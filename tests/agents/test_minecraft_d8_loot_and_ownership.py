@@ -84,12 +84,14 @@ async def test_attention_collector_forwards_others_things_touched_and_rare_loot_
     assert b_payload.source_event_type == OTHERS_THINGS_TOUCHED
     assert b_payload.player_name == "玩家甲"
     assert b_payload.player_uuid == "ae0dce67-1111-2222-3333-444455556666"
-    assert "-352" not in b_payload.summary and "玩家甲 问起就大方认下" in b_payload.summary
+    assert "-352" not in b_payload.summary and "受 玩家甲 委托整理搬运" in b_payload.summary
+    assert "道个歉" not in b_payload.summary
 
     # 不在线玩家占位词不当作真实玩家名挂上卡片
     _, off_payload = bus.events[2]
     assert isinstance(off_payload, BodyEventPayload)
-    assert off_payload.player_name == "" and "主人问起就大方认下" in off_payload.summary
+    assert off_payload.player_name == "" and "受 主人 委托整理搬运" in off_payload.summary
+    assert "道个歉" not in off_payload.summary
 
 
 def test_others_things_log_isolates_by_world_and_builds_fallback_fact() -> None:
@@ -112,6 +114,19 @@ def test_others_things_log_isolates_by_world_and_builds_fallback_fact() -> None:
         )
     )
     assert "拆掉了 玩家甲 放的" in fallback and "3 格" in fallback
+
+    stored = spoken_line(
+        others_things_of(
+            {
+                "kind": OTHERS_THINGS_TOUCHED,
+                "message": "",
+                "others_things": {"action": "stored", "owner": "玩家甲", "block": "minecraft:barrel", "count": 2},
+            },
+            at_ms=3,
+        )
+    )
+    assert stored == "放进了 玩家甲 放的barrel共 2 格"
+    assert "无需道歉" not in stored and "知会一声" not in stored
 
 
 async def test_agent_records_others_things_touched_even_when_idle_and_injects_into_next_task() -> None:

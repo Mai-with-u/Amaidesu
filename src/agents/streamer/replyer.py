@@ -997,8 +997,9 @@ def _render_plan_text(
     if target_text:
         target_line = f"target 原文: {target_text}\n{_familiarity_line(target_familiarity)}"
     elif reply_to:
-        how = "他刚在游戏公屏跟你说话" if reply_to_spoke else "他刚在游戏里找过你"
-        target_line = f"回应对象: 游戏里的玩家 {reply_to}（{how}）\n"
+        # 直播口播面向观众、游戏玩家听不见：紧凑标明向观众转述用第三人称、不喊玩家“你”
+        how = "刚在公屏发言" if reply_to_spoke else "刚在游戏里找过她"
+        target_line = f"提及的游戏同伴: {reply_to}（{how}；他听不见口播，向观众提他用第三人称，不喊「你」）\n"
         if unresolved != _NO_TARGET:
             target_line += f"target: {unresolved}\n"
     else:

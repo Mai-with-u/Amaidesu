@@ -140,7 +140,9 @@ async def test_reply_to_player_replaces_the_no_target_line() -> None:
     await replyer.generate(plan, [], game_people=[gift, chat], reply_to="玩家甲")
 
     turn = _turn_kwargs(prompt)
-    assert turn["plan"].startswith("回应对象: 游戏里的玩家 玩家甲（他刚在游戏公屏跟你说话）\n")
+    assert turn["plan"].startswith(
+        "提及的游戏同伴: 玩家甲（刚在公屏发言；他听不见口播，向观众提他用第三人称，不喊「你」）\n"
+    )
     assert "target" not in turn["plan"]
     section = turn["game_people_section"]
     assert section.startswith("\n\n## 游戏里最近找你的人（谁说的、谁做的以此为准）\n\n")
@@ -202,7 +204,9 @@ async def test_reply_to_keeps_the_planner_target_and_says_how_he_found_her() -> 
     await replyer.generate(plan, [], game_people=[gift], reply_to="玩家乙")
 
     turn = _turn_kwargs(prompt)
-    assert turn["plan"].startswith("回应对象: 游戏里的玩家 玩家乙（他刚在游戏里找过你）\ntarget: 钻石那事\n")
+    assert turn["plan"].startswith(
+        "提及的游戏同伴: 玩家乙（刚在游戏里找过她；他听不见口播，向观众提他用第三人称，不喊「你」）\ntarget: 钻石那事\n"
+    )
 
 
 async def test_danmaku_target_wins_over_reply_to_and_people_section_omitted() -> None:
@@ -219,7 +223,7 @@ async def test_danmaku_target_wins_over_reply_to_and_people_section_omitted() ->
 
     turn = _turn_kwargs(prompt)
     assert turn["plan"].startswith("target 原文: 观众甲: 几点下播\n")
-    assert "回应对象" not in turn["plan"]
+    assert "提及的游戏同伴" not in turn["plan"]
     assert turn["game_people_section"] == ""
 
 
@@ -391,18 +395,21 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
     )
     text = llm.calls[-1]["input"][0]["content"]
 
-    # 说话人：玩家甲，在游戏公屏；回应对象：游戏里的玩家甲，原来的"无特定目标"一行换掉
+    # 说话人：玩家甲，在游戏公屏；点明向观众转述用第三人称、不要对着麦喊他“你”，原来的"无特定目标"一行换掉
     people = text.split("## 游戏里最近找你的人（谁说的、谁做的以此为准）", 1)[1]
     assert re.search(r"\[\d\d:\d\d minecraft 公屏\] 玩家 玩家甲：我勒个", people)
     assert re.search(r"\[\d\d:\d\d minecraft 动作\] 玩家 玩家甲 看着我空出手，朝我扔了 8 个卷心菜", people)
-    assert "回应对象: 游戏里的玩家 玩家甲（他刚在游戏公屏跟你说话）" in text
+    assert ("提及的游戏同伴: 玩家甲（刚在公屏发言；他听不见口播，向观众提他用第三人称，不喊「你」）") in text
     assert "无特定目标" not in text
     assert '交接稿的"她"就是你' in text and "别安到女仆、宠物或观众头上" in text
     # 输入里每一处"我勒个"都记在玩家甲名下，没有一处和女仆连在一起
     wolege = [line for line in text.splitlines() if "我勒个" in line and "「我勒个」" not in line]
     assert wolege and all("玩家甲" in line and "小白" not in line for line in wolege)
-    # 女仆只出现在她自己那句台词里，不在玩家条目和回应对象里
-    assert "小白" not in people.split("\n## ", 1)[0] and "小白" not in text.split("回应对象:", 1)[1].split("\n", 1)[0]
+    # 女仆只出现在她自己那句台词里，不在玩家条目和提及同伴一行里
+    assert (
+        "小白" not in people.split("\n## ", 1)[0]
+        and "小白" not in text.split("提及的游戏同伴:", 1)[1].split("\n", 1)[0]
+    )
     # 第 66 场回归：表达侧归属规矩不再默认"玩家公屏说的事多半在说你"，明确公屏全服可见、不在身边别往自己脚下套
     assert "玩家公屏说的事多半在说你" not in people
     assert "公屏全服可见" in people and "没说在你身边就别往自己脚下套" in people

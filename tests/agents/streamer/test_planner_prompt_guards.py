@@ -578,6 +578,8 @@ def test_game_chat_vs_streamer_reply_role_split_in_prompt_and_speakers(prompts: 
 
     note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 公屏] 玩家 玩家甲：在忙什么")
     speakers_text = render_game_speakers((note,))
+    assert speakers_text.startswith("【游戏公屏近期发言】")
     assert "调用 `minecraft_chat_send` 在游戏里回一句" in speakers_text
     assert "再用 `streamer_reply` 收口直播口播" in speakers_text
     assert "单独填 `to_player` 不会往游戏公屏发字" in speakers_text
+    assert "属于旁人对话，不要强行调 `minecraft_chat_send` 插嘴或代答" in speakers_text

@@ -114,13 +114,14 @@ def _fallback_fact(entry: OthersThingsTouched) -> str:
 
 
 def spoken_line(entry: OthersThingsTouched) -> str:
-    """给主播的一句话：动了谁放的什么，连同被问起时的认账口径（去掉坐标）。"""
+    """给主播的一句话：写清动了谁放的什么（去掉坐标），区分存入与取用，不再硬塞道歉口径。"""
     fact = _PARENTHESIZED_COORDINATES.sub("", entry.message).strip().rstrip("。") or _fallback_fact(entry)
-    asker = f"{entry.owner} 问起" if entry.owner and entry.owner != "一位不在线的玩家" else "主人问起"
-    return (
-        f"{fact}。那是别人放的东西：{asker}就大方认下是我动的，可以俏皮一点；"
-        "要是人家在意，就道个歉、说回头补上或恢复原样"
-    )
+    # 往同伴放的容器存入物品（如交货、代存）：只陈述客观事实，不强加认账与道歉尾巴
+    if entry.action == "stored":
+        return fact
+    owner = entry.owner if entry.owner and entry.owner != "一位不在线的玩家" else "主人"
+    # 取用或拆改别人放的东西时只给行为边界：受委托搬运/整理不道歉，仅私自取用且对方不知情时顺口知会一声
+    return f"{fact}（若受 {owner} 委托整理搬运属正常干活，无需道歉；私自取用且对方不知情时顺口知会一声即可）"
 
 
 class OthersThingsLog:

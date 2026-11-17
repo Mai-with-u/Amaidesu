@@ -749,9 +749,9 @@ async def test_planner_reference_names_players_waiting_for_an_in_game_reply() ->
     await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=notes))
     await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=notes[2:]))
 
-    assert "【游戏里有人在跟她说话】玩家 玩家甲（在游戏里，听不到直播）" in references[0]
+    assert "【游戏公屏近期发言】玩家 玩家甲（在游戏里，听不到直播）" in references[0]
     assert "在游戏里回一句" in references[0] and "玩家乙" not in references[0]
-    assert "【游戏里有人在跟她说话】" not in references[1]
+    assert "【游戏公屏近期发言】" not in references[1]
 
 
 # 提示词守则
