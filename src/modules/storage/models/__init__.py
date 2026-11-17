@@ -34,6 +34,7 @@ from src.modules.storage.models.game_work_docs import GameWorkDocRecord
 from src.modules.storage.models.memory import (
     Viewer,
     ViewerName,
+    ViewerSelfNote,
 )
 from src.modules.storage.models.rundown import (
     DEBUT_ZATSUDAN_RUNDOWN,
@@ -88,6 +89,7 @@ __all__ = [
     # memory 域
     "Viewer",
     "ViewerName",
+    "ViewerSelfNote",
     # rundown 域
     "DEBUT_ZATSUDAN_RUNDOWN",
     "DEFAULT_RUNDOWN",

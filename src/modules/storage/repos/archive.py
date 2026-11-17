@@ -31,6 +31,7 @@ _ARCHIVE_COLUMNS = (
     "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, human_locked, keywords, place,"
     " source, viewer_chat_id, viewer_word, highlight"
 )
+_ALIASED_ARCHIVE_COLUMNS = ", ".join(f"a.{col.strip()}" for col in _ARCHIVE_COLUMNS.split(","))
 # 快照读面：引用的档案行连同快照标注一起取
 _SNAPSHOT_COLUMNS = (
     "a.id, a.live_session_id, a.text, a.quote, a.evidence_chat_id, a.game, a.save_id, a.save_name, a.human_locked,"
@@ -556,6 +557,26 @@ class ArchiveRepo(BaseRepo):
                     (max(1, int(limit)),),
                 ).fetchall()
                 return [(int(row["session_id"]), int(row["started_at_ms"] or 0)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_viewer_authored_lines(self, *, viewer_ids: Sequence[int], limit: int = 2) -> List[ArchiveLine]:
+        """按观众同人簇查当初由这位观众在直播间提议并写入档案的名字或设定（新的在前）。"""
+        ids = sorted({int(vid) for vid in viewer_ids})
+        if not ids or limit <= 0:
+            return []
+
+        def _exec() -> List[ArchiveLine]:
+            placeholders = ",".join("?" for _ in ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT {_ALIASED_ARCHIVE_COLUMNS} FROM archive_lines a"  # noqa: S608 列清单与占位符由代码生成
+                    " JOIN live_chat c ON c.id = a.viewer_chat_id"
+                    f" WHERE a.source = 'viewer' AND c.viewer_id IN ({placeholders})"
+                    " ORDER BY a.id DESC LIMIT ?",
+                    (*ids, max(1, int(limit))),
+                ).fetchall()
+                return with_source_viewer_names(conn, [archive_line_of(row) for row in rows])
 
         return await self._run_in_executor(_exec)
 

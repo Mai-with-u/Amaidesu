@@ -460,14 +460,35 @@ class SessionRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def rejected_candidate_keys(self) -> Tuple[List[int], List[str]]:
-        """驳回过的观众候选挂的弹幕与标题：整理时同一条弹幕或同样标题的不再列。"""
+        """驳回过的"观众定下的"候选挂的弹幕与标题：整理时同一条弹幕或同样标题的不再列。"""
 
         def _exec() -> Tuple[List[int], List[str]]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
-                    "SELECT viewer_chat_id, title FROM viewer_candidates WHERE status='rejected'"
+                    "SELECT viewer_chat_id, title FROM viewer_candidates"
+                    " WHERE status='rejected' AND kind='viewer_defined'"
                 ).fetchall()
             return [int(row[0]) for row in rows if row[0] is not None], [str(row[1]) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def decided_viewer_self_keys(self) -> Tuple[Dict[int, List[str]], List[int]]:
+        """整理去重用：每位熟客已批、已驳回的近况标题，以及驳回过的那条弹幕编号。"""
+
+        def _exec() -> Tuple[Dict[int, List[str]], List[int]]:
+            titles: Dict[int, List[str]] = {}
+            rejected: List[int] = []
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT viewer_id, title, viewer_chat_id, status FROM viewer_candidates"
+                    " WHERE kind='viewer_self' AND status<>'pending'"
+                ).fetchall()
+            for row in rows:
+                if row["viewer_id"] is not None:
+                    titles.setdefault(int(row["viewer_id"]), []).append(str(row["title"]))
+                if row["status"] == "rejected" and row["viewer_chat_id"] is not None:
+                    rejected.append(int(row["viewer_chat_id"]))
+            return titles, rejected
 
         return await self._run_in_executor(_exec)
 

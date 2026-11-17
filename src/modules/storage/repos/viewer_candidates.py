@@ -37,15 +37,24 @@ CANDIDATE_EXPIRE_MS = 14 * 24 * 60 * 60 * 1000
 
 VIEWER_DEFINED = "viewer_defined"
 CLAIMED_MISSING = "claimed_missing"
+VIEWER_SELF = "viewer_self"
 
 _COLUMNS = (
     "id, live_session_id, kind, title, viewer_chat_id, viewer_quote, reply_chat_id, reply_quote, game, save_id,"
-    " save_name, status, created_at_ms, decided_at_ms, archive_line_id, commitment_id, word"
+    " save_name, status, created_at_ms, decided_at_ms, archive_line_id, commitment_id, word, viewer_id"
 )
 
 
 def _candidate_of(row: Any) -> ViewerCandidate:
     return ViewerCandidate.model_validate(dict(row))
+
+
+def _row_or_not_found(conn: sqlite3.Connection, candidate_id: int) -> Any:
+    """按主键读取候选行；不存在报 not_found。"""
+    row = conn.execute(f"SELECT {_COLUMNS} FROM viewer_candidates WHERE id=?", (int(candidate_id),)).fetchone()  # noqa: S608
+    if row is None:
+        raise MemoryReviewError("not_found", f"候选不存在: {candidate_id}")
+    return row
 
 
 def replace_session_candidates(
@@ -57,18 +66,20 @@ def replace_session_candidates(
 ) -> int:
     """在整理事务里写本场的待审候选：先删本场还在待审的，再写这一轮的；返回写了几条。
 
-    已批、已驳回的不动（驳回的留作去重依据）。同一句回应只写一条。
+    已批、已驳回的不动（驳回的留作去重依据）。同一句回应按候选类型各自至多保留一条，允许同一句既定下游戏名字又记一句熟客近况。
     """
     conn.execute("DELETE FROM viewer_candidates WHERE live_session_id=? AND status='pending'", (int(live_session_id),))
     written = 0
-    seen: set[int] = set()
+    seen: set[tuple[str, int]] = set()
     for item in candidates:
-        if int(item.reply_chat_id) in seen:
+        dedup_key = (item.kind, int(item.reply_chat_id))
+        if dedup_key in seen:
             continue
-        seen.add(int(item.reply_chat_id))
+        seen.add(dedup_key)
         conn.execute(
             "INSERT INTO viewer_candidates(live_session_id, kind, title, viewer_chat_id, viewer_quote, reply_chat_id,"
-            " reply_quote, game, save_id, save_name, created_at_ms, word) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " reply_quote, game, save_id, save_name, created_at_ms, word, viewer_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT id FROM viewers WHERE id = ?))",
             (
                 int(live_session_id),
                 item.kind,
@@ -82,6 +93,7 @@ def replace_session_candidates(
                 item.save_name,
                 int(created_at_ms),
                 item.word,
+                int(item.viewer_id) if item.viewer_id is not None else None,
             ),
         )
         written += 1
@@ -90,9 +102,7 @@ def replace_session_candidates(
 
 def _pending(conn: sqlite3.Connection, candidate_id: int) -> Any:
     """取一条待审候选；不存在报 not_found，已经审过报 conflict。"""
-    row = conn.execute(f"SELECT {_COLUMNS} FROM viewer_candidates WHERE id=?", (int(candidate_id),)).fetchone()  # noqa: S608
-    if row is None:
-        raise MemoryReviewError("not_found", f"候选不存在: {candidate_id}")
+    row = _row_or_not_found(conn, candidate_id)
     if row["status"] != "pending":
         raise MemoryReviewError("conflict", "这条候选已经审过了")
     return row
@@ -144,12 +154,13 @@ class ViewerCandidateRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def rejected_keys(self) -> Tuple[List[int], List[str]]:
-        """驳回过的候选挂的弹幕与标题：整理时同一条弹幕或同样标题的不再列。"""
+        """驳回过的全局候选（不含熟客个人近况）挂的弹幕与标题：整理时同一条弹幕或同样标题的不再列。"""
 
         def _exec() -> Tuple[List[int], List[str]]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
-                    "SELECT viewer_chat_id, title FROM viewer_candidates WHERE status='rejected'"
+                    "SELECT viewer_chat_id, title FROM viewer_candidates"
+                    " WHERE status='rejected' AND kind<>'viewer_self'"
                 ).fetchall()
             return [int(row[0]) for row in rows if row[0] is not None], [str(row[1]) for row in rows]
 
@@ -158,10 +169,10 @@ class ViewerCandidateRepo(BaseRepo):
     async def approve(
         self, *, candidate_id: int, title: Optional[str] = None, lasting: bool = False, at_ms: int
     ) -> ViewerCandidate:
-        """批准一条候选，返回批准后的候选（带生成的档案行或承诺编号）。
+        """批准一条候选，返回批准后的候选（带生成的档案行或承诺编号；熟客近况原地留在候选表）。
 
-        观众定下的写成一行观众来源的档案行并放进最新快照；她说欠着的登记成一条未了结承诺。
-        还没有存下的快照、这句回应已经写成档案行或登记过承诺时做不了，给出原因。
+        观众定下的写成一行观众来源的档案行并放进最新快照；她说欠着的登记成一条未了结承诺；
+        熟客近况不写档案与承诺，仅在该熟客场内发言时进熟客卡。
         """
 
         def _exec() -> ViewerCandidate:
@@ -170,7 +181,11 @@ class ViewerCandidateRepo(BaseRepo):
                 final = _title(title, str(row["title"]))
                 line_id: Optional[int] = None
                 commitment_id: Optional[int] = None
-                if row["kind"] == CLAIMED_MISSING:
+                is_self_note = row["kind"] == VIEWER_SELF
+                if is_self_note:
+                    # 熟客近况：只按观众在场内熟客卡里读取，不写全局档案行、快照或承诺
+                    pass
+                elif row["kind"] == CLAIMED_MISSING:
                     # 她说欠着的：登记成未了结承诺，证据是她说欠着的那一句（同一句只登记一次）
                     cur = conn.execute(
                         "INSERT INTO commitments(what, quote, evidence_chat_id, game, save_id, save_name,"
@@ -225,14 +240,15 @@ class ViewerCandidateRepo(BaseRepo):
                     " commitment_id=? WHERE id=?",
                     (final, int(at_ms), line_id, commitment_id, int(candidate_id)),
                 )
+                # 熟客近况改动日志不落自述文本，保证删除观众后审计表零自述残留
                 record_edit(
                     conn,
                     live_session_id=int(row["live_session_id"]),
                     target="candidate",
                     archive_line_id=line_id,
-                    action="approve",
-                    before=str(row["title"]),
-                    after=final,
+                    action="viewer_self_approve" if is_self_note else "approve",
+                    before="" if is_self_note else str(row["title"]),
+                    after="" if is_self_note else final,
                     at_ms=at_ms,
                     candidate_id=int(candidate_id),
                 )
@@ -250,6 +266,7 @@ class ViewerCandidateRepo(BaseRepo):
         def _exec() -> None:
             with self._manager.transaction() as conn:
                 row = _pending(conn, candidate_id)
+                is_self_note = row["kind"] == VIEWER_SELF
                 conn.execute(
                     "UPDATE viewer_candidates SET status='rejected', decided_at_ms=? WHERE id=?",
                     (int(at_ms), int(candidate_id)),
@@ -259,12 +276,62 @@ class ViewerCandidateRepo(BaseRepo):
                     live_session_id=int(row["live_session_id"]),
                     target="candidate",
                     archive_line_id=None,
-                    action="reject",
-                    before=str(row["title"]),
+                    action="viewer_self_reject" if is_self_note else "reject",
+                    before="" if is_self_note else str(row["title"]),
                     after="",
                     at_ms=at_ms,
                     candidate_id=int(candidate_id),
                 )
+
+        await self._run_in_executor(_exec)
+
+    async def revoke(self, *, candidate_id: int, at_ms: int) -> ViewerCandidate:
+        """撤销已批准的熟客近况：撤下熟客卡、回到待审，14 天待审期从撤销时刻重算。"""
+
+        def _exec() -> ViewerCandidate:
+            with self._manager.transaction(immediate=True) as conn:
+                row = _row_or_not_found(conn, candidate_id)
+                if row["kind"] != VIEWER_SELF or row["status"] != "approved":
+                    raise MemoryReviewError("conflict", "只有已批准的熟客近况才能撤销批准")
+                conn.execute(
+                    "UPDATE viewer_candidates SET status='pending', decided_at_ms=NULL, created_at_ms=? WHERE id=?",
+                    (int(at_ms), int(candidate_id)),
+                )
+                record_edit(
+                    conn,
+                    live_session_id=int(row["live_session_id"]),
+                    target="candidate",
+                    archive_line_id=None,
+                    action="viewer_self_revoke",
+                    before="",
+                    after="",
+                    at_ms=at_ms,
+                    candidate_id=int(candidate_id),
+                )
+                done = _row_or_not_found(conn, candidate_id)
+            return _candidate_of(done)
+
+        return await self._run_in_executor(_exec)
+
+    async def delete_candidate(self, *, candidate_id: int, at_ms: int) -> None:
+        """删除一条候选（任意状态皆可）；不存在报 ``not_found``。"""
+
+        def _exec() -> None:
+            with self._manager.transaction(immediate=True) as conn:
+                row = _row_or_not_found(conn, candidate_id)
+                action = "viewer_self_delete" if row["kind"] == VIEWER_SELF else "candidate_delete"
+                record_edit(
+                    conn,
+                    live_session_id=int(row["live_session_id"]),
+                    target="candidate",
+                    archive_line_id=None,
+                    action=action,
+                    before="",
+                    after="",
+                    at_ms=at_ms,
+                    candidate_id=int(candidate_id),
+                )
+                conn.execute("DELETE FROM viewer_candidates WHERE id=?", (int(candidate_id),))
 
         await self._run_in_executor(_exec)
 
@@ -286,6 +353,7 @@ __all__ = [
     "CANDIDATE_EXPIRE_MS",
     "CLAIMED_MISSING",
     "VIEWER_DEFINED",
+    "VIEWER_SELF",
     "ViewerCandidateRepo",
     "replace_session_candidates",
 ]

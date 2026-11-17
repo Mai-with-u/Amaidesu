@@ -36,12 +36,13 @@ from dataclasses import dataclass
 from datetime import datetime, time as dt_time
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
-from src.modules.storage.models.memory import Viewer, ViewerName
+from src.modules.storage.models.memory import Viewer, ViewerName, ViewerSelfNote
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
 IdKind = Literal["account", "open"]
 ResolveOutcome = Literal["matched_id", "linked_by_name", "created", "pending"]
+FamiliarityTier = Literal["close", "regular", "none"]
 
 # 采集器拿不到昵称时填的占位名：官方开放平台填 unknown，LAPLACE 与旧版填"未知用户"，
 # 早期主播回复尚未建档的观众时记过"?"；这些名字不代表任何人
@@ -53,8 +54,9 @@ _MASK_MARK = "***"
 _USER_ID_EXPR = "COALESCE(account_id, open_id, '')"
 _SELECT_VIEWER = f"SELECT *, {_USER_ID_EXPR} AS user_id FROM viewers"
 _MATCH_EXTERNAL = "platform=? AND (account_id=? OR open_id=?)"
-# 展示曾用名时最多带几个（最近用过的在前）
-_FORMER_NAMES_LIMIT = 3
+# 展示曾用名时最多带几个（最近用过的在前）；在场认人与熟客卡最多带 2 个且过滤单字昵称
+_FORMER_NAMES_LIMIT = 2
+_MIN_FORMER_NAME_LEN = 2
 
 
 def is_placeholder_name(name: Optional[str]) -> bool:
@@ -84,7 +86,7 @@ class ViewerNameMatch:
 
 @dataclass(frozen=True)
 class ViewerPresenceStats:
-    """观众在场认人用的合并统计：把待确认（pending）身份关联簇合并后计算的过往场次数与上次活跃时刻。"""
+    """观众在场认人用的合并统计：把待确认（pending）身份关联簇合并后计算的过往场次数、互动计数与曾用名。"""
 
     primary_viewer_id: int
     cluster_viewer_ids: Tuple[int, ...]
@@ -92,6 +94,27 @@ class ViewerPresenceStats:
     earlier_sessions: int
     prev_seen_ms: Optional[int]
     forget_requested_at_ms: Optional[int]
+    replied_count: int = 0
+    paid_count: int = 0
+    has_guard: bool = False
+    former_names: Tuple[str, ...] = ()
+
+    @property
+    def familiarity_tier(self) -> FamiliarityTier:
+        """按过往来访场次与互动、付费、大航海记录分层判定熟悉度；待删观众一律降为 none。"""
+        if self.forget_requested_at_ms is not None:
+            return "none"
+        if (
+            self.has_guard
+            or (self.earlier_sessions >= 6 and self.replied_count >= 5)
+            or (self.earlier_sessions >= 4 and self.paid_count >= 3)
+        ):
+            return "close"
+        if self.earlier_sessions >= 3 or (
+            self.earlier_sessions >= 2 and (self.replied_count >= 3 or self.paid_count >= 1)
+        ):
+            return "regular"
+        return "none"
 
 
 class ViewerRepo(BaseRepo):
@@ -466,10 +489,14 @@ class ViewerRepo(BaseRepo):
                     summed_earlier += sc
                 earlier_sessions = max(len(distinct_sids), max(0, summed_earlier - overlap_extra))
 
-                # 取簇内本场之前最近一次活跃时刻：对本场已活跃的行看 prev_seen_ms，本场未活跃的行看 last_active_ms
+                # 取簇内本场之前最近一次活跃时刻与累计互动、付费计数
                 prev_candidates: List[int] = []
                 forget_candidates: List[int] = []
+                replied_total = 0
+                paid_total = 0
                 for r in cluster_rows:
+                    replied_total += max(0, int(r["replied_count"] or 0))
+                    paid_total += max(0, int(r["paid_count"] or 0))
                     if r["forget_requested_at_ms"] is not None:
                         forget_candidates.append(int(r["forget_requested_at_ms"]))
                     last_sid = int(r["last_session_id"]) if r["last_session_id"] is not None else None
@@ -479,7 +506,38 @@ class ViewerRepo(BaseRepo):
                     elif int(r["sessions_count"] or 0) > 0 and r["last_active_ms"]:
                         prev_candidates.append(int(r["last_active_ms"]))
 
+                has_guard = (
+                    conn.execute(
+                        f"SELECT 1 FROM guards WHERE viewer_id IN ({placeholders}) AND simulated=0 LIMIT 1",  # noqa: S608
+                        list(cluster_ids),
+                    ).fetchone()
+                    is not None
+                )
+
                 chosen_name = str(anchor["user_name"] or user_name or "")
+                chosen_trimmed = chosen_name.strip()
+                former_list: List[str] = []
+                seen_former: set[str] = set()
+                name_rows = conn.execute(
+                    f"SELECT user_name FROM viewer_names WHERE viewer_id IN ({placeholders})"  # noqa: S608
+                    " ORDER BY last_seen_ms DESC, first_seen_ms DESC",
+                    list(cluster_ids),
+                ).fetchall()
+                for nrow in name_rows:
+                    candidate = str(nrow["user_name"] or "").strip()
+                    if (
+                        not candidate
+                        or candidate == chosen_trimmed
+                        or is_placeholder_name(candidate)
+                        or len(candidate) < _MIN_FORMER_NAME_LEN
+                        or candidate in seen_former
+                    ):
+                        continue
+                    seen_former.add(candidate)
+                    former_list.append(candidate)
+                    if len(former_list) >= _FORMER_NAMES_LIMIT:
+                        break
+
                 return ViewerPresenceStats(
                     primary_viewer_id=root_id,
                     cluster_viewer_ids=cluster_ids,
@@ -487,7 +545,30 @@ class ViewerRepo(BaseRepo):
                     earlier_sessions=earlier_sessions,
                     prev_seen_ms=max(prev_candidates) if prev_candidates else None,
                     forget_requested_at_ms=min(forget_candidates) if forget_candidates else None,
+                    replied_count=replied_total,
+                    paid_count=paid_total,
+                    has_guard=has_guard,
+                    former_names=tuple(former_list),
                 )
+
+        return await self._run_in_executor(_exec)
+
+    async def approved_viewer_notes(self, *, viewer_ids: Sequence[int], limit: int = 2) -> List[ViewerSelfNote]:
+        """场内熟客卡用：读取同人簇内已批准的熟客近况（最近批准的在前；待审与已驳回绝不返回）。"""
+        ids = sorted({int(vid) for vid in viewer_ids})
+        if not ids or limit <= 0:
+            return []
+
+        def _exec() -> List[ViewerSelfNote]:
+            placeholders = ",".join("?" for _ in ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT id, title, decided_at_ms FROM viewer_candidates"
+                    f" WHERE viewer_id IN ({placeholders}) AND kind='viewer_self' AND status='approved'"  # noqa: S608
+                    " ORDER BY decided_at_ms DESC, id DESC LIMIT ?",
+                    (*ids, max(1, int(limit))),
+                ).fetchall()
+            return [ViewerSelfNote.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
@@ -746,4 +827,11 @@ def _insert_viewer(
     return viewer_id
 
 
-__all__ = ["ViewerNameMatch", "ViewerRepo", "ViewerResolution", "is_placeholder_name"]
+__all__ = [
+    "FamiliarityTier",
+    "ViewerNameMatch",
+    "ViewerPresenceStats",
+    "ViewerRepo",
+    "ViewerResolution",
+    "is_placeholder_name",
+]

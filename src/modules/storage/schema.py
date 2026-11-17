@@ -64,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 46
+SCHEMA_VERSION: int = 47
 
 
 # =============================================================================
@@ -896,15 +896,17 @@ END;
 
 
 # --- viewer_candidates —— 观众候选 ---
-# 下播整理列出的、要人批准才进记忆的两类事：viewer_defined 是观众定下、她当场接受却没复述的名字、设定、
-# 梗（标题不写昵称）；claimed_missing 是她说"上次答应过""欠着的"、承诺账上却找不到的事。批准前对她
-# 完全不可见：简报、线索卡、回想、检索索引都只读 archive_lines 与 commitments，不读这张表。
+# 下播整理列出的、要人批准才生效的三类事：viewer_defined 是观众定下、她当场接受却没复述的名字、设定、
+# 梗（标题不写昵称）；claimed_missing 是她说"上次答应过""欠着的"、承诺账上却找不到的事；viewer_self 是
+# 熟客主动说起并被她当场接住的持续性日常或喜好（标题以"ta "开头，批准后仍留在本表，仅在该熟客场内发言时
+# 经 viewer_id 读取进熟客线索卡，不进档案与承诺）。批准前对她完全不可见：简报、回想、检索索引不读这张表。
 # 每条挂在两条台词记录上：观众那条弹幕（viewer_chat_id；她说欠着的一类只在她是回应某条弹幕时才有）
-# 与她那句回应（reply_chat_id），两条都按外键级联——删观众、忘了我、按句删弹幕或台词、删场次时候选
-# 随之删除。status 是 pending 待审 / approved 已批 / rejected 已驳回（驳回的留着，同一条以后不再列）；
-# 批准后生成的档案行或承诺记在 archive_line_id / commitment_id，那一行再被删时置空。待审的按时间过期。
-# word 是观众定下的那个名字或梗词（整理时核对过在标题与那条弹幕原文里都原样出现；她说欠着的一类为空）：
-# 批准来的档案行渲染时，她那句回应里和它相同的那一段不遮成"那位观众"。
+# 与她那句回应（reply_chat_id），并经 viewer_id 关联观众行，三处均按外键级联——删观众、忘了我、按句删
+# 弹幕或台词、删场次时候选随之删除（viewer_id 列的索引由 v47 迁移建）。status 是 pending 待审 /
+# approved 已批 / rejected 已驳回（驳回的留着，同一条以后不再列）；前两类批准后生成的档案行或承诺记在
+# archive_line_id / commitment_id，那一行再被删时置空。待审的按时间过期。
+# word 是观众定下的名字/梗词或熟客近况关键词（整理时核对过在标题与那条弹幕原文里都原样出现；她说欠着的一类为空）：
+# 观众定下的候选批准成档案行渲染时，她那句回应里和它相同的那一段不遮成"那位观众"。
 
 _VIEWER_CANDIDATES_SQL = """
 CREATE TABLE IF NOT EXISTS viewer_candidates (
@@ -924,7 +926,8 @@ CREATE TABLE IF NOT EXISTS viewer_candidates (
     decided_at_ms   INTEGER,
     archive_line_id INTEGER REFERENCES archive_lines(id) ON DELETE SET NULL,
     commitment_id   INTEGER REFERENCES commitments(id) ON DELETE SET NULL,
-    word            TEXT NOT NULL DEFAULT ''
+    word            TEXT NOT NULL DEFAULT '',
+    viewer_id       INTEGER REFERENCES viewers(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_viewer_candidates_session ON viewer_candidates(live_session_id, status);
 CREATE INDEX IF NOT EXISTS idx_viewer_candidates_viewer_chat ON viewer_candidates(viewer_chat_id);

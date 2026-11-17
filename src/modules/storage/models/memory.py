@@ -60,6 +60,7 @@ __all__ = [
     "UnregisteredItem",
     "ViewerCandidate",
     "ViewerName",
+    "ViewerSelfNote",
     "Viewer",
 ]
 
@@ -386,20 +387,22 @@ class PendingViewerCandidate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: str = Field(..., description="viewer_defined 观众定下的 / claimed_missing 她说欠着的")
+    kind: str = Field(..., description="viewer_defined 观众定下的 / claimed_missing 她说欠着的 / viewer_self 熟客近况")
     title: str = Field(..., description="标题（不写观众昵称；代码已截到上限）")
     viewer_chat_id: Optional[int] = Field(
         default=None, description="观众那条弹幕；她说欠着的一类只在她是回应某条弹幕时才有"
     )
     viewer_quote: str = Field(default="", description="那条弹幕的逐字片段")
     word: str = Field(
-        default="", description="观众定下的那个名字或梗词（核对过在标题与弹幕里原样出现；她说欠着的一类为空）"
+        default="",
+        description="观众定下的那个名字/梗词或熟客近况关键词（核对过在标题与弹幕里原样出现；她说欠着的一类为空）",
     )
     reply_chat_id: int = Field(..., description="她那句回应（或说欠着的那句）的 live_chat 行")
     reply_quote: str = Field(..., description="她那句台词的逐字片段")
     game: Optional[str] = Field(default=None, description="关于哪个游戏世界的事；None 即与游戏无关")
     save_id: str = Field(default="", description="那个存档的编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+    viewer_id: Optional[int] = Field(default=None, description="那条弹幕所属观众主键（熟客近况查询与级联删除用）")
 
 
 class ViewerCandidate(PendingViewerCandidate):
@@ -412,6 +415,16 @@ class ViewerCandidate(PendingViewerCandidate):
     decided_at_ms: Optional[int] = Field(default=None, description="批准或驳回的时刻")
     archive_line_id: Optional[int] = Field(default=None, description="批准后生成的档案行（观众定下的）")
     commitment_id: Optional[int] = Field(default=None, description="批准后登记的承诺（她说欠着的）")
+
+
+class ViewerSelfNote(BaseModel):
+    """已批准的熟客近况（供场内熟客卡按观众只读展示）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., description="观众候选主键")
+    title: str = Field(..., description="以 ta 开头的简短近况标题")
+    decided_at_ms: Optional[int] = Field(default=None, description="批准时刻（Unix epoch 毫秒）")
 
 
 class KeptSnapshotLine(BaseModel):
