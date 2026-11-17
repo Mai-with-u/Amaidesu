@@ -14,12 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.game_ledger import PlayerNote
-from src.agents.streamer.plan import DecisionPlan
+from src.agents.streamer.plan import DecisionPlan, ReplyRoundAttachment
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.speech_guard import WordFilter
 from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, TimelineTurn, note_turn
+from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.llm.payload import Response
+from src.modules.tools.models import ToolInvocation
 from tests.modules.storage.helpers import make_room_message
 
 
@@ -91,7 +93,10 @@ async def test_persona_goes_into_system_template_and_turn_data_into_the_turn_tem
         "boundaries_rule": "\n- 不答应的事：线下见面",
         # 没配设定档案：档案段为空串；默认边玩边说档、启用游戏：说话方式与游戏第一人称两条照旧
         "persona_profile_section": "",
-        "speech_style_rule": "像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+        "speech_style_rule": (
+            "像真人主播随口说话，不像写稿：平时一次只说一件事、干脆收住；"
+            "接弹幕或醒目留言亮话头时先顺口带出对方问的事再答，两三句短话自然说完就停。"
+        ),
         "game_rule_line": '- 游戏里干活的就是你自己，用第一人称说，不说"活已经派下去了"，不提"游戏侧"这类幕后系统。\n',
     }
 
@@ -346,3 +351,53 @@ async def test_replyer_verbatim_repeat_rephrases_once_and_delivers_new_wording()
 
     assert result == {"speech": fresh, "llm_request_id": "req_rephrase"}
     assert llm.generate.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("tier", "expected_snippet"),
+    [
+        ("close", "发言人关系: 常来的老熟人（"),
+        ("regular", "发言人关系: 眼熟的老观众（"),
+        ("", None),
+    ],
+    ids=["close", "regular", "unfamiliar"],
+)
+async def test_reply_tool_passes_target_familiarity_into_replyer_plan_text(
+    tier: str, expected_snippet: Optional[str]
+) -> None:
+    """ReplyToolProvider 按 target 解析出消息 ID 并把熟客档位透传给 Replyer，紧跟 target 原文渲染发言人关系。"""
+    replyer, _, prompt = _replyer("来啦来啦")
+    msg = make_room_message(
+        message_id="m_ajie",
+        content="今天还继续搭桥吗",
+        user=RoomMessageUser(id="u_ajie", name="阿杰"),
+    )
+    provider = ReplyToolProvider(replyer=replyer, history_provider=lambda: [], rundown_text_provider=lambda: "")
+    attachment = ReplyRoundAttachment(
+        round_batch=[msg],
+        familiarity_by_message_id={"m_ajie": tier} if tier else {},
+    )
+    invocation = ToolInvocation(
+        tool_name="streamer_reply",
+        arguments={
+            "topic_summary": "阿杰问今天是否继续搭桥",
+            "reply_guidance": "顺口回应",
+            "target": "[id:m_ajie]",
+            "emotion": "neutral",
+            "intensity": 0.4,
+            "is_novel": True,
+        },
+        round_id="r_fam",
+        attachment=attachment,
+    )
+
+    exec_result = await provider.invoke(invocation)
+    assert exec_result.success is True
+
+    turn_kwargs = {call.args[0]: call.kwargs for call in prompt.render.call_args_list}["amaidesu_replyer"]
+    plan_text = str(turn_kwargs["plan"])
+    assert "target 原文: 阿杰: 今天还继续搭桥吗\n" in plan_text
+    if expected_snippet is None:
+        assert "发言人关系:" not in plan_text
+    else:
+        assert f"target 原文: 阿杰: 今天还继续搭桥吗\n{expected_snippet}" in plan_text
