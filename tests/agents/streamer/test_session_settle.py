@@ -1772,3 +1772,107 @@ async def test_archive_call_input_carries_open_commitment_ledger(
     assert "【现行承诺台账】" in archive_prompt
     assert f"#{old} 「画生日贺图」" in archive_prompt
     assert "下播给你画张生日贺图" in archive_prompt
+
+
+async def test_viewer_self_candidates_require_familiar_viewer_and_drop_personal_privacy(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """熟客近况提取：仅熟客标『回复熟客观众N』并允许进待审；新观众硬门禁拦进 unregistered；隐私词计入 personal_dropped 不落库。"""
+    s1 = await _ended_session(store, started_at_ms=1_000)
+    familiar = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_familiar",
+        user_name="阿杰",
+        timestamp_ms=1_050,
+        name_match_window_ms=0,
+    )
+    await store.execute(
+        "INSERT INTO guards(live_session_id, timestamp_ms, platform, user_id, user_name, viewer_id, simulated)"
+        " VALUES (?, 1100, 'bilibili', 'u_familiar', '阿杰', ?, 0)",
+        (s1, familiar.viewer_id),
+    )
+    newcomer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_newcomer",
+        user_name="小夏",
+        timestamp_ms=1_060,
+        name_match_window_ms=0,
+    )
+
+    session_id = await _ended_session(store, started_at_ms=50_000)
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=50_100,
+        sender_role="viewer",
+        sender_name="阿杰",
+        viewer_id=familiar.viewer_id,
+        content="我平时喜欢手冲咖啡",
+        message_type="danmaku",
+        message_id="m_fam_ok",
+    )
+    await _speech(store, session_id, "手冲咖啡很香呀", reply_to_message_id="m_fam_ok", timestamp_ms=50_150)
+
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=50_200,
+        sender_role="viewer",
+        sender_name="小夏",
+        viewer_id=newcomer.viewer_id,
+        content="我周末常去攀岩",
+        message_type="danmaku",
+        message_id="m_new",
+    )
+    await _speech(store, session_id, "攀岩很锻炼核心", reply_to_message_id="m_new", timestamp_ms=50_250)
+
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=50_300,
+        sender_role="viewer",
+        sender_name="阿杰",
+        viewer_id=familiar.viewer_id,
+        content="我在软件公司写代码",
+        message_type="danmaku",
+        message_id="m_fam_priv",
+    )
+    await _speech(store, session_id, "写代码注意护眼", reply_to_message_id="m_fam_priv", timestamp_ms=50_350)
+
+    llm = _reply(
+        '{"archive": [], "viewer_candidates": ['
+        '{"kind": "viewer_self", "line": 1, "title": "熟客观众1平时喜欢手冲咖啡", "word": "手冲咖啡",'
+        ' "viewer_quote": "平时喜欢手冲咖啡", "quote": "手冲咖啡很香呀"},'
+        '{"kind": "viewer_self", "line": 2, "title": "ta 周末常去攀岩", "word": "攀岩",'
+        ' "viewer_quote": "周末常去攀岩", "quote": "攀岩很锻炼核心"},'
+        '{"kind": "viewer_self", "line": 3, "title": "ta 在软件公司写代码", "word": "软件公司",'
+        ' "viewer_quote": "在软件公司写代码", "quote": "写代码注意护眼"}'
+        "]}",
+        '{"commitments": []}',
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        viewer_repo=store.viewers,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        clock=lambda: 60_000,
+    )
+    assert await settler.settle_session(session_id) is True
+
+    archive_input = llm.calls[0]["input"]
+    assert "（回复熟客观众1「我平时喜欢手冲咖啡」）" in archive_input
+    assert "（回复观众2「我周末常去攀岩」）" in archive_input
+
+    candidates = await store.viewer_candidates.list_candidates(status=None)
+    assert [(c.kind, c.title, c.viewer_id) for c in candidates] == [
+        ("viewer_self", "ta 平时喜欢手冲咖啡", familiar.viewer_id)
+    ]
+
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert report.candidates_personal_dropped == 1
+    assert [(u.kind, u.what) for u in report.unregistered] == [("candidate", "ta 周末常去攀岩")]

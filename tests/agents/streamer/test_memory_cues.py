@@ -15,7 +15,9 @@ from src.agents.streamer.memory.cues import (
 )
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.memory import PendingArchiveLine, PendingViewerCandidate
 from src.modules.storage.privacy import PrivacyService
+from src.modules.storage.repos.viewer_candidates import VIEWER_SELF, replace_session_candidates
 from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation, NearbyPlace
 from tests.modules.storage.helpers import make_room_message
@@ -668,3 +670,132 @@ async def test_inside_joke_card_only_when_a_viewer_brings_it_up(store: SQLiteDat
     assert "[老梗] 弹幕 m3 提到了「倒立洗头」" in cues.text
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
     assert entry.card_kind == "joke" and entry.detail == {"keyword_index": [1], "how": ["exact"], "joke_index": 0}
+
+
+async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_persists_after_reply(
+    store: SQLiteDatabase, privacy: PrivacyService
+) -> None:
+    """熟客发言：有已批准近况或共同造梗时推熟客卡（cue_log 不落昵称、压制重复在场行）；本场回复后卡停推但熟悉度映射照常保留，发忘了我立即清空。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 200_000_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 190_000_000)
+
+    # 阿杰：上过舰的老熟人（close），有一条已批准近况 + 一条共同造梗档案行
+    ajie_id = await _viewer(store, external_id="u_ajie", name="阿杰", sessions_count=5, prev_seen_ms=_NOW - 60_000)
+    await store.execute(
+        "INSERT INTO guards(live_session_id, timestamp_ms, platform, user_id, user_name, viewer_id, simulated)"
+        " VALUES (?, ?, 'bilibili', 'u_ajie', '阿杰', ?, 0)",
+        (old_session, _NOW - 195_000_000, ajie_id),
+    )
+    # 新人：首次来访（none）
+    await _viewer(store, external_id="u_new", name="小夏", sessions_count=1, prev_seen_ms=None)
+
+    said = await store.chat.insert_live_chat(
+        live_session_id=old_session,
+        timestamp_ms=_NOW - 195_000_000,
+        sender_role="viewer",
+        viewer_id=ajie_id,
+        content="我平时爱拼木模型，小羊叫绒球吧",
+        message_type="danmaku",
+    )
+    replied = await store.chat.insert_live_chat(
+        live_session_id=old_session,
+        timestamp_ms=_NOW - 194_900_000,
+        sender_role="assistant",
+        content="木模型很有趣，小羊就叫绒球",
+        message_type="speech",
+    )
+    await store.sessions.apply_settlement(
+        live_session_id=old_session,
+        archive_lines=[PendingArchiveLine(text="搭好牧场围栏", quote="围栏", evidence_chat_id=replied + 50)],
+        commitments=[],
+        closures=[],
+        settled_at_ms=_NOW - 190_000_000,
+        now_ms_value=_NOW - 190_000_000,
+    )
+    with store.manager.transaction() as conn:
+        replace_session_candidates(
+            conn,
+            live_session_id=old_session,
+            candidates=[
+                PendingViewerCandidate(
+                    kind="viewer_defined",
+                    title="小羊取名绒球",
+                    viewer_chat_id=said,
+                    viewer_quote="小羊叫绒球",
+                    word="绒球",
+                    reply_chat_id=replied,
+                    reply_quote="小羊就叫绒球",
+                    viewer_id=ajie_id,
+                ),
+                PendingViewerCandidate(
+                    kind=VIEWER_SELF,
+                    title="ta 平时爱拼木模型",
+                    viewer_chat_id=said,
+                    viewer_quote="爱拼木模型",
+                    word="木模型",
+                    reply_chat_id=replied,
+                    reply_quote="木模型很有趣",
+                    viewer_id=ajie_id,
+                ),
+            ],
+            created_at_ms=_NOW - 190_000_000,
+        )
+    for item in await store.viewer_candidates.list_candidates(status="pending"):
+        await store.viewer_candidates.approve(candidate_id=item.id, at_ms=_NOW - 189_000_000)
+
+    session_id = await _session(store)
+    clock = _Clock()
+    provider = _passive(store, session_id, clock, privacy=privacy)
+
+    first = await provider.collect(
+        batch=[
+            _message(external_id="u_ajie", name="阿杰", content="晚上好呀", message_id="m_ajie_1"),
+            _message(external_id="u_ajie", name="阿杰", content="今天还去牧场吗", message_id="m_ajie_2"),
+            _message(external_id="u_new", name="小夏", content="第一次来", message_id="m_new_1"),
+        ]
+    )
+    assert "[熟客·阿杰]" in first.text
+    assert "ta 跟你说过：ta 平时爱拼木模型。" in first.text
+    assert "当初「小羊取名绒球」就是和 ta 一起定的。" in first.text
+    assert "老观众在场" not in first.text, "已推熟客卡时不再叠重复的老观众在场行"
+    assert dict(first.familiarity_by_message_id) == {"m_ajie_1": "close", "m_ajie_2": "close"}
+
+    (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
+    assert (entry.card_kind, entry.sources, entry.detail) == (
+        "viewer_familiar",
+        ["viewer_presence"],
+        {"viewer_id": ajie_id},
+    )
+    assert "阿杰" not in str(entry.model_dump()), "cue_log 绝不落观众昵称"
+
+    # 本场主播已回应过阿杰后：熟客卡停推，但 familiarity_by_message_id 依然把阿杰的新弹幕标为 close
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=clock.value,
+        sender_role="viewer",
+        viewer_id=ajie_id,
+        content="晚上好呀",
+        message_type="danmaku",
+        message_id="m_ajie_1",
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=clock.value + 100,
+        sender_role="assistant",
+        content="晚上好阿杰，等下就去牧场看看",
+        message_type="speech",
+        reply_to_message_id="m_ajie_1",
+    )
+    clock.value += PUSH_COOLDOWN_MS + 1_000
+    after_reply = await provider.collect(
+        batch=[_message(external_id="u_ajie", name="阿杰", content="绒球还在吗", message_id="m_ajie_3")]
+    )
+    assert "[熟客·阿杰]" not in after_reply.text
+    assert dict(after_reply.familiarity_by_message_id) == {"m_ajie_3": "close"}
+
+    # 一旦发送"忘了我"命令，当场清掉缓存，不再输出熟悉度映射也不推熟客卡
+    forget_round = await provider.collect(
+        batch=[_message(external_id="u_ajie", name="阿杰", content="忘了我吧", message_id="m_ajie_forget")]
+    )
+    assert dict(forget_round.familiarity_by_message_id) == {}
+    assert "[熟客·阿杰]" not in forget_round.text

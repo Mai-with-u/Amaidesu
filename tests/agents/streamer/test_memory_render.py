@@ -26,6 +26,7 @@ from src.agents.streamer.memory.render import (
     render_commitment_number,
     render_commitment_text,
     render_cue_block,
+    render_familiar_viewer_card,
     render_forget_notice,
     render_game_card,
     render_presence_line,
@@ -790,3 +791,33 @@ def test_zatsudan_mode_expands_cross_save_highlights_with_save_names_and_used_ma
             speaking_mode="zatsudan",
         )
         assert ids == [1, 30, 14, 13, 12, 11]
+
+
+def test_presence_line_and_familiar_viewer_card_include_tier_former_names_and_zero_raw_numbers() -> None:
+    """老观众在场行与熟客卡：区分常来老熟人与眼熟老观众、附曾用名与近况/共创梗，绝不透出场次数或日期数字。"""
+    presence = render_presence_line(
+        [
+            ("阿杰", _NOW - 60_000, "close", ("阿杰在摸鱼",)),
+            ("小夏", None, "regular", ()),
+            ("老陈", _NOW - 60_000),
+        ],
+        now_ms=_NOW,
+    )
+    assert "常来的老熟人 阿杰（以前叫「阿杰在摸鱼」，前几天刚来过）" in presence
+    assert "眼熟的老观众 小夏（有阵子没来）" in presence
+    assert "老陈（前几天刚来过）" in presence
+    assert not any(ch.isdigit() for ch in presence)
+
+    assert render_familiar_viewer_card(user_name="阿杰", tier="close", self_notes=(), authored_titles=()) == ""
+    card = render_familiar_viewer_card(
+        user_name="阿杰",
+        tier="close",
+        former_names=("阿杰在摸鱼",),
+        self_notes=("ta 周末常去夜跑",),
+        authored_titles=("水獭取名圆圆",),
+    )
+    assert card.startswith("[熟客·阿杰] 阿杰（以前叫「阿杰在摸鱼」）是常来的老熟人。")
+    assert "ta 跟你说过：ta 周末常去夜跑。" in card
+    assert "当初「水獭取名圆圆」就是和 ta 一起定的。" in card
+    assert "只在话题沾边时顺嘴聊起" in card
+    assert not any(ch.isdigit() for ch in card)
