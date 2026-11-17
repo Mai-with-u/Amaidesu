@@ -240,4 +240,6 @@ config.toml.backup*
 
 MaiCraftMod/
 /docs/tmp/
+# 仓库根的本地临时目录（一次性分析脚本、事件切片等机器本地产物）
+/tmp/
 GLOSSARY.md
