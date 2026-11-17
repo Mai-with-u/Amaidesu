@@ -3,6 +3,7 @@ import {
   ARCHIVE_TITLE_MAX_LENGTH,
   CLOSE_QUOTE_MAX_LENGTH,
   archiveLineTags,
+  candidateApproveWarning,
   candidateKindLabel,
   candidateReportText,
   candidateStatusLabel,
@@ -171,20 +172,25 @@ describe('记忆页审核', () => {
 });
 
 describe('观众候选', () => {
-  it('类型、状态与未登记条目各有中文标签', () => {
+  it('类型、状态、批准提示与未登记条目各有中文标签', () => {
     expect(candidateKindLabel('viewer_defined')).toBe('观众定下的');
     expect(candidateKindLabel('claimed_missing')).toBe('她说欠着的');
+    expect(candidateKindLabel('viewer_self')).toBe('熟客近况');
+    expect(candidateApproveWarning('viewer_self', 'ta 养了一只橘猫', '阿杰')).toContain(
+      '只记在 阿杰 的熟客卡上',
+    );
+    expect(candidateApproveWarning('viewer_self', 'ta 喜欢喝美式')).toContain('不进开播简报');
     expect(candidateStatusLabel('pending')).toBe('待审');
     expect(candidateStatusLabel('rejected')).toBe('已驳回');
     expect(unregisteredKindLabel('candidate')).toBe('观众候选');
   });
 
-  it('整理报告里的候选一句话：分两类列数，个人信息只报条数；都没有不出这一句', () => {
+  it('整理报告里的候选一句话：按类型列数，个人信息只报条数；都没有不出这一句', () => {
     expect(candidateReportText({ viewer_defined: 2 }, 1)).toBe(
       '列进待审区：观众定下的 2 条；含个人信息丢掉 1 条',
     );
-    expect(candidateReportText({ claimed_missing: 1, player_self: 2 }, 0)).toBe(
-      '列进待审区：她说欠着的 1 条、玩家自述 2 条',
+    expect(candidateReportText({ viewer_self: 2, claimed_missing: 1, player_self: 2 }, 0)).toBe(
+      '列进待审区：熟客近况 2 条、她说欠着的 1 条、玩家自述 2 条',
     );
     expect(candidateReportText({ viewer_defined: 1, claimed_missing: 1 }, 0)).toBe(
       '列进待审区：观众定下的 1 条、她说欠着的 1 条',

@@ -661,6 +661,10 @@ export const ledgerApi = {
     api.post<CandidateItem>(`/memory/candidates/${candidateId}/approve`, payload),
   rejectCandidate: (candidateId: number) =>
     api.post<LedgerMutationResponse>(`/memory/candidates/${candidateId}/reject`),
+  revokeCandidate: (candidateId: number) =>
+    api.post<CandidateItem>(`/memory/candidates/${candidateId}/revoke`),
+  deleteCandidate: (candidateId: number) =>
+    api.delete<LedgerMutationResponse>(`/memory/candidates/${candidateId}`),
   getSettleState: () => api.get<SettleListResponse>('/memory/settle'),
   // 重新整理：重试次数清零并清掉上次失败原因，下一次调度会再挑到这一场
   resettle: (liveSessionId: number) =>

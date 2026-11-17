@@ -9,8 +9,9 @@
           >
         </div>
         <p class="panel-hint">
-          观众定下、她当场接受了却没自己复述的事，以及她说“欠着”、账上却找不到的事。批准前她完全看不到；
-          批准后进记忆，标题可以先改再批。待审的列出后 14 天没人审会自动删掉。
+          观众定下、她当场接受了却没自己复述的事，熟客主动说起的持续近况与喜好，以及她说“欠着”、账上却找不到的事。
+          批准前她完全看不到；标题可以先改再批，熟客近况批准后只进该熟客的场内卡片。待审的列出后 14
+          天没人审会自动删掉。
         </p>
       </div>
       <div class="head-actions">
@@ -30,10 +31,19 @@
         <div class="candidate-head">
           <el-tag
             size="small"
-            :type="item.kind === 'claimed_missing' ? 'danger' : 'primary'"
+            :type="
+              item.kind === 'claimed_missing'
+                ? 'danger'
+                : item.kind === 'viewer_self'
+                  ? 'success'
+                  : 'primary'
+            "
             effect="plain"
             >{{ candidateKindLabel(item.kind) }}</el-tag
           >
+          <el-tag v-if="item.kind === 'viewer_self'" size="small" effect="plain">{{
+            item.viewer_name || '已删除的观众'
+          }}</el-tag>
           <el-input
             v-if="item.status === 'pending'"
             v-model="titles[item.id]"
@@ -78,12 +88,33 @@
             >批准</el-button
           >
         </div>
-        <p v-else class="candidate-meta mono">
-          {{ candidateStatusLabel(item.status) }}
-          <template v-if="item.decided_at_ms !== null">
-            · {{ formatDateTimeCn(item.decided_at_ms) }}</template
+        <div v-else class="candidate-actions">
+          <span class="candidate-meta mono">
+            {{ candidateStatusLabel(item.status) }}
+            <template v-if="item.decided_at_ms !== null">
+              · {{ formatDateTimeCn(item.decided_at_ms) }}</template
+            >
+          </span>
+          <span class="grow" />
+          <el-button
+            v-if="item.kind === 'viewer_self' && item.status === 'approved'"
+            size="small"
+            :loading="busyId === item.id"
+            :disabled="busyId !== null && busyId !== item.id"
+            @click="revoke(item)"
+            >撤销批准</el-button
           >
-        </p>
+          <el-button
+            v-if="item.kind === 'viewer_self'"
+            size="small"
+            type="danger"
+            plain
+            :loading="busyId === item.id"
+            :disabled="busyId !== null && busyId !== item.id"
+            @click="remove(item)"
+            >删除</el-button
+          >
+        </div>
       </li>
       <li v-if="!loading && !loadError && items.length === 0" class="empty-hint">
         {{ status === 'pending' ? '没有待审的候选' : '没有记录' }}
@@ -111,6 +142,7 @@ import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn } from '@/utils/format';
 import {
   ARCHIVE_TITLE_MAX_LENGTH,
+  candidateApproveWarning,
   candidateKindLabel,
   candidateStatusLabel,
   nearestCommitmentsText,
@@ -155,14 +187,15 @@ async function approve(item: CandidateItem): Promise<void> {
     actionError.value = titleError;
     return;
   }
-  const warning =
-    item.kind === 'claimed_missing'
-      ? `批准后登记成一条未了结承诺「${title}」，之后每场都会提醒她兑现。先确认她不是顺着观众的话编的。`
-      : `批准后「${title}」进记忆，下一场开播会记得。这条记忆挂在那位观众的弹幕上：删除这位观众或 ta 发“忘了我”时会一起删掉。`;
+  const warning = candidateApproveWarning(item.kind, title, item.viewer_name);
   if (!(await confirmAction(warning, '批准观众候选', { type: 'info' }))) return;
   await mutate(
     item,
-    () => ledgerApi.approveCandidate(item.id, { title, lasting: lasting[item.id] ?? false }),
+    () =>
+      ledgerApi.approveCandidate(item.id, {
+        title,
+        lasting: item.kind === 'viewer_defined' ? (lasting[item.id] ?? false) : false,
+      }),
     '已批准',
     '批准失败',
   );
@@ -175,6 +208,22 @@ async function reject(item: CandidateItem): Promise<void> {
     '已驳回，以后不再列这一条',
     '驳回失败',
   );
+}
+
+async function revoke(item: CandidateItem): Promise<void> {
+  const who = item.viewer_name || '这位熟客';
+  const warning = `撤销后「${item.title}」从 ${who} 的熟客卡上撤下，回到待审，可以改了标题再批或驳回。`;
+  if (!(await confirmAction(warning, '撤销批准', { type: 'warning' }))) return;
+  await mutate(item, () => ledgerApi.revokeCandidate(item.id), '已撤销，回到待审', '撤销失败');
+}
+
+async function remove(item: CandidateItem): Promise<void> {
+  const warning =
+    item.status === 'rejected'
+      ? `删掉「${item.title}」：删了以后同一句话下次整理可能再被列出。`
+      : `删掉「${item.title}」：批准过的会从熟客卡上撤下，删了不能恢复。`;
+  if (!(await confirmAction(warning, '删除这一条', { type: 'warning' }))) return;
+  await mutate(item, () => ledgerApi.deleteCandidate(item.id), '已删掉', '删除失败');
 }
 
 async function mutate(

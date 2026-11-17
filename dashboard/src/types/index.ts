@@ -1627,8 +1627,8 @@ export interface ArchiveLineCreatePayload {
 /** 整理时没能登记的条目类型：承诺 / 档案行 / 观众候选 */
 export type UnregisteredKind = 'commitment' | 'archive' | 'candidate';
 
-/** 观众候选类型：观众定下的 / 她说欠着的 */
-export type CandidateKind = 'viewer_defined' | 'claimed_missing';
+/** 观众候选类型：观众定下的 / 她说欠着的 / 熟客近况 */
+export type CandidateKind = 'viewer_defined' | 'claimed_missing' | 'viewer_self';
 
 /** 观众候选状态：待审 / 已批 / 已驳回 */
 export type CandidateStatus = 'pending' | 'approved' | 'rejected';
@@ -1640,13 +1640,15 @@ export interface NearCommitment {
   status: CommitmentStatus;
 }
 
-/** 观众候选的一行：人批准才进记忆 */
+/** 观众候选的一行：人批准才生效 */
 export interface CandidateItem {
   id: number;
   live_session_id: number;
   kind: CandidateKind;
   /** 标题（不写观众昵称） */
   title: string;
+  /** 熟客近况所属观众当前昵称；其余候选为空 */
+  viewer_name?: string | null;
   /** 观众那条弹幕里定下这件事的那一段（已知昵称已遮成某位观众）；她说欠着的一类可能为空 */
   viewer_quote: string;
   /** 她那句回应（或说欠着的那句）的逐字片段 */

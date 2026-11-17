@@ -403,3 +403,92 @@ async def test_claimed_missing_candidates_come_with_the_nearest_ledger_entries(c
         (draw, "closed"),
     ]
     assert items["开箱视频"]["nearest_commitments"] == []
+
+
+async def test_viewer_self_candidates_expose_viewer_name_and_support_revoke_and_delete(
+    client, store: SQLiteDatabase
+) -> None:
+    """熟客近况候选：仅 viewer_self 带观众昵称、原文照旧遮名；批准不落档案，支持撤销批准与删除。"""
+    session_id = await _ended_session(store)
+    await _settled(store, session_id, [])
+    viewer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_self_1",
+        user_name="小夏",
+        timestamp_ms=1_000,
+        name_match_window_ms=0,
+    )
+    said = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_100,
+        sender_role="viewer",
+        viewer_id=viewer.viewer_id,
+        content="小夏平时爱拼乐高，这栋塔叫积木塔吧",
+        message_type="danmaku",
+    )
+    reply = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_200,
+        sender_role="assistant",
+        content="拼乐高很有意思，那就叫积木塔",
+        message_type="text",
+    )
+    with store.manager.transaction() as conn:
+        replace_session_candidates(
+            conn,
+            live_session_id=session_id,
+            candidates=[
+                PendingViewerCandidate(
+                    kind="viewer_defined",
+                    title="塔取名积木塔",
+                    viewer_chat_id=said,
+                    viewer_quote="这栋塔叫积木塔",
+                    word="积木塔",
+                    reply_chat_id=reply,
+                    reply_quote="那就叫积木塔",
+                    viewer_id=viewer.viewer_id,
+                ),
+                PendingViewerCandidate(
+                    kind="viewer_self",
+                    title="ta 平时爱拼乐高",
+                    viewer_chat_id=said,
+                    viewer_quote="小夏平时爱拼乐高",
+                    word="乐高",
+                    reply_chat_id=reply,
+                    reply_quote="拼乐高很有意思",
+                    viewer_id=viewer.viewer_id,
+                ),
+            ],
+            created_at_ms=2_000,
+        )
+
+    listed = {item["kind"]: item for item in (await client.get("/api/v1/memory/candidates")).json()["items"]}
+    assert listed["viewer_defined"]["viewer_name"] is None
+    assert listed["viewer_self"]["viewer_name"] == "小夏"
+    assert listed["viewer_self"]["viewer_quote"] == "某位观众平时爱拼乐高"
+
+    self_id = listed["viewer_self"]["id"]
+    def_id = listed["viewer_defined"]["id"]
+
+    # 未批准或非 viewer_self 撤销返回 409
+    assert (await client.post(f"/api/v1/memory/candidates/{self_id}/revoke")).status_code == 409
+    assert (await client.post(f"/api/v1/memory/candidates/{def_id}/revoke")).status_code == 409
+
+    approved = await client.post(
+        f"/api/v1/memory/candidates/{self_id}/approve", json={"title": "ta 爱拼乐高模型", "lasting": True}
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    assert approved.json()["viewer_name"] == "小夏"
+    assert approved.json()["archive_line_id"] is None
+    assert (await client.get(f"/api/v1/memory/archive/{session_id}")).json()["items"] == []
+
+    revoked = await client.post(f"/api/v1/memory/candidates/{self_id}/revoke")
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "pending"
+    assert revoked.json()["viewer_name"] == "小夏"
+
+    deleted = await client.delete(f"/api/v1/memory/candidates/{self_id}")
+    assert deleted.status_code == 200 and deleted.json()["success"] is True
+    assert (await client.delete(f"/api/v1/memory/candidates/{self_id}")).status_code == 404

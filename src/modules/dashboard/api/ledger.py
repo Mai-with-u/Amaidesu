@@ -19,8 +19,10 @@
 - POST   /memory/settle/{session_id}/reviewed 标已审
 - POST   /memory/settle/{session_id}/resettle 重新排进整理队列（清整理完成时刻与重试次数）
 - GET    /memory/candidates                   观众候选（待审 / 已批 / 已驳回）与待审数
-- POST   /memory/candidates/{id}/approve      批准（观众定下的写成档案行，她说欠着的登记成承诺）
+- POST   /memory/candidates/{id}/approve      批准（观众定下的写成档案行，她说欠着的登记成承诺，熟客近况进熟客卡）
 - POST   /memory/candidates/{id}/reject       驳回（同一条以后不再列）
+- POST   /memory/candidates/{id}/revoke       撤销已批准的熟客近况（回到待审）
+- DELETE /memory/candidates/{id}              删除一条候选
 
 人改过的行之后的整理不能去掉或替换，人放回、新增的行整理不挤掉；每次改动都记进改动记录。
 观众候选批准前对她完全不可见；弹幕原文里的已知观众昵称按回想工具的口径遮成"某位观众"。
@@ -462,8 +464,14 @@ def _nearest_commitments(text: str, rows: Sequence[Commitment]) -> List[NearComm
     return [NearCommitment(id=row.id, what=row.what, status=row.status) for _score, _id, row in scored[:_NEAREST_LIMIT]]
 
 
-def _candidate_item(row: ViewerCandidate, names: List[str], ledger: Sequence[Commitment] = ()) -> CandidateItem:
-    """候选转响应行：弹幕原文里的已知观众昵称遮成"某位观众"；待审的"她说欠着的"附上账上最接近的几条。"""
+def _candidate_item(
+    row: ViewerCandidate,
+    names: List[str],
+    ledger: Sequence[Commitment] = (),
+    *,
+    viewer_name: Optional[str] = None,
+) -> CandidateItem:
+    """候选转响应行：弹幕原文里的已知观众昵称遮成"某位观众"；熟客近况附观众当前昵称；待审的"她说欠着的"附参照。"""
     nearest: List[NearCommitment] = []
     if row.kind == "claimed_missing" and row.status == "pending":
         nearest = _nearest_commitments(f"{row.title} {row.reply_quote}", ledger)
@@ -472,6 +480,7 @@ def _candidate_item(row: ViewerCandidate, names: List[str], ledger: Sequence[Com
         live_session_id=row.live_session_id,
         kind=row.kind,
         title=row.title,
+        viewer_name=viewer_name if row.kind == "viewer_self" else None,
         viewer_quote=mask_names_in_text(row.viewer_quote, names, replacement=_MASKED_VIEWER),
         reply_quote=row.reply_quote,
         game=row.game,
@@ -514,15 +523,29 @@ async def list_candidates(
     commitments: CommitmentRepoDep,
     status: Annotated[str, Query(description="pending / approved / rejected / all")] = "pending",
 ) -> CandidateListResponse:
-    """观众候选列表（新的在前）与待审数；待审的"她说欠着的"附上账上最接近的几条承诺。"""
+    """观众候选列表（新的在前）与待审数；熟客近况附观众当前昵称，待审的"她说欠着的"附上账上最接近的几条承诺。"""
     value = status.strip().lower()
     if value not in ("pending", "approved", "rejected", "all"):
         raise HTTPException(status_code=422, detail=f"未知的候选状态: {status}")
     rows = await candidates.list_candidates(status=None if value == "all" else value)
     names = await _known_names(viewers)
+    self_names = await _viewer_names(
+        viewers, [int(row.viewer_id) for row in rows if row.kind == "viewer_self" and row.viewer_id is not None]
+    )
     ledger = await _ledger_for_claims(rows, commitments)
     return CandidateListResponse(
-        items=[_candidate_item(row, names, ledger) for row in rows], pending_count=await candidates.count_pending()
+        items=[
+            _candidate_item(
+                row,
+                names,
+                ledger,
+                viewer_name=self_names.get(int(row.viewer_id))
+                if (row.kind == "viewer_self" and row.viewer_id is not None)
+                else None,
+            )
+            for row in rows
+        ],
+        pending_count=await candidates.count_pending(),
     )
 
 
@@ -533,7 +556,7 @@ async def approve_candidate(
     viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
     request: Optional[CandidateApproveRequest] = None,
 ) -> CandidateItem:
-    """批准：观众定下的写成一行观众来源的档案行并放进最新快照，她说欠着的登记成未了结承诺。"""
+    """批准：观众定下的写成档案行并放进最新快照，她说欠着的登记成未了结承诺，熟客近况留供场内熟客卡读取。"""
     body = request or CandidateApproveRequest()
     title = body.title if body.title is not None and body.title.strip() else None
     try:
@@ -542,7 +565,16 @@ async def approve_candidate(
         )
     except MemoryReviewError as exc:
         _raise_review_error(exc)
-    return _candidate_item(row, await _known_names(viewers))
+    self_names = (
+        await _viewer_names(viewers, [int(row.viewer_id)])
+        if row.kind == "viewer_self" and row.viewer_id is not None
+        else {}
+    )
+    return _candidate_item(
+        row,
+        await _known_names(viewers),
+        viewer_name=self_names.get(int(row.viewer_id)) if row.viewer_id is not None else None,
+    )
 
 
 @router.post("/candidates/{candidate_id}/reject", response_model=LedgerMutationResponse)
@@ -553,6 +585,39 @@ async def reject_candidate(candidate_id: int, candidates: CandidateRepoDep) -> L
     except MemoryReviewError as exc:
         _raise_review_error(exc)
     return LedgerMutationResponse(success=True, detail="已驳回，以后不再列这一条")
+
+
+@router.post("/candidates/{candidate_id}/revoke", response_model=CandidateItem)
+async def revoke_candidate(
+    candidate_id: int,
+    candidates: CandidateRepoDep,
+    viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
+) -> CandidateItem:
+    """撤销已批准的熟客近况：撤下熟客卡并回到待审，14 天待审期重算。"""
+    try:
+        row = await candidates.revoke(candidate_id=int(candidate_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    self_names = (
+        await _viewer_names(viewers, [int(row.viewer_id)])
+        if row.kind == "viewer_self" and row.viewer_id is not None
+        else {}
+    )
+    return _candidate_item(
+        row,
+        await _known_names(viewers),
+        viewer_name=self_names.get(int(row.viewer_id)) if row.viewer_id is not None else None,
+    )
+
+
+@router.delete("/candidates/{candidate_id}", response_model=LedgerMutationResponse)
+async def delete_candidate(candidate_id: int, candidates: CandidateRepoDep) -> LedgerMutationResponse:
+    """删除一条候选（任意状态皆可）。"""
+    try:
+        await candidates.delete_candidate(candidate_id=int(candidate_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=True, detail="已删除这一条")
 
 
 def _correction_repo(archive: ArchiveRepoDep) -> MemoryCorrectionRepo:

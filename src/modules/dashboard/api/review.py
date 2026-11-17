@@ -218,6 +218,10 @@ async def session_cues(
             label, title = f"档#{entry.archive_line_id}", line.text if line is not None else ""
         elif entry.commitment_id is not None:
             label, title = f"约#{entry.commitment_id}", commitment_titles.get(entry.commitment_id, "")
+        elif entry.card_kind == "viewer_familiar":
+            viewer_id = entry.detail.get("viewer_id")
+            label = f"熟客#{int(viewer_id)}" if isinstance(viewer_id, int) else "熟客卡"
+            title = ""
         else:
             label, title = _joke_label(entry.detail), ""
         items.append(

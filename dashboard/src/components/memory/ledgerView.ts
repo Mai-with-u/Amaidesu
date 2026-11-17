@@ -103,7 +103,25 @@ export function unregisteredKindLabel(kind: UnregisteredKind): string {
 
 /** 观众候选类型 → 页面标签 */
 export function candidateKindLabel(kind: CandidateKind): string {
-  return kind === 'claimed_missing' ? '她说欠着的' : '观众定下的';
+  if (kind === 'claimed_missing') return '她说欠着的';
+  if (kind === 'viewer_self') return '熟客近况';
+  return '观众定下的';
+}
+
+/** 观众候选批准前的确认提示文案 */
+export function candidateApproveWarning(
+  kind: CandidateKind,
+  title: string,
+  viewerName?: string | null,
+): string {
+  if (kind === 'claimed_missing') {
+    return `批准后登记成一条未了结承诺「${title}」，之后每场都会提醒她兑现。先确认她不是顺着观众的话编的。`;
+  }
+  if (kind === 'viewer_self') {
+    const who = viewerName || '这位熟客';
+    return `批准后「${title}」只记在 ${who} 的熟客卡上：仅在 ta 直播间发言时提示，不进开播简报；删除这位观众或 ta 发“忘了我”时会一起删掉。`;
+  }
+  return `批准后「${title}」进记忆，下一场开播会记得。这条记忆挂在那位观众的弹幕上：删除这位观众或 ta 发“忘了我”时会一起删掉。`;
 }
 
 /** 观众候选状态 → 页面标签 */
@@ -126,16 +144,18 @@ export function nearestCommitmentsText(nearest: NearCommitment[] | undefined): s
   return `账上最接近的：${items.join('、')}`;
 }
 
-/** 整理报告里观众候选的一句话：列了几条（分两类）、因个人信息丢了几条；都没有返回 null */
+/** 整理报告里观众候选的一句话：列了几条（按类型）、因个人信息丢了几条；都没有返回 null */
 export function candidateReportText(
   listed: Partial<Record<CandidateKind | 'player_self', number>> | undefined,
   personalDropped: number | undefined,
 ): string | null {
   const parts: string[] = [];
   const defined = listed?.viewer_defined ?? 0;
+  const viewerSelf = listed?.viewer_self ?? 0;
   const claimed = listed?.claimed_missing ?? 0;
   const players = listed?.player_self ?? 0;
   if (defined) parts.push(`观众定下的 ${defined} 条`);
+  if (viewerSelf) parts.push(`熟客近况 ${viewerSelf} 条`);
   if (claimed) parts.push(`她说欠着的 ${claimed} 条`);
   if (players) parts.push(`玩家自述 ${players} 条`);
   const head = parts.length ? `列进待审区：${parts.join('、')}` : '';

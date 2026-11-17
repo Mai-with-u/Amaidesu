@@ -142,13 +142,14 @@ class NearCommitment(BaseModel):
 
 
 class CandidateItem(BaseModel):
-    """观众候选的一行：观众定下的事或她说欠着的事，人批准才进记忆。"""
+    """观众候选的一行：观众定下的事、她说欠着的事或熟客近况，人批准才生效。"""
 
     id: int = Field(description="候选主键")
     live_session_id: int = Field(description="列出它的场次")
-    kind: str = Field(description="viewer_defined 观众定下的 / claimed_missing 她说欠着的")
+    kind: str = Field(description="viewer_defined 观众定下的 / claimed_missing 她说欠着的 / viewer_self 熟客近况")
     title: str = Field(description="标题（不写观众昵称）")
-    viewer_quote: str = Field(default="", description="观众那条弹幕里定下这件事的那一段（已知昵称已遮成某位观众）")
+    viewer_name: Optional[str] = Field(default=None, description="熟客近况所属观众当前昵称；其余候选为空")
+    viewer_quote: str = Field(default="", description="观众那条弹幕里对应的那一段（已知昵称已遮成某位观众）")
     reply_quote: str = Field(description="她那句回应（或说欠着的那句）的逐字片段")
     game: Optional[str] = Field(default=None, description="关于哪个游戏世界的事")
     save_name: str = Field(default="", description="那个存档给人看的名字")
