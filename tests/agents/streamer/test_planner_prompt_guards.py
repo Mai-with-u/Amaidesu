@@ -583,3 +583,19 @@ def test_game_chat_vs_streamer_reply_role_split_in_prompt_and_speakers(prompts: 
     assert "再用 `streamer_reply` 收口直播口播" in speakers_text
     assert "单独填 `to_player` 不会往游戏公屏发字" in speakers_text
     assert "属于旁人对话，不要强行调 `minecraft_chat_send` 插嘴或代答" in speakers_text
+
+
+def test_speakers_segment_anchors_the_mention_mark(prompts: Any) -> None:
+    """提及标注判据：公屏说话人段锚住行尾的 [提及…] 标注——带标注优先处理、无标注的旁人对话不插嘴。
+
+    标注是采集器按文本判的事实：判据同时写明撞词也照标、"说她"是否等于"跟她说话"由模型按句意分辨。
+    """
+    note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 公屏] 玩家 玩家甲：麦麦在吗")
+    speakers_text = render_game_speakers((note,))
+    assert "行尾带 [提及…] 标注的行是正文里提到了她的名字，优先处理" in speakers_text
+    assert "是不是在跟她说话按那句的意思分辨" in speakers_text, "只做事实标注，行为判断留给模型"
+    assert "无标注且是玩家间互相点名或一问一答聊他们自己的事的行，属于旁人对话" in speakers_text
+
+    rules_text = prompts.render("amaidesu_planner_delegate_rules")
+    assert "带标注的优先处理，对方多半在游戏里等她回话" in rules_text
+    assert "无标注且是玩家互相聊他们自己事情的条目属旁人对话" in rules_text

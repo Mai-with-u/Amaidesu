@@ -77,6 +77,9 @@ class ComponentRuntimeContext:
     # 任务跟踪器：动态启用的 Agent 和配置启动的一样拿到它（游戏 Agent 据此追踪委派任务号、写委派终态，
     # 主播据此读委派还在不在做）；缺了它，看板里启用的游戏 Agent 不追踪委派
     task_tracker: Optional[Any] = None
+    # 配置服务：动态启用带附属采集器的 Agent 时，读别的 Agent 配置段里的跨 Agent 参考事实
+    # （如判"游戏聊天提到她"要的主播人设名）用；缺了它，相关透传按空串降级
+    config_service: Optional[Any] = None
 
     @classmethod
     def from_server(cls, server: Any) -> "ComponentRuntimeContext":
@@ -88,6 +91,7 @@ class ComponentRuntimeContext:
             llm_manager=getattr(server, "llm_manager", None),
             prompt_manager=getattr(server, "prompt_manager", None),
             task_tracker=getattr(server, "task_tracker", None),
+            config_service=getattr(server, "config_service", None),
         )
 
 
@@ -441,12 +445,24 @@ async def apply_component_plan(
     return report
 
 
+def _agents_section(ctx: ComponentRuntimeContext) -> dict:
+    """配置服务合并视图里的 [agents] 段（无配置服务或未初始化时为空 dict）。"""
+    main_config = ctx.config_service.main_config if ctx.config_service else {}
+    section = main_config.get("agents") if isinstance(main_config, dict) else None
+    return section if isinstance(section, dict) else {}
+
+
 async def _ensure_agent_companions(ctx: ComponentRuntimeContext, agent_name: str, agent_config: dict) -> None:
     """确保 Agent 的附属采集器在运行（已运行的不重复启动；无管理器时静默跳过）。"""
     manager = ctx.collector_manager
     if manager is None:
         return
-    started = await start_companions(manager, agent_name, agent_config, ctx.event_bus)
+    # 跨 Agent 参考事实与配置启动同一口径：从主播配置段取人设名透传（配置服务缺席时降级为空）
+    streamer_section = _agents_section(ctx).get("streamer")
+    persona = streamer_section.get("persona") if isinstance(streamer_section, dict) else None
+    bot_name = persona.get("bot_name") if isinstance(persona, dict) else None
+    context = {"streamer_bot_name": bot_name if isinstance(bot_name, str) else ""}
+    started = await start_companions(manager, agent_name, agent_config, ctx.event_bus, context)
     if started:
         logger.info(f"Agent {agent_name} 的附属采集器已随之启动：{started}")
 

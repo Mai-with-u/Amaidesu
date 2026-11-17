@@ -52,13 +52,18 @@ def build_companion_collectors(
     agent_name: str,
     agent_config: Optional[Dict[str, Any]],
     event_bus: Any = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> List[BaseCollector]:
-    """按 Agent 的配置构造它的附属采集器（未启动、未登记）；Agent 不带或此刻不该带时为空表。"""
+    """按 Agent 的配置构造它的附属采集器（未启动、未登记）；Agent 不带或此刻不该带时为空表。
+
+    ``context`` 是组合根透传的跨 Agent 参考事实（如主播人设名）：某些采集器的判定需要别的 Agent
+    配置段里的值，组合根取好放这里透传，框架与 Agent 包都不跨段读别人的配置。
+    """
     if agent_name == "minecraft":
         # 函数内 import：Minecraft 包拉起 MCP 客户端等依赖，只有启用了 Minecraft Agent 才需要
         from src.agents.minecraft.companions import build_companion_collectors as build_minecraft
 
-        return build_minecraft(agent_config or {}, event_bus)
+        return build_minecraft(agent_config or {}, event_bus, context)
     return []
 
 
@@ -67,10 +72,11 @@ def register_companions(
     agent_name: str,
     agent_config: Optional[Dict[str, Any]],
     event_bus: Any = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """启动装配用：把 Agent 的附属采集器登记进管理器（随后由 ``start_all`` 一并启动），返回登记了哪几个。"""
     registered: List[str] = []
-    for collector in build_companion_collectors(agent_name, agent_config, event_bus):
+    for collector in build_companion_collectors(agent_name, agent_config, event_bus, context):
         if manager.register(collector, description=f"{collector.description}（随 Agent {agent_name} 开关）"):
             registered.append(collector.name)
     if registered:
@@ -83,10 +89,11 @@ async def start_companions(
     agent_name: str,
     agent_config: Optional[Dict[str, Any]],
     event_bus: Any = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """运行中启用 Agent 时：登记并启动它的附属采集器；已在运行的不重复启动。返回启动了哪几个。"""
     started: List[str] = []
-    for collector in build_companion_collectors(agent_name, agent_config, event_bus):
+    for collector in build_companion_collectors(agent_name, agent_config, event_bus, context):
         if manager.get_collector_by_name(collector.name) is None:
             manager.register(collector, description=f"{collector.description}（随 Agent {agent_name} 开关）")
         if await manager.start_collector(collector.name):

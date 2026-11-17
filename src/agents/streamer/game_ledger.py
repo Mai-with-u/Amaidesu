@@ -85,6 +85,8 @@ class _PendingEntry:
     note: str = ""
     # 公屏消息号：只挂在决策层看的时间线行末尾（``[id:…]``），折叠比较与交给表达侧的原话都不带它
     message_id: str = ""
+    # 公屏行提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时在决策层看的行尾挂 [提及…] 标注
+    mention: str = ""
 
 
 def keep_recent_notes(kept: Sequence[PlayerNote], fresh: Sequence[PlayerNote], at_ms: int) -> Tuple[PlayerNote, ...]:
@@ -258,7 +260,14 @@ class GameLedger:
         return summary
 
     def record_chat(
-        self, game: str, body: str, timestamp_ms: int, speaker: str = "", who: str = "", message_id: str = ""
+        self,
+        game: str,
+        body: str,
+        timestamp_ms: int,
+        speaker: str = "",
+        who: str = "",
+        message_id: str = "",
+        mention: str = "",
     ) -> None:
         """游戏聊天行入账（标签就是游戏名）；原话随本窗说话交给表达侧，行文不经脱敏。
 
@@ -267,6 +276,8 @@ class GameLedger:
         ``who`` 是玩家名（系统消息为空）：有名字时这一行列进玩家找她的条目。
         ``message_id`` 是采集时发的消息号：出账时挂在时间线行末尾 ``[id:…]`` 并记在行上，决策层据此指认这一句；
         交给表达侧的原话与玩家条目不带号，表达侧聊天记录按行上的消息号剥掉标签（与弹幕同一办法）。
+        ``mention`` 是这句正文提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时决策层看的行尾
+        挂 ``[提及…]`` 标注，提示词判据据此优先处理点名她的行、不插嘴旁人对话；与消息号同不进表达侧。
         """
         self._stage(
             note_turn(game, body, timestamp_ms or now_ms()),
@@ -278,6 +289,7 @@ class GameLedger:
             who=who,
             note=body if who else "",
             message_id=message_id,
+            mention=mention,
         )
 
     def record_self_chat(self, game: str, message: str, timestamp_ms: int) -> None:
@@ -306,6 +318,7 @@ class GameLedger:
         who: str = "",
         note: str = "",
         message_id: str = "",
+        mention: str = "",
     ) -> None:
         """入账暂存：同摘要落在折叠窗内时并入最近一条只记数，按上限裁剪。"""
         now = now_ms()
@@ -327,6 +340,7 @@ class GameLedger:
                 who=who,
                 note=note,
                 message_id=message_id,
+                mention=mention,
             )
         )
         overflow = len(self._pending) - _PENDING_GAME_EVENTS_MAX
@@ -358,7 +372,9 @@ class GameLedger:
                 # 表达侧聊天记录按行上的号剥掉标签；交给表达侧的原话（fresh_chat）本来就不带号
                 turn = replace(turn, message_id=item.message_id)
             turns.append(turn)
-            events.append(f"{content} [id:{item.message_id}]" if item.message_id else content)
+            # 提及标注同样只在决策层看的行上（与消息号同不进表达侧）：提示词判据锚它分"点名她的行"与"旁人对话"
+            marked = f"{content} [提及{item.mention}]" if item.mention else content
+            events.append(f"{marked} [id:{item.message_id}]" if item.message_id else marked)
             if item.is_chat:
                 fresh_chat.append(content)
                 if item.speaker and (item.label, item.speaker) not in speakers:

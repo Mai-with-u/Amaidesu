@@ -32,11 +32,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from src.modules.events.payloads.game_chat import GameChatMention
 
-__all__ = ["ChatAttribution", "attribute_chat", "line_speaker", "mentions_of"]
+__all__ = ["ChatAttribution", "attribute_chat", "line_speaker", "matched_self_mention", "mentions_of"]
+
+#: 自提及条目在 ``GameChatMention.type`` 里用的标记：不是游戏报的点名词，是归因层按文本判定补的
+SELF_MENTION_TYPE = "self"
 
 #: 借角色名义发的机器消息的说明
 NOTE_SHOWN_AS_SELF = "模组借你的名义发的消息，不是谁说的话"
@@ -117,6 +120,21 @@ def _from_chat_line(speaker: str, text: str) -> ChatAttribution:
     said = _CHAT_LINE.fullmatch(text)
     content = said.group(2) if said else text
     return ChatAttribution(kind="player", sender=speaker, sender_id="", content=content, note=NOTE_UNVERIFIED)
+
+
+def matched_self_mention(content: str, names: Sequence[str]) -> str:
+    """聊天正文里命中的"她的名字"，按词表顺序取第一个命中的；没命中为空串。
+
+    ``names`` 是算作提及她的名字词表（主播的人设名、角色在游戏里的账号名）。判定只做事实：
+    正文含不含这个词（casefold 后子串匹配，大小写不敏感）——"麦麦一号树场"这类撞词也会命中，
+    因为文本确实提及了这个词；"说她"是不是等于"跟她说话"留给决策模型分辨，这里不排除特判。
+    词表按传入顺序匹配，调用方把更常被玩家打字叫的名字排前面。
+    """
+    folded = content.casefold()
+    for name in names:
+        if name and name.casefold() in folded:
+            return name
+    return ""
 
 
 def mentions_of(event: Dict[str, Any]) -> List[GameChatMention]:

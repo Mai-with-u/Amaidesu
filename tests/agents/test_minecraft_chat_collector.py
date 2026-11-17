@@ -19,8 +19,10 @@ from src.agents.minecraft.chat_attribution import (
     NOTE_SHOWN_AS_SELF,
     NOTE_SPEAKER_UNCONFIRMED,
     NOTE_UNVERIFIED,
+    SELF_MENTION_TYPE,
     attribute_chat,
     line_speaker,
+    matched_self_mention,
 )
 from src.agents.minecraft.chat_collector import MaicraftChatCollector
 from src.modules.collectors.base import BaseCollector
@@ -50,11 +52,15 @@ def _chat(
 
 async def _primed(
     config: Optional[Dict[str, Any]] = None,
+    self_mention_names: Tuple[str, ...] = (),
 ) -> Tuple[MaicraftChatCollector, FakeMcpClient, FakeEventBus]:
     """接上替身并完成首次读取：流里已有一条接手前的聊天，游标停在 3。"""
     bus = FakeEventBus()
     collector = MaicraftChatCollector(  # type: ignore[arg-type]
-        config=config or {}, event_bus=bus, client_factory=fake_client_factory()
+        config=config or {},
+        event_bus=bus,
+        client_factory=fake_client_factory(),
+        self_mention_names=self_mention_names,
     )
     assert await collector._ensure_ready() is True
     client = FakeMcpClient.instances[-1]
@@ -93,6 +99,78 @@ def test_note_follows_whether_the_speaker_was_checked() -> None:
     # 宿主从系统消息兜底认出来的：没对过在线玩家列表，固定附说明
     fallback = attribute_chat({"kind": "system", "text": "<Steve> 不是我的"}, self_name="Alex")
     assert (fallback.kind, fallback.sender, fallback.note) == ("player", "Steve", NOTE_UNVERIFIED)
+
+
+def test_self_mention_matches_the_text_not_the_intent() -> None:
+    """提及判定只看文本事实：人设名、账号名都算，大小写不敏感；不含就不标；撞词的行照标。"""
+    assert matched_self_mention("麦麦你在干嘛呀", ("麦麦",)) == "麦麦"
+    assert matched_self_mention("Alex 来看看", ("麦麦", "Alex")) == "Alex", "词表按传入顺序取第一个命中的"
+    assert matched_self_mention("MaiMai 快来", ("麦麦",)) == "", "词表里没有的写法不算提及"
+    assert matched_self_mention("MAIMAISERVER", ("maimai",)) == "maimai"
+    assert matched_self_mention("这谁挖的坑", ("麦麦", "Alex")) == ""
+    # 撞词不是误报：文本确实提及了这个词，"说她"是否等于"跟她说话"留给决策模型分辨
+    assert matched_self_mention("麦麦一号树场的瓜熟了", ("麦麦",)) == "麦麦"
+
+
+def test_companion_collectors_receive_the_streamer_bot_name() -> None:
+    """组合根透传主播人设名：聊天流采集器拿它判提及；不传时词表为空（不标提及）。"""
+    with_name = [
+        c
+        for c in build_companion_collectors(
+            "minecraft", {"mcp": {"enabled": True}}, context={"streamer_bot_name": "麦麦"}
+        )
+    ]
+    chat = next(c for c in with_name if c.name == "maicraft_chat")
+    assert chat._injected_mention_names == ("麦麦",)
+    without = [c for c in build_companion_collectors("minecraft", {"mcp": {"enabled": True}})]
+    chat = next(c for c in without if c.name == "maicraft_chat")
+    assert chat._injected_mention_names == ()
+
+
+async def test_player_chat_mentioning_her_is_marked_in_mentions() -> None:
+    """玩家聊天正文含人设名或账号名时，payload 的 mentions 追加 type="self" 条目；不含与系统消息不标。"""
+    collector, client, bus = await _primed(self_mention_names=("麦麦",))
+    client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
+    client.pages.append(
+        events_page(
+            [
+                _chat(4, "麦麦一号树场的瓜熟了"),
+                _chat(5, "Alex 在吗"),
+                _chat(6, "这谁挖的坑"),
+                _chat(7, "麦麦上线了", kind="system"),
+            ],
+            cursor=7,
+        )
+    )
+    await collector._drain()
+    persona_line, account_line, plain, system_line = (payload for _, payload in bus.events)
+    assert [(m.name, m.type, m.id) for m in persona_line.mentions] == [("麦麦", SELF_MENTION_TYPE, "")]
+    assert [(m.name, m.type) for m in account_line.mentions] == [("Alex", SELF_MENTION_TYPE)], (
+        "账号名也算提及，不分大小写"
+    )
+    assert plain.mentions == []
+    assert system_line.mentions == [], "提及标注只做玩家聊天行，系统消息不标"
+
+
+async def test_game_reported_mentions_stay_and_self_entry_is_appended() -> None:
+    """游戏报的点名词照旧在前，自提及条目追加在后；同一条上互不挤掉。"""
+    collector, client, bus = await _primed(self_mention_names=("麦麦",))
+    client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
+    line = {
+        "cursor": 4,
+        "kind": "player",
+        "sender": "Steve",
+        "sender_online": True,
+        "text": "麦麦看它",
+        "mentions": [{"name": "苦力怕", "type": "minecraft:creeper", "uuid": "0f0e0d0c-0b0a-4908-8706-050403020100"}],
+    }
+    client.pages.append(events_page([line], cursor=4))
+    await collector._drain()
+    [(_, payload)] = bus.events
+    assert [(m.name, m.type, m.id) for m in payload.mentions] == [
+        ("苦力怕", "minecraft:creeper", "0f0e0d0c-0b0a-4908-8706-050403020100"),
+        ("麦麦", SELF_MENTION_TYPE, ""),
+    ]
 
 
 def test_chat_lines_sent_as_system_messages_are_attributed() -> None:
@@ -235,6 +313,7 @@ async def test_reads_the_chat_topic_and_does_not_replay_history() -> None:
 
 async def test_player_and_system_messages_become_game_chat_events() -> None:
     collector, client, bus = await _primed()
+    client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     client.pages.append(
         events_page(
             [
@@ -256,7 +335,8 @@ async def test_player_and_system_messages_become_game_chat_events() -> None:
     assert long_one.truncated is True
     # 旧版 Mod 没报在线核对、系统消息没有发言人：都按没核对过
     assert (said.sender_online, joined.sender_online) == (False, False)
-    assert client.read_calls[-1]["arguments"] == {
+    long_polls = [call for call in client.read_calls if call["name"] == "events"]
+    assert long_polls[-1]["arguments"] == {
         "topic": "chat",
         "stream_id": "stream-A",
         "after_cursor": 3,
@@ -282,6 +362,7 @@ async def test_the_online_check_from_the_game_is_passed_on() -> None:
 async def test_chat_carries_the_save_of_its_page() -> None:
     """聊天带着这一页所在的存档：存储据此记在哪个存档见过这位玩家；旧版 Mod 的页没有 world，存档留空。"""
     collector, client, bus = await _primed()
+    client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     page = events_page([_chat(4, "来切磋")], cursor=4)
     page["world"] = {"id": "aaa", "name": "老家", "source": "world_id_file", "online_mode": "off"}
     client.pages.append(page)

@@ -311,6 +311,23 @@ def test_chat_speakers_list_who_spoke_this_batch() -> None:
     assert ledger.drain().chat_speakers == (), "出账后清空，下一窗只看新来的"
 
 
+def test_chat_mention_mark_reaches_decision_view_only() -> None:
+    """提及标注挂在决策层看的事件行尾；交给表达侧的原话与玩家条目不带标注。"""
+    ledger = GameLedger()
+    ledger.record_chat("minecraft", "玩家 Alex：麦麦来看看我", _ts(20, 1), speaker="uuid-a", who="Alex", mention="麦麦")
+    ledger.record_chat("minecraft", "玩家 Steve：这谁挖的坑", _ts(20, 2), speaker="uuid-s", who="Steve")
+
+    batch = ledger.drain()
+
+    assert batch.events[0].endswith("麦麦来看看我 [提及麦麦]")
+    assert "[提及" not in batch.events[1]
+    assert batch.fresh_chat == (
+        "[20:01 minecraft] 玩家 Alex：麦麦来看看我",
+        "[20:02 minecraft] 玩家 Steve：这谁挖的坑",
+    ), "原话不带标注"
+    assert all("[提及" not in note.line for note in batch.player_notes)
+
+
 @pytest.mark.parametrize(
     ("speakers", "expected"),
     [

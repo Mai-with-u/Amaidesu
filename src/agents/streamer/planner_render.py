@@ -536,7 +536,8 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
     游戏里的玩家听不到直播：问她事、跟她搭话的要在游戏里回一句，否则对方看到的就是她不理人。
     同时游戏公屏是全服广播，远处玩家探索时的环境感叹也会进来：结合现场速览标出谁在身边、谁不在身边，
     既保持对点名她、向她求助搭话或就在身边围观互动玩家的回应积极度，也防止把远处未点名她的环境感叹
-    硬套成她自己手头工位的状况。
+    硬套成她自己手头工位的状况。点名关系靠行尾的 [提及…] 标注（采集器按文本判定的事实）锚定，
+    决策模型不再从扁平行里自己猜指向。
     """
     names: List[str] = []
     for note in notes:
@@ -546,13 +547,17 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
         return ""
     who = "、".join(f"玩家 {name}" for name in names)
     # 游戏内玩家听不到直播间口播：明确区分别人互相聊天的旁人对话与直接找她的搭话，
-    # 需要游戏内回字时先用 minecraft_chat_send 往公屏发字，再用 streamer_reply 收口直播口播
+    # 需要游戏内回字时先用 minecraft_chat_send 往公屏发字，再用 streamer_reply 收口直播口播。
+    # 提及标注是采集器按文本判的事实（正文含她的名字，撞词也照标——"说她"是否等于"跟她说话"
+    # 由模型按句意分辨），判据锚在标注上而不是让模型自己从一堆扁平行里猜谁在对谁说
     base = (
         f"【游戏公屏近期发言】{who}（在游戏里，听不到直播）：问她事、向她求助或直接跟她搭话的，"
         "先（或同一步并列）调用 `minecraft_chat_send` 在游戏里回一句，再用 `streamer_reply` 收口直播口播"
         "（`streamer_reply` 只对直播间出声，单独填 `to_player` 不会往游戏公屏发字——只在直播里接，对方看到的就是她不理人）；"
-        "若公屏上多名玩家是在互相点名或一问一答聊他们自己的事（未点名她、也不是向她求助），"
-        "属于旁人对话，不要强行调 `minecraft_chat_send` 插嘴或代答；"
+        "行尾带 [提及…] 标注的行是正文里提到了她的名字，优先处理——对方多半在游戏里等她回话"
+        "（标注只是文本事实：别的东西恰好也叫这个名的行也会标，是不是在跟她说话按那句的意思分辨）；"
+        "无标注且是玩家间互相点名或一问一答聊他们自己的事的行，属于旁人对话，"
+        "不要强行调 `minecraft_chat_send` 插嘴或代答；"
         "纯感叹、自言自语可以只用 `streamer_reply` 在直播里接。"
     )
     nearby_set = nearby_players_from_overview(overview)

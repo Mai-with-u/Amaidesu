@@ -30,11 +30,11 @@ GameChatKind = Literal["player", "system"]
 
 
 class GameChatMention(BaseModel):
-    """消息里点到的一个游戏实体（如死亡播报里的死者、凶手）。"""
+    """消息里点到的一个实体：游戏报的（如死亡播报里的死者、凶手），或采集器判定的自提及。"""
 
     name: str = Field(default="", description="消息里写出的名字（游戏没给时为空串）")
-    type: str = Field(default="", description="实体类型（如 minecraft:creeper；游戏没给时为空串）")
-    id: str = Field(..., description="实体在游戏里的唯一编号（Minecraft 是 UUID）")
+    type: str = Field(default="", description='实体类型（如 minecraft:creeper；自提及条目为 "self"）')
+    id: str = Field(..., description="实体在游戏里的唯一编号（Minecraft 是 UUID；自提及条目无编号，为空串）")
 
 
 @register_event(CoreEvents.GAME_CHAT_RECEIVED)
@@ -55,7 +55,8 @@ class GameChatPayload(BasePayload):
         private: 私聊——对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）
         truncated: 上游是否截断了过长的原话
         note: 采集器附的一句归属说明（无说明为空串）
-        mentions: 消息里点到的实体，按出现先后（死亡播报的死者与凶手等；没有为空列表）
+        mentions: 消息里点到的实体，按出现先后（死亡播报的死者与凶手等；玩家聊天文本提到主播的行由
+          采集器补一条 ``type="self"`` 的自提及条目——事实标注，"说她"是否等于"跟她说话"由决策层分辨）
         message_key: 游戏给这条消息的模板编号（Minecraft 是翻译键；没有为空串）
         suppressed: 上游因洪泛或重复而没有转出的消息条数（随这一条一起说明）
         save_id: 收到时角色所在的存档编号（空串 = 不分存档或存档不明）
@@ -83,7 +84,8 @@ class GameChatPayload(BasePayload):
     truncated: bool = Field(default=False, description="上游是否截断了过长的原话")
     note: str = Field(default="", description="采集器附的一句归属说明：谁说的、说的是谁（无说明为空串）")
     mentions: List[GameChatMention] = Field(
-        default_factory=list, description="消息里点到的实体，按出现先后（死亡播报的死者与凶手等）"
+        default_factory=list,
+        description='消息里点到的实体，按出现先后（死亡播报的死者与凶手等；玩家聊天文本提到主播的行带 type="self" 的自提及条目）',
     )
     message_key: str = Field(
         default="", description="消息模板编号（Minecraft 是翻译键，如 death.attack.explosion.player；没有为空串）"

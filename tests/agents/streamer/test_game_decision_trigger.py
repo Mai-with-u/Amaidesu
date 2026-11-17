@@ -12,7 +12,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
+from src.modules.events.payloads.game_chat import GameChatMention, GameChatPayload, GameSelfChattedPayload
 from src.modules.events.payloads.game_place import GamePlacePayload
 from src.agents.streamer.trigger_cause import TriggerKind
 from tests.agents.streamer.helpers import make_streamer_agent
@@ -168,6 +168,28 @@ async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replye
     assert "玩家 Steve：麦麦你在干嘛呀（之前还有 2 条重复或刷屏的没转过来）" in batch.events[1]
     # 聊天原话随本窗说话交给表达侧
     assert batch.fresh_chat == (batch.events[0], batch.events[1])
+
+
+async def test_game_chat_mention_mark_lands_on_decision_line(live_agent) -> None:
+    """采集器判定的自提及（payload 里 type="self" 的点名词条目）在决策窗公屏行尾挂 [提及…] 标注。"""
+    agent, bus = live_agent
+    mentioned = GameChatPayload(
+        game="minecraft",
+        kind="player",
+        sender="Steve",
+        content="麦麦一号树场的瓜熟了",
+        mentions=[GameChatMention(name="麦麦", type="self", id="")],
+        timestamp_ms=1_000,
+    )
+    plain = GameChatPayload(game="minecraft", kind="player", sender="Alex", content="这谁挖的坑", timestamp_ms=1_001)
+    await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, mentioned, source="maicraft_chat")
+    await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, plain, source="maicraft_chat")
+    await _wait_until(lambda: len(agent._game_ledger._pending) == 2)
+
+    batch = agent._scope.drain_window()
+    assert batch.events[0].endswith("麦麦一号树场的瓜熟了 [提及麦麦]")
+    assert "[提及" not in batch.events[1]
+    assert all("[提及" not in line for line in batch.fresh_chat), "交给表达侧的原话不带标注"
 
 
 async def test_game_chat_note_follows_the_speaker(live_agent) -> None:

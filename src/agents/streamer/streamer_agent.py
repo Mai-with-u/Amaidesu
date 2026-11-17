@@ -192,6 +192,15 @@ def _chat_speaker(payload: GameChatPayload) -> str:
     return payload.sender_id if payload.sender_id and payload.sender_online else "?"
 
 
+def self_mention_word(payload: GameChatPayload) -> str:
+    """这条游戏聊天里采集器判定的自提及名字（玩家聊天正文提到她的名字）；没提及为空串。
+
+    名字取自 payload 的 ``type="self"`` 点名词条目：采集器在进游戏的进程里按文本判的事实，
+    决策侧只转写标注、不重新判。
+    """
+    return next((m.name for m in payload.mentions if m.type == "self" and m.name), "")
+
+
 def _game_chat_line(payload: GameChatPayload) -> str:
     """游戏里别人说的一句话写成给决策看的一行：发言人 + 标注 + 原话 + 截断/刷屏说明。
 
@@ -1589,7 +1598,10 @@ class StreamerAgent(BaseAgent):
                 continue
             ts = int(row.get("timestamp_ms", 0))
             time_text = datetime.fromtimestamp(ts / 1000).strftime("%H:%M") if ts > 0 else "--:--"
-            lines.append(f"{time_text} {_game_chat_line(payload)}")
+            # 续播重放也是决策参考：提及标注与实时决策窗同款，判据对两种来源一视同仁
+            mentioned = self_mention_word(payload)
+            mark = f" [提及{mentioned}]" if mentioned else ""
+            lines.append(f"{time_text} {_game_chat_line(payload)}{mark}")
         if lines:
             self._resume_chat_replay = lines
             self._logger.info(f"续播重放：已暂存重启前她可能还没回的 {len(lines)} 条玩家发言，下个决策轮注入")
@@ -2740,6 +2752,8 @@ class StreamerAgent(BaseAgent):
                     speaker=_chat_speaker(payload),
                     who=payload.sender if payload.kind == "player" else "",
                     message_id=payload.message_id,
+                    # 采集器判定的自提及（玩家聊天正文提到她的名字）：决策行据此挂 [提及…] 标注
+                    mention=self_mention_word(payload),
                 )
                 if self._mouth is not None:
                     self._mouth.note_game(body)

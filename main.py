@@ -1290,12 +1290,25 @@ def _enabled_agents_with_companions(agents_config: Dict[str, Any]) -> List[str]:
     return [name for name in (enabled or []) if isinstance(name, str) and companion_names(name)]
 
 
+def _streamer_bot_name(agents_config: Dict[str, Any]) -> str:
+    """主播的人设名（config/agents.toml [agents.streamer.persona].bot_name；缺段或没配为空串）。
+
+    附属采集器透传用：游戏聊天采集器判"玩家聊天提到她"需要这个名字。
+    """
+    streamer = agents_config.get("streamer")
+    persona = streamer.get("persona") if isinstance(streamer, dict) else None
+    bot_name = persona.get("bot_name") if isinstance(persona, dict) else None
+    return bot_name if isinstance(bot_name, str) else ""
+
+
 def _register_companion_collectors(manager, agents_config: Dict[str, Any], event_bus=None) -> None:
     """把每个启用的 Agent 的附属采集器登记进 CollectorManager（启动由调用方的 start_all 统一做）。
 
     附属采集器只对所属 Agent 有意义：Agent 没启用就不装，免得对着连不上的游戏空转重试；
-    配置由 Agent 自己的配置段换算（见 ``src.modules.agents.companions``）。
+    配置由 Agent 自己的配置段换算（见 ``src.modules.agents.companions``）。跨 Agent 的参考事实
+    （主播人设名）由组合根在这里取好透传。
     """
+    context = {"streamer_bot_name": _streamer_bot_name(agents_config)}
     for agent_name in _enabled_agents_with_companions(agents_config):
         agent_section = agents_config.get(agent_name)
         register_companions(
@@ -1303,6 +1316,7 @@ def _register_companion_collectors(manager, agents_config: Dict[str, Any], event
             agent_name,
             agent_section if isinstance(agent_section, dict) else {},
             event_bus=event_bus,
+            context=context,
         )
 
 
