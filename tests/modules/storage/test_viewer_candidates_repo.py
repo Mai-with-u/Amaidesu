@@ -15,7 +15,11 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import PendingArchiveLine, PendingViewerCandidate
 from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.repos.memory_review import MemoryReviewError
-from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, replace_session_candidates
+from src.modules.storage.repos.viewer_candidates import (
+    CANDIDATE_EXPIRE_MS,
+    VIEWER_SELF,
+    replace_session_candidates,
+)
 
 
 @pytest.fixture()
@@ -444,3 +448,280 @@ async def test_forget_me_compares_percent_and_underscore_literally(store: SQLite
     titles = sorted(item.title for item in await store.viewer_candidates.list_candidates(status=None))
     assert titles == ["给一位观众唱歌", "给阿x杰讲故事"], "真提到 ta 的照换，只是像的不动"
     assert [(edit[1], edit[2]) for edit in _edits(store)] == [("reject", "给阿x杰讲故事")]
+
+
+async def test_viewer_self_candidate_lifecycle_coexists_revokes_deletes_and_stays_out_of_archive(
+    store: SQLiteDatabase,
+) -> None:
+    """熟客近况候选：可与观众定下共享同一句回应；批准后留在候选表、不写档案与承诺；支持撤回待审与删除，驳回不影响全局去重。"""
+    session_id, _said, _reply, _owed = await _settled_session(store)
+    viewer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_xiaoxia",
+        user_name="小夏",
+        timestamp_ms=1_050,
+        name_match_window_ms=0,
+    )
+    chat_1 = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=2_100,
+        sender_role="viewer",
+        viewer_id=viewer.viewer_id,
+        content="我平时做木工，这只小狗叫木头吧",
+        message_type="danmaku",
+    )
+    reply_1 = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=2_200,
+        sender_role="assistant",
+        content="原来你做木工呀，那就叫木头",
+        message_type="speech",
+    )
+    chat_2 = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=2_300,
+        sender_role="viewer",
+        viewer_id=viewer.viewer_id,
+        content="我周末常去徒步",
+        message_type="danmaku",
+    )
+    reply_2 = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=2_400,
+        sender_role="assistant",
+        content="徒步呼吸新鲜空气挺好",
+        message_type="speech",
+    )
+
+    written = _write(
+        store,
+        session_id,
+        [
+            PendingViewerCandidate(
+                kind="viewer_defined",
+                title="小狗取名木头",
+                viewer_chat_id=chat_1,
+                viewer_quote="小狗叫木头",
+                word="木头",
+                reply_chat_id=reply_1,
+                reply_quote="那就叫木头",
+                viewer_id=viewer.viewer_id,
+            ),
+            PendingViewerCandidate(
+                kind=VIEWER_SELF,
+                title="ta 平时做木工",
+                viewer_chat_id=chat_1,
+                viewer_quote="平时做木工",
+                word="木工",
+                reply_chat_id=reply_1,
+                reply_quote="原来你做木工呀",
+                viewer_id=viewer.viewer_id,
+            ),
+            # 同 kind 同 reply_chat_id 第二条去重丢弃
+            PendingViewerCandidate(
+                kind=VIEWER_SELF,
+                title="ta 喜欢做木工活",
+                viewer_chat_id=chat_1,
+                viewer_quote="做木工",
+                word="木工",
+                reply_chat_id=reply_1,
+                reply_quote="原来你做木工呀",
+                viewer_id=viewer.viewer_id,
+            ),
+            PendingViewerCandidate(
+                kind=VIEWER_SELF,
+                title="ta 周末常去徒步",
+                viewer_chat_id=chat_2,
+                viewer_quote="常去徒步",
+                word="徒步",
+                reply_chat_id=reply_2,
+                reply_quote="徒步呼吸新鲜空气挺好",
+                viewer_id=viewer.viewer_id,
+            ),
+        ],
+        at_ms=10_000,
+    )
+    assert written == 3
+
+    by_title = {item.title: item for item in await store.viewer_candidates.list_candidates()}
+    archive_before = len(await store.archive.list_lines(live_session_id=session_id))
+    commitments_before = await store.commitments.count_commitments()
+
+    approved = await store.viewer_candidates.approve(
+        candidate_id=by_title["ta 平时做木工"].id, title="ta 平时爱做木工", lasting=True, at_ms=12_000
+    )
+    assert (approved.status, approved.title, approved.archive_line_id, approved.commitment_id) == (
+        "approved",
+        "ta 平时爱做木工",
+        None,
+        None,
+    )
+    assert len(await store.archive.list_lines(live_session_id=session_id)) == archive_before
+    assert await store.commitments.count_commitments() == commitments_before
+    assert [n.title for n in await store.viewers.approved_viewer_notes(viewer_ids=[viewer.viewer_id])] == [
+        "ta 平时爱做木工"
+    ]
+
+    # 非 viewer_self 或未批准的候选不可撤销批准
+    with pytest.raises(MemoryReviewError) as conflict_kind:
+        await store.viewer_candidates.revoke(candidate_id=by_title["小狗取名木头"].id, at_ms=12_500)
+    assert conflict_kind.value.kind == "conflict"
+
+    revoked = await store.viewer_candidates.revoke(candidate_id=approved.id, at_ms=13_000)
+    assert (revoked.status, revoked.decided_at_ms, revoked.created_at_ms) == ("pending", None, 13_000)
+    assert await store.viewers.approved_viewer_notes(viewer_ids=[viewer.viewer_id]) == []
+
+    # 再次批准一条、驳回另一条：验证全局去重键与熟客个人去重键互不串扰
+    await store.viewer_candidates.approve(candidate_id=approved.id, at_ms=14_000)
+    await store.viewer_candidates.reject(candidate_id=by_title["ta 周末常去徒步"].id, at_ms=14_500)
+    assert await store.viewer_candidates.rejected_keys() == ([], [])
+    assert await store.sessions.rejected_candidate_keys() == ([], [])
+    self_titles, rejected_chats = await store.sessions.decided_viewer_self_keys()
+    assert sorted(self_titles[viewer.viewer_id]) == ["ta 周末常去徒步", "ta 平时爱做木工"]
+    assert rejected_chats == [chat_2]
+
+    # 删除候选（任意状态）与审计空文本保护
+    await store.viewer_candidates.delete_candidate(candidate_id=by_title["ta 周末常去徒步"].id, at_ms=15_000)
+    with pytest.raises(MemoryReviewError) as missing_err:
+        await store.viewer_candidates.delete_candidate(candidate_id=by_title["ta 周末常去徒步"].id, at_ms=15_100)
+    assert missing_err.value.kind == "not_found"
+    assert all(before == "" and after == "" for _target, _action, before, after in _edits(store))
+
+
+async def test_viewer_presence_stats_tiers_former_names_and_authored_archive_lines(
+    store: SQLiteDatabase,
+) -> None:
+    """熟客分层（close/regular/none）、曾用名过滤与观众共同造梗档案行归属查询。"""
+    s1 = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=s1, ended_at_ms=2_000)
+    s2 = await store.sessions.insert_live_session(started_at_ms=3_000, kind="live")
+
+    # 小夏：改过多次昵称（含占位名与单字名），上过舰（非模拟） -> close，曾用名只留最近 2 个合法非当前昵称
+    v_close = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_close",
+        user_name="阿",
+        timestamp_ms=1_000,
+        name_match_window_ms=0,
+    )
+    await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_close",
+        user_name="未知用户",
+        timestamp_ms=1_100,
+        name_match_window_ms=0,
+    )
+    await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_close",
+        user_name="旧名一号",
+        timestamp_ms=1_200,
+        name_match_window_ms=0,
+    )
+    await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_close",
+        user_name="旧名二号",
+        timestamp_ms=1_300,
+        name_match_window_ms=0,
+    )
+    await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_close",
+        user_name="旧名三号",
+        timestamp_ms=1_400,
+        name_match_window_ms=0,
+    )
+    await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_close",
+        user_name="小夏",
+        timestamp_ms=1_500,
+        name_match_window_ms=0,
+    )
+    await store.execute(
+        "INSERT INTO guards(live_session_id, timestamp_ms, platform, user_id, user_name, viewer_id, simulated)"
+        " VALUES (?, 1600, 'bilibili', 'u_close', '小夏', ?, 0)",
+        (s1, v_close.viewer_id),
+    )
+
+    stats_close = await store.viewers.resolve_presence_stats(viewer_id=v_close.viewer_id, current_session_id=s2)
+    assert stats_close is not None
+    assert stats_close.has_guard is True
+    assert stats_close.familiarity_tier == "close"
+    assert stats_close.former_names == ("旧名三号", "旧名二号")
+
+    # 老陈：过往 2 场 + 被回复 3 次 -> regular；标上待遗忘后立即降为 none
+    v_reg = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_reg",
+        user_name="老陈",
+        timestamp_ms=1_000,
+        name_match_window_ms=0,
+    )
+    await store.execute(
+        "UPDATE viewers SET sessions_count=2, last_session_id=?, replied_count=3 WHERE id=?",
+        (s1, v_reg.viewer_id),
+    )
+    stats_reg = await store.viewers.resolve_presence_stats(viewer_id=v_reg.viewer_id, current_session_id=s2)
+    assert stats_reg is not None and stats_reg.familiarity_tier == "regular"
+
+    await store.execute("UPDATE viewers SET forget_requested_at_ms=2500 WHERE id=?", (v_reg.viewer_id,))
+    stats_forgetting = await store.viewers.resolve_presence_stats(viewer_id=v_reg.viewer_id, current_session_id=s2)
+    assert stats_forgetting is not None and stats_forgetting.familiarity_tier == "none"
+
+    # 共同造梗档案行归属：只查挂在该观众弹幕上的 source='viewer' 档案行
+    said_close = await store.chat.insert_live_chat(
+        live_session_id=s1,
+        timestamp_ms=1_700,
+        sender_role="viewer",
+        viewer_id=v_close.viewer_id,
+        content="水獭叫圆圆吧",
+        message_type="danmaku",
+    )
+    reply_close = await store.chat.insert_live_chat(
+        live_session_id=s1,
+        timestamp_ms=1_800,
+        sender_role="assistant",
+        content="好，水獭就叫圆圆",
+        message_type="speech",
+    )
+    await store.sessions.apply_settlement(
+        live_session_id=s1,
+        archive_lines=[PendingArchiveLine(text="修好风车", quote="风车", evidence_chat_id=reply_close + 50)],
+        commitments=[],
+        closures=[],
+        settled_at_ms=1_900,
+        now_ms_value=1_900,
+    )
+    _write(
+        store,
+        s1,
+        [
+            PendingViewerCandidate(
+                kind="viewer_defined",
+                title="水獭取名圆圆",
+                viewer_chat_id=said_close,
+                viewer_quote="水獭叫圆圆",
+                word="圆圆",
+                reply_chat_id=reply_close,
+                reply_quote="水獭就叫圆圆",
+                viewer_id=v_close.viewer_id,
+            )
+        ],
+    )
+    (cand,) = await store.viewer_candidates.list_candidates()
+    await store.viewer_candidates.approve(candidate_id=cand.id, at_ms=2_000)
+
+    authored = await store.archive.list_viewer_authored_lines(viewer_ids=[v_close.viewer_id])
+    assert [line.text for line in authored] == ["水獭取名圆圆"]
+    assert await store.archive.list_viewer_authored_lines(viewer_ids=[v_reg.viewer_id]) == []
+    assert await store.archive.list_viewer_authored_lines(viewer_ids=[]) == []
