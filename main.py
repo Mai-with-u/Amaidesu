@@ -824,9 +824,15 @@ async def create_app_components(
         )
 
         # --- 形象动作工具（avatar_act：主播有意发起身体动作的唯一入口，委托面捕合成器）---
-        # 组合根直接注册（无配置段、无外部连接）；平台把自己的动作片段登记到面捕合成器上
-        if avatar_tracking is not None:
+        # 组合根直接注册（无外部连接）；跟随 [avatar.platform].enabled 名单语义——
+        # 名单为空即皮套整体未启用，工具也从列表消失，避免动作写入无人承接的
+        # 合成器时间线却回 success
+        avatar_platform_enabled = avatar_platform.get("enabled", []) if isinstance(avatar_platform, dict) else []
+        avatar_platform_enabled = avatar_platform_enabled if isinstance(avatar_platform_enabled, list) else []
+        if avatar_tracking is not None and avatar_platform_enabled:
             tool_registry.register_provider(AvatarActProvider(avatar_tracking))
+        elif avatar_tracking is not None:
+            logger.info("皮套平台未启用，avatar_act 工具不注册")
 
         # --- 视觉基础模块工具 look_at_screen（L2 DI：组合根注入 mss 截屏后端）---
         # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按 [tools.vision] 开关装配
