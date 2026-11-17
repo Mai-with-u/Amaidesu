@@ -408,6 +408,10 @@ class _SessionsRepoStub(_UnusedRepo):
         # 用例里也没有人驳回过"她说欠着的"候选
         return [], []
 
+    async def decided_viewer_self_keys(self) -> tuple[dict[int, list[str]], list[int]]:
+        # 用例里没有熟客近况的已批或已驳回记录
+        return {}, []
+
 
 class _CommitmentsRepoStub:
     """回放用例中的旧承诺：未了结按登记顺序，判误记、已了结按最近在前（与生产查询同序）。"""

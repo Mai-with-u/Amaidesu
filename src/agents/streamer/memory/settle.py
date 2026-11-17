@@ -273,6 +273,8 @@ class SettleMaterial:
     corrections_text: str = ""
     # 已知观众昵称（小写，排除本场游戏玩家名且至少 3 字符）：防止模型把念观众昵称误写成给动物/物件起名进标题
     viewer_names_guard: Set[str] = field(default_factory=set)
+    # 本场被她回应过的非模拟熟客观众主键集合：仅这些观众的回复行标"回复熟客观众N"并允许产出熟客近况候选
+    familiar_viewer_ids: Set[int] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -629,6 +631,7 @@ class SessionSettler:
         cue_log_repo: Optional["MemoryCueLogRepo"] = None,
         social_fact_repo: Optional["SocialFactRepo"] = None,
         correction_repo: Optional[MemoryCorrectionRepo] = None,
+        viewer_repo: Optional[ViewerRepo] = None,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
@@ -655,7 +658,7 @@ class SessionSettler:
         self._corrections: Optional[MemoryCorrectionRepo] = correction_repo or (
             MemoryCorrectionRepo(conn_mgr) if conn_mgr is not None else None
         )
-        self._viewers: Optional[ViewerRepo] = ViewerRepo(conn_mgr) if conn_mgr is not None else None
+        self._viewers: Optional[ViewerRepo] = viewer_repo or (ViewerRepo(conn_mgr) if conn_mgr is not None else None)
         self._min_session_ms = max(0, int(min_session_ms))
         self._task_registry = task_registry
         self._clock = clock
@@ -996,7 +999,10 @@ class SessionSettler:
         carried = await self._material_step(6, self._load_carried(session), progress)
         place_marks = await self._material_step(7, self._load_place_marks(session), progress)
         records = await self._material_step(8, self._load_game_records(session), progress)
-        speech_text, lines_by_number, speech_note = self._render_speech(delivered, player_codes=players.codes)
+        familiar_viewer_ids = await self._load_familiar_viewer_ids(session, delivered)
+        speech_text, lines_by_number, speech_note = self._render_speech(
+            delivered, player_codes=players.codes, familiar_viewer_ids=familiar_viewer_ids
+        )
         corrections, corrections_text = await self._load_corrections(session, previous)
         viewer_names_guard = await self._load_viewer_names_guard()
         game_agents = self._enabled_game_names()
@@ -1035,6 +1041,7 @@ class SessionSettler:
             corrections=corrections,
             corrections_text=corrections_text,
             viewer_names_guard=viewer_names_guard,
+            familiar_viewer_ids=familiar_viewer_ids,
         )
 
     async def _material_step(
@@ -1283,10 +1290,41 @@ class SessionSettler:
         except Exception as exc:  # noqa: BLE001 - 读不到就不写，免得冲掉人批准过的事
             raise SettleError(f"取人批准过的观众来源行失败：{exc}") from exc
 
+    async def _load_familiar_viewer_ids(self, session: LiveSession, delivered: Sequence[SettleSpeechLine]) -> Set[int]:
+        """解析本场被她回应过的非模拟观众里属于熟客（close / regular）且未请求遗忘的观众主键集合。"""
+        if self._viewers is None:
+            return set()
+        resolver = getattr(self._viewers, "resolve_presence_stats", None)
+        if not callable(resolver):
+            return set()
+        replied_vids = dict.fromkeys(
+            int(line.reply_viewer_id)
+            for line in delivered
+            if not line.reply_simulated and line.reply_viewer_id is not None
+        )
+        familiar: Set[int] = set()
+        for vid in replied_vids:
+            try:
+                stats = await resolver(viewer_id=vid, current_session_id=int(session.id))
+            except Exception as exc:  # noqa: BLE001 - 熟客判定失败时按普通观众处理，不挡整理
+                logger.debug(f"场次 {session.id} 解析观众 {vid} 熟悉度失败: {exc}", exc=exc)
+                return set()
+            if (
+                stats is not None
+                and stats.forget_requested_at_ms is None
+                and stats.familiarity_tier in ("close", "regular")
+            ):
+                familiar.add(vid)
+        return familiar
+
     def _render_speech(
-        self, delivered: List[SettleSpeechLine], *, player_codes: Optional[Mapping[int, str]] = None
+        self,
+        delivered: List[SettleSpeechLine],
+        *,
+        player_codes: Optional[Mapping[int, str]] = None,
+        familiar_viewer_ids: AbstractSet[int] = frozenset(),
     ) -> Tuple[str, Dict[int, SettleSpeechLine], Optional[str]]:
-        """台词渲染成带编号的行；回应弹幕的把那句原文与发言人代号附在前面。
+        """台词渲染成带编号的行；回应弹幕的把那句原文与发言人代号附在前面（熟客标注"回复熟客观众N"）。
 
         编号是模型输出用来指回具体台词的键：整场台词超过模型窗口预算时只保留一部分，
         按保留顺序重新编号，台词行本身仍指向原行。返回的第三项是裁剪说明（未裁剪为 None），
@@ -1302,8 +1340,13 @@ class SessionSettler:
             reply_viewer_id = line.reply_viewer_id
             if line.reply_content and reply_viewer_id is not None:
                 code = codes.setdefault(int(reply_viewer_id), f"{_VIEWER_CODE_PREFIX}{len(codes) + 1}")
+                speaker_label = (
+                    f"熟客{code}"
+                    if (not line.reply_simulated and int(reply_viewer_id) in familiar_viewer_ids)
+                    else code
+                )
                 reply_text = " ".join((line.reply_content or "").split())
-                reply_note = f"（回复{code}「{reply_text}」）"
+                reply_note = f"（回复{speaker_label}「{reply_text}」）"
             player_note = ""
             # 在回弹幕的行只标回复了哪位观众，不再标回应玩家
             reply_player = _reply_player_of(line)
@@ -1737,6 +1780,14 @@ class SessionSettler:
             rejected_chats, rejected_titles = await self._sessions.rejected_candidate_keys()
         except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
             logger.warning(f"读驳回过的观众候选失败，本次不按驳回记录去重: {exc}", exc=exc)
+        decided_self_titles: Dict[int, List[str]] = {}
+        rejected_self_chats: List[int] = []
+        decided_self_fn = getattr(self._sessions, "decided_viewer_self_keys", None)
+        if callable(decided_self_fn):
+            try:
+                decided_self_titles, rejected_self_chats = await decided_self_fn()
+            except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
+                logger.warning(f"读审过的熟客近况候选失败，本次不按审过的记录去重: {exc}", exc=exc)
         # 去重依据：上一份档案、本场留下的观众来源行（重新整理时批准过的不再列）、本场新写的行
         base = [*(material.previous.lines if material.previous is not None else []), *material.carried]
         new_evidence, new_titles = taken_from(new_lines)
@@ -1750,6 +1801,9 @@ class SessionSettler:
             taken_titles=[*new_titles, *old_titles],
             rejected_viewer_chats=rejected_chats,
             rejected_titles=rejected_titles,
+            familiar_viewer_ids=material.familiar_viewer_ids,
+            decided_self_titles=decided_self_titles,
+            rejected_self_chats=rejected_self_chats,
         )
 
     async def _call_with_liveness(

@@ -39,6 +39,7 @@ __all__ = [
     "MAX_CLAIMED_MISSING",
     "MAX_PLAYER_CANDIDATES",
     "MAX_VIEWER_CANDIDATES",
+    "MAX_VIEWER_SELF_CANDIDATES",
     "CandidateCheck",
     "PlayerCandidateCheck",
     "normalize_title",
@@ -48,8 +49,10 @@ __all__ = [
     "validate_viewer_candidates",
 ]
 
-# 一场至多列几条观众候选（只是候选，宁缺毋滥）
+# 一场至多列几条观众定下类候选（只是候选，宁缺毋滥）
 MAX_VIEWER_CANDIDATES = 5
+# 一场至多列几条熟客近况候选
+MAX_VIEWER_SELF_CANDIDATES = 3
 # 一场至多列几条"她说欠着的"
 MAX_CLAIMED_MISSING = 3
 # 一场至多列几条玩家自述（只是候选，宁缺毋滥）
@@ -59,11 +62,12 @@ _QUOTE_CHARS = 80
 # 观众定下的那个名字或梗词：两个字以上（单字太容易碰巧出现在弹幕里）、不超过 16 字
 _WORD_MIN_CHARS = 2
 _WORD_CHARS = 16
-_VIEWER_CODE = re.compile(r"观众\s*\d+")
+_VIEWER_CODE = re.compile(r"(?:熟客)?观众\s*\d+")
 _PLAYER_CODE = re.compile(r"玩家\s*\d+")
-# 观众个人信息的模式：手机号或长串数字、年龄、住址、学校、联系方式
+# 观众个人信息的模式：手机号或长串数字、年龄、住址、学校、工作单位、就医病历、联系方式
 _PERSONAL = re.compile(
-    r"\d{7,}|\d+\s*岁|住在|住址|地址|小区|门牌|学校|大学|中学|小学|高中|初中|年级|手机|电话|微信号|[Qq]{2}号|身份证"
+    r"\d{7,}|\d+\s*岁|住在|住址|地址|小区|门牌|学校|大学|中学|小学|高中|初中|年级"
+    r"|单位|公司|工位|医院|就诊|住院|病历|确诊|手术|手机号|手机|电话|微信号|[Qq]{2}号|身份证|邮箱"
 )
 _NOT_WORD = re.compile(r"[\s\W_]+", re.UNICODE)
 
@@ -113,26 +117,144 @@ def validate_viewer_candidates(
     taken_titles: Iterable[str],
     rejected_viewer_chats: Iterable[int],
     rejected_titles: Iterable[str],
+    familiar_viewer_ids: Iterable[int] = (),
+    decided_self_titles: Optional[Mapping[int, Iterable[str]]] = None,
+    rejected_self_chats: Iterable[int] = (),
 ) -> CandidateCheck:
-    """把模型列的 ``viewer_candidates`` 逐条核成待审候选。
+    """把模型列的 ``viewer_candidates``（观众定下的 ``viewer_defined`` 与熟客近况 ``viewer_self``）逐条核成待审候选。
 
     ``taken_evidence`` / ``taken_titles`` 是本场新写与上一份档案里的行（作证据的台词、标题）；
-    ``rejected_*`` 是驳回过的候选挂的弹幕与标题。挂了游戏的按那行台词的时刻认存档，与档案行同一口径。
+    ``rejected_*`` 是驳回过的观众定下类候选挂的弹幕与标题；``familiar_viewer_ids`` 是代码认定的本场熟客主键集合，
+    非熟客行上报的 ``viewer_self`` 一律硬门禁拦截记入 ``missed``。
     """
     check = CandidateCheck()
     if not isinstance(rows, list):
         return check
-    evidence: Set[int] = {int(item) for item in taken_evidence}
+    seen_by_kind: Set[Tuple[str, int]] = {("viewer_defined", int(item)) for item in taken_evidence}
     titles: Set[str] = {normalize_title(item) for item in taken_titles} | {
         normalize_title(item) for item in rejected_titles
     }
     titles.discard("")
     rejected_chats: Set[int] = {int(item) for item in rejected_viewer_chats}
+    familiar_set: Set[int] = {int(item) for item in familiar_viewer_ids}
+    self_titles_by_viewer: Dict[int, Set[str]] = {
+        int(vid): {normalize_title(t) for t in items if normalize_title(t)}
+        for vid, items in (decided_self_titles or {}).items()
+    }
+    rejected_self_chat_set: Set[int] = {int(item) for item in rejected_self_chats}
+    defined_count = 0
+    self_count = 0
+
     for raw in rows:
-        if not isinstance(raw, dict) or len(check.candidates) >= MAX_VIEWER_CANDIDATES:
+        if not isinstance(raw, dict):
             continue
-        title = _VIEWER_CODE.sub("观众", str(raw.get("title") or "").strip())[:_TITLE_CHARS]
+        kind = str(raw.get("kind") or "viewer_defined").strip() or "viewer_defined"
+        raw_title = str(raw.get("title") or "").strip()
         quote = str(raw.get("quote") or "").strip()
+        word = str(raw.get("word") or "").strip()
+        raw_viewer_quote = str(raw.get("viewer_quote") or "")
+        if kind not in ("viewer_defined", "viewer_self"):
+            if not _PERSONAL.search(" ".join((raw_title, word, raw_viewer_quote, quote))):
+                check.missed.append(
+                    UnregisteredItem(
+                        kind="candidate",
+                        what=_VIEWER_CODE.sub("观众", raw_title)[:_TITLE_CHARS],
+                        quote=quote,
+                        reason=f"观众候选类型认不出（{kind[:20]}），未列入",
+                    )
+                )
+            else:
+                check.personal_dropped += 1
+            continue
+
+        if kind == "viewer_self":
+            if self_count >= MAX_VIEWER_SELF_CANDIDATES:
+                continue
+            title = re.sub(r"\s+", " ", _VIEWER_CODE.sub("ta ", raw_title)).strip()[:_TITLE_CHARS]
+            line = line_of(raw.get("line"))
+            if _PERSONAL.search(" ".join((title, word, raw_viewer_quote, quote))):
+                check.personal_dropped += 1
+                continue
+            if line is None or line.reply_chat_id is None or line.reply_simulated:
+                check.missed.append(
+                    UnregisteredItem(
+                        kind="candidate",
+                        what=title,
+                        quote=quote,
+                        reason="熟客近况：引用的不是她回复真实观众弹幕的那一行",
+                    )
+                )
+                continue
+            if line.reply_viewer_id is None or int(line.reply_viewer_id) not in familiar_set:
+                check.missed.append(
+                    UnregisteredItem(
+                        kind="candidate",
+                        what=title,
+                        quote=quote,
+                        reason="熟客近况只认标注了熟客观众的那一行，普通观众弹幕不列入",
+                    )
+                )
+                continue
+            viewer_quote = verbatim_quote(raw.get("viewer_quote"), line.reply_content, _QUOTE_CHARS)
+            reply_quote = verbatim_quote(quote, line.content, _QUOTE_CHARS)
+            if not title or viewer_quote is None or reply_quote is None:
+                check.missed.append(
+                    UnregisteredItem(
+                        kind="candidate",
+                        what=title,
+                        quote=quote,
+                        reason=f"熟客近况：没有标题，或弹幕与她那句的原话不是第 {raw.get('line')} 行的逐字片段",
+                    )
+                )
+                continue
+            if not _word_from_speaker(word, title, line.reply_content):
+                check.missed.append(
+                    UnregisteredItem(
+                        kind="candidate",
+                        what=title,
+                        quote=quote,
+                        reason=(
+                            f"熟客近况：关键词「{word}」不在标题里，或不在第 {raw.get('line')} 行回复的那条弹幕原文里"
+                            if word
+                            else "熟客近况：没写弹幕里的近况或喜好关键词"
+                        ),
+                    )
+                )
+                continue
+            vid = int(line.reply_viewer_id)
+            key = normalize_title(title)
+            viewer_seen = self_titles_by_viewer.setdefault(vid, set())
+            if (
+                ("viewer_self", int(line.id)) in seen_by_kind
+                or key in viewer_seen
+                or int(line.reply_chat_id) in rejected_self_chat_set
+            ):
+                continue
+            seen_by_kind.add(("viewer_self", int(line.id)))
+            viewer_seen.add(key)
+            game_name = game_of(raw.get("game"))
+            save = saves.save_at(game_name, int(line.timestamp_ms))
+            check.candidates.append(
+                PendingViewerCandidate(
+                    kind="viewer_self",
+                    title=title,
+                    viewer_chat_id=int(line.reply_chat_id),
+                    viewer_quote=viewer_quote,
+                    word=word,
+                    reply_chat_id=int(line.id),
+                    reply_quote=reply_quote,
+                    game=game_name,
+                    save_id=save.id,
+                    save_name=save.name,
+                    viewer_id=vid,
+                )
+            )
+            self_count += 1
+            continue
+
+        if defined_count >= MAX_VIEWER_CANDIDATES:
+            continue
+        title = _VIEWER_CODE.sub("观众", raw_title)[:_TITLE_CHARS]
         line = line_of(raw.get("line"))
         if line is None or line.reply_chat_id is None or line.reply_simulated:
             # 只认她在回复一条真实观众弹幕的那几行：模拟观众说的不算观众定下的
@@ -142,8 +264,7 @@ def validate_viewer_candidates(
             continue
         viewer_quote = verbatim_quote(raw.get("viewer_quote"), line.reply_content, _QUOTE_CHARS)
         reply_quote = verbatim_quote(quote, line.content, _QUOTE_CHARS)
-        word = str(raw.get("word") or "").strip()
-        if _PERSONAL.search(" ".join((title, word, str(raw.get("viewer_quote") or ""), quote))):
+        if _PERSONAL.search(" ".join((title, word, raw_viewer_quote, quote))):
             # 观众的个人信息不进待审区，也不把内容写进报告
             check.personal_dropped += 1
             continue
@@ -173,10 +294,14 @@ def validate_viewer_candidates(
             )
             continue
         key = normalize_title(title)
-        if int(line.id) in evidence or key in titles or int(line.reply_chat_id) in rejected_chats:
-            # 已经写成档案、驳回过、或同一行已经列过：不重复列
+        if (
+            ("viewer_defined", int(line.id)) in seen_by_kind
+            or key in titles
+            or int(line.reply_chat_id) in rejected_chats
+        ):
+            # 已经写成档案、驳回过、或同一行已经列过同类型候选：不重复列
             continue
-        evidence.add(int(line.id))
+        seen_by_kind.add(("viewer_defined", int(line.id)))
         titles.add(key)
         game_name = game_of(raw.get("game"))
         save = saves.save_at(game_name, int(line.timestamp_ms))
@@ -193,8 +318,10 @@ def validate_viewer_candidates(
                 game=game_name,
                 save_id=save.id,
                 save_name=save.name,
+                viewer_id=int(line.reply_viewer_id) if line.reply_viewer_id is not None else None,
             )
         )
+        defined_count += 1
     return check
 
 
@@ -258,10 +385,12 @@ def validate_claimed_missing(
         lines_taken.add(int(line.id))
         titles.add(key)
         viewer_chat_id: Optional[int] = None
+        viewer_id: Optional[int] = None
         viewer_quote = ""
         if line.reply_chat_id is not None and not line.reply_simulated:
             # 她在回一条真实观众弹幕：挂上那条弹幕，观众被删或说"忘了我"时候选一起删
             viewer_chat_id = int(line.reply_chat_id)
+            viewer_id = int(line.reply_viewer_id) if line.reply_viewer_id is not None else None
             viewer_text = " ".join((line.reply_content or "").split())[:_QUOTE_CHARS]
             viewer_quote = "" if _PERSONAL.search(viewer_text) else viewer_text
         game_name = game_of(raw.get("game"))
@@ -277,6 +406,7 @@ def validate_claimed_missing(
                 game=game_name,
                 save_id=save.id,
                 save_name=save.name,
+                viewer_id=viewer_id,
             )
         )
     return check

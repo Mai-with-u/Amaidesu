@@ -67,6 +67,7 @@ from .render import (
     render_archive_number,
     render_commitment_number,
     render_cue_block,
+    render_familiar_viewer_card,
     render_forget_notice,
     render_joke_card,
     render_player_card,
@@ -118,13 +119,16 @@ _MAX_COMMITMENTS_PER_GAME = 20
 _MAX_PROMISES_PER_PLAYER = 2
 # 玩家卡上至多写几条他说过、人批准过的自述
 _MAX_STATEMENTS_PER_PLAYER = 2
+# 熟客卡上至多写几条已批准近况、至多写几条共同造梗归属
+_MAX_NOTES_PER_FAMILIAR_VIEWER = 2
+_MAX_AUTHORED_PER_FAMILIAR_VIEWER = 2
 # 规则一路看她最近几句播出的台词
 RECENT_SPEECH_LINES = 3
 
 
 @dataclass(frozen=True)
 class MemoryCues:
-    """一批的线索结果：拼好的参考段文本 + 本批出现的承诺与档案行编号（供点名校验）。"""
+    """一批的线索结果：拼好的参考段文本 + 本批出现的承诺与档案行编号（供点名校验）+ 熟客弹幕熟悉度映射。"""
 
     text: str = ""
     commitment_ids: Tuple[int, ...] = ()
@@ -134,6 +138,8 @@ class MemoryCues:
     archive_ids: Tuple[int, ...] = ()
     # 本批由观众弹幕或玩家开口推上来的档案行：本场提过的旧事有人提到了，再点名不退回
     asked_archive_ids: Tuple[int, ...] = ()
+    # 本批非遗忘观众弹幕 message_id → 熟悉度档位（"close" / "regular"；"none" 不写入）
+    familiarity_by_message_id: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -148,6 +154,7 @@ class _Sender:
     message_type: str = ""
     platform: str = ""
     viewer_id: Optional[int] = None
+    primary_viewer_id: Optional[int] = None
     cluster_viewer_ids: Tuple[int, ...] = ()
     forget_requested_at_ms: Optional[int] = None
     # 外部 ID 在不记录名单里：发过"忘了我"（建没建过档都算），或观众行已按要求删掉
@@ -156,6 +163,9 @@ class _Sender:
     earlier_sessions: Optional[int] = None
     last_session_id: Optional[int] = None
     prev_seen_ms: Optional[int] = None
+    familiarity_tier: str = "none"
+    former_names: Tuple[str, ...] = ()
+    message_ids: List[str] = field(default_factory=list)
 
 
 def _forgetting(sender: _Sender) -> bool:
@@ -218,12 +228,15 @@ class _Round:
 
 
 def _label(key: ItemKey) -> str:
-    """日志里认条目用的写法：约#7 / 档#41 / 老梗「倒立洗头」。"""
+    """日志里认条目用的写法：约#7 / 档#41 / 熟客#3 / 玩家#2 / 老梗「倒立洗头」。"""
     kind, value = key
     if kind == "commitment":
         return render_commitment_number(int(value))
     if kind == "archive":
         return render_archive_number(int(value))
+    if kind == "viewer_familiar":
+        # 只记观众编号，不写昵称（日志与线索卡记录同口径）
+        return f"熟客#{int(value)}"
     if kind == "player":
         # 只记玩家编号，不写名字（日志与线索卡记录同口径）
         return f"玩家#{int(value)}"
@@ -284,6 +297,8 @@ class MemoryCueProvider:
         self._push_at: Dict[ItemKey, List[int]] = {}
         # 本场已经给过"常来的某某进来了"提示的观众（按同人簇主 ID 记，每场每人最多一次）
         self._announced_enter_viewers: Set[int] = set()
+        # 本场观众来访统计轻缓存：观众主键 → (行关键快照元组, ViewerPresenceStats)，遗忘或换场立即作废
+        self._presence_stats_cache: Dict[int, Tuple[Tuple[Any, ...], Any]] = {}
         # 本批推送的卡：编号 → 对方称呼（说话档据此说"答应过谁"）
         self._round_labels: Dict[int, str] = {}
 
@@ -317,6 +332,10 @@ class MemoryCueProvider:
         sid = int(session_id)
         self._reset_if_new_session(sid)
         senders = await self._resolve_senders(batch, current_session_id=sid)
+        familiarity_by_message_id = self._build_familiarity_map(senders)
+        replied: Optional[Set[int]] = None
+        if any(sender.familiarity_tier in ("close", "regular") and not _forgetting(sender) for sender in senders):
+            replied = await self._replied_viewer_ids(sid)
         used, used_archive = await load_used_refs(self._chat, sid)
         await self._mark_used(sid, used_archive, used)
         del open_games  # 游戏承诺不再按"游戏开着"轮播，只在对象开口、走到地点或情境命中时单推
@@ -333,8 +352,10 @@ class MemoryCueProvider:
             self_trigger_cutoff_ms=self_cutoff_ms,
         )
         self._round_labels = {}
-        # 对象开口（观众、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
+        # 对象开口（观众承诺、熟客卡、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
         await self._viewer_cards(senders, state)
+        if replied is not None:
+            await self._familiar_viewer_cards(senders, replied, state)
         await self._player_cards(sid, game_players, state)
         if self._passive_enabled:
             await self._pool.refresh_if_stale()
@@ -347,7 +368,9 @@ class MemoryCueProvider:
             self._situation.update(situations or {}, state.saves, game_tasks or {}, names=self._known_names)
             await self._vector_cards(sid, batch, senders, state)
         # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众，并顺带认出只进房没说话的老观众
-        presence = await self._presence_line(sid, senders, state.carded_viewers, recent_enters=recent_enters)
+        presence = await self._presence_line(
+            sid, senders, state.carded_viewers, replied=replied, recent_enters=recent_enters
+        )
         notices = self._command_notices(batch)
         text = render_cue_block(cards=[card.text for card in state.cards], presence=presence, notices=notices)
         await self._record_round(sid, state)
@@ -358,13 +381,15 @@ class MemoryCueProvider:
             labels=dict(self._round_labels),
             archive_ids=state.ids("archive"),
             asked_archive_ids=state.asked_ids("archive"),
+            familiarity_by_message_id=familiarity_by_message_id,
         )
 
     def reset(self) -> None:
-        """下播时清空本场状态（推送计数、进房提示去重、到过的地点与回执追踪都只在本场内有效）。"""
+        """下播时清空本场状态（推送计数、进房提示去重、统计缓存、到过的地点与回执追踪都只在本场内有效）。"""
         self._session_id = None
         self._push_at.clear()
         self._announced_enter_viewers.clear()
+        self._presence_stats_cache.clear()
         self._arrivals.reset()
         self._pool.reset()
         self._situation.reset()
@@ -420,9 +445,23 @@ class MemoryCueProvider:
     async def _resolve_senders(
         self, batch: Sequence[Any], *, current_session_id: Optional[int] = None
     ) -> List[_Sender]:
-        """本批发言人解析成观众：模拟消息不解析，同一观众（含待确认身份关联簇）一批只算一次。"""
+        """本批发言人解析成观众：模拟消息不解析，同一观众合并同批消息编号，遗忘请求立即作废缓存。"""
+        forget_ext_keys: Set[Tuple[str, str]] = set()
+        if self._privacy is not None:
+            for message in batch:
+                if bool(getattr(message, "simulated", False)):
+                    continue
+                if str(getattr(message, "message_type", "") or "") != "danmaku":
+                    continue
+                user = getattr(message, "user", None)
+                ext_id = str(getattr(user, "id", "") or "").strip()
+                content = str(getattr(message, "content", "") or "")
+                if ext_id and content and self._privacy.is_forget_command(content):
+                    forget_ext_keys.add((str(getattr(message, "platform", "") or ""), ext_id))
+
         senders: List[_Sender] = []
-        seen: Set[int] = set()
+        by_ext: Dict[Tuple[str, str], _Sender] = {}
+        by_viewer: Dict[int, _Sender] = {}
         for message in batch:
             if bool(getattr(message, "simulated", False)):
                 continue
@@ -430,30 +469,84 @@ class MemoryCueProvider:
             external_id = str(getattr(user, "id", "") or "").strip()
             if user is None or not external_id:
                 continue
+            platform = str(getattr(message, "platform", "") or "")
+            message_id = str(getattr(message, "message_id", "") or "")
+            content = str(getattr(message, "content", "") or "")
+            message_type = str(getattr(message, "message_type", "") or "")
+            ext_key = (platform, external_id)
+            is_forget_cmd = ext_key in forget_ext_keys or (
+                self._privacy is not None and message_type == "danmaku" and self._privacy.is_forget_command(content)
+            )
+
+            existing = by_ext.get(ext_key)
+            if existing is not None:
+                if is_forget_cmd:
+                    self._evict_sender_cache(existing)
+                elif message_id and not _forgetting(existing) and message_id not in existing.message_ids:
+                    existing.message_ids.append(message_id)
+                continue
+
             sender = _Sender(
                 external_id=external_id,
                 id_kind=str(getattr(user, "id_kind", "") or "account"),
                 user_name=str(getattr(user, "name", "") or ""),
-                content=str(getattr(message, "content", "") or ""),
-                message_id=str(getattr(message, "message_id", "") or ""),
-                message_type=str(getattr(message, "message_type", "") or ""),
-                platform=str(getattr(message, "platform", "") or ""),
+                content=content,
+                message_id=message_id,
+                message_type=message_type,
+                platform=platform,
             )
             self.note_name(sender.user_name)
             if self._viewers is not None:
                 await self._fill_viewer(
                     sender,
-                    platform=str(getattr(message, "platform", "") or ""),
+                    platform=platform,
                     current_session_id=current_session_id,
                 )
-            sender.forget_listed = await self._on_forget_list(sender)
+            sender.forget_listed = is_forget_cmd or await self._on_forget_list(sender)
+            if _forgetting(sender):
+                self._evict_sender_cache(sender)
+            elif message_id:
+                sender.message_ids.append(message_id)
+
+            by_ext[ext_key] = sender
             if sender.viewer_id is not None:
                 dedup_ids = sender.cluster_viewer_ids or (sender.viewer_id,)
-                if seen.intersection(dedup_ids):
+                matched_existing = next((by_viewer[vid] for vid in dedup_ids if vid in by_viewer), None)
+                if matched_existing is not None:
+                    by_ext[ext_key] = matched_existing
+                    if _forgetting(sender):
+                        self._evict_sender_cache(matched_existing)
+                    elif (
+                        message_id
+                        and not _forgetting(matched_existing)
+                        and message_id not in matched_existing.message_ids
+                    ):
+                        matched_existing.message_ids.append(message_id)
                     continue
-                seen.update(dedup_ids)
+                for vid in dedup_ids:
+                    by_viewer[vid] = sender
             senders.append(sender)
         return senders
+
+    def _evict_sender_cache(self, sender: _Sender) -> None:
+        """收到遗忘请求或命中不记录名单时，立即清除该观众的本场统计缓存与熟悉度映射。"""
+        sender.forget_listed = True
+        sender.familiarity_tier = "none"
+        sender.message_ids.clear()
+        for vid in sender.cluster_viewer_ids or ((sender.viewer_id,) if sender.viewer_id is not None else ()):
+            self._presence_stats_cache.pop(int(vid), None)
+
+    @staticmethod
+    def _build_familiarity_map(senders: Sequence[_Sender]) -> Dict[str, str]:
+        """提取本批非遗忘熟客弹幕的 message_id → 熟悉度档位（仅 close 与 regular 入表）。"""
+        mapping: Dict[str, str] = {}
+        for sender in senders:
+            if _forgetting(sender) or sender.familiarity_tier not in ("close", "regular"):
+                continue
+            for mid in sender.message_ids:
+                if mid:
+                    mapping[mid] = sender.familiarity_tier
+        return mapping
 
     async def _fill_viewer(
         self,
@@ -462,7 +555,7 @@ class MemoryCueProvider:
         platform: str,
         current_session_id: Optional[int] = None,
     ) -> None:
-        """按外部 ID 只读解析观众（合并待确认关联簇场次数，不建观众行）；解析失败按陌生人处理。"""
+        """按外部 ID 只读解析观众（合并待确认关联簇场次数与熟悉度，不建观众行）；解析失败按陌生人处理。"""
         assert self._viewers is not None  # noqa: S101 调用方已判空
         try:
             viewer_id = await self._viewers.find_viewer_id(platform=platform, external_id=sender.external_id)
@@ -478,28 +571,59 @@ class MemoryCueProvider:
             return
         if row is None:
             return
-        sender.viewer_id = int(viewer_id)
-        sender.cluster_viewer_ids = (int(viewer_id),)
+        vid = int(viewer_id)
+        sender.viewer_id = vid
+        sender.primary_viewer_id = vid
+        sender.cluster_viewer_ids = (vid,)
         sender.user_name = row.user_name or sender.user_name
         sender.forget_requested_at_ms = row.forget_requested_at_ms
         sender.sessions_count = int(row.sessions_count)
         sender.last_session_id = int(row.last_session_id) if row.last_session_id is not None else None
         sender.prev_seen_ms = row.prev_seen_ms
+        if row.forget_requested_at_ms is not None:
+            self._presence_stats_cache.pop(vid, None)
+            return
         resolver = getattr(self._viewers, "resolve_presence_stats", None)
         if callable(resolver):
-            try:
-                merged = await resolver(
-                    viewer_id=int(viewer_id),
-                    current_session_id=current_session_id,
-                )
-                if merged is not None:
-                    sender.cluster_viewer_ids = merged.cluster_viewer_ids
-                    sender.earlier_sessions = merged.earlier_sessions
-                    sender.prev_seen_ms = merged.prev_seen_ms
-                    if merged.forget_requested_at_ms is not None:
-                        sender.forget_requested_at_ms = merged.forget_requested_at_ms
-            except Exception as exc:  # noqa: BLE001 - 合并查询失败退回单行计数
-                logger.debug(f"合并待确认观众场次数失败（退回单行计数）: {exc}", exc=exc)
+            row_sig = (
+                current_session_id,
+                int(row.sessions_count),
+                int(getattr(row, "replied_count", 0) or 0),
+                int(getattr(row, "paid_count", 0) or 0),
+                str(row.user_name or ""),
+                row.prev_seen_ms,
+                row.forget_requested_at_ms,
+            )
+            cached = self._presence_stats_cache.get(vid)
+            merged = cached[1] if cached is not None and cached[0] == row_sig else None
+            if merged is None:
+                try:
+                    merged = await resolver(
+                        viewer_id=vid,
+                        current_session_id=current_session_id,
+                    )
+                    if merged is not None and merged.forget_requested_at_ms is None:
+                        self._presence_stats_cache[vid] = (row_sig, merged)
+                except Exception as exc:  # noqa: BLE001 - 合并查询失败退回单行计数
+                    logger.debug(f"合并待确认观众场次数失败（退回单行计数）: {exc}", exc=exc)
+            if merged is not None:
+                sender.primary_viewer_id = int(merged.primary_viewer_id)
+                sender.cluster_viewer_ids = merged.cluster_viewer_ids
+                sender.earlier_sessions = merged.earlier_sessions
+                sender.prev_seen_ms = merged.prev_seen_ms
+                sender.familiarity_tier = str(getattr(merged, "familiarity_tier", "none") or "none")
+                sender.former_names = tuple(getattr(merged, "former_names", ()) or ())
+                if merged.forget_requested_at_ms is not None:
+                    sender.forget_requested_at_ms = merged.forget_requested_at_ms
+                    sender.familiarity_tier = "none"
+                    self._presence_stats_cache.pop(vid, None)
+                return
+        # 假对象未实现 resolve_presence_stats 时，按单行场次数退回基础熟悉度判定
+        fallback_earlier = sender.sessions_count
+        if current_session_id is not None and sender.last_session_id == current_session_id:
+            fallback_earlier = max(0, fallback_earlier - 1)
+        if fallback_earlier >= MIN_SESSIONS_FOR_PRESENCE:
+            sender.familiarity_tier = "regular"
 
     async def _on_forget_list(self, sender: _Sender) -> bool:
         """这位发言人的外部 ID 在不记录名单里就返回 True；没有隐私服务时只能靠观众行上的标记。
@@ -657,6 +781,61 @@ class MemoryCueProvider:
                 state.carded_viewers.add(int(sender.viewer_id))
                 self._round_labels[int(commitment.id)] = sender.user_name or "观众"
                 break
+
+    async def _familiar_viewer_cards(self, senders: Sequence[_Sender], replied: Set[int], state: _Round) -> None:
+        """熟客开口：本场尚未回应过的熟客若名下有已批准近况或共同造梗归属，推一张熟客卡（记录不带昵称）。"""
+        if self._viewers is None:
+            return
+        notes_fn = getattr(self._viewers, "approved_viewer_notes", None)
+        authored_fn = getattr(self._archive, "list_viewer_authored_lines", None) if self._archive is not None else None
+        if not callable(notes_fn) and not callable(authored_fn):
+            return
+        for sender in senders:
+            if state.full:
+                return
+            if sender.viewer_id is None or _forgetting(sender):
+                continue
+            if sender.familiarity_tier not in ("close", "regular"):
+                continue
+            cluster_ids = sender.cluster_viewer_ids or (int(sender.viewer_id),)
+            primary_id = int(sender.primary_viewer_id or sender.viewer_id)
+            key: ItemKey = ("viewer_familiar", primary_id)
+            if self._skip(key, state, "本场已回应" if replied.intersection(cluster_ids) else self._blocked(key, state)):
+                continue
+            notes = []
+            if callable(notes_fn):
+                try:
+                    notes = await notes_fn(viewer_ids=cluster_ids, limit=_MAX_NOTES_PER_FAMILIAR_VIEWER)
+                except Exception as exc:  # noqa: BLE001 - 读取失败只少这一部分，不挡其余线索
+                    logger.warning(f"读熟客近况失败（跳过该部分）: {exc}", exc=exc)
+            authored = []
+            if callable(authored_fn):
+                try:
+                    authored = await authored_fn(viewer_ids=cluster_ids, limit=_MAX_AUTHORED_PER_FAMILIAR_VIEWER)
+                except Exception as exc:  # noqa: BLE001 - 读取失败只少这一部分，不挡其余线索
+                    logger.warning(f"读熟客共同造梗归属失败（跳过该部分）: {exc}", exc=exc)
+            if not notes and not authored:
+                continue
+            text = render_familiar_viewer_card(
+                user_name=sender.user_name or "观众",
+                tier=sender.familiarity_tier,
+                former_names=sender.former_names,
+                self_notes=[item.title for item in notes],
+                authored_titles=[line.text for line in authored],
+            )
+            if not text:
+                continue
+            self._push(
+                state,
+                _Card(
+                    key=key,
+                    text=text,
+                    kind="viewer_familiar",
+                    sources=("viewer_presence",),
+                    detail={"viewer_id": primary_id},
+                ),
+            )
+            state.carded_viewers.update(cluster_ids)
 
     async def _player_cards(self, session_id: int, game_players: Sequence[Tuple[str, str]], state: _Round) -> None:
         """对象开口扩到游戏玩家：本窗在游戏里开口或冲她做动作的玩家，以前有往来的推一张"这位是谁、和你有过什么"。
@@ -1091,11 +1270,12 @@ class MemoryCueProvider:
         senders: Sequence[_Sender],
         carded_viewers: Set[int],
         *,
+        replied: Optional[Set[int]] = None,
         recent_enters: Sequence[Tuple[str, str]] = (),
     ) -> str:
         """老观众在场一行：覆盖本批开口的老观众，以及只进房尚未开口的老观众（每场每人最多提示一次）。"""
-        replied = await self._replied_viewer_ids(session_id)
-        entries: List[Tuple[str, Optional[int]]] = []
+        replied_ids = replied if replied is not None else await self._replied_viewer_ids(session_id)
+        entries: List[Tuple[str, Optional[int], str, Sequence[str]]] = []
         active_cluster_ids: Set[int] = set()
         active_names_lower: Set[str] = set()
         for sender in senders:
@@ -1105,7 +1285,7 @@ class MemoryCueProvider:
             active_cluster_ids.update(cluster_ids)
             if sender.user_name:
                 active_names_lower.add(sender.user_name.strip().lower())
-            # 只跳过这一批拿了对 ta 本人承诺卡的观众；别人拿卡不压 ta 这一行
+            # 只跳过这一批拿了对 ta 本人承诺卡或熟客卡的观众；别人拿卡不压 ta 这一行
             if carded_viewers.intersection(cluster_ids):
                 continue
             if sender.earlier_sessions is not None:
@@ -1114,18 +1294,20 @@ class MemoryCueProvider:
                 earlier_sessions = sender.sessions_count
                 if sender.last_session_id is not None and sender.last_session_id == session_id:
                     earlier_sessions -= 1
-            if earlier_sessions < MIN_SESSIONS_FOR_PRESENCE:
+            if earlier_sessions < MIN_SESSIONS_FOR_PRESENCE and sender.familiarity_tier not in ("close", "regular"):
                 continue
-            if sender.forget_requested_at_ms is not None:
+            if _forgetting(sender):
                 continue
-            if replied.intersection(cluster_ids):
+            if replied_ids.intersection(cluster_ids):
                 continue
-            entries.append((sender.user_name or "观众", sender.prev_seen_ms))
+            entries.append(
+                (sender.user_name or "观众", sender.prev_seen_ms, sender.familiarity_tier, sender.former_names)
+            )
 
         entered_veterans = await self._resolve_entered_veterans(
             session_id=session_id,
             recent_enters=recent_enters,
-            replied=replied,
+            replied=replied_ids,
             active_cluster_ids=active_cluster_ids,
             active_names_lower=active_names_lower,
         )

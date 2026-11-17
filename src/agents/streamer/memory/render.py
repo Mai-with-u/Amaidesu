@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotLine
 from src.modules.storage.privacy import mask_names_in_text
@@ -90,6 +90,7 @@ __all__ = [
     "render_commitment_text",
     "render_cue_block",
     "render_cue_header",
+    "render_familiar_viewer_card",
     "render_forget_notice",
     "render_game_card",
     "render_joke_card",
@@ -967,16 +968,62 @@ def render_player_card(
     return f"[玩家·{player.name}] {name} 在游戏里找你了。{past}{said_text}{promise_text}认得出他就好，别念清单。"
 
 
+PresenceViewerItem = Union[Tuple[str, Optional[int]], Tuple[str, Optional[int], str, Sequence[str]]]
+
+
+def render_familiar_viewer_card(
+    *,
+    user_name: str,
+    tier: str,
+    former_names: Sequence[str] = (),
+    self_notes: Sequence[str] = (),
+    authored_titles: Sequence[str] = (),
+) -> str:
+    """场内熟客发言时的熟客线索卡：汇总关系定位、曾用名、已批准近况与共同造梗归属；两项内容皆空时返回空串。"""
+    notes = [item.strip() for item in self_notes if item and item.strip()]
+    titles = [item.strip() for item in authored_titles if item and item.strip()]
+    if not notes and not titles:
+        return ""
+    label = (user_name or "").strip() or "观众"
+    role = "常来的老熟人" if tier == "close" else "眼熟的老观众"
+    former_cleaned = [item.strip() for item in former_names if item and item.strip()]
+    former_part = f"（以前叫{'、'.join(f'「{item}」' for item in former_cleaned)}）" if former_cleaned else ""
+    notes_part = f"ta 跟你说过：{'；'.join(notes)}。" if notes else ""
+    authored_part = f"当初{'、'.join(f'「{item}」' for item in titles)}就是和 ta 一起定的。" if titles else ""
+    return (
+        f"[熟客·{label}] {label}{former_part}是{role}。"
+        f"{notes_part}{authored_part}"
+        "只在话题沾边时顺嘴聊起，像熟人接话不背档案、不报场次或日期。"
+    )
+
+
+def _format_presence_viewer(item: PresenceViewerItem, now_ms: int) -> str:
+    """单名在场老观众的展示片段：按熟悉度分层前缀并附曾用名与近远档位词，不透出具体场次数或日期。"""
+    if len(item) == 2:
+        name, prev_seen_ms = item
+        tier = "none"
+        former_names: Sequence[str] = ()
+    else:
+        name, prev_seen_ms, tier, former_names = item
+    role_prefix = "常来的老熟人 " if tier == "close" else "眼熟的老观众 " if tier == "regular" else ""
+    recency = _presence_tier(prev_seen_ms, now_ms)
+    former_cleaned = [n.strip() for n in former_names if n and n.strip()]
+    if former_cleaned:
+        former_text = f"以前叫{'、'.join(f'「{n}」' for n in former_cleaned)}"
+        return f"{role_prefix}{name}（{former_text}，{recency}）"
+    return f"{role_prefix}{name}（{recency}）"
+
+
 def render_presence_line(
-    viewers: Sequence[Tuple[str, Optional[int]]],
+    viewers: Sequence[PresenceViewerItem],
     *,
     now_ms: int,
     entered_names: Sequence[str] = (),
 ) -> str:
-    """老观众在场一行：开口的老观众给名字加档位词，只进房没说话的老观众给"常来的某某进来了"（与欢迎合并）。
+    """老观众在场一行：开口的老观众按熟悉度给称呼、曾用名与档位词，只进房没说话的老观众给"常来的某某进来了"。
 
-    viewers 是（昵称, 本场之前最后一次出现的时刻）序列；``entered_names`` 是本场刚进房、来过三场以上但
-    尚未说话的老观众昵称（每场每人最多提示一次）。
+    ``viewers`` 支持二元组 ``(昵称, 上次出现时刻)`` 或四元组 ``(昵称, 上次出现时刻, 熟悉度档位, 曾用名序列)``；
+    ``entered_names`` 是本场刚进房但尚未说话的老观众提示文本（每场每人最多提示一次）。
     """
     entries = list(viewers)
     enters = [name.strip() for name in entered_names if name and name.strip()]
@@ -985,7 +1032,7 @@ def render_presence_line(
     lines: List[str] = []
     if entries:
         shown = entries[:MAX_PRESENCE_VIEWERS]
-        parts = [f"{name}（{_presence_tier(prev_seen_ms, now_ms)}）" for name, prev_seen_ms in shown]
+        parts = [_format_presence_viewer(entry, now_ms) for entry in shown]
         rest = len(entries) - len(shown)
         text = "、".join(parts)
         if rest > 0:
