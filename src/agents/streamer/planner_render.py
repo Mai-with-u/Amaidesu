@@ -43,6 +43,7 @@ __all__ = [
     "forced_situation",
     "goal_lines",
     "nearby_players_from_overview",
+    "online_players_from_overview",
     "render_delegations",
     "render_game_speakers",
     "render_social_facts",
@@ -516,7 +517,7 @@ def nearby_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
             continue
         if data.get("unavailable") or data.get("nearby_error"):
             continue
-        if "body" not in data and "entities" not in data:
+        if "body" not in data and "entities" not in data and "online_players" not in data:
             continue
         found_scene = True
         for entity in data.get("entities") or ():
@@ -530,11 +531,54 @@ def nearby_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
     return frozenset(players) if found_scene else None
 
 
+def online_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
+    """从本轮参考工具产出的现场速览文本里取出当前全服在线的其他玩家名集合。
+
+    仅当速览成功返回有效场景快照（不含 unavailable / nearby_error）且携带 ``online_players`` 列表时返回集合；
+    空集合明确表达此刻服内除角色自己外没有其他玩家在线。未开启速览、周边读取失败或快照未提供在线列表时返回 None。
+    """
+    if not overview or not overview.strip():
+        return None
+    found_online = False
+    players: set[str] = set()
+    for raw_line in overview.splitlines():
+        _, sep, payload = raw_line.partition(": ")
+        candidate = payload.strip() if sep else raw_line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            data = json.loads(candidate)
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("unavailable") or data.get("nearby_error"):
+            continue
+        raw_online = data.get("online_players")
+        if not isinstance(raw_online, list):
+            continue
+        found_online = True
+        for item in raw_online:
+            if isinstance(item, str) and item.strip():
+                players.add(item.strip())
+        # 同快照周边实体里的玩家此刻必然在线，一并并入集合以保证在场与在线集合自洽
+        for entity in data.get("entities") or ():
+            if not isinstance(entity, dict):
+                continue
+            raw_type = str(entity.get("type") or "").lower()
+            is_player = raw_type.split(":")[-1] == "player" or entity.get("kind") == "玩家"
+            name = str(entity.get("name") or "").strip()
+            if is_player and name:
+                players.add(name)
+    return frozenset(players) if found_online else None
+
+
 def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str:
-    """本窗在游戏公屏说话的玩家：提醒在游戏里回话，并对照现场速览标明在不在身边；没人开口时为空串。
+    """本窗在游戏公屏说话的玩家：提醒在游戏里回话，并对照现场速览标明在身边、在线不在身边或已下线；没人开口时为空串。
 
     游戏里的玩家听不到直播：问她事、跟她搭话的要在游戏里回一句，否则对方看到的就是她不理人。
-    同时游戏公屏是全服广播，远处玩家探索时的环境感叹也会进来：结合现场速览标出谁在身边、谁不在身边，
+    同时游戏公屏是全服广播，远处玩家探索时的环境感叹也会进来，还有玩家刚说完话就退服下线：
+    结合现场速览标出谁在身边、谁在线但不在身边、谁已经下线（已下线的不必再用公屏空喊，可在直播口播顺口带过），
     既保持对点名她、向她求助搭话或就在身边围观互动玩家的回应积极度，也防止把远处未点名她的环境感叹
     硬套成她自己手头工位的状况。点名关系靠行尾的 [提及…] 标注（采集器按文本判定的事实）锚定，
     决策模型不再从扁平行里自己猜指向。
@@ -561,26 +605,53 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
         "纯感叹、自言自语可以只用 `streamer_reply` 在直播里接。"
     )
     nearby_set = nearby_players_from_overview(overview)
-    if nearby_set is None:
+    online_set = online_players_from_overview(overview)
+    if nearby_set is None and online_set is None:
         return (
             f"{base}公屏是全服广播：点名她、向她求助搭话或就在【现场速览】身边的照常积极回应；"
             "不在身边且未点名她的环境感叹是对方那边的遭遇，别套成她手头工位的状况，拿不准可顺口问清在哪碰上的。"
         )
-    here = [f"玩家 {name}" for name in names if name in nearby_set]
-    afar = [f"玩家 {name}" for name in names if name not in nearby_set]
-    if here and not afar:
+    # 对照当刻速览将本窗发言过的玩家分为三类：就在身边 / 在线但不在身边（或未知在线全集时不在身边） / 刚说完已下线
+    here = [f"玩家 {name}" for name in names if nearby_set is not None and name in nearby_set]
+    offline = [
+        f"玩家 {name}"
+        for name in names
+        if online_set is not None and (nearby_set is None or name not in nearby_set) and name not in online_set
+    ]
+    afar = [
+        f"玩家 {name}"
+        for name in names
+        if (nearby_set is None or name not in nearby_set) and (online_set is None or name in online_set)
+    ]
+    if here and not afar and not offline:
         return f"{base}（现场核对：{'、'.join(here)} 当前就在【现场速览】身边，围观互动或搭话照常积极回应。）"
-    if afar and not here:
+    if afar and not here and not offline:
+        online_tag = "（仍在服内在线）" if online_set is not None else ""
         return (
-            f"{base}（现场核对：{'、'.join(afar)} 当前不在【现场速览】身边——公屏是全服广播，"
+            f"{base}（现场核对：{'、'.join(afar)} 当前不在【现场速览】身边{online_tag}——公屏是全服广播，"
             "点名她或向她求助搭话的照常积极回应；未点名她的环境感叹是对方那边的遭遇，"
             "别硬套成她手头工位的状况，拿不准对方在说什么时可顺口问清在哪碰上的。）"
         )
-    return (
-        f"{base}（现场核对：{'、'.join(here)} 当前就在身边，围观搭话照常积极回应；"
-        f"{'、'.join(afar)} 当前不在身边——公屏是全服广播，点名她或求助搭话的照常积极回应，"
-        "未点名她的环境感叹别套成她手头工位的状况，拿不准可顺口问清在哪碰上的。）"
-    )
+    if offline and not here and not afar:
+        return (
+            f"{base}（现场核对：{'、'.join(offline)} 当前已下线（不在【现场速览】的 `online_players` 在线列表里），"
+            "无需再用 `minecraft_chat_send` 往公屏空喊，可在直播口播里顺口带过。）"
+        )
+    clauses: List[str] = []
+    if here:
+        clauses.append(f"{'、'.join(here)} 当前就在身边，围观搭话照常积极回应")
+    if afar:
+        online_tag = "（仍在服内在线）" if online_set is not None else ""
+        clauses.append(
+            f"{'、'.join(afar)} 当前不在身边{online_tag}——公屏是全服广播，点名她或求助搭话的照常积极回应，"
+            "未点名她的环境感叹别套成她手头工位的状况，拿不准可顺口问清在哪碰上的"
+        )
+    if offline:
+        clauses.append(
+            f"{'、'.join(offline)} 当前已下线（不在 `online_players` 在线列表里），"
+            "无需再用 `minecraft_chat_send` 往公屏空喊，可在直播口播里顺口带过"
+        )
+    return f"{base}（现场核对：{'；'.join(clauses)}。）"
 
 
 def render_recent_relays(relays: Iterable[Relay], current_ms: int) -> str:

@@ -11,7 +11,7 @@ import pytest
 from src.agents.streamer.config import StreamerPersonaConfig
 from src.agents.streamer.game_now import GameNow, GoalResultLine
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
-from src.agents.streamer.planner_render import render_game_speakers
+from src.agents.streamer.planner_render import online_players_from_overview, render_game_speakers
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.agents.streamer.tools.social_fact import SocialFactToolProvider
@@ -628,3 +628,60 @@ def test_speakers_segment_anchors_the_mention_mark(prompts: Any) -> None:
     rules_text = prompts.render("amaidesu_planner_delegate_rules")
     assert "带标注的优先处理，对方多半在游戏里等她回话" in rules_text
     assert "无标注且是玩家互相聊他们自己事情的条目属旁人对话" in rules_text
+
+
+@pytest.mark.parametrize(
+    ("overview", "expected"),
+    [
+        ("", None),
+        ('minecraft_glance: {"unavailable": "游戏未连接"}', None),
+        ('minecraft_glance: {"nearby_error": "不在世界里"}', None),
+        ('minecraft_glance: {"body": {"dimension": "minecraft:overworld"}, "entities": []}', None),
+        ('minecraft_glance: {"body": {"dimension": "minecraft:overworld"}, "online_players": []}', frozenset()),
+        (
+            'minecraft_glance: {"body": {"dimension": "minecraft:overworld"}, '
+            '"entities": [{"type": "minecraft:player", "name": "玩家甲", "distance": 4.0}], '
+            '"online_players": ["玩家乙"]}',
+            frozenset({"玩家甲", "玩家乙"}),
+        ),
+    ],
+    ids=["empty", "unavailable", "nearby_error", "legacy_without_key", "nobody_online", "merged_online_set"],
+)
+def test_online_players_from_overview_parses_presence_cleanly(overview: str, expected: frozenset[str] | None) -> None:
+    """全服在线名单解析：仅在有效速览快照携带 online_players 列表时返回集合，空列表与读取失败严格区分。"""
+    assert online_players_from_overview(overview) == expected
+
+
+def test_render_game_speakers_marks_offline_players_and_mixed_presence() -> None:
+    """本窗发言过的玩家若在当刻速览里已不在 online_players 中，现场核对如实标明已下线并不必往公屏空喊。"""
+    offline_overview = 'minecraft_glance: {"body": {"dimension": "minecraft:overworld"}, "online_players": []}'
+    note_a = PlayerNote(who="玩家甲", said=True, line="[21:10 minecraft 公屏] 玩家 玩家甲：我先溜了")
+    only_offline = render_game_speakers((note_a,), overview=offline_overview)
+    assert "玩家 玩家甲 当前已下线" in only_offline
+    assert "无需再用 `minecraft_chat_send` 往公屏空喊" in only_offline
+    assert "可在直播口播里顺口带过" in only_offline
+
+    # 三种在场状态并存：玩家甲在身边、玩家乙在线但不在身边、玩家丙刚说完已下线
+    mixed_overview = (
+        'minecraft_glance: {"body": {"dimension": "minecraft:overworld"}, '
+        '"entities": [{"type": "minecraft:player", "name": "玩家甲", "distance": 5.0}], '
+        '"online_players": ["玩家甲", "玩家乙"]}'
+    )
+    notes = (
+        note_a,
+        PlayerNote(who="玩家乙", said=True, line="[21:10 minecraft 公屏] 玩家 玩家乙：我在矿洞挖铁"),
+        PlayerNote(who="玩家丙", said=True, line="[21:10 minecraft 公屏] 玩家 玩家丙：拜拜"),
+    )
+    mixed = render_game_speakers(notes, overview=mixed_overview)
+    assert "玩家 玩家甲 当前就在身边，围观搭话照常积极回应" in mixed
+    assert "玩家 玩家乙 当前不在身边（仍在服内在线）" in mixed
+    assert "玩家 玩家丙 当前已下线" in mixed and "无需再用 `minecraft_chat_send` 往公屏空喊" in mixed
+
+
+def test_delegate_rules_check_online_players_and_click_commands(prompts: Any) -> None:
+    """委派守则：主动在公屏找人前先对照 online_players 确认在线，系统消息带可点击执行命令时可委派执行。"""
+    rules_text = prompts.render("amaidesu_planner_delegate_rules")
+    assert "对照【现场速览】的 `online_players` 确认对方此刻在线" in rules_text
+    assert "不在列表里的已下线玩家不往公屏空喊" in rules_text
+    assert "（可点击执行: /...）" in rules_text
+    assert "委派游戏里按该命令执行" in rules_text
