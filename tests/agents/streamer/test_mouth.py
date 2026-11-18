@@ -141,6 +141,15 @@ async def test_mouth_carries_no_memory_in_system_prompt_or_scene_card(prompts: A
     assert card.startswith("【现场】") and "悬着的事" not in card
 
 
+async def test_mouth_rule_keeps_broadcast_talk_third_person(prompts: Any) -> None:
+    """口播不直呼游戏玩家「你」：现场归属那条规矩里带明他们听不到直播，别对着镜头喊「你」。"""
+    llm = _LLM("happy：好家伙")
+
+    await _mouth(llm, _Speech(), prompts).react_once([_trigger()])
+
+    assert "他们听不到直播，别对着镜头喊「你」" in llm.calls[0]["system"]
+
+
 #: AI 声明写死在三条说话通路的模板里，不随人设配置变；嘴的这条后面接边界栏那一行（有的话）
 _AI_RULE = "- 被问到是不是真人时，坦白自己是 AI 主播，可以俏皮，但不能否认。"
 
