@@ -167,8 +167,8 @@ function reveal(lane: LaneId, card: HTMLElement | null): void {
 /** 卡片内的可交互元素自己处理点击：展开参数、点链接不该顺带把对侧滚走 */
 const INTERACTIVE = 'button, a, summary, input, textarea, select, [role="button"]';
 
-function onCardClick(entry: ShowEntry, lane: LaneId, event: MouseEvent): void {
-  const target = event.target;
+/** 卡片激活的公共逻辑：点击与键盘触发（Enter/Space）走同一条路 */
+function activateCard(entry: ShowEntry, lane: LaneId, target: EventTarget | null): void {
   if (target instanceof Element && target.closest(INTERACTIVE)) return;
   // 收活卡的点击语义是"跳到这次派活的指令卡"（身份配对已给出目标），不走对侧近邻对齐
   if (entry.kind === 'delegate_receipt' && entry.delegateEntryId) {
@@ -176,6 +176,14 @@ function onCardClick(entry: ShowEntry, lane: LaneId, event: MouseEvent): void {
     return;
   }
   alignFrom(entry, lane);
+}
+
+function onCardClick(entry: ShowEntry, lane: LaneId, event: MouseEvent): void {
+  activateCard(entry, lane, event.target);
+}
+
+function onCardKeydown(entry: ShowEntry, lane: LaneId, event: KeyboardEvent): void {
+  activateCard(entry, lane, event.target);
 }
 
 /** 点卡片空白处：把对侧滚到同一时刻 */
@@ -223,7 +231,12 @@ function revealNearest(tsMs: number): void {
           主播 Agent 看到的<span class="lane-tip">点卡片 → 对侧跳到同一刻</span>
         </p>
         <section v-for="section in sections" :key="`stage-${section.key}`" class="lane-section">
-          <header class="section-head" @click="toggleSection(section)">
+          <button
+            type="button"
+            class="section-head"
+            :aria-expanded="!isCollapsed(section)"
+            @click="toggleSection(section)"
+          >
             <span class="section-caret" :class="{ 'is-collapsed': isCollapsed(section) }">▸</span>
             <span class="section-title">{{ section.title }}</span>
             <span v-if="section.note" class="section-note">{{ section.note }}</span>
@@ -238,7 +251,7 @@ function revealNearest(tsMs: number): void {
                 {{ side.label }} {{ side.count }}
               </span>
             </span>
-          </header>
+          </button>
           <div v-show="!isCollapsed(section)" class="lane-body">
             <div
               v-for="entry in section.stage"
@@ -247,7 +260,10 @@ function revealNearest(tsMs: number): void {
               :class="{ 'is-matched': matchedTs?.has(entry.tsMs) }"
               :data-entry-id="entry.id"
               :data-entry-ts="entry.tsMs"
+              tabindex="0"
               @click="onCardClick(entry, 'stage', $event)"
+              @keydown.enter.prevent="onCardKeydown(entry, 'stage', $event)"
+              @keydown.space.prevent="onCardKeydown(entry, 'stage', $event)"
             >
               <Component :is="CARD_REGISTRY[entry.kind]" :entry="entry" :now-ms="nowMs" />
             </div>
@@ -261,7 +277,12 @@ function revealNearest(tsMs: number): void {
           游戏 Agent 看到的<span class="lane-tip">点卡片 → 对侧跳到同一刻</span>
         </p>
         <section v-for="section in sections" :key="`game-${section.key}`" class="lane-section">
-          <header class="section-head" @click="toggleSection(section)">
+          <button
+            type="button"
+            class="section-head"
+            :aria-expanded="!isCollapsed(section)"
+            @click="toggleSection(section)"
+          >
             <span class="section-caret" :class="{ 'is-collapsed': isCollapsed(section) }">▸</span>
             <span class="section-title">{{ section.title }}</span>
             <span v-if="section.note" class="section-note">{{ section.note }}</span>
@@ -276,7 +297,7 @@ function revealNearest(tsMs: number): void {
                 {{ side.label }} {{ side.count }}
               </span>
             </span>
-          </header>
+          </button>
           <div v-show="!isCollapsed(section)" class="lane-body">
             <template v-for="entry in collapseGoalPolls(section.game)" :key="entry.id">
               <div
@@ -284,7 +305,10 @@ function revealNearest(tsMs: number): void {
                 :class="{ 'is-matched': matchedTs?.has(entry.tsMs) }"
                 :data-entry-id="entry.id"
                 :data-entry-ts="entry.tsMs"
+                tabindex="0"
                 @click="onCardClick(entry, 'game', $event)"
+                @keydown.enter.prevent="onCardKeydown(entry, 'game', $event)"
+                @keydown.space.prevent="onCardKeydown(entry, 'game', $event)"
               >
                 <Component :is="CARD_REGISTRY[entry.kind]" :entry="entry" :now-ms="nowMs" />
               </div>
@@ -372,19 +396,24 @@ function revealNearest(tsMs: number): void {
   overflow: clip;
 }
 
-/* 节头也吸在列顶（让开列标签那一行）：滚动时始终知道处在哪个环节 */
+/* 节头也吸在列顶（让开列标签那一行）：滚动时始终知道处在哪个环节。
+   原生 button 承载（键盘可达）：重置按钮默认外观，视觉与原 header 一致 */
 .section-head {
   position: sticky;
   top: 22px;
   z-index: 2;
   display: flex;
+  width: 100%;
   gap: 10px;
   align-items: baseline;
   padding: 5px 10px;
   background: var(--bg-hover);
+  border: none;
   border-bottom: 1px solid var(--border-color-light);
+  font: inherit;
   font-size: 11px;
   color: var(--text-secondary);
+  text-align: left;
   cursor: pointer;
   user-select: none;
 }
