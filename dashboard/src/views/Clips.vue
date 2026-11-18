@@ -304,12 +304,35 @@ async function onCutOne(segment: ClipSegment): Promise<void> {
 
 async function onConfirmSegment(segment: ClipSegment): Promise<void> {
   const ok = await updateSegment(segment.id, { status: 'confirmed' });
-  if (ok) await openSessionSegments();
+  if (ok) {
+    await openSessionSegments();
+    advanceToNextReviewable(segment.id);
+  }
 }
 
 async function onDismissSegment(segment: ClipSegment): Promise<void> {
   const ok = await updateSegment(segment.id, { status: 'dismissed' });
-  if (ok) await openSessionSegments();
+  if (ok) {
+    await openSessionSegments();
+    advanceToNextReviewable(segment.id);
+  }
+}
+
+/** 核对自动前进：当前段处理完后跳到列表中下一个待核对的段并自动预览 */
+function advanceToNextReviewable(currentId: number): void {
+  const index = segments.value.findIndex(s => s.id === currentId);
+  const next = segments.value.slice(index + 1).find(s => isReviewable(s));
+  if (!next) {
+    ElMessage.info('待核对的段都过完了');
+    return;
+  }
+  selectedSegmentId.value = next.id;
+  onPreviewSegment(next);
+}
+
+/** 待核对 = AI 建议或已确认还没切的段（与"待切"口径一致） */
+function isReviewable(segment: ClipSegment): boolean {
+  return segment.status === 'suggested' || segment.status === 'confirmed';
 }
 
 async function onDeleteSegment(segment: ClipSegment): Promise<void> {
@@ -320,6 +343,12 @@ async function onDeleteSegment(segment: ClipSegment): Promise<void> {
     if (selectedSegmentId.value === segment.id) selectedSegmentId.value = null;
     await openSessionSegments();
   }
+}
+
+/** 段卡片"更多"菜单：看产物 / 删除（删除走 confirmAction 二次确认） */
+function onSegmentMoreCommand(segment: ClipSegment, command: string): void {
+  if (command === 'output') onPreviewOutput(segment);
+  else if (command === 'delete') void onDeleteSegment(segment);
 }
 
 /** 列表主行：`11-07 周五 20:30` 形态（同自然年内不带年份，安静） */
@@ -651,7 +680,7 @@ onMounted(async () => {
                 {{ formatDateTimeCn(selectedSession.started_at_ms) }} 起播 · 共
                 {{ recordings.length }} 个录播文件 · {{ segments.length }} 个切片段
                 <span class="clip-meta-chip is-cut">{{ cuttableSegments.length }} 待切</span>
-                <span class="clip-meta-chip is-done">{{ doneCount }} 已出片</span>
+                <span v-if="doneCount" class="clip-meta-chip is-done">{{ doneCount }} 已出片</span>
                 <span v-if="failedCount" class="clip-meta-chip is-failed"
                   >{{ failedCount }} 失败</span
                 >
@@ -676,7 +705,7 @@ onMounted(async () => {
               <el-button type="primary" :loading="selecting" @click="onRunSelection">
                 {{ segments.some(s => s.origin === 'ai') ? '重新 AI 选段' : 'AI 选段' }}
               </el-button>
-              <el-button :loading="detailLoading" @click="openSessionSegments">刷新</el-button>
+              <el-button text :loading="detailLoading" @click="openSessionSegments">刷新</el-button>
               <el-button
                 type="success"
                 :loading="cutting"
@@ -785,7 +814,24 @@ onMounted(async () => {
                 @timeupdate="onPreviewTime"
               />
               <div v-else class="clip-player-empty">
-                点右侧段行的「预览」核对切点，或点下方时间轴任意位置跳转播放；播放器固定在这里，调段不用来回滚。
+                <template v-if="segments.length > 0">
+                  <p class="clip-player-empty-stat">
+                    本场 {{ formatRelClock(sessionEndMs - selectedSession.started_at_ms) }} · 待切
+                    {{ cuttableSegments.length }} · 已出 {{ doneCount
+                    }}<template v-if="failedCount"> · 失败 {{ failedCount }}</template>
+                  </p>
+                  <el-button
+                    type="primary"
+                    plain
+                    size="small"
+                    @click="onPreviewSegment(segments[0])"
+                    >预览第一段</el-button
+                  >
+                </template>
+                <p v-else class="clip-player-empty-stat">
+                  还没有切片段，先点「AI 选段」或拖时间轴建段
+                </p>
+                <p class="clip-player-empty-hint">播放器固定在这里，调段不用来回滚</p>
               </div>
             </section>
 
@@ -873,29 +919,37 @@ onMounted(async () => {
                       切这段
                     </el-button>
                     <el-button
-                      v-if="outputsOf(segment).length"
-                      size="small"
-                      @click="onPreviewOutput(segment)"
-                    >
-                      看产物
-                    </el-button>
-                    <el-button
                       v-if="segment.status !== 'dismissed'"
                       size="small"
+                      text
                       @click="onDismissSegment(segment)"
                     >
                       弃用
                     </el-button>
-                    <el-button size="small" type="danger" plain @click="onDeleteSegment(segment)"
-                      >删除</el-button
+                    <el-dropdown
+                      class="clip-segment-more"
+                      trigger="click"
+                      @command="(command: string) => onSegmentMoreCommand(segment, command)"
                     >
+                      <el-button size="small" text aria-label="更多操作">⋯</el-button>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item v-if="outputsOf(segment).length" command="output"
+                            >看产物</el-dropdown-item
+                          >
+                          <el-dropdown-item command="delete" class="clip-more-danger"
+                            >删除</el-dropdown-item
+                          >
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
                   </div>
                 </div>
               </div>
             </section>
           </div>
 
-          <section class="clip-card" v-loading="detailLoading">
+          <section v-loading="detailLoading" class="clip-card">
             <h3 class="clip-section-title">
               切段时间轴<span class="clip-settings-hint"
                 >点击跳转播放 · 按住空白拖动建段 · 拖段边微调</span
@@ -1093,15 +1147,29 @@ onMounted(async () => {
   flex: 1;
   min-height: 220px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0 32px;
+  gap: 10px;
+  padding: 16px 32px;
   text-align: center;
   font-size: 13px;
   line-height: 1.8;
   color: var(--el-text-color-secondary);
   background: #000;
   border-radius: 4px;
+}
+
+.clip-player-empty-stat {
+  margin: 0;
+  color: #e5eaf3;
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-player-empty-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .clip-segments-col {
@@ -1353,8 +1421,8 @@ onMounted(async () => {
 
 .clip-segment-row {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
@@ -1423,12 +1491,39 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+/* 操作行收进卡片底部：横排小按钮，"更多"菜单靠右 */
 .clip-segment-actions {
   flex: none;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  align-items: stretch;
+}
+
+.clip-segment-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.clip-segment-more {
+  margin-left: auto;
+}
+
+.clip-more-danger {
+  color: var(--el-color-danger);
+}
+
+/* 标题与时间输入平时无边框（去框减噪），hover/focus 才显边框提示可编辑 */
+.clip-title-input :deep(.el-input__wrapper),
+.clip-time-input :deep(.el-input__wrapper) {
+  box-shadow: none;
+  background: transparent;
+}
+
+.clip-title-input:hover :deep(.el-input__wrapper),
+.clip-time-input:hover :deep(.el-input__wrapper),
+.clip-title-input :deep(.el-input__wrapper.is-focus),
+.clip-time-input :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px var(--el-border-color) inset;
+  background: var(--el-fill-color-blank);
 }
 
 .clip-assign-path {
