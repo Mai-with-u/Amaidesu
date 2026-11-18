@@ -47,13 +47,13 @@ export function useLiveStatus() {
       const label =
         mode === 'generate'
           ? running
-            ? '观众观众模拟器 · 生成中'
-            : '观众观众模拟器 · 生成待启'
+            ? '观众模拟器 · 生成中'
+            : '观众模拟器 · 生成待启'
           : mode === 'replay'
             ? running
-              ? '观众观众模拟器 · 回放中'
-              : '观众观众模拟器 · 回放待启'
-            : '观众观众模拟器未启用';
+              ? '观众模拟器 · 回放中'
+              : '观众模拟器 · 回放待启'
+            : '观众模拟器未启用';
       simulatorChip.value = { label, on: mode !== 'off' && running };
     } catch {
       simulatorChip.value = null;

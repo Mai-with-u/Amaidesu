@@ -76,22 +76,22 @@ describe('useLiveStatus', () => {
     expect(stageChip.value).toMatchObject({ label: 'mystery', running: true, detail: '思考中' });
   });
 
-  it('观众观众模拟器徽章：生成中/回放待启/未启用的标签与点亮矩阵', async () => {
+  it('观众模拟器徽章：生成中/回放待启/未启用的标签与点亮矩阵', async () => {
     const { simulatorChip, loadSimulatorStatus } = mount();
     getStatusMock.mockResolvedValue({ data: { mode: 'generate', is_running: true } } as never);
     await loadSimulatorStatus();
-    expect(simulatorChip.value).toEqual({ label: '观众观众模拟器 · 生成中', on: true });
+    expect(simulatorChip.value).toEqual({ label: '观众模拟器 · 生成中', on: true });
 
     getStatusMock.mockResolvedValue({ data: { mode: 'replay', is_running: false } } as never);
     await loadSimulatorStatus();
-    expect(simulatorChip.value).toEqual({ label: '观众观众模拟器 · 回放待启', on: false });
+    expect(simulatorChip.value).toEqual({ label: '观众模拟器 · 回放待启', on: false });
 
     getStatusMock.mockResolvedValue({ data: { mode: 'off', is_running: false } } as never);
     await loadSimulatorStatus();
-    expect(simulatorChip.value).toEqual({ label: '观众观众模拟器未启用', on: false });
+    expect(simulatorChip.value).toEqual({ label: '观众模拟器未启用', on: false });
   });
 
-  it('观众观众模拟器接口失败时徽章置空不抛错', async () => {
+  it('观众模拟器接口失败时徽章置空不抛错', async () => {
     const { simulatorChip, loadSimulatorStatus } = mount();
     getStatusMock.mockRejectedValue(new Error('down'));
     await loadSimulatorStatus();
