@@ -75,6 +75,7 @@ from src.modules.utils.time_utils import now_ms
 
 from src.modules.storage.models.sessions import LiveSessionListItem
 from src.modules.storage.repos import ChatRepo, SessionRepo
+from src.modules.storage.repos.sessions import LiveSessionSummary
 from src.modules.types.session_kind import SESSION_KIND_REHEARSAL, SessionKind
 
 if TYPE_CHECKING:
@@ -594,6 +595,28 @@ class LiveSessionManager:
     ) -> int:
         """筛选后共有多少场（分页总数；与 ``list_sessions`` 同一套筛选条件）。"""
         return await self._sessions.count_live_sessions(
+            source=source,
+            kind=kind,
+            title_keyword=title_keyword,
+            started_after=started_after,
+            started_before=started_before,
+            settle_state=settle_state,
+        )
+
+    async def summarize_sessions(
+        self,
+        *,
+        now_ms: int,
+        source: Optional[str] = None,
+        kind: Optional[SessionKind] = None,
+        title_keyword: Optional[str] = None,
+        started_after: Optional[int] = None,
+        started_before: Optional[int] = None,
+        settle_state: Optional[str] = None,
+    ) -> LiveSessionSummary:
+        """筛选后全场的汇总统计（与 ``list_sessions`` 同一套筛选条件，算全集不随分页）。"""
+        return await self._sessions.summarize_live_sessions(
+            now_ms=now_ms,
             source=source,
             kind=kind,
             title_keyword=title_keyword,

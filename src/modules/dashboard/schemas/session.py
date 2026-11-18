@@ -44,6 +44,31 @@ class SessionResidualResponse(BaseModel):
     items: List[SessionItem] = Field(default_factory=list, description="待决残留场次（含行详情供弹窗展示）")
 
 
+class SessionDailyBucket(BaseModel):
+    """场次汇总的按开播日桶（热力图的一天：该日场次数与时长合计）"""
+
+    date: str = Field(..., description="开播日（yyyy-MM-DD，本地时区）")
+    count: int = Field(default=0, description="该日场次数")
+    duration_ms: int = Field(default=0, description="该日时长合计（毫秒；进行中场次按请求时刻截算）")
+
+
+class SessionSummaryResponse(BaseModel):
+    """场次清单汇总响应（``GET /live-sessions/summary``）
+
+    与场次列表同一套筛选条件，统计的是筛选命中的全集（不随分页）；清单页的
+    汇总行与场次日历由此取数。
+    """
+
+    total: int = Field(default=0, description="命中的场次数")
+    total_duration_ms: int = Field(default=0, description="时长合计（毫秒）")
+    average_duration_ms: int = Field(default=0, description="平均时长（毫秒；无场次为 0）")
+    longest_duration_ms: int = Field(default=0, description="最长一场的时长（毫秒）")
+    message_total: int = Field(default=0, description="消息条数合计")
+    kind_counts: Dict[str, int] = Field(default_factory=dict, description="各类型多少场（键为 kind 原值）")
+    source_counts: Dict[str, int] = Field(default_factory=dict, description="各来源多少场（键为 source 原值）")
+    daily: List[SessionDailyBucket] = Field(default_factory=list, description="按开播日的场次数与时长（日期升序）")
+
+
 class ComponentRef(BaseModel):
     """组件引用（组 + 注册名）：开播意图清单的条目。"""
 

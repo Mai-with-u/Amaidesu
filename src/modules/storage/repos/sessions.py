@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from src.modules.storage.models.game_players import (
     INTERACTION_HELPED,
@@ -52,6 +53,30 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEA
 # 下播整理的自动重试上限：用满后不再自动补跑，等运营者在 WebUI 点「重新整理」把次数清零。
 # 定在存储层：整理执行器与 WebUI 的整理状态接口共用同一个数，不各写一份
 MAX_SETTLE_ATTEMPTS = 3
+
+
+class SessionDailyBucket(NamedTuple):
+    """场次汇总的按日桶：该开播日的场次数与时长合计（date 为 yyyy-MM-DD，本地时区）。"""
+
+    date: str
+    count: int
+    duration_ms: int
+
+
+class LiveSessionSummary(NamedTuple):
+    """场次清单汇总：同一套筛选条件下的全集统计（不随分页）。
+
+    进行中场次的时长按传入的 ``now_ms`` 截到该时刻；``kind_counts`` /
+    ``source_counts`` 的键是 kind / source 的原值（只含实际出现的取值）。
+    """
+
+    total: int
+    total_duration_ms: int
+    longest_duration_ms: int
+    message_total: int
+    kind_counts: Dict[str, int]
+    source_counts: Dict[str, int]
+    daily: List[SessionDailyBucket]
 
 
 def _approved_unseen(
@@ -1074,5 +1099,82 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def summarize_live_sessions(
+        self,
+        *,
+        now_ms: int,
+        source: Optional[str] = None,
+        kind: Optional[SessionKind] = None,
+        title_keyword: Optional[str] = None,
+        started_after: Optional[int] = None,
+        started_before: Optional[int] = None,
+        settle_state: Optional[str] = None,
+    ) -> LiveSessionSummary:
+        """汇总筛选条件命中的全部场次（与 ``list_live_sessions`` 同一套筛选）。
 
-__all__ = ["MAX_SETTLE_ATTEMPTS", "SessionRepo"]
+        只取统计要用的几列（类型 / 来源 / 起止时刻 / 消息数聚合），聚合在本层
+        算：场次数、时长合计与最长一场、消息合计、类型与来源分布、按开播日
+        （本地时区）的场次数与时长。进行中场次（``ended_at_ms`` 为 NULL）的
+        时长截到 ``now_ms``。
+
+        Args:
+            now_ms: 进行中场次计时的当前时刻（Unix 毫秒）
+            其余参数: 与 ``list_live_sessions`` 同名筛选参数含义一致
+        """
+        where_clause, params = self._session_filter_clause(
+            source=source,
+            kind=kind,
+            title_keyword=title_keyword,
+            started_after=started_after,
+            started_before=started_before,
+            settle_state=settle_state,
+        )
+
+        def _exec() -> LiveSessionSummary:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT s.kind, s.source, s.started_at_ms, s.ended_at_ms, ("
+                    "SELECT COUNT(*) FROM live_chat c WHERE c.live_session_id = s.id"
+                    ") AS message_count "
+                    f"FROM live_sessions s {where_clause}",
+                    params,
+                ).fetchall()
+
+            total = 0
+            total_duration_ms = 0
+            longest_duration_ms = 0
+            message_total = 0
+            kind_counts: Dict[str, int] = {}
+            source_counts: Dict[str, int] = {}
+            by_day: Dict[str, SessionDailyBucket] = {}
+            for row in rows:
+                total += 1
+                kind_counts[str(row["kind"])] = kind_counts.get(str(row["kind"]), 0) + 1
+                source_counts[str(row["source"])] = source_counts.get(str(row["source"]), 0) + 1
+                message_total += int(row["message_count"] or 0)
+                ended = row["ended_at_ms"]
+                duration = max(0, int((ended if ended is not None else now_ms)) - int(row["started_at_ms"]))
+                total_duration_ms += duration
+                longest_duration_ms = max(longest_duration_ms, duration)
+                date = datetime.fromtimestamp(int(row["started_at_ms"]) / 1000).strftime("%Y-%m-%d")
+                day = by_day.get(date)
+                by_day[date] = (
+                    SessionDailyBucket(date=date, count=day.count + 1, duration_ms=day.duration_ms + duration)
+                    if day is not None
+                    else SessionDailyBucket(date=date, count=1, duration_ms=duration)
+                )
+            daily = [by_day[date] for date in sorted(by_day)]
+            return LiveSessionSummary(
+                total=total,
+                total_duration_ms=total_duration_ms,
+                longest_duration_ms=longest_duration_ms,
+                message_total=message_total,
+                kind_counts=kind_counts,
+                source_counts=source_counts,
+                daily=daily,
+            )
+
+        return await self._run_in_executor(_exec)
+
+
+__all__ = ["LiveSessionSummary", "MAX_SETTLE_ATTEMPTS", "SessionDailyBucket", "SessionRepo"]

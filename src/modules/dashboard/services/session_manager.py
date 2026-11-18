@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any, List, NamedTuple, Optional
 
 from src.modules.storage.models.sessions import LiveSessionListItem
+from src.modules.storage.repos.sessions import LiveSessionSummary
 from src.modules.types.session_kind import SessionKind
 
 
@@ -25,6 +26,13 @@ class SessionLedgerPage(NamedTuple):
 
     rows: List[LiveSessionListItem]
     total: int
+
+
+class SessionLedgerSummary(NamedTuple):
+    """场次清单汇总：全集统计加上由它算出的平均时长。"""
+
+    stats: LiveSessionSummary
+    average_duration_ms: int
 
 
 async def list_session_ledger(
@@ -61,4 +69,29 @@ async def list_session_ledger(
     return SessionLedgerPage(rows=rows, total=total)
 
 
-__all__ = ["SessionLedgerPage", "list_session_ledger"]
+async def summarize_session_ledger(
+    manager: Any,
+    *,
+    now_ms: int,
+    source: Optional[str] = None,
+    kind: Optional[SessionKind] = None,
+    title_keyword: Optional[str] = None,
+    started_after: Optional[int] = None,
+    started_before: Optional[int] = None,
+    settle_state: Optional[str] = None,
+) -> SessionLedgerSummary:
+    """汇总筛选条件命中的全部场次（与 ``list_session_ledger`` 同一套筛选条件）。"""
+    stats = await manager.summarize_sessions(
+        now_ms=now_ms,
+        source=source,
+        kind=kind,
+        title_keyword=title_keyword,
+        started_after=started_after,
+        started_before=started_before,
+        settle_state=settle_state,
+    )
+    average = round(stats.total_duration_ms / stats.total) if stats.total else 0
+    return SessionLedgerSummary(stats=stats, average_duration_ms=average)
+
+
+__all__ = ["SessionLedgerPage", "SessionLedgerSummary", "list_session_ledger", "summarize_session_ledger"]

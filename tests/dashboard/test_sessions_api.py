@@ -208,6 +208,65 @@ async def test_session_list_carries_ledger_columns(sessions_client, store) -> No
     assert ranged["total"] == 1
 
 
+async def test_summary_aggregates_full_filtered_set(sessions_client, store) -> None:
+    """汇总端点：与列表同一套筛选算全集（不随分页），含类型来源分布与按日分布。
+
+    进行中场次（ended_at_ms 为 NULL）的时长截到请求给的 now_ms。
+    """
+    client = sessions_client
+    # 三场已结束：两场正式一天播、一场彩排次日播；另一天零场
+    first = await store.sessions.insert_live_session(started_at_ms=1_000, title="第一场", kind="live")
+    await store.sessions.close_live_session(live_session_id=first, ended_at_ms=61_000)
+    second = await store.sessions.insert_live_session(started_at_ms=2_000, title="第二场", kind="live")
+    await store.sessions.close_live_session(live_session_id=second, ended_at_ms=122_000)
+    third = await store.sessions.insert_live_session(started_at_ms=86_400_000 + 1_000, kind="rehearsal")
+    await store.sessions.close_live_session(live_session_id=third, ended_at_ms=86_400_000 + 61_000)
+    await store.chat.insert_live_chat(
+        live_session_id=first, timestamp_ms=1_500, sender_role="viewer", content="早", message_type="danmaku"
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=first, timestamp_ms=1_600, sender_role="viewer", content="又来", message_type="danmaku"
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=second, timestamp_ms=2_500, sender_role="viewer", content="在吗", message_type="danmaku"
+    )
+
+    body = (await client.get("/api/v1/live-sessions/summary", params={"now_ms": 1_000_000})).json()
+    assert body["total"] == 3
+    assert body["total_duration_ms"] == (60_000 + 120_000 + 60_000)
+    assert body["average_duration_ms"] == round(240_000 / 3)
+    assert body["longest_duration_ms"] == 120_000
+    assert body["message_total"] == 3
+    assert body["kind_counts"] == {"live": 2, "rehearsal": 1}
+    assert body["source_counts"] == {"manual": 3}
+    # 按开播日（本地时区）分桶，日期升序
+    assert [(d["count"], d["duration_ms"]) for d in body["daily"]] == [(2, 180_000), (1, 60_000)]
+
+    # 筛选透传：只看彩排场
+    rehearsal_only = (
+        await client.get("/api/v1/live-sessions/summary", params={"kind": "rehearsal", "now_ms": 1_000_000})
+    ).json()
+    assert rehearsal_only["total"] == 1 and rehearsal_only["kind_counts"] == {"rehearsal": 1}
+
+    # 空全集给零值，daily 为空
+    empty = (await client.get("/api/v1/live-sessions/summary", params={"q": "不存在的标题"})).json()
+    assert (empty["total"], empty["total_duration_ms"], empty["daily"]) == (0, 0, [])
+
+    # 进行中场次：时长截到 now_ms
+    active = await store.sessions.insert_live_session(started_at_ms=500_000, title="正在播")
+    running = (await client.get("/api/v1/live-sessions/summary", params={"now_ms": 620_000, "kind": "live"})).json()
+    assert running["total"] == 3 and running["longest_duration_ms"] == 120_000
+    assert running["total_duration_ms"] == 60_000 + 120_000 + 120_000  # 进行中场截到 120s
+    assert (await store.sessions.get_live_session(live_session_id=active)) is not None
+
+
+async def test_summary_validates_filters(sessions_client) -> None:
+    """汇总端点与列表共用同一份筛选白名单：非法来源 / 整理状态 400。"""
+    client = sessions_client
+    assert (await client.get("/api/v1/live-sessions/summary", params={"source": "hacker"})).status_code == 400
+    assert (await client.get("/api/v1/live-sessions/summary", params={"settle_state": "nope"})).status_code == 400
+
+
 async def test_list_filters_by_source_and_title(sessions_client, session_manager, store) -> None:
     """前两个显式场次都需有明细，否则自动结束时会被整行丢弃。"""
     client = sessions_client

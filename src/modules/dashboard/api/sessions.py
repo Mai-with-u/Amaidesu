@@ -6,6 +6,8 @@
   供控制台场次侧边栏与场次管理页）
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束；可带组件期望运行全集做意图对齐）
 - ``GET  /sessions/residual``  待决残留场次列表（上次进程未正常退出留下的未结账场次）
+- ``GET  /sessions/summary``   场次清单汇总（与列表同一套筛选算全集：场次数、时长、
+  消息合计、类型来源分布、按开播日分布；清单页汇总行与日历的取数面）
 - ``POST /sessions/{id}/resume``   续播待决残留场次（断线续播；已有进行中场次时 409）
 - ``POST /sessions/{id}/discard``  收尾待决残留场次（补结束时间为最后活动时刻）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
@@ -34,6 +36,7 @@ from src.modules.dashboard.schemas.session import (
     ComponentPlanReport,
     RundownPlannedSegment,
     SessionActionResponse,
+    SessionDailyBucket,
     SessionItem,
     SessionKindRequest,
     SessionListResponse,
@@ -42,6 +45,7 @@ from src.modules.dashboard.schemas.session import (
     SessionResidualResponse,
     SessionRundownExecutionResponse,
     SessionSearchResponse,
+    SessionSummaryResponse,
     SessionTimelineResponse,
     SessionUpdateRequest,
 )
@@ -53,11 +57,12 @@ from src.modules.dashboard.services.config_adapter import sync_enabled_lists
 from src.modules.dashboard.services.event_query import events_dir_of
 from src.modules.dashboard.services.session_details import list_session_details, search_session_details
 from src.modules.dashboard.services.session_events import SessionEventReader, record_matches_keyword
-from src.modules.dashboard.services.session_manager import list_session_ledger
+from src.modules.dashboard.services.session_manager import list_session_ledger, summarize_session_ledger
 from src.modules.dashboard.services.session_rundown import build_rundown_execution
 from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.dashboard.utils.component_helper import config_dir
 from src.modules.logging import get_logger
+from src.modules.utils.time_utils import now_ms as server_now_ms
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.types.session_kind import SessionKind
 
@@ -146,6 +151,14 @@ _SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "generate", "legacy"})
 _SESSION_SETTLE_FILTERS = frozenset({"pending", "failed", "review", "reviewed"})
 
 
+def _ensure_session_filters(source: Optional[str], settle_state: Optional[str]) -> None:
+    """来源与整理状态筛选取值校验（列表与汇总两个端点共用同一份白名单）。"""
+    if source is not None and source != "" and source not in _SESSION_SOURCE_FILTERS:
+        raise HTTPException(status_code=400, detail=f"非法来源筛选: {source}")
+    if settle_state is not None and settle_state != "" and settle_state not in _SESSION_SETTLE_FILTERS:
+        raise HTTPException(status_code=400, detail=f"非法整理状态筛选: {settle_state}")
+
+
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(
     server: ServerDep,
@@ -162,10 +175,7 @@ async def list_sessions(
     ] = None,
 ) -> SessionListResponse:
     """列出直播场次（按开始时间倒序，附消息数），支持来源、类型、标题、开播区间与整理状态筛选。"""
-    if source is not None and source != "" and source not in _SESSION_SOURCE_FILTERS:
-        raise HTTPException(status_code=400, detail=f"非法来源筛选: {source}")
-    if settle_state is not None and settle_state != "" and settle_state not in _SESSION_SETTLE_FILTERS:
-        raise HTTPException(status_code=400, detail=f"非法整理状态筛选: {settle_state}")
+    _ensure_session_filters(source, settle_state)
     page = await list_session_ledger(
         manager,
         limit=limit,
@@ -290,6 +300,51 @@ async def list_residual_sessions(
             )
         )
     return SessionResidualResponse(items=items)
+
+
+@router.get("/summary", response_model=SessionSummaryResponse)
+async def summarize_sessions(
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+    source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / generate / legacy")] = None,
+    kind: Annotated[Optional[SessionKind], Query(description="类型筛选：live=正式 / rehearsal=彩排")] = None,
+    q: Annotated[Optional[str], Query(description="标题关键字筛选")] = None,
+    started_after_ms: Annotated[Optional[int], Query(description="开播时刻下界（含，Unix 毫秒）")] = None,
+    started_before_ms: Annotated[Optional[int], Query(description="开播时刻上界（含，Unix 毫秒）")] = None,
+    settle_state: Annotated[
+        Optional[str], Query(description="整理状态筛选：pending / failed / review / reviewed")
+    ] = None,
+    now_ms: Annotated[
+        Optional[int], Query(description="进行中场次计时的当前时刻（Unix 毫秒）；缺省用服务器当前时刻")
+    ] = None,
+) -> SessionSummaryResponse:
+    """场次清单汇总：与列表同一套筛选条件算筛选全集（不随分页）。
+
+    清单页的汇总行与场次日历由此取数；进行中场次的时长按 ``now_ms`` 截算，
+    前端把请求时刻带过来以对齐"已播"口径。
+    """
+    _ensure_session_filters(source, settle_state)
+    ledger = await summarize_session_ledger(
+        manager,
+        now_ms=now_ms if now_ms is not None else server_now_ms(),
+        source=source or None,
+        kind=kind,
+        title_keyword=(q or "").strip() or None,
+        started_after=started_after_ms,
+        started_before=started_before_ms,
+        settle_state=settle_state or None,
+    )
+    stats = ledger.stats
+    return SessionSummaryResponse(
+        total=stats.total,
+        total_duration_ms=stats.total_duration_ms,
+        average_duration_ms=ledger.average_duration_ms,
+        longest_duration_ms=stats.longest_duration_ms,
+        message_total=stats.message_total,
+        kind_counts=stats.kind_counts,
+        source_counts=stats.source_counts,
+        daily=[SessionDailyBucket(date=day.date, count=day.count, duration_ms=day.duration_ms) for day in stats.daily],
+    )
 
 
 @router.post("/{session_id}/resume", response_model=SessionActionResponse)
