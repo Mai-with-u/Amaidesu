@@ -88,3 +88,16 @@ def test_brief_of_reads_only_the_brief_field() -> None:
     assert brief_of({"tool": "glance", "brief": " 在主世界的森林。 ", "body": {"health": 20}}) == "在主世界的森林。"
     assert brief_of({"tool": "glance", "body": {}}) == ""
     assert brief_of("not a dict") == ""
+
+
+def test_identity_line_renders_when_in_game_name_given() -> None:
+    """有游戏内名时【现在的状态】段首带身份行；没有名字时不渲染该行。"""
+    inputs = SceneInputs(now_ms=1_000, scene_brief="院子里有一只苦力怕。", scene_brief_ms=1_000, in_game_name="Maikana")
+
+    card = build_scene_card(inputs)
+
+    assert "游戏里你的名字叫 Maikana，记录里提到这个名字就是你。" in card
+    assert "【现在的状态】" in card and "苦力怕" in card
+
+    no_name = build_scene_card(SceneInputs(now_ms=1_000, scene_brief="院子里有一只苦力怕。", scene_brief_ms=1_000))
+    assert "游戏里你的名字叫" not in no_name

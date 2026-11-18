@@ -54,6 +54,10 @@ class SceneInputs:
     segment_title: str = ""
     room_activity: str = ""
     recent_speeches: Sequence[str] = field(default_factory=tuple)
+    # 她在游戏里的名字（账号名）：系统广播与记录常用游戏名指代她，没有这行她会把
+    # 提到这名字的行当成别人的事。数据源（采集器读到的账号名）尚未接到 streamer 侧，
+    # 空串 = 不渲染身份行，等名字来源接通后由调用方传入
+    in_game_name: str = ""
 
 
 def brief_of(result: object) -> str:
@@ -83,11 +87,19 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _scene_section(inputs: SceneInputs) -> str:
-    if not inputs.scene_brief:
+    identity = (
+        f"游戏里你的名字叫 {inputs.in_game_name}，记录里提到这个名字就是你。" if inputs.in_game_name.strip() else ""
+    )
+    if not inputs.scene_brief and not identity:
         return ""
     age_ms = inputs.now_ms - inputs.scene_brief_ms if inputs.scene_brief_ms else 0
     note = f"（{_ago(age_ms)}看的" + ("，可能已经变了）" if age_ms >= STALE_SCENE_MS else "）")
-    return f"【现在的状态】{note}\n{_clip(inputs.scene_brief, 320)}"
+    lines = [f"【现在的状态】{note}" if inputs.scene_brief else "【现在的状态】"]
+    if identity:
+        lines.append(identity)
+    if inputs.scene_brief:
+        lines.append(_clip(inputs.scene_brief, 320))
+    return "\n".join(lines)
 
 
 def _goal_section(inputs: SceneInputs) -> str:
