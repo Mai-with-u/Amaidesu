@@ -21,7 +21,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
@@ -33,6 +33,139 @@ from src.modules.utils.time_utils import now_ms
 logger = get_logger("RetentionService")
 
 _DAY_MS: int = 86_400_000
+
+
+@dataclass(frozen=True)
+class _CleanupRule:
+    """保留期清理的单条声明：目标表、统计口径与 SQL 模板。
+
+    模板里的 ``{expired_sessions}`` / ``{orphan_sessions}`` 展开为到期场次判定子查询；
+    ``cutoff_slots`` 是模板中按序填入截止时刻参数的占位符个数；``prefix_params`` 是排在
+    截止时刻参数之前的固定参数（如委派账的类型前缀）。
+    """
+
+    table: str
+    counter: str
+    sql: str
+    cutoff_slots: int = 0
+    prefix_params: Tuple[str, ...] = ()
+
+
+# 与 RetentionResult 统计字段一一对应的计数口径名
+_COUNTER_CHAT = "chat_deleted"
+_COUNTER_PAYMENTS = "payments_scrubbed"
+_COUNTER_SUMMARIES = "summaries_deleted"
+_COUNTER_DELEGATIONS = "delegations_deleted"
+_COUNTER_LLM = "llm_bodies_scrubbed"
+
+# 到期场次删数据；不挂任何场次的孤儿行（live_session_id 不在 live_sessions 里）按时刻兜底删
+_EXPIRED_SESSIONS_SQL = "SELECT id FROM live_sessions WHERE ended_at_ms IS NOT NULL AND ended_at_ms <= ?"
+_ORPHAN_SESSIONS_SQL = "SELECT id FROM live_sessions"
+
+# 保留期清理的逐表声明：删到期观众弹幕与公屏玩家聊天（批准进记忆/玩家卡挂着的行除外）、
+# 清空付费三表身份与留言、删到期话题与时间线摘要、删到期委派账、清空到期请求正文。
+# 各条的范围与豁免条件和逐条手写时期保持一致
+_CLEANUP_RULES: Tuple[_CleanupRule, ...] = (
+    _CleanupRule(
+        table="live_chat",
+        counter=_COUNTER_CHAT,
+        sql=(
+            "DELETE FROM live_chat WHERE sender_role = 'viewer'"
+            " AND (live_session_id IN ({expired_sessions})"
+            "      OR (live_session_id NOT IN ({orphan_sessions}) AND timestamp_ms <= ?))"
+            # 批准进记忆的观众候选或熟客近况挂着的弹幕留着：删了它，那一行档案或已批近况会被外键级联删掉
+            " AND id NOT IN (SELECT viewer_chat_id FROM archive_lines WHERE viewer_chat_id IS NOT NULL)"
+            " AND id NOT IN ("
+            "SELECT viewer_chat_id FROM viewer_candidates"
+            " WHERE kind = 'viewer_self' AND status = 'approved' AND viewer_chat_id IS NOT NULL"
+            ")"
+        ),
+        cutoff_slots=2,
+    ),
+    _CleanupRule(
+        table="game_chat",
+        counter=_COUNTER_CHAT,
+        sql=(
+            "DELETE FROM game_chat WHERE direction <> 'streamer'"
+            " AND (live_session_id IN ({expired_sessions})"
+            "      OR (live_session_id NOT IN ({orphan_sessions}) AND at_ms <= ?))"
+            # 批准进玩家卡的自述挂着的他那句留着：删了它，那条自述会被外键级联删掉
+            " AND id NOT IN (SELECT player_chat_id FROM player_candidates WHERE status = 'approved')"
+        ),
+        cutoff_slots=2,
+    ),
+    _CleanupRule(
+        table="gifts",
+        counter=_COUNTER_PAYMENTS,
+        sql=(
+            "UPDATE gifts SET viewer_id = NULL, user_id = '', user_name = '', id_kind = '',"
+            " fans_medal_name = '', raw_data = NULL"
+            " WHERE (live_session_id IN ({expired_sessions})"
+            "        OR (live_session_id NOT IN ({orphan_sessions}) AND timestamp_ms <= ?))"
+            "   AND (viewer_id IS NOT NULL OR user_id <> '' OR user_name <> '' OR raw_data IS NOT NULL)"
+        ),
+        cutoff_slots=2,
+    ),
+    _CleanupRule(
+        table="super_chats",
+        counter=_COUNTER_PAYMENTS,
+        sql=(
+            "UPDATE super_chats SET viewer_id = NULL, user_id = '', user_name = '', id_kind = '',"
+            " message = '', fans_medal_name = '', raw_data = NULL"
+            " WHERE (live_session_id IN ({expired_sessions})"
+            "        OR (live_session_id NOT IN ({orphan_sessions}) AND timestamp_ms <= ?))"
+            "   AND (viewer_id IS NOT NULL OR user_id <> '' OR user_name <> ''"
+            "        OR message <> '' OR raw_data IS NOT NULL)"
+        ),
+        cutoff_slots=2,
+    ),
+    _CleanupRule(
+        table="guards",
+        counter=_COUNTER_PAYMENTS,
+        sql=(
+            "UPDATE guards SET viewer_id = NULL, user_id = '', user_name = '', id_kind = '',"
+            " fans_medal_name = '', raw_data = NULL"
+            " WHERE (live_session_id IN ({expired_sessions})"
+            "        OR (live_session_id NOT IN ({orphan_sessions}) AND timestamp_ms <= ?))"
+            "   AND (viewer_id IS NOT NULL OR user_id <> '' OR user_name <> '' OR raw_data IS NOT NULL)"
+        ),
+        cutoff_slots=2,
+    ),
+    _CleanupRule(
+        table="topics",
+        counter=_COUNTER_SUMMARIES,
+        sql="DELETE FROM topics WHERE live_session_id IN ({expired_sessions})",
+        cutoff_slots=1,
+    ),
+    _CleanupRule(
+        table="timeline_summary",
+        counter=_COUNTER_SUMMARIES,
+        sql=("DELETE FROM timeline_summary WHERE live_session_id IN ({expired_sessions}) OR end_ms <= ?"),
+        cutoff_slots=2,
+    ),
+    # 委派账是工作数据：下播整理核对完、续播认领过就不再要，到期场次的随话题一起删
+    _CleanupRule(
+        table="game_events",
+        counter=_COUNTER_DELEGATIONS,
+        sql=(
+            # substr 的长度取前缀字符数，是常量不是绑定参数
+            f"DELETE FROM game_events WHERE substr(event_type, 1, {len(DELEGATION_EVENT_PREFIX)}) = ?"
+            " AND (live_session_id IN ({expired_sessions})"
+            "      OR (live_session_id NOT IN ({orphan_sessions}) AND timestamp_ms <= ?))"
+        ),
+        cutoff_slots=2,
+        prefix_params=(DELEGATION_EVENT_PREFIX,),
+    ),
+    _CleanupRule(
+        table="llm_requests",
+        counter=_COUNTER_LLM,
+        sql=(
+            "UPDATE llm_requests SET response_content = NULL, preview_text = ''"
+            " WHERE timestamp_ms <= ? AND (response_content IS NOT NULL OR preview_text <> '')"
+        ),
+        cutoff_slots=1,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -127,103 +260,34 @@ class RetentionService:
         return result
 
     def _cleanup_raw_blocking(self, cutoff_ms: int) -> tuple[int, int, int, int, int, int]:
-        chat_del = pay_scrub = sum_del = deleg_del = llm_scrub = 0
-        expired_sessions_sql = "SELECT id FROM live_sessions WHERE ended_at_ms IS NOT NULL AND ended_at_ms <= ?"
-        orphan_session_sql = "SELECT id FROM live_sessions"
-
+        counts = {
+            _COUNTER_CHAT: 0,
+            _COUNTER_PAYMENTS: 0,
+            _COUNTER_SUMMARIES: 0,
+            _COUNTER_DELEGATIONS: 0,
+            _COUNTER_LLM: 0,
+        }
         with self._manager.transaction(immediate=True) as conn:
-            cur = conn.execute(
-                f"DELETE FROM live_chat WHERE sender_role = 'viewer'"  # noqa: S608 常量 SQL 片段
-                f" AND (live_session_id IN ({expired_sessions_sql})"
-                f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND timestamp_ms <= ?))"
-                # 批准进记忆的观众候选或熟客近况挂着的弹幕留着：删了它，那一行档案或已批近况会被外键级联删掉
-                " AND id NOT IN (SELECT viewer_chat_id FROM archive_lines WHERE viewer_chat_id IS NOT NULL)"
-                " AND id NOT IN ("
-                "SELECT viewer_chat_id FROM viewer_candidates"
-                " WHERE kind = 'viewer_self' AND status = 'approved' AND viewer_chat_id IS NOT NULL"
-                ")",
-                (cutoff_ms, cutoff_ms),
-            )
-            chat_del += max(0, cur.rowcount)
+            for rule in _CLEANUP_RULES:
+                sql = rule.sql.format(expired_sessions=_EXPIRED_SESSIONS_SQL, orphan_sessions=_ORPHAN_SESSIONS_SQL)
+                params: List[object] = [*rule.prefix_params, *([cutoff_ms] * rule.cutoff_slots)]
+                cur = conn.execute(sql, params)  # noqa: S608 表名与条件来自声明常量
+                counts[rule.counter] += max(0, cur.rowcount)
 
-            # 公屏游戏聊天和弹幕一样是工作数据：到期场次里玩家说的、认不出是谁的占位行删掉，她说的留着
-            cur = conn.execute(
-                f"DELETE FROM game_chat WHERE direction <> 'streamer'"  # noqa: S608 常量 SQL 片段
-                f" AND (live_session_id IN ({expired_sessions_sql})"
-                f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND at_ms <= ?))"
-                # 批准进玩家卡的自述挂着的他那句留着：删了它，那条自述会被外键级联删掉
-                " AND id NOT IN (SELECT player_chat_id FROM player_candidates WHERE status = 'approved')",
-                (cutoff_ms, cutoff_ms),
-            )
-            chat_del += max(0, cur.rowcount)
-
-            cur = conn.execute(
-                f"UPDATE gifts SET viewer_id = NULL, user_id = '', user_name = '', id_kind = '',"  # noqa: S608
-                f" fans_medal_name = '', raw_data = NULL"
-                f" WHERE (live_session_id IN ({expired_sessions_sql})"
-                f"        OR (live_session_id NOT IN ({orphan_session_sql}) AND timestamp_ms <= ?))"
-                f"   AND (viewer_id IS NOT NULL OR user_id <> '' OR user_name <> '' OR raw_data IS NOT NULL)",
-                (cutoff_ms, cutoff_ms),
-            )
-            pay_scrub += max(0, cur.rowcount)
-
-            cur = conn.execute(
-                f"UPDATE super_chats SET viewer_id = NULL, user_id = '', user_name = '', id_kind = '',"  # noqa: S608
-                f" message = '', fans_medal_name = '', raw_data = NULL"
-                f" WHERE (live_session_id IN ({expired_sessions_sql})"
-                f"        OR (live_session_id NOT IN ({orphan_session_sql}) AND timestamp_ms <= ?))"
-                f"   AND (viewer_id IS NOT NULL OR user_id <> '' OR user_name <> ''"
-                f"        OR message <> '' OR raw_data IS NOT NULL)",
-                (cutoff_ms, cutoff_ms),
-            )
-            pay_scrub += max(0, cur.rowcount)
-
-            cur = conn.execute(
-                f"UPDATE guards SET viewer_id = NULL, user_id = '', user_name = '', id_kind = '',"  # noqa: S608
-                f" fans_medal_name = '', raw_data = NULL"
-                f" WHERE (live_session_id IN ({expired_sessions_sql})"
-                f"        OR (live_session_id NOT IN ({orphan_session_sql}) AND timestamp_ms <= ?))"
-                f"   AND (viewer_id IS NOT NULL OR user_id <> '' OR user_name <> '' OR raw_data IS NOT NULL)",
-                (cutoff_ms, cutoff_ms),
-            )
-            pay_scrub += max(0, cur.rowcount)
-
-            cur = conn.execute(
-                f"DELETE FROM topics WHERE live_session_id IN ({expired_sessions_sql})",  # noqa: S608
-                (cutoff_ms,),
-            )
-            sum_del += max(0, cur.rowcount)
-
-            cur = conn.execute(
-                f"DELETE FROM timeline_summary"  # noqa: S608
-                f" WHERE live_session_id IN ({expired_sessions_sql}) OR end_ms <= ?",
-                (cutoff_ms, cutoff_ms),
-            )
-            sum_del += max(0, cur.rowcount)
-
-            # 委派账是工作数据：下播整理核对完、续播认领过就不再要，到期场次的随话题一起删
-            cur = conn.execute(
-                f"DELETE FROM game_events WHERE substr(event_type, 1, {len(DELEGATION_EVENT_PREFIX)}) = ?"  # noqa: S608
-                f" AND (live_session_id IN ({expired_sessions_sql})"
-                f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND timestamp_ms <= ?))",
-                (DELEGATION_EVENT_PREFIX, cutoff_ms, cutoff_ms),
-            )
-            deleg_del += max(0, cur.rowcount)
-
-            cur = conn.execute(
-                "UPDATE llm_requests SET response_content = NULL, preview_text = ''"
-                " WHERE timestamp_ms <= ? AND (response_content IS NOT NULL OR preview_text <> '')",
-                (cutoff_ms,),
-            )
-            llm_scrub += max(0, cur.rowcount)
-
-        if any((chat_del, pay_scrub, sum_del, deleg_del, llm_scrub)):
+        if any(counts.values()):
             conn = self._manager.connection()
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
         backups_del = self._delete_expired_backups(cutoff_ms)
 
-        return chat_del, pay_scrub, sum_del, deleg_del, llm_scrub, backups_del
+        return (
+            counts[_COUNTER_CHAT],
+            counts[_COUNTER_PAYMENTS],
+            counts[_COUNTER_SUMMARIES],
+            counts[_COUNTER_DELEGATIONS],
+            counts[_COUNTER_LLM],
+            backups_del,
+        )
 
     def _delete_expired_backups(self, cutoff_ms: int) -> int:
         """删除 backups/ 下到期的备份条目，返回删除数。
