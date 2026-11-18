@@ -1071,6 +1071,31 @@ export interface LiveSessionListResponse {
   total: number;
 }
 
+/** 场次汇总的按开播日桶（热力图的一天：该日场次数与时长合计） */
+export interface SessionDailyBucket {
+  /** 开播日 yyyy-MM-DD（本地时区） */
+  date: string;
+  count: number;
+  /** 该日时长合计（毫秒；进行中场次按请求时刻截算） */
+  duration_ms: number;
+}
+
+/** 场次清单汇总（GET /api/v1/live-sessions/summary）：与列表同一套筛选算全集，不随分页 */
+export interface SessionSummaryResponse {
+  total: number;
+  total_duration_ms: number;
+  /** 平均时长（毫秒；无场次为 0） */
+  average_duration_ms: number;
+  longest_duration_ms: number;
+  message_total: number;
+  /** 各类型多少场（键为 kind 原值，只含实际出现的取值） */
+  kind_counts: Record<string, number>;
+  /** 各来源多少场（键为 source 原值） */
+  source_counts: Record<string, number>;
+  /** 按开播日的场次数与时长（日期升序） */
+  daily: SessionDailyBucket[];
+}
+
 /** 待决残留场次响应（GET /api/v1/live-sessions/residual） */
 export interface SessionResidualResponse {
   /** 上次进程未正常退出留下的未结账场次（含行详情供续播弹窗展示） */

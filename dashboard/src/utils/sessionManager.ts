@@ -84,7 +84,7 @@ export function sessionDurationLabel(
 }
 
 /** 整理状态的口径：整理三列（整理完成 / 重新整理尝试次数 / 标已审）算出的标签与色调 */
-export type SessionSettleTone = 'default' | 'warning' | 'danger' | 'success';
+export type SessionSettleTone = 'default' | 'danger' | 'success';
 
 export interface SessionSettleState {
   label: string;
@@ -93,22 +93,27 @@ export interface SessionSettleState {
 
 /**
  * 整理状态：标过已审的算已审；整理完成但没标已审的算待审；整理失败（试过又没成）
- * 单独标出；其余是待整理。
+ * 单独标出；其余是待整理。待审与待整理是常态不是告警，用中性色——红色只留给
+ * 整理失败，绿色留给已审，色彩才保有信息量。
  */
 export function settleStateOf(
   item: Pick<LiveSessionItem, 'settled_at_ms' | 'settle_attempts' | 'reviewed_at_ms'>,
 ): SessionSettleState {
   if (item.reviewed_at_ms != null) return { label: '已审', tone: 'success' };
-  if (item.settled_at_ms != null) return { label: '已整理待审', tone: 'warning' };
+  if (item.settled_at_ms != null) return { label: '已整理待审', tone: 'default' };
   if (item.settle_attempts > 0) return { label: '整理失败', tone: 'danger' };
   return { label: '待整理', tone: 'default' };
 }
 
-/** 清单汇总（全部由当页这批场次算出，不另查库） */
+/**
+ * 清单汇总的视图形状（场次管理页消费）。数值由服务端按同一套筛选条件对全集
+ * 算出（``GET /live-sessions/summary``），组合式把响应映射成这个形状——
+ * kindCounts 补齐两个键的零值，页面不必判缺。
+ */
 export interface SessionLedgerSummary {
   /** 命中的场次数 */
   count: number;
-  /** 总时长（毫秒；进行中的场次按当前时刻算） */
+  /** 总时长（毫秒；进行中的场次按请求时刻截算） */
   totalDurationMs: number;
   /** 平均时长（毫秒；无场次时为 0） */
   averageDurationMs: number;
@@ -120,45 +125,6 @@ export interface SessionLedgerSummary {
   kindCounts: Record<SessionKind, number>;
   /** 各来源多少场 */
   sourceCounts: Record<string, number>;
-}
-
-/**
- * 汇总当前这批场次：场次数、总时长、平均与最长时长、消息合计、类型与来源分布。
- * 进行中的场次时长按传入的当前时刻算（随时钟在走）。
- */
-export function summarizeSessions(
-  items: readonly LiveSessionItem[],
-  nowMs: number,
-): SessionLedgerSummary {
-  const kindCounts: Record<SessionKind, number> = { live: 0, rehearsal: 0 };
-  const sourceCounts: Record<string, number> = {};
-  let totalDurationMs = 0;
-  let longestDurationMs = 0;
-  let messageTotal = 0;
-
-  for (const item of items) {
-    kindCounts[item.kind] = (kindCounts[item.kind] ?? 0) + 1;
-    sourceCounts[item.source] = (sourceCounts[item.source] ?? 0) + 1;
-    messageTotal += item.message_count;
-    const duration = item.is_active
-      ? Math.max(0, nowMs - item.started_at_ms)
-      : item.ended_at_ms == null
-        ? 0
-        : Math.max(0, item.ended_at_ms - item.started_at_ms);
-    totalDurationMs += duration;
-    if (duration > longestDurationMs) longestDurationMs = duration;
-  }
-
-  const count = items.length;
-  return {
-    count,
-    totalDurationMs,
-    averageDurationMs: count > 0 ? Math.round(totalDurationMs / count) : 0,
-    longestDurationMs,
-    messageTotal,
-    kindCounts,
-    sourceCounts,
-  };
 }
 
 // ==================== 场次日历热力图 ====================
@@ -188,34 +154,23 @@ export interface Heatmap {
 /**
  * 场次日历热力图：按开播日铺格子，颜色深浅看当天播了几场。
  *
- * 窗口 = 今天往前 ``minWeeks`` 周，同时不早于最早那场（有更早的场次就把窗口
- * 往前延，不藏数据；格子铺得宽时由界面横向滚动）。格子按周排成列、周一在上
- * （与日历习惯一致）。
+ * 数据是清单汇总端点的按日桶（筛选全集，不随翻页变）；窗口 = 今天往前
+ * ``minWeeks`` 周，同时不早于最早有场次的那天（有更早的场次就把窗口往前延，
+ * 不藏数据；格子铺得宽时由界面横向滚动）。格子按周排成列、周一在上（与日历
+ * 习惯一致）。
  */
-export function buildHeatmap(
-  items: readonly LiveSessionItem[],
+export function buildHeatmapFromDays(
+  dayList: readonly HeatmapDay[],
   nowMs: number,
   options?: { minWeeks?: number },
 ): Heatmap {
   const minWeeks = Math.max(1, options?.minWeeks ?? 26);
   const today = startOfDayMs(nowMs);
-  const earliest = items.length
-    ? Math.min(...items.map(item => startOfDayMs(item.started_at_ms)))
-    : today;
+  const earliest = dayList.length ? Math.min(...dayList.map(day => dayStart(day.date))) : today;
   const windowStart = Math.min(earliest, today - minWeeks * 7 * DAY_MS);
 
   const byDate = new Map<string, HeatmapDay>();
-  for (const item of items) {
-    const date = formatDateYMD(item.started_at_ms);
-    const day = byDate.get(date) ?? { date, count: 0, durationMs: 0 };
-    day.count += 1;
-    day.durationMs += item.is_active
-      ? Math.max(0, nowMs - item.started_at_ms)
-      : item.ended_at_ms == null
-        ? 0
-        : Math.max(0, item.ended_at_ms - item.started_at_ms);
-    byDate.set(date, day);
-  }
+  for (const day of dayList) byDate.set(day.date, day);
 
   // 窗口起点对齐到周一，让每列都是完整的一周
   const startWeekday = (new Date(windowStart).getDay() + 6) % 7;
@@ -253,4 +208,10 @@ export function heatmapLevel(day: HeatmapDay | null): number {
 function startOfDayMs(ms: number): number {
   const at = new Date(ms);
   return new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime();
+}
+
+/** yyyy-MM-DD → 当天零点的毫秒（本地时区；直接 new Date(字符串) 会按 UTC 解析，差出时区偏移） */
+export function dayStart(date: string): number {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year ?? 1970, (month ?? 1) - 1, day ?? 1).getTime();
 }

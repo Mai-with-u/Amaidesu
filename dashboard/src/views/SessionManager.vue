@@ -4,10 +4,7 @@
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">场次管理</h1>
-        <p class="page-subtitle">
-          所有场次在一张表里 · 筛出要处理的，逐场或批量处置
-          <span class="scope-note">改类型会动到该场登记的账本，删除不可撤销</span>
-        </p>
+        <p class="page-subtitle">所有场次在一张表里 · 筛出要处理的，逐场或批量处置</p>
       </div>
       <div class="header-actions">
         <el-button type="primary" plain :loading="loading" @click="load">刷新</el-button>
@@ -75,7 +72,7 @@
       <el-button size="small" link @click="clearSelection()">取消选择</el-button>
     </div>
 
-    <!-- 汇总：全部由当页这批场次算出 -->
+    <!-- 汇总：服务端按同一套筛选条件算全集（不随翻页变），汇总行与日历同源 -->
     <section class="summary-card">
       <div class="summary-stats">
         <span class="stat"
@@ -134,6 +131,7 @@
                   <span
                     class="heat-cell"
                     :class="[`lv${heatmapLevel(day)}`, { 'is-blank': !day }]"
+                    @click="pickHeatmapDay(day)"
                   />
                 </el-tooltip>
               </div>
@@ -150,7 +148,7 @@
       </div>
     </section>
 
-    <!-- 场次表 -->
+    <!-- 场次表：行点击开详情对话框（按钮/勾选框等交互元素除外） -->
     <section class="table-card">
       <el-table
         v-loading="loading"
@@ -158,28 +156,26 @@
         row-key="live_session_id"
         class="session-table"
         @selection-change="setSelection"
+        @row-click="onRowClick"
       >
         <el-table-column type="selection" width="42" />
-        <el-table-column label="场次" min-width="180">
+        <el-table-column label="场次" min-width="220">
           <template #default="{ row }">
-            <span class="cell-name" :title="row.title ?? `场次 #${row.live_session_id}`">
-              {{ row.title ?? `场次 #${row.live_session_id}` }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="类型" width="64">
-          <template #default="{ row }">
-            <span class="badge" :class="`is-${row.kind}`">{{ kindLabel(row.kind) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="来源" width="64">
-          <template #default="{ row }">
-            <span class="badge" :class="`is-${row.source}`">{{ sourceLabel(row.source) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="开播" width="160">
-          <template #default="{ row }">
-            <span class="mono nowrap">{{ startedLabel(row.started_at_ms) }}</span>
+            <div class="cell-session">
+              <div class="cell-session-line">
+                <!-- 未命名场次标题即开播时刻，此时不再重复第二行 -->
+                <span class="cell-name">{{ row.title ?? startedLabel(row.started_at_ms) }}</span>
+                <span v-if="row.kind !== 'live'" class="badge is-rehearsal">{{
+                  kindLabel(row.kind)
+                }}</span>
+                <span v-if="row.source !== 'manual'" class="badge">{{
+                  sourceLabel(row.source)
+                }}</span>
+              </div>
+              <div v-if="row.title" class="cell-sub mono">
+                {{ startedLabel(row.started_at_ms) }}
+              </div>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="用时" width="120">
@@ -223,10 +219,10 @@
         </el-table-column>
         <el-table-column label="操作" width="150" align="right">
           <template #default="{ row }">
-            <el-button link size="small" @click="goReview(row)">复盘</el-button>
-            <el-button link size="small" @click="goReplay(row)">回看</el-button>
+            <el-button link size="small" @click.stop="goReview(row)">复盘</el-button>
+            <el-button link size="small" @click.stop="goReplay(row)">回看</el-button>
             <el-dropdown trigger="click" @command="(cmd: string) => onRowCommand(cmd, row)">
-              <el-button link size="small">更多</el-button>
+              <el-button link size="small" @click.stop>更多</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="rename">改名</el-dropdown-item>
@@ -245,8 +241,12 @@
         <template #empty>
           <div class="empty-hint">
             {{
-              query || sourceFilter !== SESSION_FILTER_ALL || kindFilter !== SESSION_FILTER_ALL
-                ? '没有匹配的场次'
+              query ||
+              sourceFilter !== SESSION_FILTER_ALL ||
+              kindFilter !== SESSION_FILTER_ALL ||
+              settleFilter !== 'all' ||
+              dateRange
+                ? '没有匹配的场次——放宽筛选或清掉条件再试'
                 : '还没有场次——开启直播后这里会出现记录'
             }}
           </div>
@@ -282,6 +282,96 @@
         <el-button type="primary" @click="submitNotes">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 场次详情：一场的全部字段与全部处置动作收在一处（表格行点击打开） -->
+    <el-dialog v-model="detailVisible" :title="detailTitle" width="640px" class="detail-dialog">
+      <template v-if="detailTarget">
+        <div class="detail-meta">
+          <span class="detail-item">
+            类型 <b>{{ kindLabel(detailTarget.kind) }}</b>
+          </span>
+          <span class="detail-item">
+            来源 <b>{{ sourceLabel(detailTarget.source) }}</b>
+          </span>
+          <span class="detail-item">
+            状态
+            <b :class="{ 'is-running': detailTarget.is_active }">{{
+              detailTarget.is_active ? '进行中' : '已结束'
+            }}</b>
+          </span>
+          <span class="detail-item">
+            开播 <b class="mono">{{ startedLabel(detailTarget.started_at_ms) }}</b>
+          </span>
+          <span class="detail-item">
+            结束
+            <b class="mono">{{
+              detailTarget.ended_at_ms ? startedLabel(detailTarget.ended_at_ms) : '—'
+            }}</b>
+          </span>
+          <span class="detail-item">
+            用时 <b class="mono">{{ sessionDurationLabel(detailTarget, nowTick) ?? '—' }}</b>
+          </span>
+          <span class="detail-item">
+            消息 <b class="mono">{{ detailTarget.message_count }}</b>
+          </span>
+          <span v-if="detailTarget.room_id" class="detail-item">
+            房间 <b class="mono">{{ detailTarget.room_id }}</b>
+          </span>
+          <span v-if="detailTarget.platform" class="detail-item">
+            平台 <b>{{ detailTarget.platform }}</b>
+          </span>
+          <span class="detail-item">
+            整理 <b>{{ settleStateOf(detailTarget).label }}</b>
+          </span>
+          <span v-if="detailTarget.settled_at_ms" class="detail-item">
+            整理完成 <b class="mono">{{ startedLabel(detailTarget.settled_at_ms) }}</b>
+          </span>
+          <span v-if="detailTarget.settle_attempts > 0" class="detail-item">
+            整理重试 <b class="mono">{{ detailTarget.settle_attempts }} 次</b>
+          </span>
+          <span v-if="detailTarget.reviewed_at_ms" class="detail-item">
+            标已审 <b class="mono">{{ startedLabel(detailTarget.reviewed_at_ms) }}</b>
+          </span>
+        </div>
+
+        <div class="detail-block">
+          <div class="detail-block-head">
+            备注<span class="detail-block-note">自己写给自己的</span>
+          </div>
+          <p v-if="detailTarget.notes" class="detail-text">{{ detailTarget.notes }}</p>
+          <p v-else class="detail-text is-empty">没写备注</p>
+        </div>
+
+        <div class="detail-block">
+          <div class="detail-block-head">
+            概要<span class="detail-block-note">模型写的这场发生了什么</span>
+          </div>
+          <p v-if="detailTarget.overview" class="detail-text">{{ detailTarget.overview }}</p>
+          <p v-else class="detail-text is-empty">还没生成</p>
+        </div>
+      </template>
+      <template #footer>
+        <div class="detail-actions">
+          <el-button type="primary" plain size="small" @click="detailReview()">复盘</el-button>
+          <el-button size="small" @click="detailReplay()">回看</el-button>
+          <span class="detail-actions-gap" />
+          <el-button size="small" @click="detailRename()">改名</el-button>
+          <el-button size="small" @click="detailNotes()">写备注</el-button>
+          <el-button
+            v-if="detailTarget && !detailTarget.is_active"
+            size="small"
+            @click="detailKind()"
+          >
+            改{{ detailTarget?.kind === 'live' ? '彩排' : '正式' }}
+          </el-button>
+          <el-button size="small" @click="detailResettle()">重新整理</el-button>
+          <el-button size="small" @click="detailReviewed()">标记已审</el-button>
+          <el-button v-if="detailTarget" type="danger" plain size="small" @click="detailDelete()">
+            删除
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -291,27 +381,29 @@
  *
  * 与其它三页的分工：直播控制台管正在播的那一场，场次复盘看这一场播得怎么样
  * （只读聚合），记忆账本管整理出来的东西记对了吗；这一页管"有哪些场、什么状态、
- * 要处置哪些"——以全部场次为单位。
+ * 要处置哪些"——以全部场次为单位。行点击开详情对话框：一场的全部字段（备注与
+ * 概要的全文只有这里有阅读面）与全部处置动作收在一处。
  *
- * 表格每列的数据来源（前端只做装配与显示，判定都在 utils/sessionManager.ts）：
- * - 标题：live_sessions 的 title
- * - 类型、来源：live_sessions 的 kind / source
- * - 开播时刻：started_at_ms（毫秒）
+ * 表格每列与汇总的数据来源（前端只做装配与显示，判定都在 utils/sessionManager.ts）：
+ * - 标题：live_sessions 的 title（未命名时显示开播时刻，不再重复第二行）
+ * - 类型、来源：只在非默认值（彩排 / 非手动）时挂小徽章，整列同值不占列
+ * - 开播时刻：started_at_ms（毫秒），场次列的第二行
  * - 用时：起止时刻之差，进行中的场次按共享时钟走
  * - 消息数：live_chat 行数
  * - 备注：live_sessions 的 notes（人手写的自由文本；列里可点开就着改）
  * - 概要：live_sessions 的 overview（模型写的这场发生了什么；只给人看，不进记忆）
  * - 整理状态：整理三列（整理完成时刻 / 重新整理尝试次数 / 标已审时刻）算出的标签
- * - 汇总与日历：同一批场次在前端算，不另查库
+ * - 汇总与日历：汇总端点按同一套筛选算全集，不随翻页变
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSessionManager } from '@/composables/useSessionManager';
 import {
   SESSION_FILTER_ALL,
   SESSION_KIND_OPTIONS,
   SESSION_SOURCE_OPTIONS,
-  buildHeatmap,
+  buildHeatmapFromDays,
+  dayStart,
   heatmapLevel,
   kindLabel,
   sourceLabel,
@@ -334,6 +426,7 @@ const {
   settleFilter,
   selectedIds,
   summary,
+  dailyBuckets,
   nowTick,
   load,
   applyQueryFromUrl,
@@ -370,14 +463,33 @@ const shownRange = computed<string>(() => {
   return `${from}-${to}`;
 });
 
-/** 场次日历热力图（同一批场次在前端铺格子） */
-const heatmap = computed(() => buildHeatmap(items.value, nowTick.value));
+/** 场次日历热力图（汇总端点的按日桶铺格子） */
+const heatmap = computed(() => buildHeatmapFromDays(dailyBuckets.value, nowTick.value));
 
 /** 格子的悬停说明：那天播了几场、合计多久 */
 function dayTip(day: HeatmapDay | null): string {
   if (!day) return '';
   if (day.count === 0) return `${day.date} 没播`;
   return `${day.date}：${day.count} 场 · ${formatElapsedMs(day.durationMs, { alwaysHours: true })}`;
+}
+
+/**
+ * 点日历格子 = 按那天的开播日期筛场次；已选中的同一天再点一次即取消。
+ */
+function pickHeatmapDay(day: HeatmapDay | null): void {
+  if (!day) return;
+  const startOfDayMs = dayStart(day.date);
+  const isPicked =
+    dateRange.value !== null &&
+    dateRange.value.length === 2 &&
+    startOfDay(dateRange.value[0]) === startOfDayMs &&
+    startOfDay(dateRange.value[1]) === startOfDayMs;
+  dateRange.value = isPicked ? null : [new Date(startOfDayMs), new Date(startOfDayMs)];
+}
+
+/** 时刻 → 当天零点（本地时区），与筛选区间的自然日口径一致 */
+function startOfDay(at: Date): number {
+  return new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime();
 }
 
 function onPageChange(next: number): void {
@@ -436,6 +548,79 @@ async function onRowCommand(command: string, row: LiveSessionItem): Promise<void
   else if (command === 'delete') await removeSession(row);
 }
 
+// -------------------- 详情对话框 --------------------
+
+const detailVisible = ref(false);
+/** 打开的场次主键：内容从清单行实时取，处置动作刷新清单后对话框内容跟着更新 */
+const detailId = ref<number | null>(null);
+const detailTarget = computed<LiveSessionItem | null>(
+  () => items.value.find(item => item.live_session_id === detailId.value) ?? null,
+);
+const detailTitle = computed(() => {
+  const target = detailTarget.value;
+  return target ? (target.title ?? `场次 #${target.live_session_id}`) : '场次详情';
+});
+
+// 行被删（或筛掉）时详情没有内容可显示，对话框跟着关
+watch(detailTarget, target => {
+  if (target === null) detailVisible.value = false;
+});
+
+/** 行点击开详情；点在按钮 / 勾选框等交互元素上不触发 */
+function onRowClick(row: LiveSessionItem, _column: unknown, event: Event): void {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest('button, a, input, label, .el-checkbox, .el-dropdown')) return;
+  detailId.value = row.live_session_id;
+  detailVisible.value = true;
+}
+
+/** 详情里的处置动作与行内菜单共用同一批组合式函数；复盘/回看是跳页，先收对话框 */
+function detailReview(): void {
+  const target = detailTarget.value;
+  if (target) {
+    detailVisible.value = false;
+    goReview(target);
+  }
+}
+
+function detailReplay(): void {
+  const target = detailTarget.value;
+  if (target) {
+    detailVisible.value = false;
+    goReplay(target);
+  }
+}
+
+async function detailRename(): Promise<void> {
+  const target = detailTarget.value;
+  if (target) await renameSession(target);
+}
+
+function detailNotes(): void {
+  const target = detailTarget.value;
+  if (target) openNotes(target);
+}
+
+async function detailKind(): Promise<void> {
+  const target = detailTarget.value;
+  if (target) await toggleSessionKind(target);
+}
+
+async function detailResettle(): Promise<void> {
+  const target = detailTarget.value;
+  if (target) await resettle(target);
+}
+
+async function detailReviewed(): Promise<void> {
+  const target = detailTarget.value;
+  if (target) await markReviewed(target);
+}
+
+async function detailDelete(): Promise<void> {
+  const target = detailTarget.value;
+  if (target) await removeSession(target);
+}
+
 // -------------------- 按开播日的场次数 --------------------
 
 onMounted(() => {
@@ -469,12 +654,6 @@ onMounted(() => {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-.scope-note {
-  margin-left: var(--spacing-sm);
-  font-size: 11px;
-  color: var(--text-placeholder);
 }
 
 .header-actions {
@@ -531,10 +710,10 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
-/* 汇总 */
+/* 汇总：统计行与日历顶对齐（日历高，居中会让一行统计悬在半空） */
 .summary-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-lg);
   padding: 10px 14px;
   border: 1px solid var(--border-color-light);
@@ -663,6 +842,15 @@ onMounted(() => {
   background: var(--bg-hover);
 }
 
+/* 有场次的格子才可点（点了按那天筛）：悬停描边提示 */
+.heat-grid .heat-cell:not(.is-blank) {
+  cursor: pointer;
+}
+
+.heat-grid .heat-cell:not(.is-blank):hover {
+  outline: 1px solid var(--color-primary);
+}
+
 .heat-cell.lv1 {
   background: var(--color-primary);
   opacity: 0.38;
@@ -709,6 +897,23 @@ onMounted(() => {
   overflow: hidden;
 }
 
+/* 整行可点（开详情）；按钮与勾选框自己有指针语义 */
+.session-table :deep(.el-table__row) {
+  cursor: pointer;
+}
+
+/* 场次格：第一行标题 + 非默认徽章，第二行开播时刻 */
+.cell-session {
+  min-width: 0;
+}
+
+.cell-session-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .cell-name {
   font-size: 12px;
   font-weight: 600;
@@ -716,6 +921,12 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cell-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-placeholder);
 }
 
 /* 备注与话题都是长文本：单行截断，完整内容在悬停提示里 */
@@ -749,6 +960,7 @@ onMounted(() => {
 }
 
 .badge {
+  flex-shrink: 0;
   padding: 0 6px;
   border-radius: var(--radius-sm);
   font-size: 11px;
@@ -758,11 +970,7 @@ onMounted(() => {
   color: var(--text-secondary);
 }
 
-.badge.is-live {
-  color: var(--color-primary);
-  border-color: var(--color-primary);
-}
-
+/* 只挂非默认徽章：彩排（虚线灰）与回放（流程单色）需要一眼认出 */
 .badge.is-rehearsal {
   color: var(--text-placeholder);
   border-style: dashed;
@@ -786,11 +994,6 @@ onMounted(() => {
   font-weight: 600;
   background: var(--bg-hover);
   color: var(--text-secondary);
-}
-
-.settle-chip.is-warning {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
 }
 
 .settle-chip.is-danger {
@@ -820,5 +1023,76 @@ onMounted(() => {
   margin: 0 0 8px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+/* 详情对话框：元信息一组、备注与概要各自成块 */
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+}
+
+.detail-item {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.detail-item b {
+  margin-left: 4px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.detail-block {
+  margin-top: 12px;
+}
+
+.detail-block-head {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.detail-block-note {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-placeholder);
+}
+
+/* 全文区：保留手写换行，长文可换行不截断 */
+.detail-text {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-regular);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.detail-text.is-empty {
+  color: var(--text-placeholder);
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+}
+
+.detail-actions-gap {
+  flex: 1;
 }
 </style>

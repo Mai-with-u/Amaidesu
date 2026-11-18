@@ -1,6 +1,7 @@
 // utils/sessionManager.ts 场次显示口径的测试
 //
-// 覆盖：来源/类型显示名与选项、场次时长标签、整理状态映射、清单汇总、日历热力图。
+// 覆盖：来源/类型显示名与选项、场次时长标签、整理状态映射、日历热力图（吃汇总
+// 端点的按日桶）。
 
 import { describe, expect, it } from 'vitest';
 
@@ -8,16 +9,16 @@ import {
   SESSION_FILTER_ALL,
   SESSION_KIND_OPTIONS,
   SESSION_SOURCE_OPTIONS,
-  buildHeatmap,
+  buildHeatmapFromDays,
+  dayStart,
   defaultSessionTitle,
   heatmapLevel,
   kindLabel,
   sessionDurationLabel,
   settleStateOf,
   sourceLabel,
-  summarizeSessions,
 } from '@/utils/sessionManager';
-import type { LiveSessionItem, SessionKind } from '@/types';
+import type { LiveSessionItem } from '@/types';
 
 function item(partial: Partial<LiveSessionItem>): LiveSessionItem {
   return {
@@ -88,7 +89,7 @@ describe('sessionDurationLabel', () => {
 });
 
 describe('settleStateOf', () => {
-  it('按整理三列给出状态标签', () => {
+  it('按整理三列给出状态标签与色调', () => {
     expect(settleStateOf(item({})).label).toBe('待整理');
     expect(settleStateOf(item({ settle_attempts: 2 })).label).toBe('整理失败');
     expect(settleStateOf(item({ settled_at_ms: 5_000 })).label).toBe('已整理待审');
@@ -96,65 +97,29 @@ describe('settleStateOf', () => {
     // 已审优先于其它状态
     expect(settleStateOf(item({ settle_attempts: 3, reviewed_at_ms: 6_000 })).label).toBe('已审');
   });
-});
 
-describe('summarizeSessions', () => {
-  it('汇总场次数、时长、消息数与类型来源分布', () => {
-    const items = [
-      item({ live_session_id: 1, started_at_ms: 0, ended_at_ms: 3_600_000, message_count: 10 }),
-      item({
-        live_session_id: 2,
-        source: 'replay',
-        kind: 'rehearsal',
-        started_at_ms: 0,
-        ended_at_ms: 1_800_000,
-        message_count: 5,
-      }),
-      item({
-        live_session_id: 3,
-        source: 'replay',
-        started_at_ms: 0,
-        is_active: true,
-        message_count: 1,
-      }),
-    ];
-    const summary = summarizeSessions(items, 3_600_000);
-    expect(summary.count).toBe(3);
-    // 总时长 = 1 小时 + 30 分 + 1 小时（进行中按当前时刻算）
-    expect(summary.totalDurationMs).toBe(3_600_000 + 1_800_000 + 3_600_000);
-    expect(summary.averageDurationMs).toBe(3_000_000);
-    expect(summary.longestDurationMs).toBe(3_600_000);
-    expect(summary.messageTotal).toBe(16);
-    expect(summary.kindCounts).toEqual({ live: 2, rehearsal: 1 } satisfies Record<
-      SessionKind,
-      number
-    >);
-    expect(summary.sourceCounts).toEqual({ manual: 1, replay: 2 });
-  });
-
-  it('空清单给零值', () => {
-    const summary = summarizeSessions([], 1_000);
-    expect(summary.count).toBe(0);
-    expect(summary.averageDurationMs).toBe(0);
-    expect(summary.totalDurationMs).toBe(0);
+  it('色调：待审与待整理是常态走中性色，红留给整理失败、绿留给已审', () => {
+    expect(settleStateOf(item({ settled_at_ms: 5_000 })).tone).toBe('default');
+    expect(settleStateOf(item({})).tone).toBe('default');
+    expect(settleStateOf(item({ settle_attempts: 2 })).tone).toBe('danger');
+    expect(settleStateOf(item({ reviewed_at_ms: 6_000 })).tone).toBe('success');
   });
 });
 
-describe('buildHeatmap', () => {
+describe('dayStart', () => {
+  it('yyyy-MM-DD 按本地时区取当天零点（不是 new Date(字符串) 的 UTC 解析）', () => {
+    expect(dayStart('2026-11-11')).toBe(new Date(2026, 10, 11).getTime());
+  });
+});
+
+describe('buildHeatmapFromDays', () => {
   const day = (d: number, h = 21) => new Date(2026, 10, d, h, 0).getTime();
 
-  it('按周排成列、周一在上；场次落在当周对应的那一格', () => {
+  it('按周排成列、周一在上；汇总桶落在当周对应的那一格', () => {
     // 2026-11-09 是周一，窗口往前两周 = 2026-11-01
     const now = day(15, 12);
-    const heat = buildHeatmap(
-      [
-        item({ live_session_id: 1, started_at_ms: day(11), ended_at_ms: day(11) + 600_000 }),
-        item({
-          live_session_id: 2,
-          started_at_ms: day(11, 23),
-          ended_at_ms: day(11, 23) + 600_000,
-        }),
-      ],
+    const heat = buildHeatmapFromDays(
+      [{ date: '2026-11-11', count: 2, durationMs: 1_200_000 }],
       now,
       { minWeeks: 2 },
     );
@@ -170,14 +135,14 @@ describe('buildHeatmap', () => {
     expect(heat.weeks[0].days[0]).toBeNull();
   });
 
-  it('窗口至少铺满 minWeeks 周；更早的场次把窗口往前延（不藏数据）', () => {
+  it('窗口至少铺满 minWeeks 周；更早的桶把窗口往前延（不藏数据）', () => {
     const now = day(15, 12);
-    const short = buildHeatmap([], now, { minWeeks: 4 });
+    const short = buildHeatmapFromDays([], now, { minWeeks: 4 });
     // 窗口起点不一定落在周一，首列可能是半列——列数只会多不会少
     expect(short.weeks.length).toBeGreaterThanOrEqual(4);
 
-    const long = buildHeatmap(
-      [item({ live_session_id: 1, started_at_ms: new Date(2026, 0, 5, 20, 0).getTime() })],
+    const long = buildHeatmapFromDays(
+      [{ date: '2026-01-05', count: 1, durationMs: 3_600_000 }],
       now,
       { minWeeks: 4 },
     );
@@ -187,7 +152,7 @@ describe('buildHeatmap', () => {
   });
 
   it('月份标签只在换月的那一列出现', () => {
-    const heat = buildHeatmap([], day(15, 12), { minWeeks: 8 });
+    const heat = buildHeatmapFromDays([], day(15, 12), { minWeeks: 8 });
     const labels = heat.weeks.map(week => week.monthLabel).filter(Boolean);
     expect(labels.length).toBeGreaterThan(0);
     expect(labels).toContain('11月');

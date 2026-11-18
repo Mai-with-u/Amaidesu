@@ -116,6 +116,7 @@ import type {
   TriggerProactiveResponse,
   LiveSessionListResponse,
   SessionResidualResponse,
+  SessionSummaryResponse,
   SessionKind,
   SessionRundownExecutionResponse,
   SessionSearchResponse,
@@ -386,6 +387,16 @@ export const liveSessionsApi = {
     started_before_ms?: number;
     settle_state?: 'pending' | 'failed' | 'review' | 'reviewed';
   }) => api.get<LiveSessionListResponse>('/live-sessions', { params }),
+  // 清单汇总：与列表同一套筛选条件算全集（不随分页）；now_ms 供进行中场次把时长截到请求时刻
+  summary: (params?: {
+    source?: string;
+    kind?: SessionKind;
+    q?: string;
+    started_after_ms?: number;
+    started_before_ms?: number;
+    settle_state?: 'pending' | 'failed' | 'review' | 'reviewed';
+    now_ms?: number;
+  }) => api.get<SessionSummaryResponse>('/live-sessions/summary', { params }),
   // 开场必须声明类型（正式 / 彩排）
   open: (payload: { kind: SessionKind; title?: string; component_plan?: ComponentRef[] }) =>
     api.post<SessionOpenResponse>('/live-sessions/open', payload),

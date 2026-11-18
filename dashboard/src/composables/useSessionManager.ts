@@ -3,7 +3,8 @@
  *
  * 页面私有状态（只有场次管理页消费），走 composable 而非 Pinia。取数走服务端
  * 筛选（标题关键字 / 来源 / 类型 / 开播区间 / 整理状态），页面上的"共多少场"
- * 与当页同口径（服务端用同一套筛选条件计数）。
+ * 与当页同口径（服务端用同一套筛选条件计数）。清单汇总（汇总行与场次日历）
+ * 走汇总端点：同一套筛选条件对全集算，不随翻页变化。
  *
  * 处置动作都落在既有的场次端点上，不新造机制：
  * - 改标题 / 改备注：`PATCH /live-sessions/{id}`（各改各的）
@@ -13,7 +14,7 @@
  * - 导出数据包：复盘页的导出端点（多场打包）
  */
 
-import { computed, nextTick, ref, watch } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ledgerApi, liveSessionsApi, reviewApi } from '@/api';
@@ -26,7 +27,8 @@ import {
   kindLabel,
   sessionDurationLabel,
   settleStateOf,
-  summarizeSessions,
+  type HeatmapDay,
+  type SessionLedgerSummary,
   type SessionSource,
 } from '@/utils/sessionManager';
 import type { LiveSessionItem, SessionKind } from '@/types';
@@ -56,7 +58,7 @@ function endOfDay(at: Date): number {
 export function useSessionManager() {
   const route = useRoute();
   const router = useRouter();
-  /** 共享 1s 时钟：进行中场次的"已播"时长与汇总时长随时钟走 */
+  /** 共享 1s 时钟：进行中场次的"已播"时长随时钟走 */
   const nowTick = useNowTick();
 
   const items = ref<LiveSessionItem[]>([]);
@@ -75,21 +77,77 @@ export function useSessionManager() {
   /** 多选（批量处置用）：选中的是场次主键 */
   const selectedIds = ref<number[]>([]);
 
-  const summary = computed(() => summarizeSessions(items.value, nowTick.value));
+  /** 清单汇总（服务端全集口径，不随翻页变） */
+  const summary = ref<SessionLedgerSummary>({
+    count: 0,
+    totalDurationMs: 0,
+    averageDurationMs: 0,
+    longestDurationMs: 0,
+    messageTotal: 0,
+    kindCounts: { live: 0, rehearsal: 0 },
+    sourceCounts: {},
+  });
+
+  /** 按开播日的场次数与时长（同一份汇总响应，热力图取数） */
+  const dailyBuckets = ref<HeatmapDay[]>([]);
+
+  /** 当前筛选条件（清单与汇总两个请求共用，保证同口径） */
+  function filterParams(): {
+    q?: string;
+    source?: SessionSource;
+    kind?: SessionKind;
+    started_after_ms?: number;
+    started_before_ms?: number;
+    settle_state?: Exclude<SessionSettleFilter, 'all'>;
+  } {
+    return {
+      q: query.value.trim() || undefined,
+      source: sourceFilter.value === SESSION_FILTER_ALL ? undefined : sourceFilter.value,
+      kind: kindFilter.value === SESSION_FILTER_ALL ? undefined : kindFilter.value,
+      started_after_ms: dateRange.value ? startOfDay(dateRange.value[0]) : undefined,
+      started_before_ms: dateRange.value ? endOfDay(dateRange.value[1]) : undefined,
+      settle_state: settleFilter.value === 'all' ? undefined : settleFilter.value,
+    };
+  }
+
+  /** 取清单汇总：失败只报错，汇总行保留上一次的数值 */
+  async function loadSummary(): Promise<void> {
+    try {
+      const response = await liveSessionsApi.summary({ ...filterParams(), now_ms: Date.now() });
+      const data = response.data;
+      summary.value = {
+        count: data.total,
+        totalDurationMs: data.total_duration_ms,
+        averageDurationMs: data.average_duration_ms,
+        longestDurationMs: data.longest_duration_ms,
+        messageTotal: data.message_total,
+        kindCounts: {
+          live: data.kind_counts['live'] ?? 0,
+          rehearsal: data.kind_counts['rehearsal'] ?? 0,
+        },
+        sourceCounts: data.source_counts,
+      };
+      dailyBuckets.value = data.daily.map(day => ({
+        date: day.date,
+        count: day.count,
+        durationMs: day.duration_ms,
+      }));
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error, '场次汇总加载失败'));
+    }
+  }
 
   async function load(): Promise<void> {
     loading.value = true;
     try {
-      const response = await liveSessionsApi.list({
-        q: query.value.trim() || undefined,
-        source: sourceFilter.value === SESSION_FILTER_ALL ? undefined : sourceFilter.value,
-        kind: kindFilter.value === SESSION_FILTER_ALL ? undefined : kindFilter.value,
-        started_after_ms: dateRange.value ? startOfDay(dateRange.value[0]) : undefined,
-        started_before_ms: dateRange.value ? endOfDay(dateRange.value[1]) : undefined,
-        settle_state: settleFilter.value === 'all' ? undefined : settleFilter.value,
-        limit: pageSize.value,
-        offset: (page.value - 1) * pageSize.value,
-      });
+      const [response] = await Promise.all([
+        liveSessionsApi.list({
+          ...filterParams(),
+          limit: pageSize.value,
+          offset: (page.value - 1) * pageSize.value,
+        }),
+        loadSummary(),
+      ]);
       items.value = response.data.items;
       total.value = response.data.total;
     } catch (error) {
@@ -362,6 +420,7 @@ export function useSessionManager() {
     settleFilter,
     selectedIds,
     summary,
+    dailyBuckets,
     nowTick,
     load,
     applyQueryFromUrl,

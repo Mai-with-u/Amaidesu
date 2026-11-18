@@ -1,7 +1,8 @@
 // useSessionManager.ts 场次管理页组合式函数的测试
 //
-// 覆盖：清单取数与筛选透传（含分页）、筛选防抖、URL 还原筛选、
-// 逐场处置（改名 / 备注 / 改类型 / 删除 / 重新整理 / 标已审）与批量处置。
+// 覆盖：清单取数与筛选透传（含分页）、清单汇总（同口径全集 + 视图形状映射）、
+// 筛选防抖、URL 还原筛选、逐场处置（改名 / 备注 / 改类型 / 删除 / 重新整理 /
+// 标已审）与批量处置。
 
 import { effectScope, type EffectScope } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +25,7 @@ vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<object>()),
   liveSessionsApi: {
     list: vi.fn(),
+    summary: vi.fn(),
     update: vi.fn(),
     setKind: vi.fn(),
     remove: vi.fn(),
@@ -64,6 +66,7 @@ function sessionItem(partial: Partial<LiveSessionItem>): LiveSessionItem {
 }
 
 const listMock = vi.mocked(liveSessionsApi.list);
+const summaryMock = vi.mocked(liveSessionsApi.summary);
 const updateMock = vi.mocked(liveSessionsApi.update);
 const setKindMock = vi.mocked(liveSessionsApi.setKind);
 const removeMock = vi.mocked(liveSessionsApi.remove);
@@ -81,6 +84,18 @@ describe('useSessionManager', () => {
     scope = effectScope();
     listMock.mockResolvedValue({
       data: { items: [sessionItem({ live_session_id: 7 })], active_session_id: null, total: 1 },
+    } as never);
+    summaryMock.mockResolvedValue({
+      data: {
+        total: 45,
+        total_duration_ms: 87_131_000,
+        average_duration_ms: 1_936_244,
+        longest_duration_ms: 11_080_000,
+        message_total: 3_434,
+        kind_counts: { live: 45 },
+        source_counts: { manual: 45 },
+        daily: [{ date: '2026-11-17', count: 1, duration_ms: 2_926_000 }],
+      },
     } as never);
     updateMock.mockResolvedValue({ data: { success: true, detail: 'ok' } } as never);
     setKindMock.mockResolvedValue({ data: { success: true, detail: 'ok' } } as never);
@@ -117,6 +132,30 @@ describe('useSessionManager', () => {
     );
     expect(composable.items.value).toHaveLength(1);
     expect(composable.total.value).toBe(1);
+  });
+
+  it('load：清单汇总同口径取全集并映射成视图形状（缺的类型补零）', async () => {
+    const composable = mount();
+    composable.query.value = ' 周五 ';
+    composable.kindFilter.value = 'rehearsal';
+    await composable.load();
+    // 汇总不带分页参数，带 now_ms 供进行中场次截算时长
+    expect(summaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ q: '周五', kind: 'rehearsal', now_ms: expect.any(Number) }),
+    );
+    expect(composable.summary.value).toEqual({
+      count: 45,
+      totalDurationMs: 87_131_000,
+      averageDurationMs: 1_936_244,
+      longestDurationMs: 11_080_000,
+      messageTotal: 3_434,
+      // 响应里没有 rehearsal 键，视图形状补零
+      kindCounts: { live: 45, rehearsal: 0 },
+      sourceCounts: { manual: 45 },
+    });
+    expect(composable.dailyBuckets.value).toEqual([
+      { date: '2026-11-17', count: 1, durationMs: 2_926_000 },
+    ]);
   });
 
   it('筛选变化：回到第一页并经 250ms 防抖后重取', async () => {
