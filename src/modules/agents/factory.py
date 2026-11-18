@@ -37,6 +37,42 @@ SUPPORTED_AGENTS: tuple[str, ...] = tuple(AGENT_BINDINGS)
 
 _logger = get_logger("AgentFactory")
 
+# StreamerAgent 形参与 AgentDeps 字段同名直传的依赖：构造参数从这份清单编程式派生，
+# 不再逐字段手抄 kwargs（deps 字段改名时这里同步改一处即可）。
+# 形参名不同的例外单独映射：deps.storage_ledger → 形参 stream_ledger。
+_STREAMER_DEPS_FIELDS: tuple[str, ...] = (
+    "llm_manager",
+    "prompt_manager",
+    "event_bus",
+    "tool_registry",
+    "rundown_repo",
+    "rundown_instance_repo",
+    "rundown_transition_repo",
+    "chat_repo",
+    "sessions_repo",
+    "topic_repo",
+    "viewer_repo",
+    "commitments_repo",
+    "archive_repo",
+    "memory_index_repo",
+    "embedding_setup",
+    "memory_cue_log_repo",
+    "game_player_repo",
+    "social_fact_repo",
+    "work_docs_repo",
+    "talk_card_repo",
+    "event_repo",
+    "privacy_service",
+    "context_assembler_config",
+    "speech_config",
+    "tts_engine",
+    "subtitle_service",
+    "session_manager",
+    "thinking_sink",
+    "task_ledger",
+    "stall_auto_cancel_alerts",
+)
+
 
 def _parse_game_config(model_cls: type, config: Optional[dict[str, Any]], label: str) -> Any:
     """解析游戏 Agent 的 Pydantic 配置；解析失败记告警并回落默认配置。"""
@@ -102,40 +138,10 @@ def instantiate_agent(
             f"background.enabled={cfg_obj.background.enabled}, "
             f"background.light_tick_ms={cfg_obj.background.light_tick_ms}"
         )
-        return StreamerAgent(
-            config=cfg_obj,
-            llm_manager=deps.llm_manager,
-            prompt_manager=deps.prompt_manager,
-            event_bus=deps.event_bus,
-            tool_registry=deps.tool_registry,
-            rundown_repo=deps.rundown_repo,
-            rundown_instance_repo=deps.rundown_instance_repo,
-            rundown_transition_repo=deps.rundown_transition_repo,
-            chat_repo=deps.chat_repo,
-            sessions_repo=deps.sessions_repo,
-            topic_repo=deps.topic_repo,
-            viewer_repo=deps.viewer_repo,
-            commitments_repo=deps.commitments_repo,
-            archive_repo=deps.archive_repo,
-            memory_index_repo=deps.memory_index_repo,
-            embedding_setup=deps.embedding_setup,
-            memory_cue_log_repo=deps.memory_cue_log_repo,
-            game_player_repo=deps.game_player_repo,
-            social_fact_repo=deps.social_fact_repo,
-            work_docs_repo=deps.work_docs_repo,
-            talk_card_repo=deps.talk_card_repo,
-            event_repo=deps.event_repo,
-            privacy_service=deps.privacy_service,
-            stream_ledger=deps.storage_ledger,
-            context_assembler_config=deps.context_assembler_config,
-            speech_config=deps.speech_config,
-            tts_engine=deps.tts_engine,
-            subtitle_service=deps.subtitle_service,
-            session_manager=deps.session_manager,
-            thinking_sink=deps.thinking_sink,
-            task_ledger=deps.task_ledger,
-            stall_auto_cancel_alerts=deps.stall_auto_cancel_alerts,
-        )
+        streamer_kwargs: dict[str, Any] = {field: getattr(deps, field) for field in _STREAMER_DEPS_FIELDS}
+        streamer_kwargs["stream_ledger"] = deps.storage_ledger
+        streamer_kwargs["config"] = cfg_obj
+        return StreamerAgent(**streamer_kwargs)
 
     if name == "minecraft":
         # 函数内 import：同上，minecraft 包（含 mcp 依赖链）仅在实例化时加载
