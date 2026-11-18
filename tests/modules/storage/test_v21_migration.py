@@ -10,16 +10,12 @@ from __future__ import annotations
 import sqlite3
 
 from src.modules.storage.migrations.v21_live_session_notebook import migrate as v21_migrate
+from tests.modules.storage.legacy_ddl import (
+    V20_SCHEMA,
+    V21_LIVE_SESSIONS_MINIMAL,
+)
 
 # v20 形状的最小 DDL：live_sessions 还没有 notebook_text 列
-_V20_SCHEMA = """
-CREATE TABLE live_sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER,
-    updated_at_ms INTEGER NOT NULL
-);
-"""
 
 
 def test_v20_database_gains_empty_notebook_column() -> None:
@@ -27,7 +23,7 @@ def test_v20_database_gains_empty_notebook_column() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     try:
-        conn.executescript(_V20_SCHEMA)
+        conn.executescript(V20_SCHEMA)
         conn.execute(
             "INSERT INTO live_sessions(id, started_at_ms, ended_at_ms, updated_at_ms) VALUES (1, 1000, 2000, 2000)"
         )
@@ -61,7 +57,7 @@ def test_migrate_is_idempotent_on_latest_shape() -> None:
     conn = sqlite3.connect(":memory:")
     try:
         v21_migrate(conn)  # 没有表
-        conn.execute("CREATE TABLE live_sessions (id INTEGER PRIMARY KEY, notebook_text TEXT NOT NULL DEFAULT '')")
+        conn.execute(V21_LIVE_SESSIONS_MINIMAL)
         v21_migrate(conn)
         v21_migrate(conn)
         columns = [row[1] for row in conn.execute("PRAGMA table_info(live_sessions)")]

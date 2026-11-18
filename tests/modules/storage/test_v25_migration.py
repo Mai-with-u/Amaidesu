@@ -19,6 +19,12 @@ from pathlib import Path
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v25_drop_legacy_memory import migrate as v25_migrate
 from src.modules.storage.schema import SCHEMA_VERSION, list_expected_tables
+from tests.modules.storage.legacy_ddl import (
+    V25_LIVE_SESSIONS_MINIMAL,
+    V25_1_SESSION_RECAPS_VIEWER_PROFILES,
+    V25_2_LIVE_SESSIONS_SESSION_RECAPS,
+)
+
 
 _LEGACY_TABLES = ("session_recaps", "viewer_profiles")
 
@@ -49,27 +55,7 @@ def _seed_v24_shape(db_path: Path) -> Path:
     """把已建好的最新库退回 v24 形状：补回两张旧表与备忘录列，并造库旁旧记忆目录。"""
     conn = sqlite3.connect(db_path)
     try:
-        conn.executescript(
-            """
-            CREATE TABLE session_recaps (
-                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-                live_session_id        INTEGER NOT NULL UNIQUE,
-                started_at_ms          INTEGER NOT NULL,
-                ended_at_ms            INTEGER NOT NULL,
-                recap_text             TEXT NOT NULL,
-                created_at_ms          INTEGER NOT NULL,
-                long_memory_merged_at_ms INTEGER,
-                settled_at_ms          INTEGER
-            );
-            CREATE TABLE viewer_profiles (
-                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-                viewer_id             INTEGER NOT NULL UNIQUE,
-                profile_text          TEXT NOT NULL,
-                last_compressed_at_ms INTEGER NOT NULL DEFAULT 0,
-                updated_at_ms         INTEGER NOT NULL
-            );
-            """
-        )
+        conn.executescript(V25_1_SESSION_RECAPS_VIEWER_PROFILES)
         conn.execute("ALTER TABLE live_sessions ADD COLUMN notebook_text TEXT NOT NULL DEFAULT ''")
         conn.execute(
             "INSERT INTO live_sessions(id, started_at_ms, ended_at_ms, updated_at_ms, notebook_text)"
@@ -169,12 +155,7 @@ def test_memory_dir_kept_when_backup_target_unusable(tmp_path: Path) -> None:
     db_path = tmp_path / "amaidesu.db"
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute(
-            "CREATE TABLE live_sessions ("
-            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            " started_at_ms INTEGER NOT NULL,"
-            " updated_at_ms INTEGER NOT NULL)"
-        )
+        conn.execute(V25_LIVE_SESSIONS_MINIMAL)
         memory_dir = tmp_path / "memory"
         (memory_dir / "snapshots").mkdir(parents=True)
         (memory_dir / "MEMORY.md").write_text("旧笔记", encoding="utf-8")
@@ -192,18 +173,7 @@ def test_migrate_is_idempotent_on_legacy_shape() -> None:
     """回调本身对旧形状可重复执行：第二次调用时表、列、目录都已不在，直接跳过。"""
     conn = sqlite3.connect(":memory:")
     try:
-        conn.executescript(
-            """
-            CREATE TABLE live_sessions (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                started_at_ms INTEGER NOT NULL,
-                updated_at_ms INTEGER NOT NULL,
-                notebook_text TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE session_recaps (id INTEGER PRIMARY KEY, live_session_id INTEGER NOT NULL);
-            CREATE TABLE viewer_profiles (id INTEGER PRIMARY KEY, viewer_id INTEGER NOT NULL);
-            """
-        )
+        conn.executescript(V25_2_LIVE_SESSIONS_SESSION_RECAPS)
         for _ in range(2):
             v25_migrate(conn)
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

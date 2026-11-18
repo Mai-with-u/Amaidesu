@@ -16,48 +16,16 @@ import pytest
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v32_game_players import migrate as v32_migrate
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import (
+    V31_COMMITMENTS,
+    V31_LIVE_CHAT,
+    V32_MINIMAL_TABLES,
+)
+
 
 # v31 时的承诺表与台词表：没有玩家引用列（直播机上已经开过几场的库就是这个形状）
-_V31_COMMITMENTS = """
-CREATE TABLE commitments (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    what               TEXT NOT NULL,
-    quote              TEXT NOT NULL DEFAULT '',
-    evidence_chat_id   INTEGER UNIQUE,
-    viewer_id          INTEGER,
-    game               TEXT,
-    save_id            TEXT NOT NULL DEFAULT '',
-    save_name          TEXT NOT NULL DEFAULT '',
-    status             TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'void')),
-    created_session_id INTEGER,
-    close_chat_id      INTEGER,
-    close_quote        TEXT,
-    created_at_ms      INTEGER NOT NULL,
-    updated_at_ms      INTEGER NOT NULL,
-    keywords           TEXT NOT NULL DEFAULT '[]'
-);
-"""
-_V31_LIVE_CHAT = """
-CREATE TABLE live_chat (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    timestamp_ms     INTEGER NOT NULL,
-    platform         TEXT NOT NULL DEFAULT '',
-    sender_role      TEXT NOT NULL,
-    sender_id        TEXT,
-    sender_name      TEXT,
-    viewer_id        INTEGER,
-    id_kind          TEXT NOT NULL DEFAULT '',
-    content          TEXT NOT NULL,
-    message_type     TEXT NOT NULL,
-    message_id       TEXT,
-    reply_to_message_id TEXT,
-    simulated        INTEGER NOT NULL DEFAULT 0,
-    utterance_id     TEXT,
-    dropped_at_ms    INTEGER,
-    memory_refs      TEXT
-);
-"""
+
+
 _NEW_TABLES = ("player_candidates", "viewer_player_links", "game_chat", "game_player_interactions", "game_players")
 
 
@@ -74,8 +42,8 @@ async def test_v31_database_upgrades_with_player_columns_and_tables(tmp_path: Pa
         raw.executescript(
             drops
             + "DROP TABLE commitments; DROP TABLE live_chat;"
-            + _V31_COMMITMENTS
-            + _V31_LIVE_CHAT
+            + V31_COMMITMENTS
+            + V31_LIVE_CHAT
             + "DELETE FROM schema_migrations WHERE version > 31;"
         )
         raw.execute("INSERT INTO commitments(what, created_at_ms, updated_at_ms) VALUES ('下次带大家挖钻石', 1, 1)")
@@ -234,10 +202,7 @@ async def test_game_chat_direction_is_a_closed_set(store: SQLiteDatabase) -> Non
 def test_migrate_is_idempotent() -> None:
     conn = sqlite3.connect(":memory:")
     try:
-        conn.executescript(
-            "CREATE TABLE live_sessions (id INTEGER PRIMARY KEY);"
-            "CREATE TABLE viewers (id INTEGER PRIMARY KEY);" + _V31_COMMITMENTS + _V31_LIVE_CHAT
-        )
+        conn.executescript(V32_MINIMAL_TABLES + V31_COMMITMENTS + V31_LIVE_CHAT)
         v32_migrate(conn)
         v32_migrate(conn)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(commitments)")}

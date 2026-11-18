@@ -23,6 +23,7 @@ import pytest
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v17_rundown_rows_and_column_cleanup import migrate as v17_migrate
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import V16_SCHEMA
 
 
 @pytest.fixture
@@ -33,59 +34,6 @@ def temp_dir() -> Generator[Path, None, None]:
 
 
 # v16 形状的存量库（含待迁移数据：segments_json、五出库列、tool_result、tags）
-_V16_SCHEMA = """
-CREATE TABLE rundowns (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    segments_json TEXT NOT NULL,
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-);
-CREATE TABLE rundown_segments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    rundown_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    seg_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    task_description TEXT NOT NULL,
-    expected_ms INTEGER NOT NULL,
-    min_duration_ms INTEGER,
-    notes TEXT,
-    UNIQUE(rundown_id, seg_id)
-);
-CREATE TABLE llm_requests (
-    request_id TEXT PRIMARY KEY,
-    timestamp_ms INTEGER NOT NULL,
-    profile_name TEXT NOT NULL DEFAULT '',
-    model_name TEXT NOT NULL DEFAULT '',
-    request_params TEXT,
-    response_content TEXT,
-    reasoning_content TEXT,
-    tool_calls TEXT,
-    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-    usage_raw_json TEXT,
-    breakdown_json TEXT,
-    preview_text TEXT NOT NULL DEFAULT '',
-    image_count INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE live_chat (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER NOT NULL,
-    timestamp_ms INTEGER NOT NULL,
-    content TEXT NOT NULL,
-    message_type TEXT NOT NULL,
-    tool_result TEXT,
-    simulated INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE timeline_summary (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER NOT NULL,
-    start_ms INTEGER NOT NULL,
-    end_ms INTEGER NOT NULL,
-    summary TEXT NOT NULL,
-    tags TEXT
-);
-""".strip()
 
 _SEGMENTS_JSON = json.dumps(
     [
@@ -123,7 +71,7 @@ _SEGMENTS_JSON = json.dumps(
 
 def _make_v16_db(db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
-    conn.executescript(_V16_SCHEMA)
+    conn.executescript(V16_SCHEMA)
     conn.execute(
         "INSERT INTO rundowns (id, title, segments_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
         ("rd_old", "存量流程单", _SEGMENTS_JSON, 1, 2),
@@ -234,7 +182,7 @@ def test_dirty_segments_json_row_is_skipped_not_fatal(temp_dir: Path) -> None:
     """历史脏行（segments_json 无法解析）跳过插行，不让迁移整体失败。"""
     db_path = temp_dir / "dirty.db"
     conn = sqlite3.connect(db_path)
-    conn.executescript(_V16_SCHEMA)
+    conn.executescript(V16_SCHEMA)
     conn.execute(
         "INSERT INTO rundowns (id, title, segments_json, created_at_ms, updated_at_ms) VALUES ('rd_bad', '坏行', '{not json', 1, 2)"
     )

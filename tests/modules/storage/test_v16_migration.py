@@ -20,6 +20,9 @@ import pytest
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v16_llm_request_image_count import migrate as v16_migrate
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import (
+    V16_1_LLM_REQUESTS,
+)
 
 
 @pytest.fixture
@@ -47,17 +50,7 @@ def test_v15_database_upgrade_adds_column_idempotent(temp_dir: Path) -> None:
     """v15 形状旧库：补列默认 0，存量行原样保留，回调幂等。"""
     db_path = temp_dir / "old.db"
     conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE llm_requests (
-            request_id TEXT PRIMARY KEY, timestamp_ms INTEGER NOT NULL,
-            profile_name TEXT NOT NULL DEFAULT '', model_name TEXT NOT NULL DEFAULT '',
-            prompt_tokens INTEGER NOT NULL DEFAULT 0, preview_text TEXT NOT NULL DEFAULT ''
-        );
-        INSERT INTO llm_requests(request_id, timestamp_ms, model_name, prompt_tokens)
-            VALUES ('req-old', 1, 'm1', 64);
-        """
-    )
+    conn.executescript(V16_1_LLM_REQUESTS)
     conn.commit()
 
     v16_migrate(conn)

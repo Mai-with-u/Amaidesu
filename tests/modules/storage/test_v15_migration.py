@@ -12,6 +12,9 @@ from pathlib import Path
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v15_session_recaps_drop_viewer_facts import migrate as v15_migrate
 from src.modules.storage.schema import SCHEMA_VERSION, list_expected_tables
+from tests.modules.storage.legacy_ddl import (
+    V15_1_VIEWER_FACTS_VIEWER_NAMES,
+)
 
 
 async def test_fresh_database_has_no_viewer_facts(tmp_path: Path) -> None:
@@ -29,20 +32,7 @@ async def test_fresh_database_has_no_viewer_facts(tmp_path: Path) -> None:
 def test_v14_database_upgrade_drops_facts_keeps_other_tables(tmp_path: Path) -> None:
     """v14 形状旧库：事实表被删，其它表与存量数据原样保留，回调幂等。"""
     conn = sqlite3.connect(tmp_path / "old.db")
-    conn.executescript(
-        """
-        CREATE TABLE viewer_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL, user_id TEXT NOT NULL,
-            fact_text TEXT NOT NULL, source_message_id TEXT NOT NULL DEFAULT '', created_at_ms INTEGER NOT NULL
-        );
-        CREATE TABLE viewer_names (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, viewer_id INTEGER NOT NULL, user_name TEXT NOT NULL,
-            first_seen_ms INTEGER NOT NULL, last_seen_ms INTEGER NOT NULL, UNIQUE(viewer_id, user_name)
-        );
-        INSERT INTO viewer_facts(platform, user_id, fact_text, created_at_ms) VALUES ('bilibili', 'u1', '喜欢数码', 1);
-        INSERT INTO viewer_names(viewer_id, user_name, first_seen_ms, last_seen_ms) VALUES (1, '甲', 1, 2);
-        """
-    )
+    conn.executescript(V15_1_VIEWER_FACTS_VIEWER_NAMES)
 
     v15_migrate(conn)
     assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='viewer_facts'").fetchone() is None

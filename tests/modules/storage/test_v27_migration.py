@@ -8,20 +8,9 @@ from __future__ import annotations
 import sqlite3
 
 from src.modules.storage.migrations.v27_rolling_archive import migrate as v27_migrate
+from tests.modules.storage.legacy_ddl import V26_SCHEMA
 
 # v26 形状的最小 DDL：档案表已有游戏与存档列，还没有滚动两列
-_V26_SCHEMA = """
-CREATE TABLE archive_lines (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    text             TEXT NOT NULL,
-    quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL,
-    game             TEXT,
-    save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT ''
-);
-"""
 
 
 def _columns(conn: sqlite3.Connection) -> list[str]:
@@ -33,7 +22,7 @@ def test_v26_archive_gains_rolling_columns_and_old_rows_stay_legacy() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     try:
-        conn.executescript(_V26_SCHEMA)
+        conn.executescript(V26_SCHEMA)
         conn.execute(
             "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id)"
             " VALUES (3, 'Minecraft：给女仆取了名', '就叫团子', 7)"

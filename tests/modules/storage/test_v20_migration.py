@@ -10,31 +10,16 @@ from __future__ import annotations
 import sqlite3
 
 from src.modules.storage.migrations.v20_session_recap_settlement import migrate as v20_migrate
+from tests.modules.storage.legacy_ddl import V19_SCHEMA
 
 # v19 形状的最小 DDL：session_recaps 还没有整理进度两列
-_V19_SCHEMA = """
-CREATE TABLE live_sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at_ms INTEGER NOT NULL,
-    ended_at_ms   INTEGER,
-    updated_at_ms INTEGER NOT NULL
-);
-CREATE TABLE session_recaps (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER NOT NULL UNIQUE,
-    started_at_ms   INTEGER NOT NULL,
-    ended_at_ms     INTEGER NOT NULL,
-    recap_text      TEXT NOT NULL,
-    created_at_ms   INTEGER NOT NULL
-);
-"""
 
 
 def _make_v19() -> sqlite3.Connection:
     """场次 1、2 有回顾，场次 3 已结束但没回顾。"""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.executescript(_V19_SCHEMA)
+    conn.executescript(V19_SCHEMA)
     for pk in (1, 2, 3):
         conn.execute(
             "INSERT INTO live_sessions(id, started_at_ms, ended_at_ms, updated_at_ms) VALUES (?, ?, ?, ?)",

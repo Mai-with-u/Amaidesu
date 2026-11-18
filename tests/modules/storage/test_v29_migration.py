@@ -14,47 +14,10 @@ import pytest
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v29_memory_index import migrate as v29_migrate
+from tests.modules.storage.legacy_ddl import V28_SCHEMA
 
 # v28 形状的最小 DDL：只留四类来源表与场次表里迁移和触发器用得到的列
-_V28_SCHEMA = """
-CREATE TABLE live_sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at_ms INTEGER NOT NULL
-);
-CREATE TABLE live_chat (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER NOT NULL,
-    sender_role     TEXT NOT NULL,
-    content         TEXT NOT NULL,
-    dropped_at_ms   INTEGER
-);
-CREATE TABLE commitments (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    what          TEXT NOT NULL,
-    quote         TEXT NOT NULL DEFAULT '',
-    status        TEXT NOT NULL DEFAULT 'open',
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-);
-CREATE TABLE archive_lines (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    text             TEXT NOT NULL,
-    quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL,
-    game             TEXT,
-    save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE game_events (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER NOT NULL,
-    game            TEXT NOT NULL,
-    event_type      TEXT NOT NULL,
-    message         TEXT NOT NULL,
-    timestamp_ms    INTEGER NOT NULL
-);
-"""
+
 
 # 四类来源：(来源表, 插入一行的语句, 改正文的语句, 向量表, 向量表主键列, 全文表)
 _SOURCES = (
@@ -100,7 +63,7 @@ def conn() -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
     # 生产连接统一打开外键；向量表与线索卡记录的级联删除靠它
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.executescript(_V28_SCHEMA)
+    connection.executescript(V28_SCHEMA)
     connection.execute("INSERT INTO live_sessions(id, started_at_ms) VALUES (1, 1000)")
     try:
         yield connection

@@ -9,6 +9,10 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v43_archive_highlights import migrate as v43_migrate
 from src.modules.storage.models.memory import KeptSnapshotLine, PendingArchiveLine
 from src.modules.storage.schema import SCHEMA_VERSION, build_schema_sql
+from tests.modules.storage.legacy_ddl import (
+    V43_ARCHIVE_LINES,
+    V43_ARCHIVE_SNAPSHOT_LINES,
+)
 
 
 def _to_v42(path: Path) -> None:
@@ -20,39 +24,8 @@ def _to_v42(path: Path) -> None:
         raw.execute("DROP TRIGGER IF EXISTS trg_memory_edits_line_deleted")
         raw.execute("DROP TABLE IF EXISTS archive_snapshot_lines")
         raw.execute("DROP TABLE IF EXISTS archive_lines")
-        raw.execute(
-            """
-            CREATE TABLE archive_lines (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                live_session_id  INTEGER NOT NULL,
-                text             TEXT NOT NULL,
-                quote            TEXT NOT NULL,
-                evidence_chat_id INTEGER NOT NULL,
-                game             TEXT,
-                save_id          TEXT NOT NULL DEFAULT '',
-                save_name        TEXT NOT NULL DEFAULT '',
-                keywords         TEXT NOT NULL DEFAULT '[]',
-                place            TEXT NOT NULL DEFAULT '',
-                human_locked     INTEGER NOT NULL DEFAULT 0,
-                source           TEXT NOT NULL DEFAULT 'streamer',
-                viewer_chat_id   INTEGER REFERENCES live_chat(id) ON DELETE CASCADE,
-                viewer_word      TEXT NOT NULL DEFAULT ''
-            )
-            """
-        )
-        raw.execute(
-            """
-            CREATE TABLE archive_snapshot_lines (
-                live_session_id INTEGER NOT NULL REFERENCES archive_snapshots(live_session_id) ON DELETE CASCADE,
-                archive_line_id INTEGER NOT NULL REFERENCES archive_lines(id) ON DELETE CASCADE,
-                position        INTEGER NOT NULL,
-                lasting         INTEGER NOT NULL DEFAULT 0,
-                seen_at_ms      INTEGER NOT NULL,
-                pinned          INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (live_session_id, archive_line_id)
-            )
-            """
-        )
+        raw.execute(V43_ARCHIVE_LINES)
+        raw.execute(V43_ARCHIVE_SNAPSHOT_LINES)
         raw.execute(
             "INSERT INTO live_sessions(id, stream_id, platform, started_at_ms, ended_at_ms, kind, updated_at_ms, settled_at_ms)"
             " VALUES (1, 'room', 'bilibili', 1000, 2000000, 'live', 2000000, 2001000)"

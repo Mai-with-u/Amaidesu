@@ -8,63 +8,13 @@ from pathlib import Path
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v23_privacy_and_speech_delivery import migrate as v23_migrate
 from src.modules.storage.schema import SCHEMA_VERSION, list_expected_tables
+from tests.modules.storage.legacy_ddl import (
+    V23_1_LIVE_SESSIONS_LIVE_CHAT,
+)
 
 
 def _make_v22_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE live_sessions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            stream_id       TEXT NOT NULL DEFAULT '',
-            platform        TEXT NOT NULL DEFAULT 'unknown',
-            started_at_ms   INTEGER NOT NULL,
-            ended_at_ms     INTEGER,
-            title           TEXT,
-            source          TEXT NOT NULL DEFAULT 'manual',
-            kind            TEXT NOT NULL DEFAULT 'live' CHECK (kind IN ('live', 'rehearsal')),
-            heat            INTEGER NOT NULL DEFAULT 0,
-            viewer_count    INTEGER NOT NULL DEFAULT 0,
-            audience_total  INTEGER NOT NULL DEFAULT 0,
-            updated_at_ms   INTEGER NOT NULL,
-            notebook_text   TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE live_chat (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            live_session_id  INTEGER NOT NULL,
-            timestamp_ms     INTEGER NOT NULL,
-            platform         TEXT NOT NULL DEFAULT '',
-            sender_role      TEXT NOT NULL,
-            sender_id        TEXT,
-            sender_name      TEXT,
-            viewer_id        INTEGER,
-            id_kind          TEXT NOT NULL DEFAULT '',
-            content          TEXT NOT NULL,
-            message_type     TEXT NOT NULL,
-            message_id       TEXT,
-            reply_to_message_id TEXT,
-            simulated        INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE viewers (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            platform            TEXT NOT NULL DEFAULT '',
-            account_id          TEXT,
-            open_id             TEXT,
-            open_app_id         TEXT,
-            user_name           TEXT NOT NULL,
-            name_seen_ms        INTEGER NOT NULL DEFAULT 0,
-            simulated           INTEGER NOT NULL DEFAULT 0,
-            link_status         TEXT NOT NULL DEFAULT 'confirmed',
-            link_candidate_id   INTEGER,
-            message_count       INTEGER NOT NULL DEFAULT 0,
-            gift_count          INTEGER NOT NULL DEFAULT 0,
-            replied_count       INTEGER NOT NULL DEFAULT 0,
-            interaction_count   INTEGER NOT NULL DEFAULT 0,
-            paid_count          INTEGER NOT NULL DEFAULT 0,
-            paid_amount         INTEGER NOT NULL DEFAULT 0,
-            last_active_ms      INTEGER NOT NULL
-        );
-        """
-    )
+    conn.executescript(V23_1_LIVE_SESSIONS_LIVE_CHAT)
 
 
 def test_v23_callback_backfills_formal_sessions_and_is_idempotent() -> None:

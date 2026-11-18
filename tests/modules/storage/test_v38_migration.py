@@ -8,6 +8,7 @@ from pathlib import Path
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v38_game_social_facts import migrate as v38_migrate
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import V37_GAME_CHAT
 
 
 def _to_v37(path: Path) -> None:
@@ -114,21 +115,6 @@ async def test_evidence_row_deletion_nulls_reference(tmp_path: Path) -> None:
         await db.close()
 
 
-_V37_GAME_CHAT = """
-CREATE TABLE game_chat (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
-    game            TEXT NOT NULL,
-    direction       TEXT NOT NULL CHECK (direction IN ('player', 'streamer', 'other')),
-    player_id       INTEGER REFERENCES game_players(id) ON DELETE CASCADE,
-    content         TEXT NOT NULL DEFAULT '',
-    save_id         TEXT NOT NULL DEFAULT '',
-    save_name       TEXT NOT NULL DEFAULT '',
-    at_ms           INTEGER NOT NULL
-);
-"""
-
-
 async def test_old_game_chat_gains_message_id_column_and_index(tmp_path: Path) -> None:
     """v37 形状的公屏表（没有消息号列）：升级后补列与索引、旧行补空串，重复执行不再变。"""
     path = tmp_path / "data" / "v37.db"
@@ -137,7 +123,7 @@ async def test_old_game_chat_gains_message_id_column_and_index(tmp_path: Path) -
     await fresh.close()
     raw = sqlite3.connect(path)
     try:
-        raw.executescript("PRAGMA foreign_keys=OFF; DROP TABLE game_chat;" + _V37_GAME_CHAT)
+        raw.executescript("PRAGMA foreign_keys=OFF; DROP TABLE game_chat;" + V37_GAME_CHAT)
         raw.execute("INSERT INTO live_sessions(started_at_ms, kind, updated_at_ms) VALUES (1, 'live', 1)")
         raw.execute(
             "INSERT INTO game_chat(live_session_id, game, direction, content, at_ms) VALUES (1, 'mc', 'other', '', 5)"

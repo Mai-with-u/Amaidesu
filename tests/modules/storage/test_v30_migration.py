@@ -16,34 +16,9 @@ import pytest
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v30_memory_review import migrate as v30_migrate
 from src.modules.storage.models.memory import KeptSnapshotLine, PendingArchiveLine
+from tests.modules.storage.legacy_ddl import V29_SCHEMA
 
 # v29 形状的最小 DDL：只留迁移和触发器用得到的四张表
-_V29_SCHEMA = """
-CREATE TABLE live_sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at_ms INTEGER NOT NULL,
-    settle_report TEXT
-);
-CREATE TABLE archive_lines (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    text             TEXT NOT NULL,
-    quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL
-);
-CREATE TABLE archive_snapshots (
-    live_session_id INTEGER PRIMARY KEY REFERENCES live_sessions(id) ON DELETE CASCADE,
-    written_at_ms   INTEGER NOT NULL
-);
-CREATE TABLE archive_snapshot_lines (
-    live_session_id INTEGER NOT NULL REFERENCES archive_snapshots(live_session_id) ON DELETE CASCADE,
-    archive_line_id INTEGER NOT NULL REFERENCES archive_lines(id) ON DELETE CASCADE,
-    position        INTEGER NOT NULL,
-    lasting         INTEGER NOT NULL DEFAULT 0,
-    seen_at_ms      INTEGER NOT NULL,
-    PRIMARY KEY (live_session_id, archive_line_id)
-);
-"""
 
 
 @pytest.fixture()
@@ -52,7 +27,7 @@ def conn() -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
     # 生产连接统一打开外键；改动记录跟着场次删靠它
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.executescript(_V29_SCHEMA)
+    connection.executescript(V29_SCHEMA)
     connection.execute("INSERT INTO live_sessions(id, started_at_ms) VALUES (1, 1000), (2, 2000)")
     connection.execute(
         "INSERT INTO archive_lines(id, live_session_id, text, quote, evidence_chat_id) VALUES (1, 1, '猫取名芝麻', '就叫芝麻', 1)"

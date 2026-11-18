@@ -9,41 +9,14 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v41_rundown_segment_mode_and_beats import migrate as v41_migrate
 from src.modules.storage.models.rundown import Rundown, RundownInstance, RundownInstanceSegment, RundownSegment
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import (
+    V41_1_RUNDOWN_SEGMENTS_RUNDOWN_INSTANCE_SEGMENTS,
+)
 
 
 def test_v41_callback_adds_columns_idempotently_and_keeps_legacy_rows() -> None:
     conn = sqlite3.connect(":memory:")
-    conn.executescript(
-        """
-        CREATE TABLE rundown_segments (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            rundown_id       TEXT NOT NULL,
-            seq              INTEGER NOT NULL,
-            seg_id           TEXT NOT NULL,
-            title            TEXT NOT NULL,
-            task_description TEXT NOT NULL,
-            expected_ms      INTEGER NOT NULL,
-            min_duration_ms  INTEGER,
-            notes            TEXT,
-            UNIQUE(rundown_id, seg_id)
-        );
-        CREATE TABLE rundown_instance_segments (
-            live_session_id  INTEGER NOT NULL,
-            seq              INTEGER NOT NULL,
-            seg_id           TEXT NOT NULL,
-            title            TEXT NOT NULL,
-            task_description TEXT NOT NULL,
-            expected_ms      INTEGER NOT NULL,
-            min_duration_ms  INTEGER,
-            notes            TEXT,
-            PRIMARY KEY(live_session_id, seq)
-        );
-        INSERT INTO rundown_segments (rundown_id, seq, seg_id, title, task_description, expected_ms)
-        VALUES ('legacy_rd', 0, 'opening', '开场', '打招呼', 180000);
-        INSERT INTO rundown_instance_segments (live_session_id, seq, seg_id, title, task_description, expected_ms)
-        VALUES (1, 0, 'opening', '开场', '打招呼', 180000);
-        """
-    )
+    conn.executescript(V41_1_RUNDOWN_SEGMENTS_RUNDOWN_INSTANCE_SEGMENTS)
 
     # 连续运行两次验证幂等
     v41_migrate(conn)

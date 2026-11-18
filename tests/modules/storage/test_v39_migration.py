@@ -8,6 +8,9 @@ from pathlib import Path
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v39_memory_zones_lifecycle import migrate as v39_migrate
 from src.modules.storage.schema import SCHEMA_VERSION, build_schema_sql
+from tests.modules.storage.legacy_ddl import (
+    V39_COMMITMENTS,
+)
 
 
 def _to_v38(path: Path) -> None:
@@ -19,29 +22,7 @@ def _to_v38(path: Path) -> None:
         raw.execute("DROP TRIGGER IF EXISTS trg_memory_index_commitment_deleted")
         raw.execute("DROP TRIGGER IF EXISTS trg_memory_index_commitment_edited")
         raw.execute("DROP TABLE IF EXISTS commitments")
-        raw.execute(
-            """
-            CREATE TABLE commitments (
-                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-                what                  TEXT NOT NULL,
-                quote                 TEXT NOT NULL DEFAULT '',
-                evidence_chat_id      INTEGER UNIQUE,
-                viewer_id             INTEGER,
-                game                  TEXT,
-                save_id               TEXT NOT NULL DEFAULT '',
-                save_name             TEXT NOT NULL DEFAULT '',
-                status                TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'void')),
-                created_session_id    INTEGER,
-                close_chat_id         INTEGER,
-                close_quote           TEXT,
-                created_at_ms         INTEGER NOT NULL,
-                updated_at_ms         INTEGER NOT NULL,
-                keywords              TEXT NOT NULL DEFAULT '[]',
-                target_player_id      INTEGER REFERENCES game_players(id) ON DELETE CASCADE,
-                evidence_game_chat_id INTEGER REFERENCES game_chat(id) ON DELETE SET NULL
-            )
-            """
-        )
+        raw.execute(V39_COMMITMENTS)
         raw.execute(
             "INSERT INTO commitments(id, what, quote, status, created_session_id, close_chat_id, created_at_ms, updated_at_ms)"
             " VALUES"

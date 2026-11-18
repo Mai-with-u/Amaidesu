@@ -12,20 +12,9 @@ from pathlib import Path
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v33_memory_edit_candidate import migrate as v33_migrate
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import V32_MEMORY_EDITS
 
 # v32 时的改动记录表：没有候选编号列（直播机上审过候选的库就是这个形状）
-_V32_MEMORY_EDITS = """
-CREATE TABLE memory_edits (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
-    target          TEXT NOT NULL,
-    archive_line_id INTEGER,
-    action          TEXT NOT NULL,
-    before_text     TEXT NOT NULL DEFAULT '',
-    after_text      TEXT NOT NULL DEFAULT '',
-    at_ms           INTEGER NOT NULL
-);
-"""
 
 
 def _to_v32(path: Path) -> None:
@@ -34,7 +23,7 @@ def _to_v32(path: Path) -> None:
     try:
         raw.executescript(
             "DROP TRIGGER IF EXISTS trg_memory_edits_candidate_deleted;"
-            "DROP TABLE memory_edits;" + _V32_MEMORY_EDITS + "DELETE FROM schema_migrations WHERE version > 32;"
+            "DROP TABLE memory_edits;" + V32_MEMORY_EDITS + "DELETE FROM schema_migrations WHERE version > 32;"
             "INSERT INTO live_sessions(started_at_ms, kind, updated_at_ms) VALUES (1000, 'live', 1000);"
             "INSERT INTO memory_edits(live_session_id, target, action, before_text, after_text, at_ms)"
             " VALUES (1, 'candidate', 'reject', '给大家讲鬼故事', '', 5);"

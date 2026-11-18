@@ -8,38 +8,13 @@ from pathlib import Path
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v24_memory_ledger import migrate as v24_migrate
 from src.modules.storage.schema import SCHEMA_VERSION, list_expected_tables
+from tests.modules.storage.legacy_ddl import (
+    V24_1_LIVE_SESSIONS_SESSION_RECAPS,
+)
 
 
 def _make_v23_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE live_sessions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            stream_id       TEXT NOT NULL DEFAULT '',
-            platform        TEXT NOT NULL DEFAULT 'unknown',
-            started_at_ms   INTEGER NOT NULL,
-            ended_at_ms     INTEGER,
-            title           TEXT,
-            source          TEXT NOT NULL DEFAULT 'manual',
-            kind            TEXT NOT NULL DEFAULT 'live' CHECK (kind IN ('live', 'rehearsal')),
-            heat            INTEGER NOT NULL DEFAULT 0,
-            viewer_count    INTEGER NOT NULL DEFAULT 0,
-            audience_total  INTEGER NOT NULL DEFAULT 0,
-            updated_at_ms   INTEGER NOT NULL,
-            notebook_text   TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE session_recaps (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            live_session_id INTEGER NOT NULL UNIQUE,
-            started_at_ms  INTEGER NOT NULL,
-            ended_at_ms    INTEGER NOT NULL,
-            recap_text     TEXT NOT NULL,
-            created_at_ms  INTEGER NOT NULL
-        );
-        INSERT INTO live_sessions (id, started_at_ms, ended_at_ms, updated_at_ms)
-            VALUES (1, 1000, 2000, 2000), (2, 3000, 4000, 4000), (3, 5000, NULL, 5000);
-        """
-    )
+    conn.executescript(V24_1_LIVE_SESSIONS_SESSION_RECAPS)
 
 
 def test_v24_callback_backfills_settled_and_is_idempotent() -> None:

@@ -8,33 +8,9 @@ from __future__ import annotations
 import sqlite3
 
 from src.modules.storage.migrations.v26_game_save_columns import migrate as v26_migrate
+from tests.modules.storage.legacy_ddl import V25_SCHEMA
 
 # v25 形状的最小 DDL：三张表都还没有存档列
-_V25_SCHEMA = """
-CREATE TABLE game_events (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    game             TEXT NOT NULL,
-    event_type       TEXT NOT NULL,
-    message          TEXT NOT NULL,
-    scene            TEXT,
-    timestamp_ms     INTEGER NOT NULL
-);
-CREATE TABLE commitments (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    what               TEXT NOT NULL,
-    game               TEXT,
-    created_at_ms      INTEGER NOT NULL,
-    updated_at_ms      INTEGER NOT NULL
-);
-CREATE TABLE archive_lines (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    text             TEXT NOT NULL,
-    quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL
-);
-"""
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
@@ -46,7 +22,7 @@ def test_v25_database_gains_save_columns_with_unknown_save() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     try:
-        conn.executescript(_V25_SCHEMA)
+        conn.executescript(V25_SCHEMA)
         conn.execute(
             "INSERT INTO game_events(live_session_id, game, event_type, message, timestamp_ms)"
             " VALUES (1, 'minecraft', 'milestone', '屋子盖好了', 1000)"

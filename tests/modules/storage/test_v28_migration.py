@@ -11,39 +11,16 @@ from typing import Iterator
 import pytest
 
 from src.modules.storage.migrations.v28_archive_snapshots import migrate as v28_migrate
+from tests.modules.storage.legacy_ddl import V27_SCHEMA
 
 # v27 形状的最小 DDL：场次表带整理三列，档案表带"出自哪一场""是否长期"两列
-_V27_SCHEMA = """
-CREATE TABLE live_sessions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at_ms   INTEGER NOT NULL,
-    ended_at_ms     INTEGER,
-    kind            TEXT NOT NULL DEFAULT 'live',
-    settled_at_ms   INTEGER,
-    settle_attempts INTEGER NOT NULL DEFAULT 0,
-    settle_report   TEXT
-);
-CREATE TABLE archive_lines (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    text             TEXT NOT NULL,
-    quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL,
-    game             TEXT,
-    save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT '',
-    from_session_id  INTEGER,
-    lasting          INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX idx_archive_lines_from_session ON archive_lines(from_session_id);
-"""
 
 
 @pytest.fixture()
 def conn() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
-    connection.executescript(_V27_SCHEMA)
+    connection.executescript(V27_SCHEMA)
     try:
         yield connection
     finally:

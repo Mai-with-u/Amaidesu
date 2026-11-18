@@ -12,45 +12,9 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v8_llm_request_link import migrate as v8_migrate
 from src.modules.storage.repos.llm import LLMRequestInsert, LLMUsageInsert
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import V7_LLM_TABLES_SQL
 
 # v7 形状的两表 DDL（无 v8 新列）
-_V7_LLM_TABLES_SQL = """
-CREATE TABLE llm_usage (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id INTEGER,
-    model_name TEXT NOT NULL,
-    assign_name TEXT,
-    profile_name TEXT,
-    provider_name TEXT NOT NULL,
-    request_type TEXT NOT NULL,
-    prompt_tokens INTEGER NOT NULL,
-    completion_tokens INTEGER NOT NULL,
-    total_tokens INTEGER NOT NULL,
-    cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
-    cost REAL NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    timestamp_ms INTEGER NOT NULL
-);
-CREATE TABLE llm_requests (
-    request_id TEXT PRIMARY KEY,
-    timestamp_ms INTEGER NOT NULL,
-    client_type TEXT NOT NULL DEFAULT '',
-    model_name TEXT NOT NULL DEFAULT '',
-    request_params TEXT,
-    response_content TEXT,
-    reasoning_content TEXT,
-    tool_calls TEXT,
-    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-    completion_tokens INTEGER NOT NULL DEFAULT 0,
-    total_tokens INTEGER NOT NULL DEFAULT 0,
-    cost REAL NOT NULL DEFAULT 0,
-    success INTEGER NOT NULL DEFAULT 1,
-    error TEXT,
-    latency_ms INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_ms INTEGER NOT NULL);
-"""
 
 
 def _assert_v8_columns(conn: sqlite3.Connection) -> None:
@@ -63,7 +27,7 @@ def _assert_v8_columns(conn: sqlite3.Connection) -> None:
 
 def test_v8_migrate_is_idempotent_directly() -> None:
     conn = sqlite3.connect(":memory:")
-    conn.executescript(_V7_LLM_TABLES_SQL)
+    conn.executescript(V7_LLM_TABLES_SQL)
     for _ in range(3):
         v8_migrate(conn)
     _assert_v8_columns(conn)
@@ -79,7 +43,7 @@ async def test_fresh_db_has_v8_columns(store: SQLiteDatabase) -> None:
 
 async def test_v7_db_upgrade_keeps_rows_and_defaults(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
-    conn.executescript(_V7_LLM_TABLES_SQL)
+    conn.executescript(V7_LLM_TABLES_SQL)
     conn.execute("INSERT INTO schema_migrations VALUES (7, 0)")
     conn.execute(
         "INSERT INTO llm_usage(model_name, provider_name, request_type, prompt_tokens, completion_tokens,"

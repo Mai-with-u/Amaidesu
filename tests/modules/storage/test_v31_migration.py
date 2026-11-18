@@ -18,21 +18,13 @@ from src.modules.storage.migrations.v31_viewer_candidates import migrate as v31_
 from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.retention import RetentionService
 from src.modules.storage.schema import SCHEMA_VERSION
+from tests.modules.storage.legacy_ddl import (
+    V30_ARCHIVE_LINES,
+    V30_SCHEMA,
+)
+
 
 # v30 形状的最小 DDL：只留迁移和外键用得到的几张表
-_V30_SCHEMA = """
-CREATE TABLE live_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_ms INTEGER NOT NULL);
-CREATE TABLE live_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER, content TEXT);
-CREATE TABLE commitments (id INTEGER PRIMARY KEY AUTOINCREMENT, what TEXT NOT NULL);
-CREATE TABLE archive_lines (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    text             TEXT NOT NULL,
-    quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL,
-    human_locked     INTEGER NOT NULL DEFAULT 0
-);
-"""
 
 
 @pytest.fixture()
@@ -41,7 +33,7 @@ def conn() -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
     # 生产连接统一打开外键；候选随台词记录删靠它
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.executescript(_V30_SCHEMA)
+    connection.executescript(V30_SCHEMA)
     connection.execute("INSERT INTO live_sessions(id, started_at_ms) VALUES (1, 1000)")
     connection.execute(
         "INSERT INTO live_chat(id, live_session_id, content) VALUES (1, 1, '叫它团子吧'), (2, 1, '好，团子')"
@@ -103,21 +95,6 @@ def test_candidates_and_viewer_lines_follow_the_messages_they_hang_on(conn: sqli
 
 
 # v30 时的档案表：没有来源与观众弹幕两列（直播机上已经开过几场的库就是这个形状）
-_V30_ARCHIVE_LINES = """
-CREATE TABLE archive_lines (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    text             TEXT NOT NULL,
-    quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL,
-    game             TEXT,
-    save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT '',
-    keywords         TEXT NOT NULL DEFAULT '[]',
-    place            TEXT NOT NULL DEFAULT '',
-    human_locked     INTEGER NOT NULL DEFAULT 0
-);
-"""
 
 
 async def test_v30_database_that_already_has_archive_lines_starts_after_upgrade(tmp_path: Path) -> None:
@@ -131,7 +108,7 @@ async def test_v30_database_that_already_has_archive_lines_starts_after_upgrade(
     try:
         raw.executescript(
             "DROP TABLE viewer_candidates; DROP TABLE archive_lines;"
-            + _V30_ARCHIVE_LINES
+            + V30_ARCHIVE_LINES
             + "DELETE FROM schema_migrations WHERE version > 30;"
         )
         raw.execute(

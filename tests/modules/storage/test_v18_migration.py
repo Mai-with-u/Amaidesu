@@ -11,55 +11,18 @@ from pathlib import Path
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v18_viewer_identity_mapping import migrate as v18_migrate
+from tests.modules.storage.legacy_ddl import V17_SCHEMA
 
 OPEN_ID = "39b8fedb-60a5-4e29-ac75-b16955f7e632"
 
 # v17 形状的最小 DDL：v18 回调读写到的列都在里面，其余列与本回调无关。
-_V17_SCHEMA = """
-CREATE TABLE viewers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL,
-    user_name TEXT NOT NULL, message_count INTEGER NOT NULL DEFAULT 0, gift_count INTEGER NOT NULL DEFAULT 0,
-    replied_count INTEGER NOT NULL DEFAULT 0, interaction_count INTEGER NOT NULL DEFAULT 0,
-    paid_count INTEGER NOT NULL DEFAULT 0, paid_amount INTEGER NOT NULL DEFAULT 0,
-    last_active_ms INTEGER NOT NULL, UNIQUE(platform, user_id)
-);
-CREATE TABLE viewer_profiles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL, user_id TEXT NOT NULL,
-    profile_text TEXT NOT NULL, last_compressed_at_ms INTEGER NOT NULL DEFAULT 0,
-    updated_at_ms INTEGER NOT NULL, UNIQUE(platform, user_id)
-);
-CREATE TABLE viewer_names (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, viewer_id INTEGER NOT NULL, user_name TEXT NOT NULL,
-    first_seen_ms INTEGER NOT NULL, last_seen_ms INTEGER NOT NULL, UNIQUE(viewer_id, user_name)
-);
-CREATE TABLE live_chat (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
-    platform TEXT NOT NULL DEFAULT '', sender_role TEXT NOT NULL, sender_id TEXT, sender_name TEXT,
-    simulated INTEGER NOT NULL DEFAULT 0, content TEXT NOT NULL, message_type TEXT NOT NULL
-);
-CREATE TABLE gifts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
-    platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL, user_name TEXT NOT NULL,
-    gift_name TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1, simulated INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE super_chats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
-    platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL, user_name TEXT NOT NULL,
-    message TEXT NOT NULL DEFAULT '', simulated INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE guards (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
-    platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL, user_name TEXT NOT NULL,
-    simulated INTEGER NOT NULL DEFAULT 0
-);
-"""
 
 
 def _make_v17() -> sqlite3.Connection:
     """v17 形状旧库 + 存量数据：同一 uid 有带/漏平台的重复行，开放平台 ID、兜底身份、模拟观众各一条。"""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.executescript(_V17_SCHEMA)
+    conn.executescript(V17_SCHEMA)
     viewers = [
         # (id, platform, user_id, user_name, message_count, last_active_ms)
         (1, "bilibili", "1001", "老王", 5, 1_000),
