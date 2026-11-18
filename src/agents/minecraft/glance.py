@@ -108,6 +108,7 @@ _MOBS: Dict[str, str] = {
     "bat": "蝙蝠",
     "chest_minecart": "运输矿车",
     "lootr_minecart": "箱子矿车",
+    "item": "掉落物",
     "player": "玩家",
 }
 
@@ -219,6 +220,20 @@ _ENTITY_THING_KINDS: Dict[str, str] = {
 #: 实体特征里与"它是谁"有关的两项：驯服关系（你的 / 自家人的 / 别人的）、听令坐下了没有
 _TRAIT_OWNER = "驯服"
 _TRAIT_SITTING = "坐着"
+#: 地面掉落物实体的特征键：具体物品注册名与堆叠数量
+_TRAIT_ITEM = "物品"
+_TRAIT_COUNT = "数量"
+#: 静态装饰实体裸名：在身边实体摘要中排在玩家、有主/命名生物、掉落物与普通生物之后，避免占满前四名额把掉落物挤进"等"
+_STATIC_DECORATION_KINDS: frozenset[str] = frozenset(
+    {
+        "leash_knot",
+        "glow_item_frame",
+        "item_frame",
+        "armor_stand",
+        "painting",
+        "interaction",
+    }
+)
 #: 驯服关系里表示"是角色自己的"那个说法
 OWNER_SELF = "你的"
 #: 驯服关系里表示"不是自家人的"那个说法：知道驯服者时直接写成"谁的"
@@ -286,6 +301,58 @@ def _owner_words(owner: str, tamer: str) -> str:
     return f"{owner.removesuffix('的')}{tamer}的"
 
 
+def _bare_entity_type(raw_type: Any) -> str:
+    """提取去掉命名空间后的实体类型短名（如 ``minecraft:item`` → ``item``）。"""
+    return str(raw_type or "").strip().rsplit(":", 1)[-1]
+
+
+def _is_dropped_item_type(raw_type: Any) -> bool:
+    """判断实体类型是否为地面掉落物（兼容 ``minecraft:item`` 与简写 ``item``）。"""
+    text = str(raw_type or "").strip()
+    return text in ("minecraft:item", "item")
+
+
+def _parse_item_count(raw: Any) -> Optional[int]:
+    """解析地面掉落物的堆叠数量（兼容正整数与数字字符串，排除布尔值与非正数）。"""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw > 0 else None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.isdigit():
+            value = int(text)
+            return value if value > 0 else None
+    return None
+
+
+def _friendly_entity_priority(entity: Dict[str, Any]) -> int:
+    """身边非己方实体的播报排序优先级：越小越靠前，同档保留由近到远原序。
+
+    站在挂满展示框或拴绳结的基地里时，按“玩家 -> 有主/命名生物 -> 地面掉落物 -> 普通生物 -> 静态装饰实体”排序，
+    防止脚边刚爆出的掉落物或同伴被装饰实体挤进“等”字省略。
+    """
+    bare_type = _bare_entity_type(entity.get("type"))
+    if bare_type == "player":
+        return 0
+    traits = entity.get("traits") if isinstance(entity.get("traits"), dict) else {}
+    if (
+        entity.get("owner")
+        or entity.get("tamer")
+        or entity.get("name")
+        or entity.get("nickname")
+        or entity.get("grave_of")
+        or traits.get(_TRAIT_OWNER)
+        or traits.get(_TRAIT_TAMER)
+    ):
+        return 1
+    if _is_dropped_item_type(entity.get("type")):
+        return 2
+    if bare_type in _STATIC_DECORATION_KINDS:
+        return 4
+    return 3
+
+
 def entity_label(entity: Dict[str, Any]) -> str:
     """一只身边的实体 → 主播叫得出的称呼：主播起的名字在前，括号里是认出它的事实。
 
@@ -293,7 +360,19 @@ def entity_label(entity: Dict[str, Any]) -> str:
     驯服关系写成"你的 / 自家人的 / 别人的"放在种类前面，知道驯服者名字时写成"玩家甲的狼""自家人玩家甲的女仆"，
     主播在游戏里说"他的狗""我家女仆"时接得上；没起名时种类就是称呼本身。
     墓碑带的名字是死者的："阿缕的女仆墓碑（上面写着莫莫酒狐）"。
+    地面掉落物按具体物品与堆叠数写成"地上的redstone×18""地上的铁镐"，无物品特征时回退"掉落物"。
     """
+    if _is_dropped_item_type(entity.get("type")):
+        # 检测到地面掉落物实体时，读取具体物品名转短名并按大于 1 的堆叠数附带 ×N，缺失物品特征时回退为“掉落物”
+        traits = entity.get("traits") if isinstance(entity.get("traits"), dict) else {}
+        raw_item = str(entity.get("item") or traits.get(_TRAIT_ITEM) or "").strip()
+        if not raw_item:
+            return "掉落物"
+        item_label = _item_label(raw_item)
+        count_source = entity.get("count") if "count" in entity else traits.get(_TRAIT_COUNT)
+        item_count = _parse_item_count(count_source)
+        suffix = f"×{item_count}" if item_count is not None and item_count > 1 else ""
+        return f"地上的{item_label}{suffix}"
     kind = kind_of(entity)
     owner = _owner_words(str(entity.get("owner") or ""), str(entity.get("tamer") or ""))
     whose = f"{owner}{kind}" if owner else kind
@@ -349,6 +428,10 @@ def glance_brief(view: Dict[str, Any]) -> str:
     if view.get("unavailable"):
         return str(view["unavailable"])
     sentences: List[str] = []
+    self_account = str(view.get("self_account") or "").strip()
+    if self_account:
+        # 当已知角色自身游戏账号名时带入一句话现场，让只读 brief 的快反应通道识别系统播报里的角色名就是主播本人
+        sentences.append(f"你是{self_account}")
     body = view.get("body") if isinstance(view.get("body"), dict) else {}
     where = _DIMENSIONS.get(str(body.get("dimension") or ""), "")
     biome = biome_name(str(view["biome"])) if view.get("biome") else ""
@@ -380,11 +463,12 @@ def glance_brief(view: Dict[str, Any]) -> str:
     if own:
         sentences.append(_list_words([entity_label(entity) for entity in own], 4) + "在身边")
     sentences.extend(_creature_sentences(view.get("creatures")))
-    friendly = [
-        entity_label(entity)
-        for entity in entities
-        if entity.get("hostile") is not True and entity.get("owner") != OWNER_SELF
-    ]
+    # 身边其他实体按玩家、有主/命名生物、地面掉落物优先于静态装饰物排序，防止脚边掉落物被展示框等挤进“等”
+    friendly_entities = sorted(
+        (entity for entity in entities if entity.get("hostile") is not True and entity.get("owner") != OWNER_SELF),
+        key=_friendly_entity_priority,
+    )
+    friendly = [entity_label(entity) for entity in friendly_entities]
     if friendly:
         sentences.append("身边还有" + _list_words(friendly, 4))
     facilities = [
@@ -980,6 +1064,15 @@ def described_entity(entity: Dict[str, Any], things: Dict[str, Dict[str, Any]]) 
         described["tamer"] = tamer
     if traits.get(_TRAIT_SITTING) == "是":
         described["sitting"] = True
+    if _is_dropped_item_type(entity.get("type")):
+        # 周边观察遇到地面掉落物时，提取物品短名与堆叠数量挂入结构化条目，避免向下游裸出英文 item
+        described.setdefault("kind", "掉落物")
+        raw_item = str(traits.get(_TRAIT_ITEM) or "").strip()
+        if raw_item:
+            described["item"] = _item_label(raw_item)
+        item_count = _parse_item_count(traits.get(_TRAIT_COUNT))
+        if item_count is not None:
+            described["count"] = item_count
     for key in ("direction", "distance", "hostile"):
         if entity.get(key) is not None:
             described[key] = entity[key]

@@ -12,6 +12,7 @@ import pytest
 from src.agents.minecraft.glance import (
     REMEMBERED_PLACES_TTL_S,
     RememberedPlacesCache,
+    described_entity,
     entity_label,
     glance_brief,
     glance_scene,
@@ -962,3 +963,108 @@ def test_game_prompt_allows_survival_click_commands_while_forbidding_admin_short
     assert "不用管理员命令" in game and "管理员命令默认拒收" in game
     assert "可点击执行" in game and "可通过 `chat` 发送" in game
     assert "`chat` 默认不执行任何游戏命令" not in game
+
+
+@pytest.mark.parametrize(
+    ("raw_entity", "expected_label", "expected_item", "expected_count"),
+    [
+        (
+            {"type": "minecraft:item", "distance": 2, "traits": {"物品": "minecraft:redstone", "数量": 18}},
+            "地上的redstone×18",
+            "redstone",
+            18,
+        ),
+        (
+            {"type": "minecraft:item", "distance": 2, "traits": {"物品": "minecraft:iron_pickaxe", "数量": 1}},
+            "地上的铁镐",
+            "铁镐",
+            1,
+        ),
+        (
+            {
+                "type": "item",
+                "distance": 3,
+                "traits": {"物品": "touhou_little_maid:smart_slab_empty", "数量": "2"},
+            },
+            "地上的魂符（smart_slab_empty）×2",
+            "魂符（smart_slab_empty）",
+            2,
+        ),
+        ({"type": "minecraft:item", "distance": 2}, "掉落物", None, None),
+        ({"type": "item", "distance": 2, "traits": {}}, "掉落物", None, None),
+    ],
+    ids=["stack_redstone", "single_iron_pickaxe", "short_type_mod_item", "no_traits_fallback", "empty_traits_fallback"],
+)
+def test_dropped_item_entities_expand_real_names_and_counts(
+    raw_entity: Dict[str, Any],
+    expected_label: str,
+    expected_item: str | None,
+    expected_count: int | None,
+) -> None:
+    """地面掉落物（minecraft:item / item）读取物品与数量特征展开为实名短称，缺失特征时回退“掉落物”，不裸出英文 item。"""
+    assert entity_label(raw_entity) == expected_label
+    described = described_entity(raw_entity, {})
+    assert described["kind"] == "掉落物"
+    assert described.get("item") == expected_item
+    assert described.get("count") == expected_count
+    assert entity_label(described) == expected_label
+    scene_view = glance_scene(MaicraftReply(ok=True, data={"entities": [raw_entity]}))
+    brief = glance_brief(scene_view)
+    assert f"身边还有{expected_label}。" == brief
+    assert "身边还有item" not in brief
+
+
+def test_glance_brief_ranks_players_pets_and_dropped_items_before_static_decorations() -> None:
+    """基地墙面挂满展示框、画、盔甲架与拴绳结时，身边摘要优先报玩家、有主/命名生物与地面掉落物，防止掉落物被装饰物挤进“等”。"""
+    scene = {
+        "entities": [
+            {"id": "d1", "type": "minecraft:leash_knot", "distance": 1.0},
+            {"id": "d2", "type": "minecraft:glow_item_frame", "distance": 1.5},
+            {"id": "d3", "type": "minecraft:item_frame", "distance": 2.0},
+            {"id": "d4", "type": "minecraft:armor_stand", "distance": 2.2},
+            {"id": "d5", "type": "minecraft:painting", "distance": 2.5},
+            {"id": "d6", "type": "interaction", "distance": 2.8},
+            {
+                "id": "i1",
+                "type": "minecraft:item",
+                "distance": 3.5,
+                "traits": {"物品": "minecraft:redstone", "数量": 18},
+            },
+            {
+                "id": "i2",
+                "type": "minecraft:item",
+                "distance": 4.0,
+                "traits": {"物品": "minecraft:iron_pickaxe", "数量": 1},
+            },
+            {
+                "id": "w1",
+                "type": "minecraft:wolf",
+                "name": "小白",
+                "distance": 5.0,
+                "traits": {"驯服": "别人的", "驯服者": "PlayerB"},
+            },
+            {"id": "p1", "type": "minecraft:player", "name": "PlayerA", "distance": 6.0},
+        ]
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    brief = glance_brief(view)
+    assert brief == "身边还有玩家（叫PlayerA）、PlayerB的狼（叫小白）、地上的redstone×18、地上的铁镐等。"
+
+
+def test_glance_brief_includes_self_account_when_present() -> None:
+    """当 self_account 非空时，一句话现场带出角色自身游戏名，供只读 brief 的快反应通道识别系统播报里的自己。"""
+    self_view = glance_self(
+        MaicraftReply(
+            ok=True,
+            data={
+                "name": "TestBot",
+                "position": {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"},
+                "health": 20,
+                "food": 20,
+            },
+        )
+    )
+    assert self_view["self_account"] == "TestBot"
+    brief = glance_brief({**self_view, "biome": "minecraft:plains"})
+    assert brief.startswith("你是TestBot。在主世界的平原。")
+    assert "你是" not in glance_brief({"body": {"dimension": "minecraft:overworld"}})

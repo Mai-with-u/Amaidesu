@@ -113,3 +113,24 @@ async def test_model_failure_raises_and_writes_nothing(store, prompt_manager) ->
         await writer.write_overview(session_id)
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.overview is None
+
+
+async def test_overview_system_prompt_identifies_main_character_as_streamer(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """场次概览系统提示词明确游戏里的主控角色就是主播本人，归在主播名下叙述。"""
+    session_id = await _ended_session(store)
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="minecraft",
+        event_type="milestone",
+        message="取得进度：整装上阵",
+        timestamp_ms=1_700_000_060_000,
+    )
+    llm = FakeLLMManager(Response(success=True, content="这场主播做出全套铁甲推进生存进度。"))
+    writer = _writer(store, llm, prompt_manager)
+
+    assert await writer.write_overview(session_id) is True
+    system_prompt = str(llm.calls[0]["system"])
+    assert "游戏里的主控角色就是主播本人" in system_prompt
+    assert "归在主播名下叙述" in system_prompt

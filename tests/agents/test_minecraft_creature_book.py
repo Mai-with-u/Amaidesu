@@ -391,7 +391,8 @@ async def test_death_broadcast_is_attributed_by_the_victim_uuid() -> None:
     server.self_view["name"] = "Alex"
     agent, _, bus = await make_minecraft_agent(server)
     view = await agent._glance()
-    assert view["self_account"] == "Alex" and "Alex" not in view["brief"]
+    # 角色自身游戏账号名同步带入一句话现场，方便快反应通道认出系统播报里的自己
+    assert view["self_account"] == "Alex" and "你是Alex" in view["brief"]
 
     def milestones() -> list[str]:
         return [
