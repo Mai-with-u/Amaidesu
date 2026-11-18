@@ -45,7 +45,7 @@ def prompts() -> Iterator[Any]:
 async def _system_prompts_sent(prompts: Any, boundaries: Optional[str]) -> Tuple[List[str], List[str]]:
     """起一个开着嘴的 Agent，让决策与嘴各发出一次请求，返回 (决策的系统提示词们, 嘴的系统提示词们)。
 
-    顺序：先走决策轮（调试门面送一条弹幕）-> 开播（嘴只在开播期间说话）-> 总线上来一条游戏交付
+    顺序：先走决策轮（调试门面送一条弹幕）-> 开播（嘴只在开播期间说话）-> 总线上来一条高光里程碑
     事件，嘴按它生成一句、出声 -> 等发言事件到达，此时假 LLM 已记下嘴的请求。
     ``boundaries`` 为 None 时不覆盖，用配置默认值。
     """
@@ -68,10 +68,10 @@ async def _system_prompts_sent(prompts: Any, boundaries: Optional[str]) -> Tuple
 
         await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, title="测试场"), source="test")
         await bus.wait_until_drained()
-        report = GamePayload(
-            game="minecraft", event_type="report", message="床做好了，放在屋里", report_kind="delivery"
+        loot = GamePayload(
+            game="minecraft", event_type="milestone", message="打开战利品箱开出了海洋之心 ×1", notable=True
         )
-        await bus.emit(CoreEvents.GAME_REPORT, report, source="minecraft")
+        await bus.emit(CoreEvents.GAME_MILESTONE, loot, source="maicraft_attention")
         # 嘴把连发的由头攒一小会儿再生成（模块内固定的攒批窗口），等它真出声再看请求
         await asyncio.wait_for(spoken.wait(), timeout=_SPEECH_TIMEOUT_S)
     finally:

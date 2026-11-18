@@ -99,7 +99,7 @@ from .session_overview import SessionOverviewWriter
 from .message_buffer import MessageBuffer
 from .delegation_workbench import PLANNER_CALL_SOURCE
 from .delegation_stall_watch import DelegationStallWatch
-from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
+from .mouth import MOUTH_BODY_KINDS, SCENE_CHANGING_BODY_KINDS, Mouth
 from .mouth_reconcile import ReconcileVerdict, SpokenLog, extract_player_join_name, reconcile_with_mouth
 from .planner import Planner, PlannerConfig, PlannerEnv
 from .paid_viewers import PaidViewerLookup
@@ -2557,9 +2557,12 @@ class StreamerAgent(BaseAgent):
             message = self._game_ledger.record_event(
                 payload.game, payload.event_type, payload.message, payload.timestamp_ms or now_ms()
             )
-            if self._mouth is not None and payload.event_type in URGENT_GAME_TYPES and message:
+            if self._mouth is not None and payload.event_type != "error" and message:
+                # 非报错的游戏进展与交付留进嘴的近期背景，使现场卡知道刚做成什么；
+                # 只有高光里程碑（如开箱发现稀罕宝物）才让嘴当场惊呼一句
                 self._mouth.note_game(message)
-                self._mouth.react(f"game:{payload.event_type}", message, urgent=True)
+                if payload.event_type == "milestone" and payload.notable:
+                    self._mouth.react("game:notable_milestone", message)
             if payload.event_type == "report":
                 self._proactive_signals.set_game()
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
@@ -2705,21 +2708,28 @@ class StreamerAgent(BaseAgent):
                 # 冲她做动作的人的名字：表达侧据此说清是谁扔来的、谁拍的她，不说成凭空到手
                 who=payload.player_name if payload.kind == "player_body_language" else "",
             )
-            if self._mouth is not None:
-                # 嘴开着：遭遇由嘴当场反应（几秒内出声），死亡也一样——不再为它专门唤醒 Planner，
-                # 免得嘴说一句、Planner 过十几秒又把同一件事讲一遍
+            if self._mouth is not None and summary:
+                # 所有身体侧经历都留进嘴的近期背景，但轻微掉血、摔伤、挨打、天色变换不再触发嘴嗷嗷叫
                 self._mouth.note_game(summary)
-                self._mouth.react(
-                    f"body:{payload.kind}",
-                    summary,
-                    urgent=payload.kind in URGENT_BODY_KINDS,
-                    refresh_scene=payload.kind in SCENE_CHANGING_BODY_KINDS,
-                )
-            elif payload.kind == "died":
-                # 死亡是要紧事：与 game.report 同款置位待定夺信号，下次空缓冲 tick 立即
-                # 促发一轮决策（绕最小间隔与每小时上限）。死亡连发时连窗是有意行为——
-                # 那是叙事价值最高的时刻，主播应当场知道、当场解说。
+            should_react_and_wake = payload.kind in MOUTH_BODY_KINDS and not (
+                payload.kind == "died" and payload.intentional
+            )
+            if should_react_and_wake:
+                if self._mouth is not None and summary:
+                    cooldown_key = (
+                        f"sighting:{payload.sighting_kind or 'rare'}"
+                        if payload.kind == "rare_sighted"
+                        else f"body:{payload.kind}"
+                    )
+                    self._mouth.react(
+                        cooldown_key,
+                        summary,
+                        refresh_scene=payload.kind in SCENE_CHANGING_BODY_KINDS,
+                    )
+                # 视野撞见强敌/稀有矿藏或意外真死亡时，无论快嘴开没开都立即唤醒决策层，
+                # 让 Planner 紧接着给游戏 Agent 下发采掘、迎战或善后任务（寻死回家不按事故唤醒）
                 self._proactive_signals.set_game()
+                self._flush_kick.set()
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体侧事件失败: {exc}", exc=True)
 

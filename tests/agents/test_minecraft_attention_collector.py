@@ -244,6 +244,7 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
         CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN,
         CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
+        CoreEvents.GAME_BODY_RARE_SIGHTED,
         CoreEvents.GAME_MILESTONE,
     }
     for kind, event_name in KIND_TO_EVENT.items():
@@ -640,3 +641,92 @@ async def test_body_language_with_a_player_uuid_also_records_the_interaction() -
     greet, gift = bus.events[1][1], bus.events[2][1]
     assert (greet.kind, greet.player_uuid, greet.actions) == ("greet", "uuid-alex", ["扔东西"])
     assert (gift.kind, gift.fact) == ("gift", {"said": "朝我扔了 3 个面包"})
+
+
+async def test_rare_sighting_forwards_boss_and_rare_ore_without_numbers() -> None:
+    """眼前撞见 Boss 或露出天然稀有矿脉：转成 game.body.rare_sighted，去格数与观察编号，带细类供分桶冷却。"""
+    assert classify("rare_sighting") == "rare_sighted"
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    boss_event = _event(6, "rare_sighting", "眼前看见了监守者（e3）（前方 12 格）")
+    boss_event["rare_sighting"] = {
+        "category": "boss",
+        "target_id": "minecraft:warden",
+        "name": "监守者",
+        "seen_id": "e3",
+        "count": 1,
+        "at": {"x": 10, "y": -50, "z": 22, "dimension": "minecraft:overworld"},
+    }
+    ore_vein = _event(7, "rare_sighting", "眼前看见了深层钻石矿石 4 块（左前方 6 格）")
+    ore_vein["rare_sighting"] = {
+        "category": "rare_ore",
+        "target_id": "minecraft:deepslate_diamond_ore",
+        "name": "深层钻石矿石",
+        "count": 4,
+        "at": {"x": 4, "y": -54, "z": 16, "dimension": "minecraft:overworld"},
+    }
+    single_ore = _event(8, "rare_sighting", "眼前看见了远古残骸（脚边）")
+    single_ore["rare_sighting"] = {
+        "category": "rare_ore",
+        "target_id": "minecraft:ancient_debris",
+        "name": "远古残骸",
+        "count": 1,
+        "at": {"x": 1, "y": 15, "z": 1, "dimension": "minecraft:the_nether"},
+    }
+    client.pages.append(_page([boss_event, ore_vein, single_ore], cursor=8))
+
+    await collector._drain()
+
+    assert [name for name, _ in bus.events] == [
+        CoreEvents.GAME_BODY_RARE_SIGHTED,
+        CoreEvents.GAME_BODY_RARE_SIGHTED,
+        CoreEvents.GAME_BODY_RARE_SIGHTED,
+    ]
+    boss, vein, debris = [payload for _, payload in bus.events]
+    assert boss.sighting_kind == "boss" and boss.summary == "眼前撞见了监守者（在前方）"
+    assert vein.sighting_kind == "rare_ore" and vein.summary == "眼前露出了深层钻石矿石好几块（在左前方）"
+    assert debris.sighting_kind == "rare_ore" and debris.summary == "眼前露出了远古残骸（就在脚边）"
+    for item in (boss, vein, debris):
+        assert "e3" not in item.summary and not any(ch.isdigit() for ch in item.summary)
+
+
+async def test_rare_loot_marks_notable_milestone_while_step_finished_stays_routine() -> None:
+    """开箱发现稀罕战利品标 notable=True 供快嘴惊呼；常规步进完成保持 notable=False 只留背景。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    loot = _event(6, "rare_loot_found", "打开战利品箱（-311, 59, 73）开出了附魔金苹果 ×1，已经拿走", goal_id=12)
+    step = _event(7, "step_finished", "采集完成：8 个圆石进了背包", goal_id=12)
+    client.pages.append(_page([loot, step], cursor=7))
+
+    await collector._drain()
+
+    assert [name for name, _ in bus.events] == [CoreEvents.GAME_MILESTONE, CoreEvents.GAME_MILESTONE]
+    loot_payload, step_payload = bus.events[0][1], bus.events[1][1]
+    assert loot_payload.notable is True
+    assert step_payload.notable is False
+
+
+async def test_suicide_marks_death_intentional_and_unseen_hurt_hides_attacker() -> None:
+    """寻死回家的死讯标 intentional=True；未见凶手的暗箭挨打保留媒介白话且不带攻击者身份。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    client.pages.append(
+        _page(
+            [
+                _event(6, "started", "开始：maicraft:suicide（回家）", goal_id=9),
+                _event(7, "character_died", "Alex被杀死了"),
+                _event(8, "finished", "目标完成", goal_id=9),
+                _event(9, "character_died", "Alex被监守者杀死了"),
+                _event(10, "hurt", "不知从哪射来箭打中 2 下，掉了 4 点血，还剩 16 点"),
+            ],
+            cursor=10,
+        )
+    )
+
+    await collector._drain()
+
+    chosen, accident, unseen_arrow = [payload for _, payload in bus.events]
+    assert chosen.kind == "died" and chosen.intentional is True
+    assert accident.kind == "died" and accident.intentional is False
+    assert unseen_arrow.kind == "attacked" and unseen_arrow.attacker == ""
+    assert unseen_arrow.summary == "不知从哪射来箭打中好几下"

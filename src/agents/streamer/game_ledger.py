@@ -39,7 +39,7 @@ _STATE_KINDS = frozenset({"died", "respawned", "reflex_started", "reflex_finishe
 
 #: 需要立即打断场外闲聊余温、优先处置眼下游戏处境的突发遭遇与待定夺事件种类
 _URGENT_ENCOUNTER_KINDS = frozenset(
-    {"attacked", "died", "respawned", "dimension_changed", "need_unhandled", "reflex_started"}
+    {"attacked", "died", "respawned", "dimension_changed", "need_unhandled", "reflex_started", "rare_sighted"}
 )
 _URGENT_GAME_EVENT_TYPES = frozenset({"report", "error", "attention_required", "task_alert", "auto_cancel"})
 

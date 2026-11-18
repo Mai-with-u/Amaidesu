@@ -41,6 +41,7 @@ BodyKind = Literal[
     "player_body_language",
     "others_food_taken",
     "others_things_touched",
+    "rare_sighted",
 ]
 
 
@@ -60,6 +61,7 @@ BodyKind = Literal[
 @register_event(CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE)
 @register_event(CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN)
 @register_event(CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED)
+@register_event(CoreEvents.GAME_BODY_RARE_SIGHTED)
 class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
 
@@ -106,6 +108,14 @@ class BodyEventPayload(BasePayload):
         description="事件说到的那位玩家的 UUID（肢体动作：冲它做动作的人；跟随状况：它跟着的人）；没有时为空串",
     )
     player_name: str = Field(default="", description="同一位玩家的名字；没有时为空串")
+    sighting_kind: str = Field(
+        default="",
+        description="罕见目击细类（如 boss / rare_ore），供快嘴冷却分桶与叙事区分",
+    )
+    intentional: bool = Field(
+        default=False,
+        description="是否角色主动选择的死亡回城（寻死回家为 True，意外阵亡为 False）",
+    )
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")
 
     model_config = ConfigDict(

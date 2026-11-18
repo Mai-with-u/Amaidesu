@@ -104,6 +104,10 @@ class GamePayload(BasePayload):
         default_factory=list,
         description="相关身体事件（本批任务期间观察到的身体事件，最多若干条；空 = 无）",
     )
+    notable: bool = Field(
+        default=False,
+        description="是否为值得当场短反应的高光里程碑（如开箱发现稀罕宝物）",
+    )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="事件时间戳（Unix 毫秒）",

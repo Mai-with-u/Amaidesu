@@ -510,15 +510,15 @@ class StreamerLiveFrameConfig(BaseConfig):
 class StreamerMouthConfig(BaseConfig):
     """[agents.streamer.mouth] 段
 
-    嘴：游戏里出事时不经 Planner、几秒内当场出一句短反应。离线对照里，带一张现场卡的瘦嘴
-    比现管线快三倍多、语气词多一倍，复读持平；所以把"对遭遇的反应"从决策轮里拆出来。
+    嘴：游戏里出现高光目击（强敌或罕见资源进入视野）、稀罕战利品发现或意外阵亡时，
+    不经 Planner、几秒内当场出一句短反应，并由主播侧同步唤醒决策层定夺任务。
     总开关默认关闭，关闭时一切照旧。
     """
 
     enabled: bool = Field(
         title="是否启用嘴",
         default=False,
-        description="开启后，游戏里出事时由嘴当场出一句短反应；死亡也改由嘴来反应，不再专门唤醒 Planner",
+        description="开启后，视野撞见强敌或稀有资源、开出稀罕宝物或意外阵亡时由嘴当场出一句短反应，同时仍唤醒 Planner 定夺行动",
     )
     reaction_ttl_ms: int = Field(
         title="反应等播放的上限",
@@ -528,10 +528,10 @@ class StreamerMouthConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     same_kind_cooldown_ms: int = Field(
-        title="同类遭遇冷却",
+        title="同类目击冷却",
         default=15000,
         ge=0,
-        description="同一类遭遇（被打、摔了、天色变了……）多久之内只反应一次；之后的只记进现场卡",
+        description="同一细类由头（如强敌目击、稀有资源目击、稀罕宝物、意外阵亡）多久之内只反应一次；之后的只记进现场卡",
         json_schema_extra={"x-ui-advanced": True},
     )
     min_gap_ms: int = Field(
@@ -545,7 +545,7 @@ class StreamerMouthConfig(BaseConfig):
         title="低优先事件的安静门槛",
         default=20000,
         ge=0,
-        description="急事开始结束、天色变化这类小事：她最近这么久里说过话就不为它开口，只记进现场卡",
+        description="保留兼容现有配置文件的门槛参数（当前快嘴仅在高光目击、稀罕发现与意外阵亡时触发）",
         json_schema_extra={"x-ui-advanced": True},
     )
     history_items: int = Field(

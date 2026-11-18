@@ -205,6 +205,8 @@ class CoreEvents:
     # 叙事面各给专名；kind 与事件名末段一致）
     GAME_BODY_OTHERS_FOOD_TAKEN = "game.body.others_food_taken"
     GAME_BODY_OTHERS_THINGS_TOUCHED = "game.body.others_things_touched"
+    # 角色在眼前视野里亲眼撞见罕见目标（Boss 级强敌或露出的天然稀有矿脉）
+    GAME_BODY_RARE_SIGHTED = "game.body.rare_sighted"
 
     # ========== v2 语义域事件（game.body.* 通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名：订阅方用它一站式

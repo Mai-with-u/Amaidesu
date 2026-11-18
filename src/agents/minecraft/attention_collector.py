@@ -25,6 +25,7 @@ from src.agents.minecraft.attention_matrix import (
     KIND_TO_EVENT,
     RESOLVED_KINDS,
     classify,
+    rare_sighting_line,
     summarize,
     without_coordinates,
 )
@@ -85,12 +86,14 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             return await self._forward_others_things(event)
         if source_type == PLAYER_BODY_LANGUAGE:
             return await self._forward_body_language(event)
+        if source_type == "rare_sighting":
+            return await self._forward_rare_sighting(event)
         kind = classify(source_type)
         if kind is None:
             return False
         if kind == "milestone":
-            # 步进完成是主播可讲的进展：Mod 自带结论句，去坐标/观察编号后直接讲；
-            # 不走 summarize()（那是为身体事件配的开头句式）。
+            # 步进完成与开箱发现稀罕宝物都是主播可讲的进展：去坐标/观察编号后直接讲；
+            # 其中开出稀罕战利品标为高光里程碑，供快嘴当场反应，常规步骤完成只留作背景。
             message = str(event.get("message") or "")
             world = self._page_world
             payload = GamePayload(
@@ -99,18 +102,20 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
                 message=without_coordinates(message),
                 save_id=world.id if world is not None else "",
                 save_name=world.name if world is not None else "",
+                notable=source_type == "rare_loot_found",
             )
             await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
             self.logger.info(f"[进展事件] {payload.message}（{source_type}）")
             return True
         summary = summarize(kind, source_type, str(event.get("message") or ""))
-        if kind == "died" and self._suicides.chosen():
+        intentional = kind == "died" and self._suicides.chosen()
+        if intentional:
             # 寻死跑着的时候死的：开着死亡不掉落回重生点，是回家的办法，主播轻松带过，不当事故讲、不当伤心事记
             summary = CHOSEN_DEATH_LINE
         # 事件上挂着玩家就原样带上（跟随状况跟的是玩家时有）：只透传，主播不据此推卡、说的话不变
         player_uuid, player_name = player_of(event)
         # Mod 在 hurt 事件上直接铺的攻击者字段原样透传（attacker 是攻击者实体类型 ID，如 minecraft:zombie）；
-        # 没攻击者的伤（摔落、溺水）与没带这字段的旧事件为空串
+        # 没攻击者的伤（摔落、溺水）与没看见凶手的伤为空串
         attacker = str(event.get("attacker") or "")
         payload = BodyEventPayload(
             game="minecraft",
@@ -121,10 +126,26 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             attacker=attacker,
             player_uuid=player_uuid,
             player_name=player_name,
+            intentional=intentional,
         )
         await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
         # 与日志同处落一条：事件面给程序看，日志给人复盘看。
         self.logger.info(f"[身体事件] {payload.summary}（{payload.source_event_type}）")
+        return True
+
+    async def _forward_rare_sighting(self, event: Dict[str, Any]) -> bool:
+        """角色在眼前视野里亲眼撞见 Boss 或天然稀有矿脉：转成 ``game.body.rare_sighted`` 唤醒快嘴与决策层。"""
+        summary, sighting_kind = rare_sighting_line(event)
+        payload = BodyEventPayload(
+            game="minecraft",
+            kind="rare_sighted",
+            summary=summary,
+            source_event_type="rare_sighting",
+            resolved=False,
+            sighting_kind=sighting_kind,
+        )
+        await self.emit_event(KIND_TO_EVENT["rare_sighted"], payload, source=self.name)
+        self.logger.info(f"[身体事件] {payload.summary}（rare_sighting:{sighting_kind}）")
         return True
 
     async def _forward_food_taken(self, event: Dict[str, Any]) -> bool:

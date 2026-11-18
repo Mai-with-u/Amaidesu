@@ -1,11 +1,11 @@
-"""嘴：游戏里出事时不经 Planner、几秒内当场出一句短反应（Agent 内部件，代码直连，不是工具）。
+"""嘴：游戏里出现高光目击、稀罕发现或意外阵亡时不经 Planner、几秒内当场出一句短反应（Agent 内部件，代码直连，不是工具）。
 
-为什么拆出来：现在每句话都要走一整轮 Planner 加 Replyer，五六十秒才开一次口，被打、掉河里这种
-当下的事只能事后讲段子。离线对照里，带一张现场卡的瘦嘴每句 4～5 秒、语气词多一倍，复读和现管线
-持平，突发事件时会当场叫出来（"疼疼疼！怎么还有掠夺者啊"）。所以把"对遭遇的反应"交给一张嘴：
+为什么拆出来：平时每句话都要走一整轮 Planner 加 Replyer，眼前撞见强敌或稀有矿藏、意外开出宝物、
+或角色突然阵亡这类高光瞬间只能事后讲段子。把这类第一时间的惊叹反应交给一张嘴，日常轻微掉血、摔伤、
+天色变换只留进现场背景而不出声大惊小怪，同时由主播 Agent 在高光目击与意外阵亡时同步唤醒 Planner 下发任务：
 
-- 触发：主播 Agent 把游戏事件转进来（:meth:`react`）。同一时刻只生成一句，生成期间来的事件攒着，
-  下一句合并成一个由头；同一类遭遇冷却一段时间；小事（急事开始结束、天色）只在她安静了一阵时才开口。
+- 触发：主播 Agent 只把高光目击（强敌/罕见矿藏进入视野）、高光里程碑（开箱发现稀罕宝物）与非自选的意外阵亡
+  转进来（:meth:`react`）。同一时刻只生成一句，生成期间来的由头攒着并成一次反应；按细类分桶冷却。
 - 依据：系统提示词只有人设和几条规矩（含"被问到是不是真人时坦白自己是 AI"和人设里的边界栏），事实全在
   每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、她刚说过的话）——实验里没有这张卡的瘦嘴会
   理直气壮地编现场。嘴不带任何记忆：长期笔记和备忘录都不给，几秒内的一句反应用不上，带上只会让她在
@@ -15,7 +15,7 @@
   分发器的反应通道：前一句没播完最多等一会儿，等不到整段作废；后面几行排在第一行后面，形象等轮到那句
   播放时再切表情。第一句真轮到播放时记一条日志，写明生成、等前一句、从事件到开始播各用了多久。
 
-嘴只说话，不做事：委派、流程单、查询仍归 Planner。
+嘴只对眼前的发现或意外做第一声反应，不替自己拍板承诺下一步行动：采掘、迎战、撤离等委派决定一律归紧随其后的 Planner。
 """
 
 from __future__ import annotations
@@ -38,17 +38,14 @@ from .scene_card import GoalLine, SceneInputs, build_scene_card
 from .speech_guard import VerbatimRepeat, WordFilter, find_verbatim_repeat, fit_to_budget, guard
 from .tools.reply_tool import coerce_emotion
 
-__all__ = ["MOUTH_TEMPLATE", "Mouth", "SCENE_CHANGING_BODY_KINDS", "Trigger", "URGENT_BODY_KINDS", "URGENT_GAME_TYPES"]
+__all__ = ["MOUTH_BODY_KINDS", "MOUTH_TEMPLATE", "Mouth", "SCENE_CHANGING_BODY_KINDS", "Trigger"]
 
 MOUTH_TEMPLATE = "amaidesu_mouth"
 
-#: 要当场反应的遭遇：被打、死亡、重生、换维度、身体处理不了的需求
-URGENT_BODY_KINDS = frozenset({"attacked", "died", "respawned", "dimension_changed", "need_unhandled"})
+#: 身体侧真正值得嘴当场开口的突发高光：视野撞见强敌/稀有矿藏，或角色意外阵亡（寻死回家在调用侧排除）
+MOUTH_BODY_KINDS = frozenset({"rare_sighted", "died"})
 #: 现场一下子变了的遭遇：读到就立即重读一句话现场
-SCENE_CHANGING_BODY_KINDS = frozenset({"died", "respawned", "dimension_changed"})
-#: 游戏进展类事件里要当场反应的：进展、交付或卡住（急事提醒和遭遇说的是同一件事，不另触发）。
-#: 游戏 Agent 自己出的错（模型调用失败、请求被拒）不是游戏里发生的事，不给嘴，由 Planner 看着处理
-URGENT_GAME_TYPES = frozenset({"milestone", "report"})
+SCENE_CHANGING_BODY_KINDS = frozenset({"died"})
 
 #: 事件到了先等这么久再生成：同一瞬间连发的几条并成一个由头
 _DEBOUNCE_S = 0.3
@@ -78,13 +75,13 @@ class _Record:
 
 @dataclass(frozen=True)
 class Trigger:
-    """一个由头：冷却按 ``key`` 算（同类遭遇共用），``urgent`` 决定要不要等她安静下来。"""
+    """一个高光或突发由头：冷却按 ``key`` 分桶（如 ``sighting:boss`` / ``sighting:rare_ore`` / ``body:died``）。"""
 
     at_ms: int
     key: str
     text: str
-    urgent: bool
-    refresh_scene: bool
+    urgent: bool = True
+    refresh_scene: bool = False
 
 
 class Mouth:
@@ -157,9 +154,15 @@ class Mouth:
         self._records.append(_Record(at_ms or self._clock(), "game", text))
 
     def react(
-        self, key: str, text: str, *, urgent: bool, refresh_scene: bool = False, at_ms: Optional[int] = None
+        self,
+        key: str,
+        text: str,
+        *,
+        urgent: bool = True,
+        refresh_scene: bool = False,
+        at_ms: Optional[int] = None,
     ) -> None:
-        """记一个由头并唤醒生成循环；不阻塞调用方（事件回调里直接调）。"""
+        """记一个高光或突发由头并唤醒生成循环；不阻塞调用方（事件回调里直接调）。"""
         self._pending.append(Trigger(at_ms or self._clock(), key, text, urgent, refresh_scene))
         self._wake.set()
 
@@ -218,11 +221,6 @@ class Mouth:
         ]
         if not fresh:
             return None
-        urgent = any(trigger.urgent for trigger in fresh)
-        last_speech = self._room_state.last_speech_ms
-        if not urgent and last_speech is not None and now - last_speech < self._config.quiet_ms:
-            # 小事：她刚说过话，就只记进现场卡，不为它开口
-            return None
         for trigger in fresh:
             self._last_reacted[trigger.key] = now
 
@@ -271,7 +269,7 @@ class Mouth:
         utterance_id = await self._speech.dispatch_reaction(
             first_text,
             emotion=first_emotion.value,
-            emotion_intensity=0.7 if urgent else 0.5,
+            emotion_intensity=0.7,
             wait_ms=self._config.reaction_ttl_ms,
             gap_ms=self._config.min_gap_ms,
             priority=_PRIORITY,

@@ -35,7 +35,7 @@ MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、�
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.events.names import CoreEvents
 
@@ -58,6 +58,7 @@ KIND_TO_EVENT: Dict[str, str] = {
     "player_body_language": CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
     "others_food_taken": CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN,
     "others_things_touched": CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
+    "rare_sighted": CoreEvents.GAME_BODY_RARE_SIGHTED,
     # 步进完成不进身体事件通道，转 game.milestone（主播可讲的进展）
     "milestone": CoreEvents.GAME_MILESTONE,
 }
@@ -88,6 +89,7 @@ _SOURCE_KINDS: Dict[str, str] = {
     "discovered": "discovered",
     "follow_status": "follow_status",
     "sky_changed": "sky_changed",
+    "rare_sighting": "rare_sighted",
 }
 
 #: 目标运行的处境变化与死亡恢复决策的执行结果：游戏 Agent 的任务通道，不进叙事通道
@@ -368,6 +370,58 @@ def summarize(kind: str, source_event_type: str, message: str) -> str:
     return lead or detail or _FALLBACK
 
 
+_BEARING_ASIDE = re.compile(
+    r"[（(]\s*(脚边|(?:左前方|右前方|左后方|右后方|前方|后方|左侧|右侧|上方|下方)(?:\s*\d+\s*格)?)\s*[）)]\s*$"
+)
+_BLOCK_COUNT = re.compile(r"\s*\d+\s*块")
+
+
+def _extract_bearing(message: str) -> str:
+    """从目击消息尾部括号提取相对方位白话，剥掉具体格数与观察编号。"""
+    cleaned = _OBSERVATION_IDS.sub("", str(message or "")).strip()
+    match = _BEARING_ASIDE.search(cleaned)
+    if match is None:
+        return ""
+    raw = match.group(1)
+    if raw == "脚边":
+        return "就在脚边"
+    direction = re.sub(r"\s*\d+\s*格$", "", raw).strip()
+    return f"在{direction}" if direction else ""
+
+
+def rare_sighting_line(event: Dict[str, Any]) -> Tuple[str, str]:
+    """把上游 ``rare_sighting`` 事件转成直播白话与细类标识 ``(summary, sighting_kind)``。
+
+    角色在眼前视野里撞见 Boss 或露出天然稀有矿脉时，去掉观察编号与坐标格数遥测，
+    保留目标中文名、是否成片以及相对方位，供快嘴当场惊呼并提醒决策层下发采掘或应对任务。
+    """
+    raw_facts = event.get("rare_sighting")
+    facts: Dict[str, Any] = raw_facts if isinstance(raw_facts, dict) else {}
+    category = str(facts.get("category") or "").strip()
+    name = str(facts.get("name") or "").strip()
+    target_id = str(facts.get("target_id") or "").strip()
+    if not name and target_id:
+        name = item_name(target_id)
+    count_raw = facts.get("count")
+    count = count_raw if isinstance(count_raw, int) and not isinstance(count_raw, bool) else 1
+    message = str(event.get("message") or "")
+    bearing = _extract_bearing(message)
+    where_suffix = f"（{bearing}）" if bearing else ""
+
+    if category == "boss":
+        return f"眼前撞见了{name or '强敌'}{where_suffix}", "boss"
+    if category == "rare_ore":
+        amount = "好几块" if count > 1 else ""
+        return f"眼前露出了{name or '稀有矿石'}{amount}{where_suffix}", "rare_ore"
+
+    # 旧格式或缺结构化字段时回退清洗原话，剥掉块数与格数数字
+    stripped = _BEARING_ASIDE.sub("", _OBSERVATION_IDS.sub("", message))
+    stripped = _BLOCK_COUNT.sub("好几块", stripped)
+    fallback = plain_detail(stripped)
+    line = f"{fallback}{where_suffix}" if fallback else f"眼前撞见了罕见目标{where_suffix}"
+    return line, category or "rare"
+
+
 __all__ = [
     "KIND_TO_EVENT",
     "RESOLVED_KINDS",
@@ -375,6 +429,7 @@ __all__ = [
     "classify",
     "item_name",
     "plain_detail",
+    "rare_sighting_line",
     "summarize",
     "without_coordinates",
 ]

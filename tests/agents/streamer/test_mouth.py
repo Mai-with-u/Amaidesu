@@ -215,21 +215,22 @@ async def test_silence_and_cooldown_keep_the_mouth_from_chattering(prompts: Any)
     assert await mouth.react_once([_trigger(at_ms=clock.now)]) == "又来？！"
 
 
-async def test_small_things_wait_for_quiet(prompts: Any) -> None:
-    """急事开始结束、天色这类小事：她刚说过话就不开口，安静一阵才为它说一句。"""
-    llm, speech = _LLM("neutral：天亮了，可以出门了。"), _Speech()
+async def test_separate_sighting_buckets_do_not_swallow_each_other_in_cooldown(prompts: Any) -> None:
+    """稀有矿与强敌分属不同冷却桶：刚见矿又撞见强敌不会互吞；同一种目击在冷却窗内不连叫。"""
+    llm, speech = _LLM("happy：哇，钻石！", "scared：怎么还有监守者？！"), _Speech()
     clock = _Clock()
     mouth = _mouth(llm, speech, prompts, clock=clock)
-    mouth._room_state.record_speech(NOW - 5_000)
-    small = _trigger("天色变了：天亮了", key="body:unknown", urgent=False)
 
-    assert await mouth.react_once([small]) is None and llm.calls == []
+    ore_first = _trigger("眼前露出了深层钻石矿石好几块（在前方）", key="sighting:rare_ore", at_ms=clock.now)
+    assert await mouth.react_once([ore_first]) == "哇，钻石！"
 
-    mouth._room_state.record_speech(NOW - 30_000)
-    assert (
-        await mouth.react_once([_trigger("天色变了：天亮了", key="body:unknown2", urgent=False)])
-        == "天亮了，可以出门了。"
-    )
+    clock.now += 2_000
+    ore_again = _trigger("眼前露出了绿宝石矿石（在左侧）", key="sighting:rare_ore", at_ms=clock.now)
+    assert await mouth.react_once([ore_again]) is None
+
+    boss_now = _trigger("眼前撞见了监守者（在前方）", key="sighting:boss", at_ms=clock.now)
+    assert await mouth.react_once([boss_now]) == "怎么还有监守者？！"
+    assert len(llm.calls) == 2 and len(speech.calls) == 2
 
 
 async def test_not_live_or_stale_trigger_says_nothing(prompts: Any) -> None:
@@ -339,31 +340,82 @@ def test_mouth_is_off_by_default() -> None:
     assert make_streamer_agent()._mouth is None
 
 
-async def test_with_mouth_on_death_goes_to_the_mouth_not_the_planner() -> None:
-    """嘴开着：死亡交给嘴当场反应，不再专门唤醒 Planner；关着时照旧唤醒。"""
-    payload = BodyEventPayload(game="minecraft", kind="died", summary="死了：被蜘蛛杀死了")
+async def test_accidental_death_triggers_both_mouth_and_planner_while_chosen_suicide_stays_quiet() -> None:
+    """意外真死亡：嘴开着时当场短反应并同步唤醒 Planner 善后；自选寻死回家既不触发嘴也不按事故唤醒。"""
+    accident = BodyEventPayload(game="minecraft", kind="died", summary="死了：被蜘蛛杀死了", intentional=False)
+    chosen = BodyEventPayload(game="minecraft", kind="died", summary="借死亡不掉落回重生点，不是出事", intentional=True)
 
     mouth = MagicMock()
     reactions: List[tuple] = []
     mouth.react.side_effect = lambda key, text, **kw: reactions.append((key, text, kw))
     agent = make_streamer_agent({"mouth": {"enabled": True}}, mouth=mouth)
-    await agent._on_body_event("game.body.died", payload, "maicraft_attention")
+
+    await agent._on_body_event("game.body.died", chosen, "maicraft_attention")
+    assert reactions == []
     assert agent._proactive_signals.game_pending is False
-    assert reactions == [("body:died", "死了：被蜘蛛杀死了", {"urgent": True, "refresh_scene": True})]
+    assert mouth.note_game.call_count == 1
+
+    await agent._on_body_event("game.body.died", accident, "maicraft_attention")
+    assert agent._proactive_signals.game_pending is True
+    assert agent._flush_kick.is_set() is True
+    assert reactions == [("body:died", "死了：被蜘蛛杀死了", {"refresh_scene": True})]
 
     plain = make_streamer_agent()
-    await plain._on_body_event("game.body.died", payload, "maicraft_attention")
+    await plain._on_body_event("game.body.died", accident, "maicraft_attention")
     assert plain._proactive_signals.game_pending is True
 
 
-async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> None:
-    """游戏进展、交付卡住当场反应（Planner 照样被交付唤醒去定夺）；急事提醒与遭遇是同一件事，不另触发；
-    游戏 Agent 自己的报错不是游戏里发生的事，既不触发也不进嘴的最近记录。"""
+async def test_routine_hurt_and_sky_stay_silent_while_rare_sighting_reacts_and_wakes_planner() -> None:
+    """摔伤、挨打、天色、装备坏只留进嘴的近期背景不叫唤；视野撞见稀有矿或强敌时快嘴惊呼并同步唤醒 Planner 派单。"""
+    mouth = MagicMock()
+    reactions: List[tuple] = []
+    mouth.react.side_effect = lambda key, text, **kw: reactions.append((key, text, kw))
+    agent = make_streamer_agent({"mouth": {"enabled": True}}, mouth=mouth)
+
+    for kind, summary in (
+        ("attacked", "摔了一下"),
+        ("attacked", "不知从哪射来箭打中一下，血掉了不少"),
+        ("reflex_started", "先放下手上的事：被怪盯上了，先自卫"),
+        ("sky_changed", "天色变了：天黑了"),
+        ("gear_broken", "装备用坏了：铁镐坏了"),
+        ("need_unhandled", "有件事没办成：饿了但没吃上"),
+    ):
+        await agent._on_body_event(
+            f"game.body.{kind}",
+            BodyEventPayload(game="minecraft", kind=kind, summary=summary),  # type: ignore[arg-type]
+            "maicraft_attention",
+        )
+
+    assert reactions == []
+    assert agent._proactive_signals.game_pending is False
+    assert mouth.note_game.call_count == 6
+
+    ore = BodyEventPayload(
+        game="minecraft",
+        kind="rare_sighted",
+        summary="眼前露出了深层钻石矿石好几块（在前方）",
+        sighting_kind="rare_ore",
+    )
+    await agent._on_body_event("game.body.rare_sighted", ore, "maicraft_attention")
+    assert reactions == [("sighting:rare_ore", "眼前露出了深层钻石矿石好几块（在前方）", {"refresh_scene": False})]
+    assert agent._proactive_signals.game_pending is True
+    assert agent._flush_kick.is_set() is True
+    assert agent._game_ledger.has_pending_urgent() is True
+
+
+async def test_only_notable_milestone_triggers_mouth_while_routine_events_stay_background() -> None:
+    """高光里程碑（开箱出稀罕宝物）触发快嘴；常规步进完成、交付上报与急事提醒只留背景不触发快嘴；报错不入背景。"""
     mouth = MagicMock()
     reactions: List[str] = []
     mouth.react.side_effect = lambda key, text, **kw: reactions.append(key)
     agent = make_streamer_agent({"mouth": {"enabled": True}}, mouth=mouth)
 
+    step = GamePayload(game="minecraft", event_type="milestone", message="采集完成，8 个圆石进了背包", notable=False)
+    await agent._on_game_event("game.milestone", step, "maicraft_attention")
+    loot = GamePayload(
+        game="minecraft", event_type="milestone", message="打开战利品箱开出了海洋之心 ×1，已经拿走", notable=True
+    )
+    await agent._on_game_event("game.milestone", loot, "maicraft_attention")
     report = GamePayload(game="minecraft", event_type="report", message="床做好了，放在屋里", report_kind="delivery")
     await agent._on_game_event("game.report", report, "minecraft")
     alert = GamePayload(game="minecraft", event_type="attention_required", message="急事处理完了：打完了，没掉血")
@@ -371,8 +423,27 @@ async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> No
     error = GamePayload(game="minecraft", event_type="error", message="LLM 推理异常: ValueError: 请求被拒")
     await agent._on_game_event("game.error", error, "minecraft")
 
-    assert reactions == ["game:report"] and agent._proactive_signals.game_pending is True
+    assert reactions == ["game:notable_milestone"] and agent._proactive_signals.game_pending is True
+    assert mouth.note_game.call_count == 4
     assert all("LLM 推理异常" not in call.args[0] for call in mouth.note_game.call_args_list)
+
+
+def test_mouth_and_delegate_prompts_align_on_rare_sighting_handoff(prompts: Any) -> None:
+    """提示词契约：嘴不为自己拍板下一步行动承诺；委派守则指导对 rare_sighted 搁下常规在途任务优先采掘或定夺强敌。"""
+    mouth_sys = prompts.render(
+        "amaidesu_mouth",
+        bot_name="麦麦",
+        personality="活泼",
+        style_constraints="口语化",
+        max_chars="40",
+        emotions="happy",
+        boundaries_rule="",
+    )
+    delegate_rules = prompts.render("amaidesu_planner_delegate_rules")
+
+    assert "具体怎么行动留给紧随其后的决策定夺，不替自己拍板承诺下一步行动" in mouth_sys
+    assert "rare_sighted" in delegate_rules
+    assert "when_busy='replace', current='shelve'" in delegate_rules
 
 
 async def test_viewer_messages_go_into_the_mouth_records() -> None:
