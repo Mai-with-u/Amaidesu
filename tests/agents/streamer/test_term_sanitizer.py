@@ -7,12 +7,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.game_ledger import GameLedger
+from src.agents.streamer.planner_render import render_delegation_backlog
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.session_scope import SessionScope
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
+from src.modules.agents.delegation_board import Board, BoardItem
 from src.modules.events.payloads.game import GamePayload
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
+from src.modules.tools.tasks import TaskRecord
 from tests.agents.streamer.helpers import make_streamer_agent
 
 # 登记（驱动穿透，合并时进底账）：agent._on_game_event 是事件订阅绑定的处理器，
@@ -133,3 +136,29 @@ async def test_delegation_render_without_task_id() -> None:
 )
 def test_sanitize_goal_headers_ability_names_and_uuids(text: str, expected) -> None:
     assert sanitize_internal_terms(text) == (text if expected is None else expected)
+
+
+def test_backlog_render_sanitized_at_exit() -> None:
+    """待办段注入出口脱敏：原话与搁下进展里的标识符不进主播上下文。"""
+    record = TaskRecord(
+        task_id="deleg_1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        status="queued",
+        source="agent",
+        snapshot={
+            "own_words": "去挖 deleg_9 石料",
+            "backlog_no": 1,
+            "queued_at_ms": 1_000,
+            "shelved_at_ms": 2_000,
+            "shelved_progress": "观察过 obs_f794817a_fc2e9d31aabbccdd 附近",
+        },
+    )
+    board = Board(backlog=(BoardItem(record=record, in_hand=False),))
+
+    text = render_delegation_backlog({"minecraft": board}, current_ms=3_000)
+
+    assert "deleg_" not in text and "obs_" not in text
+    assert "一个游戏任务" in text and "一次现场观察" in text
