@@ -152,7 +152,7 @@ function onVisibleChange(visible: boolean): void {
   margin-bottom: 12px;
   font-size: 13px;
   line-height: 1.6;
-  color: var(--color-text-secondary, #909399);
+  color: var(--text-secondary);
 }
 
 .rs-error {
@@ -166,7 +166,7 @@ function onVisibleChange(visible: boolean): void {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--color-border, #dcdfe6);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
 }
 
@@ -184,7 +184,7 @@ function onVisibleChange(visible: boolean): void {
 .rs-meta {
   margin-top: 4px;
   font-size: 12px;
-  color: var(--color-text-secondary, #909399);
+  color: var(--text-secondary);
 }
 
 .rs-actions {

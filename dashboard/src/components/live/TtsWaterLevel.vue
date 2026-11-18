@@ -9,13 +9,12 @@ const { waterLevel, warning } = useTtsWaterLevel();
 const gapLabel = computed(() => {
   const gapMs = waterLevel.value.gapMs;
   if (gapMs === null) return '—';
-  if (gapMs === 0) return '出声中';
   return `${(gapMs / 1000).toFixed(1)}s`;
 });
 
 const gapTitle = computed(
   () =>
-    `距上一句播完的空窗：约 ${NORMAL_GAP_MS / 1000}s 属正常冲入动作，超过 ${WARN_GAP_MS / 1000}s 提示引擎可能欠载`,
+    `距上一句播完的空窗：出声中时为 0s（是否出声看"在途"计数）；约 ${NORMAL_GAP_MS / 1000}s 属正常冲入动作，超过 ${WARN_GAP_MS / 1000}s 提示引擎可能欠载`,
 );
 </script>
 
@@ -48,15 +47,15 @@ const gapTitle = computed(
   gap: 4px;
   padding: 2px 10px;
   border-radius: 999px;
-  border: 1px solid var(--color-border, #dcdfe6);
+  border: 1px solid var(--border-color);
   font-size: 12px;
-  color: var(--color-text, #303133);
-  background: var(--color-bg, #fff);
+  color: var(--text-primary);
+  background: var(--bg-card);
 }
 
 .pill-label {
   font-size: 11px;
-  color: var(--color-text-secondary, #909399);
+  color: var(--text-secondary);
 }
 
 /* 警戒态：空窗过线，胶囊与文案同切警戒色（琥珀警示族） */
