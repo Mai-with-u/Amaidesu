@@ -139,9 +139,7 @@
             </div>
           </li>
         </ul>
-        <p class="sessions-hint">
-          启动不自动开场次；未开启期间消息仅在内存中流转（测试模式，不落库）
-        </p>
+        <p class="sessions-hint">启动不自动开场次</p>
       </aside>
 
       <!-- 右区：环节横幅 + 时间线                                        -->
@@ -150,16 +148,12 @@
         <RundownSlate
           :rows="rundownRows"
           :current-row="rundownCurrentRow"
-          :live="sessionMode === 'live'"
+          :live="sessionMode === 'live' && activeExplicitSession"
           :paused="rundownPaused"
           :action-loading="rundownActionLoading"
           :idle-text="rundownIdleText"
           @control="onRundownControl"
         />
-
-        <div v-if="showTestModeNotice" class="test-mode-notice" title="正式直播请先在左侧开启场次">
-          测试模式：未开启场次，消息仅在内存中流转不落库
-        </div>
 
         <div v-if="!wsConnected" class="ws-down-notice" role="status">
           连接断开 · 自动重连中，期间消息可能缺失
@@ -177,6 +171,14 @@
           >
             <h2 class="stage-title">{{ stageTitle }}</h2>
             <span class="stage-hint">{{ stageHint }}</span>
+            <!-- 测试模式警示 chip：独立提示行已并入此处，悬停给完整解释 -->
+            <span
+              v-if="showTestModeNotice"
+              class="test-mode-chip"
+              title="未开启场次，消息仅在内存中流转不落库；正式直播请先在左侧开启场次"
+            >
+              测试模式
+            </span>
             <span class="grow" />
             <!-- 三档视图共用同一份条目流，只换组织方式与密度：
                  观众视角=观众看到的单栏流；后台视角=两个 Agent 各自看到的双栏卡片；
@@ -667,14 +669,10 @@ const audienceEmptyText = computed<string>(() =>
     : '还没有观众可见的消息——弹幕、礼物与她的发言会出现在这里',
 );
 
-/** 区头标题：三档共用同一个滚动容器，标题按档位换名，避免"时间线"三字盖住整块内容 */
+/** 区头标题：回放/回看带场次名，实况态不再复读档位名（视图切换组已显示选中档） */
 const stageTitle = computed<string>(() => {
   if (replayActive.value) return `回放 · ${sessionTitle(replaySession.value)}`;
-  if (sessionMode.value === 'live') {
-    if (stageView.value === 'trajectory') return '决策轨迹';
-    if (stageView.value === 'backstage') return '后台视角';
-    return '观众视角';
-  }
+  if (sessionMode.value === 'live') return '实况';
   return `回看 · ${sessionTitle(selectedSession.value)}`;
 });
 
@@ -692,7 +690,7 @@ const stageHint = computed<string>(() => {
   if (stageView.value === 'trajectory')
     return '一次请求一条记录：输入、思考、调用、结果、发言各占一行；点任意一行看详情';
   if (stageView.value === 'backstage')
-    return '左列主播 Agent 看到的、右列游戏 Agent 看到的，两列各自滚动；点卡片让对侧跳到同一刻';
+    return '左列主播 Agent 看到的、右列游戏 Agent 看到的，两列各自滚动';
   if (sessionMode.value === 'live') {
     return paused.value
       ? '已暂停 · 事件仍在后台累积'
@@ -1580,13 +1578,14 @@ onMounted(() => {
   min-height: 0;
 }
 
-/* 测试模式提示：单行小字，不占用时间线空间 */
-.test-mode-notice {
-  padding: 4px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  font-size: 11px;
-  color: var(--text-placeholder);
+/* 测试模式警示 chip：琥珀配色与断线横幅一致，一眼可辨"现在没在录制" */
+.test-mode-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--color-warning-bg);
+  font-size: 12px;
+  color: var(--color-warning);
+  cursor: help;
 }
 
 /* 快捷键帮助入口：弱化的 ? 图标位 */
