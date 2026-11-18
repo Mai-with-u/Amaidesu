@@ -107,6 +107,16 @@ export function formatNumber(n: number): string {
 }
 
 /**
+ * 大数 → 紧凑计数标签（"1.2亿 / 3.4万 / 953"）：亿（≥1e8）与万（≥1e4）
+ * 各取一位小数，其余保持千分位。计分板 tokens 胶囊等窄空间展示用。
+ */
+export function formatCountCompact(n: number): string {
+  if (n >= 1e8) return `${(n / 1e8).toFixed(1)}亿`;
+  if (n >= 1e4) return `${(n / 1e4).toFixed(1)}万`;
+  return n.toLocaleString();
+}
+
+/**
  * 延迟毫秒 → "850ms" / "1.25s"。
  */
 export function formatLatency(ms: number): string {

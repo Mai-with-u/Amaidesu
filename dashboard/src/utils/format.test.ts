@@ -13,6 +13,7 @@ import {
   formatElapsedMs,
   formatImageSize,
   formatLatency,
+  formatCountCompact,
   formatNumber,
   formatRangeEnd,
   formatTimeHM,
@@ -171,6 +172,20 @@ describe('formatNumber', () => {
   it('千分位分组', () => {
     expect(formatNumber(1234567)).toBe('1,234,567');
     expect(formatNumber(42)).toBe('42');
+  });
+});
+
+describe('formatCountCompact', () => {
+  it('亿级一位小数', () => {
+    expect(formatCountCompact(953801794)).toBe('9.5亿');
+    expect(formatCountCompact(123456789)).toBe('1.2亿');
+  });
+
+  it('万级一位小数，小于 1 万保持千分位', () => {
+    expect(formatCountCompact(95380)).toBe('9.5万');
+    expect(formatCountCompact(10000)).toBe('1.0万');
+    expect(formatCountCompact(9999)).toBe('9,999');
+    expect(formatCountCompact(42)).toBe('42');
   });
 });
 
