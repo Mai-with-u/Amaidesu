@@ -30,7 +30,7 @@ from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider
-from src.modules.types.emotion_vocab import Emotion
+from src.modules.types.emotion_vocab import EMOTION_CN_ALIASES, Emotion
 
 from .. import canonical
 from ..plan import DecisionPlan, ReplyRoundAttachment, assistant_speech_lines
@@ -39,6 +39,7 @@ from ..replyer import Replyer
 __all__ = [
     "build_reply_tool_spec",
     "coerce_emotion",
+    "known_emotion_label",
 ]
 
 
@@ -81,8 +82,21 @@ def coerce_emotion(raw: Any) -> tuple[Emotion, str]:
     try:
         return Emotion(text), ""
     except ValueError:
+        cn_mapped = EMOTION_CN_ALIASES.get(text)
+        if cn_mapped is not None:
+            return cn_mapped, f"中文情绪名「{raw}」按 {cn_mapped.value} 处理"
         mapped = _EMOTION_ALIASES.get(text, Emotion.NEUTRAL)
         return mapped, f"{raw!r} 不在情绪名单，按 {mapped.value} 处理"
+
+
+def known_emotion_label(raw: Any) -> bool:
+    """判断一个情绪名是否可识别（枚举值、英文近义词或中文叫法）；输出解析侧据此决定要不要剥前缀。"""
+    text = str(raw or "").strip().lower()
+    try:
+        Emotion(text)
+        return True
+    except ValueError:
+        return text in _EMOTION_ALIASES or text in EMOTION_CN_ALIASES
 
 
 # ---------------------------------------------------------------------------

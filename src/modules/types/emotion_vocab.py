@@ -38,4 +38,44 @@ class Emotion(str, Enum):
     SPEECHLESS = "speechless"
 
 
-__all__ = ["Emotion"]
+# 模型偶发输出中文情绪名（实测泄漏例："害羞：我错了…"整行连前缀进了 TTS）。
+# 这里给每个枚举值配常用的中文叫法，输出解析侧统一用它认中文前缀与中文枚举值；
+# 不在表里的中文词不认——普通中文台词（如"大家：…"）不会被误当情绪标签剥掉。
+EMOTION_CN_ALIASES: dict[str, "Emotion"] = {
+    "平静": Emotion.NEUTRAL,
+    "淡定": Emotion.NEUTRAL,
+    "开心": Emotion.HAPPY,
+    "高兴": Emotion.HAPPY,
+    "快乐": Emotion.HAPPY,
+    "难过": Emotion.SAD,
+    "伤心": Emotion.SAD,
+    "生气": Emotion.ANGRY,
+    "愤怒": Emotion.ANGRY,
+    "惊讶": Emotion.SURPRISED,
+    "吃惊": Emotion.SURPRISED,
+    "害怕": Emotion.SCARED,
+    "恐惧": Emotion.SCARED,
+    "恶心": Emotion.DISGUSTED,
+    "讨厌": Emotion.DISGUSTED,
+    "害羞": Emotion.SHY,
+    "不好意思": Emotion.EMBARRASSED,
+    "尴尬": Emotion.EMBARRASSED,
+    "困惑": Emotion.CONFUSED,
+    "疑惑": Emotion.CONFUSED,
+    "心动": Emotion.LOVE,
+    "喜爱": Emotion.LOVE,
+    "兴奋": Emotion.EXCITED,
+    "激动": Emotion.EXCITED,
+    "得意": Emotion.SMUG,
+    "嘚瑟": Emotion.SMUG,
+    "认真": Emotion.SERIOUS,
+    "严肃": Emotion.SERIOUS,
+    "累": Emotion.TIRED,
+    "疲惫": Emotion.TIRED,
+    "哭": Emotion.CRYING,
+    "想哭": Emotion.CRYING,
+    "无语": Emotion.SPEECHLESS,
+}
+
+
+__all__ = ["Emotion", "EMOTION_CN_ALIASES"]

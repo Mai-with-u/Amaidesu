@@ -265,6 +265,15 @@ async def test_made_up_multiword_emotion_prefix_is_stripped(prompts: Any) -> Non
     assert spoken == "回来啦，还是麦窝这边舒坦～" and speech.calls[0]["emotion"] == "neutral"
 
 
+async def test_chinese_emotion_prefix_is_stripped_and_maps_to_enum(prompts: Any) -> None:
+    """泄漏实例"害羞：我错了…"——中文情绪名前缀同样剥除不念，情绪收敛为 shy。"""
+    llm, speech = _LLM("害羞：我错了…这可怎么办呀。"), _Speech()
+
+    spoken = await _mouth(llm, speech, prompts).react_once([_trigger()])
+
+    assert spoken == "我错了…这可怎么办呀。" and speech.calls[0]["emotion"] == "shy"
+
+
 async def test_chinese_prefixed_colon_line_is_kept_as_speech(prompts: Any) -> None:
     """冒号前含中文的行不是"情绪名：台词"形态，整行照常念出来。"""
     line = "大家：这话说的，我都不好意思了。"
