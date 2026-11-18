@@ -243,3 +243,5 @@ MaiCraftMod/
 # 仓库根的本地临时目录（一次性分析脚本、事件切片等机器本地产物）
 /tmp/
 GLOSSARY.md
+# 工作区占坑表：多会话协调状态，机器本地不入库（规则见 AGENTS.md「并行开发与工作区占用」）
+/worktrees.md
