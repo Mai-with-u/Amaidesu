@@ -21,14 +21,14 @@ const WIDGET_CATALOG: readonly WidgetMeta[] = [
   {
     key: 'danmaku',
     name: '弹幕',
-    description: '实时展示直播间的弹幕、礼物、SC 与大航海。显示哪几类内容在设置页调整。',
+    description: '实时展示直播间的弹幕、礼物、SC 与大航海。显示哪几类内容在本页下方调整。',
     path: '/widget/danmaku',
     recommendedSize: '1920 × 1080（也可窄条 400 × 1080）',
   },
   {
     key: 'subtitle',
     name: '字幕',
-    description: '跟随语音显示主播正在说的话，画面置底。字号、颜色、位置在设置页调整。',
+    description: '跟随语音显示主播正在说的话，画面置底。字号、颜色、位置在本页下方调整。',
     path: '/widget/subtitle',
     recommendedSize: '1920 × 1080',
   },

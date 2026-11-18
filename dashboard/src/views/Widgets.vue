@@ -23,6 +23,11 @@
     <section v-if="selected" class="detail-panel" aria-label="小部件详情">
       <header class="detail-header">
         <h3 class="detail-title">{{ selected.name }}</h3>
+        <ElSwitch
+          v-if="hasEnabledSwitch"
+          :model-value="formModel[selected.key]?.enabled === true"
+          @update:model-value="(value: unknown) => setField('enabled', value)"
+        />
         <span class="status-line">{{ statusTextOf(selected.key) }}</span>
       </header>
       <p class="detail-desc">{{ selected.description }}</p>
@@ -59,10 +64,13 @@
           <dt class="field-label">推荐浏览器源尺寸</dt>
           <dd class="field-value">{{ selected.recommendedSize }}</dd>
         </div>
-        <div v-if="formFields.length && formModel[selected.key]" class="field">
+        <div
+          v-if="formModel[selected.key] && (formFields.length || hasEnabledSwitch)"
+          class="field"
+        >
           <dt class="field-label">配置（保存后须重启生效）</dt>
           <dd class="field-value">
-            <div class="form-grid">
+            <div v-if="formFields.length" class="form-grid">
               <div
                 v-for="f in formFields"
                 :key="f.key"
@@ -97,7 +105,7 @@
           <dt class="field-label">配置</dt>
           <dd class="field-value">此小部件无管理页配置项；素材目录在设置页 avatar 域配置。</dd>
         </div>
-        <div v-else-if="formFields.length" class="field">
+        <div v-else-if="formFields.length || hasEnabledSwitch" class="field">
           <dt class="field-label">配置</dt>
           <dd class="field-value">
             {{ configLoadFailed ? '配置读取失败' : '配置加载中…' }}
@@ -118,15 +126,137 @@
             嵌入后的效果完全一致；「打开预览」会额外显示排查提示。
           </dd>
         </div>
+        <div class="field">
+          <dt class="field-label">预览（与 OBS 嵌入一致，含排查提示）</dt>
+          <dd class="field-value">
+            <iframe
+              :key="previewReloadKey"
+              :src="previewUrl"
+              class="preview-frame"
+              :style="{ aspectRatio: previewAspectRatio }"
+              title="小部件实时预览"
+            />
+          </dd>
+        </div>
       </dl>
     </section>
   </div>
 </template>
 
+<script lang="ts">
+// 表单字段定义与纯函数放在非 setup 块导出：页面测试直接导入验证，
+// 组件状态相关的逻辑仍全部留在下方 setup 块。
+
+export type FieldValue = boolean | number | string;
+
+export interface WidgetFieldDef {
+  /** widget 配置段内的字段名 */
+  key: string;
+  label: string;
+  type: 'switch' | 'number' | 'text' | 'select';
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: { label: string; value: string }[];
+  /** 配置缺项时的兜底值（对齐后端 Schema 默认值） */
+  fallback: FieldValue;
+}
+
+/** 把配置里读到的原始值收敛成表单控件可用的类型；缺项/类型不符回退默认值 */
+export function coerceValue(field: WidgetFieldDef, raw: unknown): FieldValue {
+  if (field.type === 'switch') return raw === true;
+  if (field.type === 'number') return typeof raw === 'number' ? raw : field.fallback;
+  return typeof raw === 'string' && raw !== '' ? raw : field.fallback;
+}
+
+/** 表单当前值与快照是否不一致（无快照 = 尚未加载，视为不脏） */
+export function isModelDirty(
+  model: Record<string, FieldValue> | undefined,
+  snapshot: string | undefined,
+): boolean {
+  if (!model || !snapshot) return false;
+  return JSON.stringify(model) !== snapshot;
+}
+
+/** 详情头部状态文案：与开关的实际操作位置（本页详情头部）一致 */
+export function statusTextFor(enabled: boolean | undefined): string {
+  if (enabled === undefined) return '状态未知';
+  return enabled ? '已启用' : '已停用（开启后保存并重启生效）';
+}
+
+/** widget key → 配置文件里的段名；在表内的 widget 详情头部有启用开关 */
+export const SECTION_BY_WIDGET: Record<string, string> = {
+  danmaku: 'danmaku_widget',
+  subtitle: 'subtitle_widget',
+  game2048: 'game2048_widget',
+};
+
+// enabled 不在字段表里：开关已升到详情标题行（见模板），但仍是表单模型的一员，
+// hydrateForms 与保存写回都按"模型含 enabled"处理
+export const FIELD_DEFS: Record<string, readonly WidgetFieldDef[]> = {
+  danmaku: [
+    { key: 'show_danmaku', label: '普通弹幕', type: 'switch', fallback: true },
+    { key: 'show_gift', label: '礼物', type: 'switch', fallback: true },
+    { key: 'show_super_chat', label: 'SuperChat', type: 'switch', fallback: true },
+    { key: 'show_guard', label: '大航海', type: 'switch', fallback: true },
+    { key: 'show_enter', label: '进场消息', type: 'switch', fallback: false },
+    { key: 'show_reply', label: 'AI 回复', type: 'switch', fallback: true },
+    // min_importance 不上表单：后端所有消息 importance 恒为 0.5，这个滑块没有实际过滤作用
+    {
+      key: 'max_messages',
+      label: '最大消息数',
+      type: 'number',
+      min: 5,
+      max: 100,
+      step: 1,
+      fallback: 30,
+    },
+    // font_size 约束与默认值对齐 DanmakuWidgetConfig（ge=10, le=72, 默认 16）
+    {
+      key: 'font_size',
+      label: '弹幕字号',
+      type: 'number',
+      min: 10,
+      max: 72,
+      step: 1,
+      fallback: 16,
+    },
+  ],
+  subtitle: [
+    {
+      key: 'font_size',
+      label: '字体大小',
+      type: 'number',
+      min: 12,
+      max: 72,
+      step: 1,
+      fallback: 32,
+    },
+    { key: 'font_color', label: '字体颜色', type: 'text', fallback: '#ffffff' },
+    { key: 'background_color', label: '背景颜色', type: 'text', fallback: 'rgba(0,0,0,0.45)' },
+    { key: 'border_color', label: '边框颜色', type: 'text', fallback: '#ff8800' },
+    {
+      key: 'position',
+      label: '显示位置',
+      type: 'select',
+      options: [
+        { label: '底部', value: 'bottom' },
+        { label: '顶部', value: 'top' },
+        { label: '居中', value: 'center' },
+      ],
+      fallback: 'bottom',
+    },
+    // auto_hide_after_ms 不上表单：嵌入页字幕跟随语音生命周期（说完才清），
+    // 该键当前已无任何展示面消费，配置域的键清理另行处置
+  ],
+  game2048: [],
+};
+</script>
+
 <script setup lang="ts">
 import type { Component } from 'vue';
 
-import { computed, onActivated, onMounted, ref } from 'vue';
+import { computed, onActivated, onMounted, ref, watch } from 'vue';
 import { ElInput, ElInputNumber, ElMessage, ElSelect, ElSwitch } from 'element-plus';
 
 import { configApi } from '@/api';
@@ -140,11 +270,12 @@ import { getApiErrorMessage } from '@/utils/apiError';
  *
  * 嵌入页本身是供浏览器源捕获的全屏透明页（/widget/<name>，不在壳内导航），
  * 本页承担它们的管理面：查看用途与推荐尺寸、复制嵌入网址、打开预览、
- * 调整配置。配置读改写都走既有配置接口（合并视图读取 + 批量原子写回）。
- * 保存以整段对象写回，热冷段以响应 requires_restart 为准：热段即时生效
- * 直接提示，冷段弹窗确认是否立即重启（重启遮罩复用全局 appRestart store，
- * 挂在 AppLayout 的唯一挂点上）。无长驻定时器与事件订阅；onActivated
- * 重读一次配置以跟随最新落盘值。
+ * 调整配置（含启用开关，在详情标题行）。配置读改写都走既有配置接口
+ * （合并视图读取 + 批量原子写回）。保存以整段对象写回，热冷段以响应
+ * requires_restart 为准：热段即时生效直接提示，冷段弹窗确认是否立即重启
+ * （重启遮罩复用全局 appRestart store，挂在 AppLayout 的唯一挂点；重启
+ * 成功后重载预览 iframe 让新配置上屏）。keep-alive 重进页面时先对全部
+ * 表单做脏检查，有未保存改动须确认后才重读磁盘，不静默丢弃编辑。
  */
 
 const { widgets } = useWidgetCatalog();
@@ -195,7 +326,31 @@ function readEnabled(
 }
 
 onMounted(refreshConfig);
-onActivated(refreshConfig);
+onActivated(() => {
+  void refreshConfigGuarded();
+});
+
+/** keep-alive 重进页面：任一表单有未保存改动时先确认，取消则保留现场不重读 */
+async function refreshConfigGuarded(): Promise<void> {
+  if (hasAnyDirty()) {
+    const discard = await confirmAction(
+      '有未保存的配置改动，重新读取会丢弃这些改动。继续吗？',
+      '未保存改动',
+      {
+        confirmButtonText: '放弃改动并重新读取',
+      },
+    );
+    if (!discard) return;
+  }
+  await refreshConfig();
+}
+
+/** 全部小部件表单（不止当前选中的）是否都干净 */
+function hasAnyDirty(): boolean {
+  return Object.keys(FIELD_DEFS).some(widgetKey =>
+    isModelDirty(formModel.value[widgetKey], snapshots.value[widgetKey]),
+  );
+}
 
 const fullUrl = computed(() =>
   selected.value ? buildWidgetUrl(window.location.origin, selected.value.path) : '',
@@ -217,9 +372,10 @@ async function copyEmbedUrl(): Promise<void> {
 }
 
 function statusTextOf(key: string): string {
-  const enabled = enabledByKey.value[key];
-  if (enabled === undefined) return '状态未知';
-  return enabled ? '已启用' : '已停用（可在设置页开启，重启后生效）';
+  // 状态文案跟随头部开关的草稿值（未加载时退回磁盘值），提示与操作位置一致
+  const draft = formModel.value[key]?.['enabled'];
+  const enabled = typeof draft === 'boolean' ? draft : enabledByKey.value[key];
+  return statusTextFor(enabled);
 }
 
 function statusClassOf(key: string): string {
@@ -230,86 +386,6 @@ function statusClassOf(key: string): string {
 
 // ---- 配置表单 ----
 
-type FieldValue = boolean | number | string;
-
-interface WidgetFieldDef {
-  /** widget 配置段内的字段名 */
-  key: string;
-  label: string;
-  type: 'switch' | 'number' | 'text' | 'select';
-  min?: number;
-  max?: number;
-  step?: number;
-  options?: { label: string; value: string }[];
-  /** 配置缺项时的兜底值（对齐后端 Schema 默认值） */
-  fallback: FieldValue;
-}
-
-const SECTION_BY_WIDGET: Record<string, string> = {
-  danmaku: 'danmaku_widget',
-  subtitle: 'subtitle_widget',
-  game2048: 'game2048_widget',
-};
-
-const FIELD_DEFS: Record<string, readonly WidgetFieldDef[]> = {
-  danmaku: [
-    { key: 'enabled', label: '启用小部件', type: 'switch', fallback: true },
-    { key: 'show_danmaku', label: '普通弹幕', type: 'switch', fallback: true },
-    { key: 'show_gift', label: '礼物', type: 'switch', fallback: true },
-    { key: 'show_super_chat', label: 'SuperChat', type: 'switch', fallback: true },
-    { key: 'show_guard', label: '大航海', type: 'switch', fallback: true },
-    { key: 'show_enter', label: '进场消息', type: 'switch', fallback: false },
-    { key: 'show_reply', label: 'AI 回复', type: 'switch', fallback: true },
-    {
-      key: 'min_importance',
-      label: '最小重要性',
-      type: 'number',
-      min: 0,
-      max: 1,
-      step: 0.05,
-      fallback: 0,
-    },
-    {
-      key: 'max_messages',
-      label: '最大消息数',
-      type: 'number',
-      min: 5,
-      max: 100,
-      step: 1,
-      fallback: 30,
-    },
-  ],
-  subtitle: [
-    { key: 'enabled', label: '启用小部件', type: 'switch', fallback: true },
-    {
-      key: 'font_size',
-      label: '字体大小',
-      type: 'number',
-      min: 12,
-      max: 72,
-      step: 1,
-      fallback: 32,
-    },
-    { key: 'font_color', label: '字体颜色', type: 'text', fallback: '#ffffff' },
-    { key: 'background_color', label: '背景颜色', type: 'text', fallback: 'rgba(0,0,0,0.45)' },
-    { key: 'border_color', label: '边框颜色', type: 'text', fallback: '#ff8800' },
-    {
-      key: 'position',
-      label: '显示位置',
-      type: 'select',
-      options: [
-        { label: '底部', value: 'bottom' },
-        { label: '顶部', value: 'top' },
-        { label: '居中', value: 'center' },
-      ],
-      fallback: 'bottom',
-    },
-    // auto_hide_after_ms 不上表单：嵌入页字幕跟随语音生命周期（说完才清），
-    // 该键当前已无任何展示面消费，配置域的键清理另行处置
-  ],
-  game2048: [{ key: 'enabled', label: '启用小部件', type: 'switch', fallback: true }],
-};
-
 const formModel = ref<Record<string, Record<string, FieldValue>>>({});
 /** 每个小部件加载/保存成功时的表单快照，用于脏判断 */
 const snapshots = ref<Record<string, string>>({});
@@ -319,29 +395,29 @@ const saving = ref(false);
 
 const formFields = computed(() => (selected.value ? (FIELD_DEFS[selected.value.key] ?? []) : []));
 
+const hasEnabledSwitch = computed(
+  () => selected.value !== undefined && selected.value.key in SECTION_BY_WIDGET,
+);
+
 const dirty = computed(() => {
   const key = selected.value?.key;
-  if (!key || !snapshots.value[key] || !formModel.value[key]) return false;
-  return JSON.stringify(formModel.value[key]) !== snapshots.value[key];
+  if (!key) return false;
+  return isModelDirty(formModel.value[key], snapshots.value[key]);
 });
 
 function hydrateForms(dashboard: Record<string, unknown> | undefined): void {
   for (const [widgetKey, fields] of Object.entries(FIELD_DEFS)) {
     const source = readSection(dashboard, SECTION_BY_WIDGET[widgetKey]);
     viewSections.value[widgetKey] = source ?? {};
-    const model: Record<string, FieldValue> = {};
+    const model: Record<string, FieldValue> = {
+      enabled: source?.['enabled'] === true,
+    };
     for (const field of fields) {
       model[field.key] = coerceValue(field, source?.[field.key]);
     }
     formModel.value[widgetKey] = model;
     snapshots.value[widgetKey] = JSON.stringify(model);
   }
-}
-
-function coerceValue(field: WidgetFieldDef, raw: unknown): FieldValue {
-  if (field.type === 'switch') return raw === true;
-  if (field.type === 'number') return typeof raw === 'number' ? raw : field.fallback;
-  return typeof raw === 'string' && raw !== '' ? raw : field.fallback;
 }
 
 function componentOf(field: WidgetFieldDef): Component {
@@ -367,8 +443,13 @@ function controlAttrs(field: WidgetFieldDef): Record<string, unknown> {
 function setField(fieldKey: string, value: unknown): void {
   const key = selected.value?.key;
   const model = key ? formModel.value[key] : undefined;
+  if (!key || !model) return;
+  if (fieldKey === 'enabled') {
+    model[fieldKey] = value === true;
+    return;
+  }
   const field = formFields.value.find(f => f.key === fieldKey);
-  if (!key || !model || !field) return;
+  if (!field) return;
   if (field.type === 'switch') {
     model[fieldKey] = value === true;
   } else if (field.type === 'number') {
@@ -377,6 +458,29 @@ function setField(fieldKey: string, value: unknown): void {
     model[fieldKey] = typeof value === 'string' ? value : '';
   }
 }
+
+// ---- 页内实时预览 ----
+
+// iframe 常驻渲染（不做懒加载）：预览是本页的核心信息面，懒加载换来的只是
+// 首屏几个像素的布局成本，不值得加一套可见性判断逻辑。重载靠换 key。
+const previewReloadKey = ref(0);
+/** 保存后用户确认立即重启时置位；重启成功（健康检查恢复）后重载预览 */
+let reloadPreviewAfterRestart = false;
+watch(
+  () => appRestart.overlayStatus,
+  status => {
+    if (status === 'success' && reloadPreviewAfterRestart) {
+      reloadPreviewAfterRestart = false;
+      previewReloadKey.value += 1;
+    }
+  },
+);
+
+/** 预览高度按推荐尺寸的宽高比给（aspect-ratio CSS），解析不出时退 16:9 */
+const previewAspectRatio = computed(() => {
+  const match = /(\d+)\s*[×xX*]\s*(\d+)/.exec(selected.value?.recommendedSize ?? '');
+  return match ? `${match[1]} / ${match[2]}` : '16 / 9';
+});
 
 async function saveWidgetConfig(): Promise<void> {
   const widget = selected.value;
@@ -402,7 +506,10 @@ async function saveWidgetConfig(): Promise<void> {
       const restartNow = await confirmAction('已保存，重启后生效。立即重启服务吗？', '保存成功', {
         confirmButtonText: '立即重启',
       });
-      if (restartNow) void appRestart.beginRestart();
+      if (restartNow) {
+        reloadPreviewAfterRestart = true;
+        void appRestart.beginRestart();
+      }
     } else {
       ElMessage.success('已保存');
     }
@@ -517,6 +624,15 @@ async function saveWidgetConfig(): Promise<void> {
 .status-line {
   font-size: 12px;
   color: var(--text-regular);
+}
+
+.preview-frame {
+  display: block;
+  width: 100%;
+  max-width: 960px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-hover);
 }
 
 .detail-desc {
