@@ -339,10 +339,11 @@ class StreamerProactiveConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     rundown_ready_interval_ms: int = Field(
-        title="环节内持续产出间隔",
+        title="两次发言最小间隔",
         default=30_000,
         ge=5_000,
-        description="环节供能期间给主播开口机会的节奏；只供机会不保证发言，质量由发言自检把关",
+        description="发言放行侧的节奏间隔：距上次开口不足该间隔时，台词等满再放行；"
+        "决策开窗不受它限制（想与说的节拍解耦），调大则发言更稀疏",
     )
     rundown_silent_cooldown_ms: int = Field(
         title="主动沉默后冷却",

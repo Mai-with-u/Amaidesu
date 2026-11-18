@@ -44,6 +44,7 @@ def test_profile_set_is_closed_and_unknown_keys_fail_with_the_key_name() -> None
         "vision",
         "simulator",
         "tts",
+        "verifier",
     }
     assert _ROOT_SCHEMAS["model.toml"] is ModelRootConfig  # 封闭集合校验挂在 model.toml 加载路径上
     instance, _ = _validate_file("model.toml", _base_model_raw())

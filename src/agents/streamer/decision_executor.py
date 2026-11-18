@@ -141,6 +141,7 @@ class DecisionRoundExecutor:
         on_round_spoken: Optional[Callable[[RoundOutcome, bool], Awaitable[None]]] = None,
         on_round_silent: Optional[Callable[[bool, bool, TriggerCause], None]] = None,
         clock: Callable[[], int] = now_ms,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """决策窗材料的取用契约：
@@ -179,6 +180,8 @@ class DecisionRoundExecutor:
         self._on_round_spoken = on_round_spoken
         self._on_round_silent = on_round_silent
         self._clock: Callable[[], int] = clock
+        # 发言放行限速的等待原语（可注入：测试用假时钟+假等待验证节拍，不依赖真实时间流逝）
+        self._sleep: Callable[[float], Awaitable[None]] = sleep
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -431,6 +434,8 @@ class DecisionRoundExecutor:
         # reply 已在 Planner ReAct 循环内经 reply 工具完成（Planner 阶段耗时含
         # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
         # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
+        if proactive and self._proactive_trigger.should_pace_speech(trigger_cause.kind):
+            await self._pace_speech_release()
         target_user_id = resolve_reply_target_user(outcome, batch)
         reply_quote = resolve_reply_quote(outcome, batch)
         # 付费触发最高优（2）、回应观众弹幕批（1）可收住正在连播的杂谈独白后半句先接话；主动独白为 0
@@ -473,6 +478,22 @@ class DecisionRoundExecutor:
 
         result["total_duration_ms"] = self._clock() - started_ms
         return result, outcome
+
+    async def _pace_speech_release(self) -> None:
+        """发言放行限速（ADR-080）：距上次开口不足 ``rundown_ready_interval_ms`` 时等满再放行。
+
+        防抖从开窗侧移除后，``rundown_ready_interval_ms`` 的"两次发言最小间隔"
+        职责保留原值移到发言放行时刻执行——只管"这句几时能说"，不再管"几时
+        开始想"。适用范围由 ``ProactiveTrigger.should_pace_speech`` 判定；等待
+        发生在台词已生成之后（决策窗已完整跑完），最坏等满一个间隔；开口时刻
+        由 ``room_state.record_speech`` 在放行后刷新，逐句按序间隔开。
+        """
+        while True:
+            wait_ms = self._proactive_trigger.speech_release_wait_ms(self._room_state.last_speech_ms, self._clock())
+            if wait_ms <= 0:
+                return
+            self._logger.debug(f"发言放行限速：距上次开口还差 {wait_ms}ms，等满再出声")
+            await self._sleep(wait_ms / 1000.0)
 
     def _next_round_id(self) -> str:
         """生成下一个决策轮次 ID（格式 ``rnd_{epoch_ms}_{seq}``）。

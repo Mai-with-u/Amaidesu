@@ -142,6 +142,8 @@ _GAME_AGENT_NAMES: tuple[str, ...] = tuple(name for name in AGENT_BINDINGS if na
 # LLM profile 用途名（与 [llm_profiles.<name>] 三层结构对齐；model.toml 必填 6 成员）
 _PROFILE_PLANNER = "planner"
 _PROFILE_REPLYER = "replyer"
+# 出声前核对器独立档：缺省引用与表达档相同的模型但不下发思考强度，用户可在 model.toml 换小模型
+_PROFILE_VERIFIER = "verifier"
 
 # 运营递话提醒队列上限（条）。满时拒收递话（receive_prompt 返回 False，
 # REST 侧映射 409）——必达语义不允许静默挤掉旧条目。
@@ -2918,7 +2920,7 @@ class StreamerAgent(BaseAgent):
             new_game_lines=self._game_ledger.pending_lines(),
             welcomed_names=self._room_state.welcomed_names,
             llm_service=self._llm,
-            profile=_PROFILE_REPLYER,
+            profile=_PROFILE_VERIFIER,
         )
 
     async def _fresh_context_since_open(self, since_ms: int) -> Dict[str, Any]:

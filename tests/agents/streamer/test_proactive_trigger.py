@@ -101,15 +101,38 @@ def test_overdue_alarm_has_double_cooldown_and_speech_debounce() -> None:
     assert debounced.should_trigger(recent, now_ms=10_004_000, rundown_overdue=True) is TriggerKind.RUNDOWN
 
 
-def test_ready_gives_speaking_opportunity_on_thirty_second_cadence() -> None:
-    """默认 30 秒节奏：距上次发言不足 30 秒不开口，到点即给机会。"""
+def test_ready_opens_regardless_of_last_speech_time() -> None:
+    """开窗不防抖（ADR-080）：上一轮刚出口也立即具备开下一窗资格，播放期间思考不断线。"""
     trigger = _trigger()
-    recent = _Room(last_speech_ms=10_000_000)
-    assert trigger.should_trigger(recent, now_ms=10_029_999, rundown_ready=True) is None
-    assert trigger.should_trigger(recent, now_ms=10_030_000, rundown_ready=True) is TriggerKind.RUNDOWN
+    just_spoke = _Room(last_speech_ms=10_000_000)
+    assert trigger.should_trigger(just_spoke, now_ms=10_000_001, rundown_ready=True) is TriggerKind.RUNDOWN
 
     silent = _Room(last_speech_ms=None)
     assert trigger.should_trigger(silent, now_ms=10_000_000, rundown_ready=True) is TriggerKind.RUNDOWN
+
+
+def test_speech_pacing_waits_for_the_ready_interval() -> None:
+    """发言放行侧节拍（ADR-080）：距上次开口不足 rundown_ready_interval_ms 时放行要等差值。"""
+    trigger = _trigger(rundown_ready_interval_ms=15_000)
+    assert trigger.speech_release_wait_ms(None, now_ms=10_000_000) == 0  # 从未发言恒可放行
+    assert trigger.speech_release_wait_ms(10_000_000, now_ms=10_015_000) == 0  # 刚好满间隔
+    assert trigger.speech_release_wait_ms(10_000_000, now_ms=10_005_000) == 10_000
+
+
+def test_speech_pacing_applies_to_autonomous_sources_only() -> None:
+    """限速适用范围：环节内持续产出 / 定时 / 冷场限速；即时信号（环节切换、超时提醒、递话、弹幕回应）不限。"""
+    trigger = _trigger()
+    trigger.should_trigger(_Room(last_speech_ms=None), now_ms=10_000_000, rundown_ready=True)
+    assert trigger.should_pace_speech(TriggerKind.RUNDOWN) is True  # 最近一次 RUNDOWN 来自持续产出
+    trigger.should_trigger(_Room(last_speech_ms=None), now_ms=11_000_000, rundown_pending=True)
+    assert trigger.should_pace_speech(TriggerKind.RUNDOWN) is False  # 最近一次来自环节切换
+    trigger.should_trigger(_Room(last_speech_ms=None), now_ms=12_000_000, rundown_overdue=True)
+    assert trigger.should_pace_speech(TriggerKind.RUNDOWN) is False  # 超时提醒同属即时信号
+    assert trigger.should_pace_speech(TriggerKind.SCHEDULE) is True
+    assert trigger.should_pace_speech(TriggerKind.COLD) is True
+    assert trigger.should_pace_speech(TriggerKind.REMINDER) is False
+    assert trigger.should_pace_speech(TriggerKind.GAME) is False
+    assert trigger.should_pace_speech(TriggerKind.SIGNOFF) is False
 
 
 def test_ready_needs_no_topic_and_ignores_the_anti_chain_interval() -> None:

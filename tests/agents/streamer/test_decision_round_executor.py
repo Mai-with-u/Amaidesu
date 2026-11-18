@@ -59,6 +59,9 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
 
     room_state = MagicMock()
     proactive_trigger = MagicMock()
+    # 发言放行限速的判定桩：默认不限速（限速行为有专属单测，见 test_paced_proactive_round_*）
+    proactive_trigger.should_pace_speech = MagicMock(return_value=False)
+    proactive_trigger.speech_release_wait_ms = MagicMock(return_value=0)
     stats = StreamerStats()
     bus, emissions = _make_event_bus()
     window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch()))
@@ -287,3 +290,104 @@ async def test_silent_proactive_round_records_silent_cooldown_only_when_proactiv
 
     await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True)
     deps["proactive_trigger"].record_silent_round.assert_called_once()
+
+
+# 发言放行限速（ADR-080：防抖从开窗侧移到发言放行时刻）
+
+
+class _FakeClock:
+    """可手拨的假时钟：sleep 即拨钟，等待不依赖真实时间流逝。"""
+
+    def __init__(self) -> None:
+        self.now_ms = 10_000_000
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> int:
+        return self.now_ms
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now_ms += int(seconds * 1000)
+
+
+async def test_paced_proactive_round_waits_out_the_release_interval():
+    """距上次开口 5 秒、间隔 15 秒：放行前等满差的 10 秒（假时钟验证），开口时刻刷新后再归零。"""
+    from src.agents.streamer.proactive_trigger import ProactiveTrigger
+    from src.agents.streamer.config import StreamerProactiveConfig
+
+    clock = _FakeClock()
+    trigger = ProactiveTrigger(StreamerProactiveConfig(enabled=True, rundown_ready_interval_ms=15_000))
+    trigger.should_trigger(MagicMock(last_speech_ms=9_995_000), now_ms=clock.now_ms, rundown_ready=True)
+
+    outcome = replace(_OKAY_OUTCOME, reply_payload={"speech": "大家好", "emotion": "", "actions": []})
+    planner = MagicMock()
+    planner.plan = AsyncMock(return_value=replace(outcome, raw_content="RAW", llm_request_id="req_1"))
+    speech = MagicMock()
+    speech.dispatch = AsyncMock(return_value=("大家好", "happy", "utt_1_1"))
+    room_state = MagicMock()
+    room_state.last_speech_ms = 9_995_000
+    bus, _emissions = _make_event_bus()
+
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=speech,
+        event_bus=bus,
+        room_state=room_state,
+        proactive_trigger=trigger,
+        stats=StreamerStats(),
+        thinking_sink=None,
+        thinking_enabled=False,
+        window_opener=AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch())),
+        rundown_text_provider=MagicMock(return_value=None),
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    result = await executor.execute(
+        [], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True
+    )
+
+    assert clock.sleeps == [10.0]  # 只等一次、等的就是差值
+    assert result["speech"] == "大家好"
+    speech.dispatch.assert_awaited_once()
+    room_state.record_speech.assert_called_once_with(clock.now_ms)
+
+
+async def test_pacing_skipped_when_release_gate_disallows():
+    """should_pace_speech 判 False（如环节切换即时窗）：不等间隔，直接放行。"""
+    from src.agents.streamer.proactive_trigger import ProactiveTrigger
+    from src.agents.streamer.config import StreamerProactiveConfig
+
+    clock = _FakeClock()
+    trigger = ProactiveTrigger(StreamerProactiveConfig(enabled=True, rundown_ready_interval_ms=15_000))
+    trigger.should_trigger(MagicMock(last_speech_ms=None), now_ms=clock.now_ms, rundown_pending=True)
+    assert trigger.should_pace_speech(TriggerKind.RUNDOWN) is False
+
+    outcome = replace(_OKAY_OUTCOME, reply_payload={"speech": "新环节开场", "emotion": "", "actions": []})
+    planner = MagicMock()
+    planner.plan = AsyncMock(return_value=replace(outcome, raw_content="RAW", llm_request_id="req_1"))
+    speech = MagicMock()
+    speech.dispatch = AsyncMock(return_value=("新环节开场", "happy", "utt_1_1"))
+    room_state = MagicMock()
+    room_state.last_speech_ms = clock.now_ms  # 刚开口：若误判限速会等满 15 秒
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=speech,
+        event_bus=None,
+        room_state=room_state,
+        proactive_trigger=trigger,
+        stats=StreamerStats(),
+        thinking_sink=None,
+        thinking_enabled=False,
+        window_opener=AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch())),
+        rundown_text_provider=MagicMock(return_value=None),
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    result = await executor.execute(
+        [], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True
+    )
+
+    assert clock.sleeps == []  # 即时信号不等
+    assert result["speech"] == "新环节开场"

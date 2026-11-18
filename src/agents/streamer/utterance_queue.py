@@ -73,6 +73,11 @@ ERROR_ALERT_THROTTLE_MS = 5 * 60 * 1000
 # 引擎故障时决策循环会被无限拖住——引擎侧 fail 快速排空则不受影响）。
 DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS = 60_000
 
+# 默认发言放行的未播积压上限（句）：放行条件从"队列排空"放宽为"未播的话
+# ≤ max_pending"——播放期间允许下一句先排队，决策不用等嘴念完才有资格出声。
+# 0 = 旧行为（等队列排空）。
+DEFAULT_MAX_PENDING = 1
+
 # 队列代发失败事件时 payload 的 engine 标识：这几条路径（渲染超时、溢出丢弃、
 # 引擎没报告的 speak 异常）上引擎都没替这句发过 failed，填队列自身标识，
 # 与引擎名（edge/gptsovits 等）区分来源。
@@ -424,12 +429,29 @@ class UtteranceQueue:
         def _is_idle() -> bool:
             return not self._queue and not self._processing
 
-        if _is_idle():
+        return await self._wait_until(_is_idle, timeout_ms)
+
+    async def wait_pending_capacity(self, max_pending: int, timeout_ms: Optional[int] = None) -> bool:
+        """阻塞等待未播积压降到 ``max_pending`` 及以内（只看队列深度，不等当前句播完）。
+
+        供发言管线的"欠一句"放行谓词（ADR-080）：播放中允许最多 ``max_pending``
+        句先排队，决策不必等嘴念完才有资格出声；0 等价于只等队列排空（当前句
+        是否在播不看——那是 ``wait_idle`` 的语义）。超时返回 ``False`` 不抛异常。
+        """
+
+        def _within_capacity() -> bool:
+            return len(self._queue) <= max_pending
+
+        return await self._wait_until(_within_capacity, timeout_ms)
+
+    async def _wait_until(self, predicate: Callable[[], bool], timeout_ms: Optional[int]) -> bool:
+        """在"变闲"条件上等待谓词成立（worker 完成一条后唤醒等待方重判）。"""
+        if predicate():
             return True
         timeout_s: Optional[float] = None if timeout_ms is None else timeout_ms / 1000.0
         try:
             async with self._idle_cond:
-                await asyncio.wait_for(self._idle_cond.wait_for(_is_idle), timeout=timeout_s)
+                await asyncio.wait_for(self._idle_cond.wait_for(predicate), timeout=timeout_s)
             return True
         except asyncio.TimeoutError:
             return False
@@ -666,6 +688,7 @@ __all__ = [
     "DEFAULT_MAX_QUEUE",
     "DEFAULT_RENDER_TIMEOUT_MS",
     "DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS",
+    "DEFAULT_MAX_PENDING",
     "RENDER_FUSE_THRESHOLD",
     "RENDER_FUSE_HALF_OPEN_MS",
 ]

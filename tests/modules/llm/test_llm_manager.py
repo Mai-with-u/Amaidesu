@@ -235,6 +235,7 @@ def test_profile_names_closed_set() -> None:
         ProfileNames.VISION,
         ProfileNames.TTS,
         ProfileNames.SIMULATOR,
+        ProfileNames.VERIFIER,
     }
     assert validate_profile_binding("planner") is None
     with pytest.raises(ValueError, match="unknown"):

@@ -111,20 +111,21 @@ async def test_reconcile_skips_llm_when_mouth_was_silent() -> None:
         ("放行", "那我顺路去看看前头的村庄。", "pass", "那我顺路去看看前头的村庄。"),
         ("重复", "刚才那只蜘蛛突然扑过来吓我一跳！", "duplicate", ""),
         (
-            "保留：顺便把旁边的火把也补上。",
-            "蜘蛛扑过来吓死我了！顺便把旁边的火把也补上。",
-            "trim",
-            "顺便把旁边的火把也补上。",
-        ),
-        (
             "作废：已经切入新世界站在河岸边，不再卡在门外",
             "怎么还卡在服务器门口进不去呀。",
             "contradicted",
             "",
         ),
+        # 契约外的输出（旧版"保留"改写、自由发挥）一律保守放行，不采纳改写
+        (
+            "保留：顺便把旁边的火把也补上。",
+            "蜘蛛扑过来吓死我了！顺便把旁边的火把也补上。",
+            "pass",
+            "蜘蛛扑过来吓死我了！顺便把旁边的火把也补上。",
+        ),
     ],
 )
-async def test_reconcile_parses_four_verdicts_when_mouth_spoke(
+async def test_reconcile_parses_three_verdicts_when_mouth_spoke(
     model_reply: str, candidate: str, expected_action: str, expected_speech: str
 ) -> None:
     llm = FakeLLMManager(responses=[Response(success=True, content=model_reply, request_id="req_rec")])
@@ -360,7 +361,9 @@ async def test_playback_slot_before_emit_vetoes_stale_speech_when_mouth_spoke_du
         event_bus=bus,
         tool_registry=registry,
         tts_engine=_GatedTTS(),
-        speech_config={"enabled": True, "wait_playback": True},
+        # max_pending=0（排空闸）：本测试锁的是"等播放槽位期间嘴插话"的毫秒时序，
+        # 排空语义保住这段等待窗；欠一句的放行时序有专属单测
+        speech_config={"enabled": True, "wait_playback": True, "max_pending": 0},
     )
     agent._register_tools()
     await agent._speech.start()

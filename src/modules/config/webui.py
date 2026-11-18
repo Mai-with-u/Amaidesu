@@ -631,6 +631,7 @@ _FIELD_ROW_LAYOUT: dict[str, tuple[str, str]] = {
     "infra.tts.max_queue": ("tts-timeout", "队列与超时"),
     "infra.tts.render_timeout_ms": ("tts-timeout", "队列与超时"),
     "infra.tts.wait_playback_timeout_ms": ("tts-timeout", "队列与超时"),
+    "infra.tts.max_pending": ("tts-timeout", "队列与超时"),
     # GPT-SoVITS
     "infra.tts.gptsovits.host": ("g2s-conn", "连接"),
     "infra.tts.gptsovits.port": ("g2s-conn", "连接"),

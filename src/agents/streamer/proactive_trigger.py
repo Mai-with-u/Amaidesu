@@ -43,9 +43,10 @@
   （默认 5 分钟，内部状态对照）+ ``rundown_speech_interval_ms`` 防抖（对照
   ``last_speech_ms``，刚发过言不立即提醒）。Agent 被唤醒后自行决定推进或
   继续——闹钟只提醒不执法。
-- ``rundown_ready=True``（环节内持续产出信号）：环节供能期间按
-  ``rundown_ready_interval_ms``（默认 30 秒，对照 ``last_speech_ms``）给
-  主播开口机会——绕过公共三道前置（环节任务描述即话题）。这只供给机会：
+- ``rundown_ready=True``（环节内持续产出信号）：环节供能期间持续开窗给
+  主播开口机会——绕过公共三道前置（环节任务描述即话题），不对照
+  ``last_speech_ms`` 防抖（发言节奏的防抖已移到发言放行侧执行，见
+  ``DecisionRoundExecutor._pace_speech_release``）。这只供给机会：
   说不说、说什么由 Agent 按本窗新输入自定，发言质量由 ``is_novel`` 自检
   与台词重合度闸把关，闸打回即本轮沉默。
 - **主动沉默冷却**：``rundown_ready`` 只给机会，她可能看完觉得没什么新鲜事、选择不说。
@@ -82,7 +83,7 @@
 """
 
 from collections import deque
-from typing import Any
+from typing import Any, Optional
 
 from .config import StreamerProactiveConfig
 from .trigger_cause import TriggerKind
@@ -125,7 +126,8 @@ class ProactiveTrigger:
         self._rundown_speech_interval_ms: int = config.rundown_speech_interval_ms
         # 环节超时提醒冷却（毫秒）。仅 rundown_overdue 触发源使用。
         self._rundown_overdue_interval_ms: int = config.rundown_overdue_interval_ms
-        # 环节内持续发言间隔（毫秒）。仅 rundown_ready 触发源使用。
+        # 发言放行节奏间隔（毫秒）。开窗侧已不对照 last_speech_ms 防抖（ADR-080）；
+        # 决策执行器在发言放行时刻经 speech_release_wait_ms 用它限速。
         self._rundown_ready_interval_ms: int = config.rundown_ready_interval_ms
         # 主动沉默冷却（毫秒）：play 档与 talk 档各一档。仅 rundown_ready 触发源使用。
         self._silent_cooldown_ms: int = config.rundown_silent_cooldown_ms
@@ -145,6 +147,10 @@ class ProactiveTrigger:
         self._last_overdue_ms: int | None = None
         # 上次主动轮走完却没开口的时刻（None = 没有沉默过，或之后已经开过口）
         self._last_silent_ms: int | None = None
+        # 最近一次 RUNDOWN 触发是否来自即时信号（环节切换 / 超时提醒）：
+        # True = 即时信号（发言放行不限速），False = 环节内持续产出（限速）。
+        # 默认 True：未走 should_trigger 判定直接开 rundown 窗的调用方按即时信号对待。
+        self._last_rundown_immediate: bool = True
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -202,8 +208,8 @@ class ProactiveTrigger:
           ``rundown_speech_interval_ms`` 防抖对照 ``last_speech_ms``），
           Agent 被唤醒后自行决定推进或继续。
         - ``rundown_ready=True``（环节内持续产出信号）：绕过公共三道前置，
-          仅按 ``rundown_ready_interval_ms``（默认 30 秒）对照
-          ``last_speech_ms`` 防抖——供给开口机会，不保证发言。
+          不对照 ``last_speech_ms`` 防抖——上一轮出口即具备开下一窗的资格
+          （发言节奏的防抖在发言放行侧执行），供给开口机会，不保证发言。
 
         Args:
             room_state: 直播间态势对象（duck-typed；需具备 ``last_speech_ms``
@@ -254,6 +260,7 @@ class ProactiveTrigger:
         # rundown_pending：环节切换即时信号——只受总开关约束，立即触发
         # （新环节开场白必须马上说，不等任何间隔）
         if rundown_pending:
+            self._last_rundown_immediate = True
             return TriggerKind.RUNDOWN
 
         # game_pending：游戏待定夺即时信号——同 rundown_pending，只受总开关
@@ -284,13 +291,15 @@ class ProactiveTrigger:
             speech_settled = last_speech_ms is None or (now_ms - last_speech_ms) >= self._rundown_speech_interval_ms
             if overdue_cooled and speech_settled:
                 self._last_overdue_ms = now_ms
+                self._last_rundown_immediate = True
                 return TriggerKind.RUNDOWN
 
         # rundown_ready：环节内持续产出机会——内容推进信号，绕过公共三道前置
-        # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）。节奏对照
-        # last_speech_ms 的 ready_interval_ms：这只是给主播开口的机会，说不说、
-        # 说什么由模型按本窗新输入自定，is_novel 自检与台词重合度闸把关质量。
-        if rundown_ready and self._ready_allowed(last_speech_ms, now_ms, talk_mode, viewer_waiting_since_ms):
+        # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要），也不对照
+        # last_speech_ms 防抖：这只是给主播开口的机会，说不说、说什么由模型
+        # 按本窗新输入自定，is_novel 自检与台词重合度闸把关质量。
+        if rundown_ready and self._ready_allowed(now_ms, talk_mode, viewer_waiting_since_ms):
+            self._last_rundown_immediate = False
             return TriggerKind.RUNDOWN
 
         # 公共前置（schedule / cold 专用，行为不变）
@@ -348,21 +357,44 @@ class ProactiveTrigger:
         """最近一轮主动决策是否以沉默收尾（尚未开口清除）；供决策侧判断是否跳过 45 秒冷场死等。"""
         return self._last_silent_ms is not None
 
+    def should_pace_speech(self, kind: TriggerKind) -> bool:
+        """本轮触发源的发言放行是否限速（ADR-080 发言侧节拍的适用范围）。
+
+        自主找话说的源限速：``rundown_ready``（环节内持续产出）、``schedule``、
+        ``cold``。即时信号不限速——环节切换开场白 / 超时提醒 / 运营递话 /
+        游戏定夺 / 弹幕回应 / 付费触发 / 道别 / 续播开口必须及时，等满间隔
+        会误事。RUNDOWN 按最近一次判定的来源细分（即时信号 vs 持续产出）。
+        """
+        if kind is TriggerKind.RUNDOWN:
+            return not self._last_rundown_immediate
+        return kind in (TriggerKind.SCHEDULE, TriggerKind.COLD)
+
+    def speech_release_wait_ms(self, last_speech_ms: Optional[int], now_ms: int) -> int:
+        """发言放行侧的节拍：距上次开口还差多少毫秒满环节节奏间隔；0 = 已可放行。
+
+        ADR-080：防抖从开窗侧移除后，``rundown_ready_interval_ms`` 的防抖职责
+        保留原值移到发言放行时刻执行——只管"这句几时能说"，不再管"几时开始
+        想"。纯函数判定（无 I/O、无 asyncio），等待由调用方执行。
+        """
+        if last_speech_ms is None or self._rundown_ready_interval_ms <= 0:
+            return 0
+        return max(0, last_speech_ms + self._rundown_ready_interval_ms - now_ms)
+
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
 
     def _ready_allowed(
         self,
-        last_speech_ms: int | None,
         now_ms: int,
         talk_mode: bool,
         viewer_waiting_since_ms: int | None,
     ) -> bool:
-        """``rundown_ready`` 的三道节奏闸：距上次开口、主动沉默冷却、给攒批弹幕让路。"""
-        # 距上次开口不足环节节奏间隔：刚说完，不催
-        if last_speech_ms is not None and (now_ms - last_speech_ms) < self._rundown_ready_interval_ms:
-            return False
+        """``rundown_ready`` 的两道节奏闸：主动沉默冷却、给攒批弹幕让路。
+
+        不对照 ``last_speech_ms`` 防抖（ADR-080：防抖从开窗侧移除，发言节奏
+        由发言放行侧的 ``rundown_ready_interval_ms`` 独立控制）。
+        """
         # 上一轮主动决策刚选择了沉默：冷却期内不再催（杂谈档冷却更短，要靠她自己撑场）
         cooldown = self._silent_cooldown_talk_ms if talk_mode else self._silent_cooldown_ms
         if self._last_silent_ms is not None and (now_ms - self._last_silent_ms) < cooldown:

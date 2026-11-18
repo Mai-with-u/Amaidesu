@@ -52,6 +52,7 @@ class ProfileNames:
     VISION = "vision"
     SIMULATOR = "simulator"
     TTS = "tts"
+    VERIFIER = "verifier"
 
     # 默认 profile（向后兼容调用方未显式指定 client_type 场景）
     DEFAULT = PLANNER

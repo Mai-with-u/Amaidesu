@@ -738,6 +738,7 @@ async def create_app_components(
             "render_timeout_ms": int(_tts.get("render_timeout_ms", 60000) or 0),
             "wait_playback": bool(_tts.get("wait_playback", True)),
             "wait_playback_timeout_ms": int(_tts.get("wait_playback_timeout_ms", 60000) or 0),
+            "max_pending": int(_tts.get("max_pending", 1)),
         }
         await _register_agents_from_config(
             agent_manager,

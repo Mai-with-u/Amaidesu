@@ -11,8 +11,10 @@
 本模块维护本场口头流水（区分嘴与决策），并在决策台词出声前做对账：
 - 本场已欢迎过的人再次被欢迎时，确定性剥掉重复欢迎句（只剩欢迎则整条不说，后面还有新进展则只留新进展）；
 - 本轮开窗后嘴没说过话时，不做任何模型调用，零额外时延放行；
-- 本轮开窗后嘴说过话时，用轻量表达档核对一次：内容已被嘴说过的直接不说或删掉重复句，
-  被嘴与期间新游戏事件推翻的整句作废（交给决策层按新现场重想一步，或静默撤回）。
+- 本轮开窗后嘴说过话时，用独立核对档（verifier profile，缺省关思考、可换小模型）核对一次：
+  内容已被嘴说过的直接不说，被嘴与期间新游戏事件推翻的整句作废（交给决策层按新现场重想一步，
+  或静默撤回）；裁决契约三选一（放行 / 重复 / 作废），无改写分支——模型裁决只判不写，
+  避免轻量模型借裁剪扭曲原话（ADR-080）。
 """
 
 from __future__ import annotations
@@ -75,18 +77,13 @@ _PLAYER_JOIN_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"^(?:系统消息[：:]\s*)?([A-Za-z0-9_\-一-鿿]{2,32})\s+joined the game\.?\s*$", re.IGNORECASE),
 )
 
-# 保留句忠实度核查用的词元提取：防止轻量模型在"保留："分支夹带原台词没有的新词
-_WORD_CHAR = re.compile(r"[a-z0-9]+|[一-鿿]")
-
 _RECONCILE_SYSTEM = (
     "你是直播台词出声前的核对器。主播在十几秒前开始构思一句台词，构思期间她的快反应通道（嘴）"
     "已经先对刚发生的事说出了一两句话。请对照嘴刚说的话与这几秒刚发生的游戏记录，判断准备说出的这句台词该怎么处理。\n"
-    "只输出下面四种格式之一，不要解释：\n"
+    "只输出下面三种格式之一，不要解释：\n"
     "1. 放行 —— 两边说的是不同的事，且这句台词没有被刚发生的新情况推翻。\n"
     "2. 重复 —— 这句台词的主要意思嘴刚才已经说过了（包括同一声欢迎、对同一遭遇或同一份礼物的同义反应），不必再说一遍。\n"
-    "3. 保留：<删掉重复那一句后剩下的原话> —— 这句台词里有一句嘴刚说过，但其余句子是嘴没提过的新内容且没过时；"
-    "只从原话里删掉重复的那一句，其余字句原样保留，不添新词。\n"
-    "4. 作废：<一句话说明哪点过时或矛盾> —— 这句台词依赖的处境已被嘴刚说的话或刚发生的游戏记录推翻"
+    "3. 作废：<一句话说明哪点过时或矛盾> —— 这句台词依赖的处境已被嘴刚说的话或刚发生的游戏记录推翻"
     "（例如已经换进新世界或重生上岸，台词却说还卡在门外进不去；东西已经吃掉或做完，台词却说还没吃或没拿到）。"
 )
 
@@ -218,23 +215,12 @@ def strip_duplicate_greetings(speech: str, welcomed_names: Iterable[str]) -> Tup
     return "".join(kept).strip(), True
 
 
-def _is_faithful_substring(kept: str, original: str) -> bool:
-    """核查轻量模型返回的"保留："文本确实来自原台词，防止模型借裁剪顺手编造新词。"""
-    kept_clean = kept.strip()
-    if not kept_clean or len(kept_clean) > len(original.strip()):
-        return False
-    if kept_clean in original:
-        return True
-    orig_tokens = set(_WORD_CHAR.findall(original.lower()))
-    kept_tokens = _WORD_CHAR.findall(kept_clean.lower())
-    if not kept_tokens:
-        return False
-    covered = sum(1 for token in kept_tokens if token in orig_tokens)
-    return covered / len(kept_tokens) >= 0.85
-
-
 def _parse_reconcile_output(raw: str, working_speech: str) -> Tuple[ReconcileAction, str, str]:
-    """解析轻量对账模型的单行裁决输出，返回 ``(动作, 保留台词, 作废理由)``。"""
+    """解析对账模型的单行裁决输出，返回 ``(动作, 台词, 作废理由)``。
+
+    契约三选一（放行 / 重复 / 作废：理由）；裁决只判不写，模型无改写分支
+    （ADR-080）。无法识别的输出保守放行。
+    """
     first_line = next((line.strip() for line in (raw or "").splitlines() if line.strip()), "")
     if not first_line or first_line.startswith("放行"):
         return "pass", working_speech, ""
@@ -245,14 +231,7 @@ def _parse_reconcile_output(raw: str, working_speech: str) -> Tuple[ReconcileAct
         return "contradicted", "", reason.strip() or "构思期间现场已变，原话与新事实矛盾"
     if first_line.startswith("作废"):
         return "contradicted", "", "构思期间现场已变，原话与新事实矛盾"
-    if first_line.startswith(("保留：", "保留:")):
-        _, _, rest = first_line.partition("：" if "：" in first_line[:4] else ":")
-        kept = rest.strip().strip("「」\"'")
-        if not kept:
-            return "duplicate", "", "删掉重复句后没有剩余内容"
-        if _is_faithful_substring(kept, working_speech):
-            return "trim", kept, ""
-        _LOGGER.debug(f"对账保留句超出原台词字面范围，忽略改写按原句放行: kept={kept!r}")
+    _LOGGER.warning(f"对账裁决输出不符合三选一契约，保守放行: raw={first_line!r}")
     return "pass", working_speech, ""
 
 
@@ -263,9 +242,14 @@ async def reconcile_with_mouth(
     new_game_lines: Sequence[str] = (),
     welcomed_names: Iterable[str] = (),
     llm_service: Optional[Any] = None,
-    profile: str = "replyer",
+    profile: str = "verifier",
 ) -> ReconcileVerdict:
-    """决策环节出声前核对：剥除重复欢迎，并对照本轮开窗后嘴说的话判断放行、裁剪、重复或矛盾作废。"""
+    """决策环节出声前核对：剥除重复欢迎，并对照本轮开窗后嘴说的话判断放行、重复或矛盾作废。
+
+    ``profile`` 缺省 ``verifier``——独立核对档，缺省引用与表达档相同的模型但
+    关思考（reasoning_effort 不下发），用户可换成更小的模型；换档只改
+    model.toml，不动代码。
+    """
     text = (candidate or "").strip()
     if not text:
         return ReconcileVerdict(action="duplicate", reason="空台词")
@@ -308,7 +292,7 @@ async def reconcile_with_mouth(
         f"【刚才嘴已经替你说出口的话】\n{mouth_block}"
         f"{events_block}\n\n"
         f"【现在准备说出去的这一句】\n{working}\n\n"
-        "请给出核对结论（放行 / 重复 / 保留：… / 作废：…）："
+        "请给出核对结论（放行 / 重复 / 作废：理由）："
     )
     try:
         # 出声前与嘴对账仅做四态轻量判别，显式传低思考档位消除长思考带来的发声卡顿

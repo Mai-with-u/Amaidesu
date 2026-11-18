@@ -345,6 +345,10 @@ _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     "vision": {"slow_threshold_ms": 10_000, "temperature": 0.3},
     "simulator": {"slow_threshold_ms": 15_000, "temperature": 0.9},
     "tts": {"slow_threshold_ms": 30_000, "temperature": 0.3},
+    # 核对器在发言放行的关键路径上（每轮可能一调），晚回等于拖慢出声：
+    # 给"晚了就没用"的上限；不设 reasoning_effort（空串 = 请求不含该字段，
+    # 思考关——实测核对调用生成内容的 98% 是思考段，全部是浪费）
+    "verifier": {"slow_threshold_ms": 8_000, "give_up_ms": 15_000, "temperature": 0.2},
 }
 
 
@@ -396,6 +400,10 @@ class LLMProfilesConfig(BaseConfig):
     tts: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("tts"),
         description="tts：omni_tts 引擎用（须指向带语音输出模态的模型）",
+    )
+    verifier: LLMProfileConfig = Field(
+        default_factory=lambda: _seed_profile("verifier"),
+        description="verifier：出声前核对器（三选一裁决，关思考；可换更小的模型）",
     )
 
     @model_validator(mode="before")
@@ -454,6 +462,29 @@ class LLMProfilesConfig(BaseConfig):
             "tts": {
                 **_PROFILE_PRESETS["tts"],
                 "model_list": list(planner["model_list"]),
+            },
+        }
+
+    @model_validator(mode="before")
+    @classmethod
+    def seed_verifier_models(cls, data: Any) -> Any:
+        """已有安装新增核对器用途时沿用表达档模型引用，避免引用不存在的 default 模型。
+
+        ADR-080：核对器独立档的缺省口径是"沿用现模型引用但关思考"；既有配置
+        在封闭集扩员后照常加载，用户可随后把 verifier.model_list 换成更小的模型。
+        """
+        if not isinstance(data, dict) or "verifier" in data:
+            return data
+        replyer = data.get("replyer", {})
+        if isinstance(replyer, LLMProfileConfig):
+            replyer = replyer.model_dump()
+        if not isinstance(replyer, dict) or not isinstance(replyer.get("model_list"), list):
+            return data
+        return {
+            **data,
+            "verifier": {
+                **_PROFILE_PRESETS["verifier"],
+                "model_list": list(replyer["model_list"]),
             },
         }
 

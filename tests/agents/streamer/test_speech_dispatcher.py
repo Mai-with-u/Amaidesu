@@ -313,13 +313,19 @@ async def test_stop_is_idempotent() -> None:
 # 发言等播放（背压闸）
 
 
-def _playback_config(wait: bool, timeout_ms: int = 5000) -> dict:
-    return {**_TTS_ON, "render_timeout_ms": 5000, "wait_playback": wait, "wait_playback_timeout_ms": timeout_ms}
+def _playback_config(wait: bool, timeout_ms: int = 5000, max_pending: int = 0) -> dict:
+    return {
+        **_TTS_ON,
+        "render_timeout_ms": 5000,
+        "wait_playback": wait,
+        "wait_playback_timeout_ms": timeout_ms,
+        "max_pending": max_pending,
+    }
 
 
 @pytest.mark.parametrize(("wait", "min_gap", "max_gap"), [(True, 0.3, 9.9), (False, 0.0, 0.3)])
 async def test_wait_playback_gates_next_speech(started, wait: bool, min_gap: float, max_gap: float) -> None:
-    """开启时第二句的业务事件要等第一句播完（嘴空才放行）；关闭时连续 dispatch 不阻塞。"""
+    """max_pending=0（排空闸）：第二句的业务事件要等第一句播完；关闭时连续 dispatch 不阻塞。"""
     bus, engine = EventBus(), _Engine(delay_s=0.4)
     captured = _capture_speech(bus)
     dispatcher = await started(bus=bus, engine=engine, config=_playback_config(wait))
@@ -332,9 +338,48 @@ async def test_wait_playback_gates_next_speech(started, wait: bool, min_gap: flo
     assert [text for text, _ in engine.calls] == ["第一句", "第二句"]
 
 
+async def test_max_pending_releases_next_speech_while_playing(started) -> None:
+    """默认 max_pending=1（欠一句）：第一句播放中，第二句业务事件立即发出、排进队列等播。"""
+    bus, engine = EventBus(), _Engine(delay_s=0.5)
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus, engine=engine, config=_playback_config(True, max_pending=1))
+
+    await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    await dispatcher.dispatch({"speech": "第二句", "emotion": {}})
+    await _until(lambda: len(captured) == 2)
+
+    assert len(engine.calls) == 1  # 第一句还在播，第二句只是先排队
+    assert [text for text, _ in engine.calls] == ["第一句"]
+    await _until(lambda: [text for text, _ in engine.calls] == ["第一句", "第二句"])
+
+
+async def test_max_pending_pauses_release_when_queue_is_full(started) -> None:
+    """队满即停：未播积压已到上限时，下一句的业务事件等积压消化后才发出。"""
+    bus, engine = EventBus(), _Engine(delay_s=1.2)
+    dispatcher = await started(bus=bus, engine=engine, config=_playback_config(True, max_pending=1))
+
+    await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    await _until(lambda: len(engine.calls) == 1)  # 等 worker 取走第一句开始播
+    await dispatcher.dispatch({"speech": "第二句", "emotion": {}})
+    await dispatcher.dispatch({"speech": "第三句", "emotion": {}})
+    # dispatch 返回即已入队：三句里第一句在播、第二三句未播（欠两句 = 默认上限的稳定态）
+    assert dispatcher.utterance_queue.size == 2
+    assert len(engine.calls) == 1  # 第一句仍在播（延迟足够长，观察到的是稳定状态）
+
+    fourth = asyncio.create_task(dispatcher.dispatch({"speech": "第四句", "emotion": {}}))
+    await asyncio.sleep(0.15)
+    assert not fourth.done()  # 队满：第四句被闸住，未播积压降不到上限内不放行
+    await _until(lambda: fourth.done())  # 第一句播完、积压降到上限内后放行
+    await fourth
+    await _until(lambda: len(engine.calls) == 4, timeout=8.0)  # 播放仍串行，积压依次播完
+    assert [text for text, _ in engine.calls] == ["第一句", "第二句", "第三句", "第四句"]
+
+
 async def test_wait_playback_fails_open_on_timeout(started) -> None:
     """等播超时放行，不丢话也不无限阻塞决策循环。"""
-    dispatcher = await started(engine=_Engine(delay_s=1.0), config=_playback_config(True, timeout_ms=150))
+    dispatcher = await started(
+        engine=_Engine(delay_s=1.0), config=_playback_config(True, timeout_ms=150, max_pending=0)
+    )
     await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
     t0 = time.monotonic()
     assert (await dispatcher.dispatch({"speech": "第二句", "emotion": {}}))[0] == "第二句"
@@ -536,7 +581,7 @@ def _spy_emit_busy(dispatcher: SpeechDispatcher) -> dict:
 async def test_reaction_gives_up_when_a_planner_line_takes_the_gap(started) -> None:
     """前一句播完时 Planner 的下一句先占了空档：嘴空完再看一眼，剩下的时间等不到就作废，不排到那句后面。"""
     engine = _Engine(delay_s=0.3)
-    dispatcher = await started(engine=engine, config=_TTS_ON)
+    dispatcher = await started(engine=engine, config={**_TTS_ON, "max_pending": 0})
     await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
     planner = asyncio.create_task(dispatcher.dispatch({"speech": "第二句", "emotion": {}}))
 
@@ -554,7 +599,7 @@ async def test_reaction_gives_up_when_a_planner_line_takes_the_gap(started) -> N
 async def test_reaction_that_lost_the_gap_waits_for_a_free_mouth_instead_of_queueing_behind(started) -> None:
     """空档被 Planner 那句占了但时间还够：等那句播完再出声，发出那一刻嘴是空的。"""
     engine = _Engine(delay_s=0.3)
-    dispatcher = await started(engine=engine, config=_TTS_ON)
+    dispatcher = await started(engine=engine, config={**_TTS_ON, "max_pending": 0})
     busy_at_emit = _spy_emit_busy(dispatcher)
     await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
     planner = asyncio.create_task(dispatcher.dispatch({"speech": "第二句", "emotion": {}}))

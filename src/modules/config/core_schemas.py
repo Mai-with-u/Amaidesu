@@ -536,6 +536,7 @@ class TTSConfig(BaseConfig):
         render_timeout_ms: 单次发声（合成+播放）超时（毫秒）；0 表示不限制。
         wait_playback: 主播发言等上一句播完再放行（发言节奏 = 嘴速）。
         wait_playback_timeout_ms: 等待播放队列排空的上限（毫秒）；0 不限制。
+        max_pending: 发言放行时允许的未播台词数；0 = 等队列排空的旧行为。
         edge_tts: EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）。
         gptsovits: GPT-SoVITS 引擎参数（仅 provider=gptsovits 时生效）。
         voicebox: Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）。
@@ -586,9 +587,17 @@ class TTSConfig(BaseConfig):
         default=60000,
         ge=0,
         title="等播超时",
-        description="发言等待播放队列排空的上限（毫秒）；超时放行发言不丢话，"
+        description="发言等待播放空档的上限（毫秒）；超时放行发言不丢话，"
         "0 表示不限制。量级覆盖当前句剩余播放加队列积压排空的最坏时间",
         json_schema_extra={"x-ui-advanced": True},
+    )
+    max_pending: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        title="未播积压上限",
+        description="发言放行时允许的未播台词数：播放中允许最多 N 句先排队（1 = "
+        "播放时下一句可先排队，决策不用等嘴念完）；0 = 等队列排空的旧行为",
     )
     edge_tts: EdgeTTSParams = Field(
         default_factory=EdgeTTSParams,

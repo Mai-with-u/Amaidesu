@@ -83,6 +83,7 @@ def test_model_config_three_layer_defaults() -> None:
         "vision",
         "simulator",
         "tts",
+        "verifier",
     )
 
 

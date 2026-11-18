@@ -9,8 +9,8 @@
 扇出策略：``streamer.speech`` 业务事件在派发路径上同步 ``await`` 发出——
 观察端时间线按实际发生顺序渲染，依赖"发言先于轮末决策记录与空闲状态"
 的先后契约，不能延后一拍；TTS 启用且开启发言等播放时，业务事件发出前
-先在播放队列上做背压等待（嘴空才放行，发言节奏 = 语音播放节奏；决策循
-环单点串行，该等待同时把思考节奏限到嘴速），TTS 入队为等待后的同步
+先在播放队列上做背压等待（未播的话 ≤ max_pending 才放行，默认 1 = 播放
+中允许下一句先排队；0 = 旧语义等队列排空），TTS 入队为等待后的同步
 ``await``（纯内存操作，dispatch 返回即已入队）；字幕推送仍为异步扇出
 （任务强引用持有 ``_bg_tasks`` 集合，``stop()`` 末尾限期 2 秒汇合，防止
 悬挂任务在进程退出/重启窗口继续调用业务事件总线），对齐
@@ -32,6 +32,7 @@ from src.modules.utils.time_utils import now_ms
 
 from .talk.speech_mode import split_talk_paragraph
 from .utterance_queue import (
+    DEFAULT_MAX_PENDING,
     DEFAULT_MAX_QUEUE,
     DEFAULT_RENDER_TIMEOUT_MS,
     DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS,
@@ -55,7 +56,7 @@ class SpeechDispatcher:
     ) -> None:
         """``speech_config`` 形态见 StreamerAgent 构造参数文档
         （enabled / max_queue / render_timeout_ms / wait_playback /
-        wait_playback_timeout_ms）；``None`` 或 ``enabled=False`` 时管线
+        wait_playback_timeout_ms / max_pending）；``None`` 或 ``enabled=False`` 时管线
         整体关闭。``subtitle_service`` / ``tts_engine`` 均鸭子消费（仅调
         公开方法）。字幕源择流守三条规则（单一源、装配期定死、两模式互斥）：
         以构造注入的 ``tts_engine`` 是否在位为判据——有引擎时本管线订阅
@@ -75,6 +76,10 @@ class SpeechDispatcher:
         self._speech_wait_timeout_ms: int = int(
             speech_cfg.get("wait_playback_timeout_ms", DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS)
         )
+        # 未播积压上限（句）：放行条件从"队列排空"放宽为"未播的话 ≤ max_pending"——
+        # 播放中允许下一句先排队，决策不必等嘴念完才有资格出声（ADR-080 想与说
+        # 节拍解耦的出口保险）；0 = 旧行为（等队列排空）。
+        self._speech_max_pending: int = int(speech_cfg.get("max_pending", DEFAULT_MAX_PENDING))
         self._tts_engine = tts_engine
         self._subtitle_service = subtitle_service
         # 字幕源择流：初始以构造注入的 ``tts_engine`` 是否在位为判据——有引擎时
@@ -359,8 +364,8 @@ class SpeechDispatcher:
         - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
         - TTS 启用且开启发言等播放（wait_playback）→ 业务事件发出前先等
-          播放队列排空（背压：上一句播完才放行本次发言；决策循环单点串行，
-          该等待把"想"的节奏限到"说"的节奏）；等待超时 fail-open 放行，
+          未播积压降到 ``max_pending`` 及以内（背压：默认 1 = 播放中允许下一句
+          先排队；0 = 旧行为等队列排空）；等待超时 fail-open 放行，
           TTS 关闭/降级/开关关闭时直接放行
         - 业务事件同步 await 发出，先于本轮 ``planner.decision`` 与 idle 状态——
           观察端时间线按实际发生顺序渲染依赖该先后关系
@@ -523,17 +528,31 @@ class SpeechDispatcher:
         queue = self._utterance_queue
         return self._slot_claimed or (queue is not None and queue.busy)
 
-    async def _claim_slot(self, *, timeout_ms: Optional[int], gap_ms: int = 0) -> bool:
-        """等到嘴空并占下这个空档；超时返回 False，不占位。
+    async def _claim_slot(
+        self,
+        *,
+        timeout_ms: Optional[int],
+        gap_ms: int = 0,
+        max_pending: Optional[int] = None,
+    ) -> bool:
+        """等到可以出声并占下这个空档；超时返回 False，不占位。
 
         判定空闲与占位之间没有 await：两路发言同时等到空档时只有先判定的那路占得到，另一路接着等
         （占位那路的台词入队后队列变忙，后到的那路再等这一句播完）。``gap_ms``：等过前一句时再空
         这么久才开口，空完重新判定一次。``timeout_ms=None`` 表示不限时。
+
+        ``max_pending``：放行谓词（ADR-080 "欠一句"）——未播积压 ≤ ``max_pending`` 即视为有空档，
+        当前句在播不算占用；None = 旧语义（等嘴完全空，队列排空且当前句播完）。
         """
         deadline = None if timeout_ms is None else now_ms() + timeout_ms
         waited = False
         while True:
-            if not self._slot_taken():
+            queue = self._utterance_queue
+            if max_pending is None:
+                free = not self._slot_taken()
+            else:
+                free = not self._slot_claimed and (queue is None or queue.size <= max_pending)
+            if free:
                 if waited and gap_ms > 0:
                     waited = False
                     await asyncio.sleep(gap_ms / 1000.0)
@@ -545,7 +564,6 @@ class SpeechDispatcher:
             if remaining is not None and remaining <= 0:
                 return False
             waited = True
-            queue = self._utterance_queue
             if self._slot_claimed or queue is None:
                 # 另一路已占下空档、正在发出它那句：等它让出，再回头看队列
                 try:
@@ -554,7 +572,10 @@ class SpeechDispatcher:
                     )
                 except asyncio.TimeoutError:
                     return False
-            elif not await queue.wait_idle(timeout_ms=remaining):
+            elif max_pending is None:
+                if not await queue.wait_idle(timeout_ms=remaining):
+                    return False
+            elif not await queue.wait_pending_capacity(max_pending, timeout_ms=remaining):
                 return False
 
     def _release_slot(self) -> None:
@@ -563,11 +584,13 @@ class SpeechDispatcher:
         self._slot_free.set()
 
     async def _wait_for_playback_slot(self) -> bool:
-        """背压闸：上一句播完（队列排空）才放行本次发言。
+        """背压闸：未播的话不超过 ``max_pending``（0 = 旧行为等队列排空）才放行本次发言。
 
-        发言节奏跟随语音播放，消除"思考快过嘴速"的错位（想完五句嘴还在
-        念第二句）；决策循环单点串行（``_flush_lock``），此处等待即把整个
-        "想"的节奏限到"说"的节奏。放行条件任一即跳过等待：开关关闭、TTS
+        ADR-080 前放行条件是"队列排空"——发言节奏完全跟随语音播放，决策循
+        环单点串行（``_flush_lock``），该等待把整个"想"的节奏限到"说"的节奏。
+        放行条件放宽为"未播的话 ≤ max_pending"（默认 1）：播放期间允许下一句
+        先排队，决策不必等嘴念完才有资格出声；限住"想到就说"的过时上界，
+        burst 时队满即暂停放行。放行条件任一即跳过等待：开关关闭、TTS
         未启用/降级（无队列）。等待超时 fail-open——发言总是要发，节奏
         错位可接受，丢发言不可接受；超时上限 0 表示不限时（依赖引擎侧
         fail-fast 与 render_timeout 看门狗排空队列）。
@@ -579,9 +602,10 @@ class SpeechDispatcher:
         if not self._speech_wait_playback or not self._tts_enabled or queue is None:
             return False
         timeout_ms = self._speech_wait_timeout_ms
-        claimed = await self._claim_slot(timeout_ms=timeout_ms if timeout_ms > 0 else None)
+        max_pending = self._speech_max_pending if self._speech_max_pending > 0 else None
+        claimed = await self._claim_slot(timeout_ms=timeout_ms if timeout_ms > 0 else None, max_pending=max_pending)
         if not claimed:
-            self._logger.warning(f"等待上一句播完超时（>{timeout_ms}ms），放行本轮发言（播放继续追赶）")
+            self._logger.warning(f"等待播放空档超时（>{timeout_ms}ms），放行本轮发言（播放继续追赶）")
         return claimed
 
     # ==================================================================
