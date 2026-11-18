@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 
 import pytest
 
+from src.agents.streamer import canonical
 from src.agents.streamer.game_ledger import GameLedger, sole_chat_player
 
 
@@ -343,8 +344,6 @@ def test_sole_chat_player_only_when_one_checked_player_spoke(speakers: tuple, ex
 
 def test_chat_message_id_only_reaches_decision_view() -> None:
     """公屏消息号挂在决策层看的时间线行末尾（折叠行带第一条的号）；交给表达侧的原话不带号。"""
-    from src.agents.streamer import canonical
-
     ledger = GameLedger()
     ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="a1b2")
     ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="c3d4")
@@ -357,6 +356,40 @@ def test_chat_message_id_only_reaches_decision_view() -> None:
     assert decision_line.endswith("（另 1 次相同） [id:a1b2]")
     assert batch.events == (decision_line,)
     assert all("[id:" not in line for line in batch.fresh_chat)
+
+
+def test_chat_mention_mark_follows_the_turn_into_the_timeline() -> None:
+    """提及标注记在时间线行上：canonical 决策侧行尾（消息号之后）挂 [提及…]，折叠行带第一条的标注；
+    事件行与 canonical 决策行同构，交给表达侧的原话不带标注。"""
+    ledger = GameLedger()
+    ledger.record_chat(
+        "minecraft",
+        "玩家 Alex：麦麦来看看我",
+        _ts(20, 1),
+        speaker="uuid-a",
+        who="Alex",
+        mention="麦麦",
+        message_id="a1",
+    )
+    # 同文在同一折叠窗内再入账一次：并入第一条只记数，标注与消息号都带第一条的
+    ledger.record_chat(
+        "minecraft",
+        "玩家 Alex：麦麦来看看我",
+        _ts(20, 1),
+        speaker="uuid-a",
+        who="Alex",
+        mention="麦麦",
+        message_id="a2",
+    )
+
+    batch = ledger.drain()
+
+    (turn,) = batch.timeline_turns
+    assert (turn.message_id, turn.mention) == ("a1", "麦麦")
+    decision_line = canonical.turn_to_message(turn)["content"]
+    assert decision_line.endswith("（另 1 次相同） [id:a1] [提及麦麦]")
+    assert batch.events == (decision_line,)
+    assert all("[提及" not in line and "[id:" not in line for line in batch.fresh_chat)
     assert all("[id:" not in note.line for note in batch.player_notes)
 
 

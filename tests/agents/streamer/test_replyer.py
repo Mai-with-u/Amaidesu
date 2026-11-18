@@ -185,6 +185,31 @@ async def test_game_reports_are_clipped_and_kept_verbatim() -> None:
     assert turn["dialogue_prompt"] == (f"[游戏·minecraft·report] {report[:80]}…\n[游戏·minecraft·里程碑] 做好了床")
 
 
+async def test_mention_annotation_stays_out_of_the_expression_side() -> None:
+    """表达侧聊天记录与回应原话都不带提及标注：标注只给决策判据用（与消息号同不进表达侧）。"""
+    history = [
+        TimelineTurn(
+            role="user",
+            content="[21:28 minecraft] 玩家 ChangingSelf：麦麦，你现在准备做啥",
+            message_type="game",
+            message_id="g1",
+            mention="麦麦",
+            timestamp_ms=1_000,
+        )
+    ]
+    replyer, llm, prompt = _replyer()
+    prompt.render = MagicMock(
+        side_effect=lambda name, **kwargs: f"{kwargs.get('dialogue_prompt', '')}|{kwargs.get('target_text', '')}"
+    )
+    # Planner 按消息号指认这句游戏公屏发言：聊天记录行与回应原话两处都不得带标注
+    await replyer.generate(_plan(target="g1"), [], history=history)
+
+    content = llm.generate.await_args.args[0][0]["content"]
+    assert "麦麦，你现在准备做啥" in content
+    assert "[提及" not in content
+    assert "[id:" not in content
+
+
 @pytest.mark.parametrize(
     ("batch_ids", "expected"),
     [

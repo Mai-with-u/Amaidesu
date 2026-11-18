@@ -10,6 +10,9 @@
 ## 内容格式（canonical content）
 - 观众行：``[类型前缀] 昵称: 内容 [id:消息ID]``（类型前缀由 message_type
   登记表的 prompt 模板承载；`[id:…]` 目标机制保留在 content 内）
+- 游戏聊天行行尾还可带 `` [提及…]`` 标注（采集器按文本判定点名了她的名字）：
+  与 `[id:…]` 同一套"决策层拼、表达侧剥"的办法——提示词判据锚它分"点名她的行"
+  与"旁人对话"，表达侧聊天记录渲染时去掉，不进她的台词
 - 主播行：``[直播间] ``
   前缀 + 原样内容（发言即正文，不加昵称前缀）——与游戏条目的 ``[时刻 minecraft]``
   标注对称，标明这句只在直播间开口（观众听得到，游戏里的玩家看不到）
@@ -101,6 +104,7 @@ def canonical_content(
     text: str = "",
     message_type: str = "danmaku",
     message_id: str = "",
+    mention: str = "",
 ) -> str:
     """单条直播消息 → canonical content（见模块 docstring 的格式约定）。"""
     if role == "assistant":
@@ -110,6 +114,8 @@ def canonical_content(
         content = line
         if message_id:
             content = f"{content} [id:{message_id}]"
+        if mention:
+            content = f"{content} [提及{mention}]"
     # 弹幕、昵称与消息标识完整进入上下文，避免长消息丢失尾部要求。
     return content
 
@@ -142,6 +148,7 @@ def turn_to_message(turn: Any) -> Dict[str, str]:
             text=_as_str(getattr(turn, "content", None)),
             message_type=_as_str(getattr(turn, "message_type", None)) or "danmaku",
             message_id=_as_str(getattr(turn, "message_id", None)),
+            mention=_as_str(getattr(turn, "mention", None)),
         ),
     }
 

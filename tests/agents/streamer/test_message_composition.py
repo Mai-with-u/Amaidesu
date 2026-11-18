@@ -23,6 +23,7 @@ class FakeTurn:
     sender_name: str = ""
     message_type: str = "danmaku"
     message_id: str = ""
+    mention: str = ""
 
 
 def _batch_msg(text: str, mid: str, *, nickname: str = "小明", message_type: str = "danmaku") -> RoomMessagePayload:
@@ -82,6 +83,44 @@ def test_canonical_mapping() -> None:
     )
     assert speak == {"role": "assistant", "content": "[直播间] 晚上好"}
     assert canonical.to_text_view([history_msg, speak]) == "小明: 来个落地水 [id:m9]\n主播: [直播间] 晚上好"
+
+
+# 提及标注：决策侧行尾挂 [提及…]（采集器判定的点名事实，提示词判据锚它），表达侧剥掉
+
+
+def test_mention_annotation_renders_at_decision_line_end() -> None:
+    """游戏聊天行带 mention 时，决策侧行尾（消息号之后）拼 [提及…]；无消息号时同样挂行尾。"""
+    with_id = canonical.turn_to_message(
+        FakeTurn(
+            role="user",
+            content="[21:28 minecraft] 玩家 ChangingSelf：麦麦，你现在准备做啥",
+            message_type="game",
+            message_id="g1",
+            mention="麦麦",
+        )
+    )
+    assert with_id == {
+        "role": "user",
+        "content": "[21:28 minecraft] 玩家 ChangingSelf：麦麦，你现在准备做啥 [id:g1] [提及麦麦]",
+    }
+    without_id = canonical.turn_to_message(
+        FakeTurn(role="user", content="[21:29 minecraft] 玩家 Steve：麦麦来看看", message_type="game", mention="麦麦")
+    )
+    assert without_id == {"role": "user", "content": "[21:29 minecraft] 玩家 Steve：麦麦来看看 [提及麦麦]"}
+
+
+def test_no_mention_keeps_decision_line_byte_identical() -> None:
+    """没有 mention 的行渲染逐字节与原先一致：行尾只有消息号，不多空格、不挂空标注。"""
+    line = canonical.turn_to_message(
+        FakeTurn(
+            role="user",
+            content="[21:28 minecraft] 玩家 Alex：上大分",
+            message_type="game",
+            message_id="g2",
+        )
+    )
+    assert line == {"role": "user", "content": "[21:28 minecraft] 玩家 Alex：上大分 [id:g2]"}
+    assert "[提及" not in line["content"]
 
 
 # 消息构成

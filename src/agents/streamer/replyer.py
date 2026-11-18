@@ -506,7 +506,9 @@ class Replyer:
         rundown_render = rundown if rundown else "（当前无流程单）"
         # 要回应的那条原话在截取之前按整份历史查：被回应的弹幕可能已滑出最近几条
         target_message = canonical.find_target_message(plan.target, batch, full_history)
-        target_text = _strip_id_tag(target_message, canonical.normalize_message_id(plan.target or ""))
+        target_text = _strip_id_tag(
+            _strip_mention_tag(target_message), canonical.normalize_message_id(plan.target or "")
+        )
         # 玩家条目截短封顶，本窗在公屏说的那句从游戏聊天一段拿掉（条目里已有、还带着是谁说的）。
         # 游戏聊天整段都挪进了条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上
         chat_before = list(game_chat or [])
@@ -611,12 +613,14 @@ class Replyer:
             window_size = max(0, window_size - overflow)
 
     def _render_entry(self, entry: _DialogueEntry) -> str:
-        """一条记录渲染成一行：去掉消息 ID 标签；前情提要与游戏记录原样成行，游戏记录截短。
+        """一条记录渲染成一行：去掉消息 ID 与提及标注；前情提要与游戏记录原样成行，游戏记录截短。
 
         消息 ID 只对 Planner 有用（它按 ID 指定要回应哪条）；要回应的原话已单独给出，
-        她这边看 ID 只是噪声。
+        她这边看 ID 只是噪声。提及标注同样只给决策判据用，不进表达侧。
         """
-        content = _strip_id_tag(entry.content, entry.message_id) if entry.role == "user" else entry.content
+        content = entry.content
+        if entry.role == "user":
+            content = _strip_id_tag(_strip_mention_tag(content), entry.message_id)
         if entry.message_type == GAME_MESSAGE_TYPE:
             return _clip_game_note(content)
         if entry.message_type == CHAPTER_MESSAGE_TYPE:
@@ -891,6 +895,16 @@ def _strip_id_tag(content: str, message_id: str) -> str:
     if not message_id:
         return content
     return content.removesuffix(f" [id:{message_id}]")
+
+
+#: canonical 行尾的提及标注（`` [提及…]``，决策层专用，拼在消息号之后）：剥标注要先于剥
+#: 消息号，否则消息号的 removesuffix 对不上行尾
+_MENTION_TAG_SUFFIX = re.compile(r" \[提及[^\]]*\]$")
+
+
+def _strip_mention_tag(content: str) -> str:
+    """去掉 canonical 行末尾的 `` [提及…]`` 标注；没有时原样返回。"""
+    return _MENTION_TAG_SUFFIX.sub("", content, count=1)
 
 
 def _clip_game_note(content: str) -> str:

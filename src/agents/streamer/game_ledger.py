@@ -371,10 +371,20 @@ class GameLedger:
                 # 消息号记在行上：canonical 映射给决策层的这一行末尾挂 [id:…]（折叠的行带第一条的号），
                 # 表达侧聊天记录按行上的号剥掉标签；交给表达侧的原话（fresh_chat）本来就不带号
                 turn = replace(turn, message_id=item.message_id)
+            if item.mention:
+                # 提及标注与消息号同一套办法记在行上：canonical 给决策层的行尾挂 [提及…]
+                # （折叠的行带第一条的标注），表达侧聊天记录剥掉；fresh_chat 本来就不带标注
+                turn = replace(turn, mention=item.mention)
             turns.append(turn)
-            # 提及标注同样只在决策层看的行上（与消息号同不进表达侧）：提示词判据锚它分"点名她的行"与"旁人对话"
-            marked = f"{content} [提及{item.mention}]" if item.mention else content
-            events.append(f"{marked} [id:{item.message_id}]" if item.message_id else marked)
+            # 决策层看的事件行：正文行尾依次挂消息号与提及标注（与 canonical 渲染同构，折叠的行
+            # 带第一条的号与标注）；两者都只给决策判据用，不进表达侧——提示词判据锚提及标注
+            # 分"点名她的行"与"旁人对话"，交给表达侧的原话（fresh_chat）用不带标注的正文
+            marked = content
+            if item.message_id:
+                marked = f"{marked} [id:{item.message_id}]"
+            if item.mention:
+                marked = f"{marked} [提及{item.mention}]"
+            events.append(marked)
             if item.is_chat:
                 fresh_chat.append(content)
                 if item.speaker and (item.label, item.speaker) not in speakers:

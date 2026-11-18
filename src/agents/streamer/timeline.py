@@ -107,6 +107,9 @@ class TimelineTurn:
     sender_name: str = ""
     message_type: str = "danmaku"
     message_id: str = ""
+    # 公屏聊天行提到的她的名字（采集器按文本判定，空串 = 没提及）：canonical 给决策层
+    # 渲染的行尾挂 [提及…] 标注，表达侧聊天记录剥掉——与消息号同一套"决策侧拼、表达侧剥"
+    mention: str = ""
     timestamp_ms: int = 0
 
 
