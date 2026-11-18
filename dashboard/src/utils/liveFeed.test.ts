@@ -422,7 +422,7 @@ describe('rundown.changed / game.*', () => {
     expect(switching).toMatchObject({
       kind: 'rundown',
       text: '闲聊',
-      note: '环节 2/5',
+      note: '环节 3/5',
       badge: 'Agent',
     });
 
