@@ -109,3 +109,33 @@ async def test_breakdown_not_persisted_diagnostics_is_authoritative(store: SQLit
     record = json.loads(stream.read_text(encoding="utf-8").strip())
     assert record["breakdown"]["request_id"] == result.request_id
     assert read_latest_breakdowns(writer)["glm-4.7"]["request_id"] == result.request_id
+
+
+async def test_latest_prompt_tokens_per_model(store: SQLiteDatabase) -> None:
+    """每模型各自取 timestamp 最大那行的 prompt_tokens（上下文水位分子）。"""
+    insert = store.llm.insert_llm_usage
+    await insert(
+        model_name="glm-4.7", provider_name="zhipu", request_type="chat", prompt_tokens=100, timestamp_ms=1_000
+    )
+    await insert(
+        model_name="glm-4.7", provider_name="zhipu", request_type="chat", prompt_tokens=700, timestamp_ms=3_000
+    )
+    await insert(
+        model_name="deepseek-flash",
+        provider_name="deepseek",
+        request_type="chat",
+        prompt_tokens=300,
+        timestamp_ms=2_000,
+    )
+
+    assert await store.llm.llm_usage_latest_prompt_tokens() == {"glm-4.7": 700, "deepseek-flash": 300}
+
+
+async def test_latest_prompt_tokens_empty_table_returns_empty(store: SQLiteDatabase) -> None:
+    assert await store.llm.llm_usage_latest_prompt_tokens() == {}
+
+
+async def test_llm_usage_model_ts_index_exists(store: SQLiteDatabase) -> None:
+    """``(model_name, timestamp_ms)`` 索引在库：每模型最新行查询与按模型聚合依赖它走索引查找。"""
+    names = {row["name"] for row in await store.execute("PRAGMA index_list('llm_usage')")}
+    assert "idx_llm_usage_model_ts" in names

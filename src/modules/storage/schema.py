@@ -1145,6 +1145,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     timestamp_ms       INTEGER NOT NULL,
     request_id         TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_llm_usage_model_ts ON llm_usage(model_name, timestamp_ms);
 """.strip()
 
 

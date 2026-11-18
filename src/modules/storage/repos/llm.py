@@ -541,12 +541,16 @@ class LLMRepo(BaseRepo):
 
         返回 ``{model_name: prompt_tokens}``；无记录时不返回键。
         用于 Dashboard 模型用量详情"上下文水位"分子（与 context_window 配对比率）。
+
+        先按模型分组求最大时间戳再回表取行：两段聚合避免"外层每行都触发
+        一次子查询"的关联形态，配合 ``(model_name, timestamp_ms)`` 索引行数
+        增长时耗时近似线性。
         """
         rows = await self._execute(
-            "SELECT model_name, prompt_tokens FROM llm_usage t1"
-            " WHERE timestamp_ms = ("
-            " SELECT MAX(timestamp_ms) FROM llm_usage t2 WHERE t2.model_name = t1.model_name"
-            " )"
+            "SELECT t.model_name, t.prompt_tokens FROM llm_usage t"
+            " JOIN ("
+            "  SELECT model_name, MAX(timestamp_ms) AS max_ts FROM llm_usage GROUP BY model_name"
+            " ) m ON m.model_name = t.model_name AND m.max_ts = t.timestamp_ms"
         )
         result: Dict[str, int] = {}
         for row in rows:
