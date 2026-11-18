@@ -18,6 +18,7 @@ from src.agents.minecraft.glance import (
     glance_self,
     glance_world_memory,
     glance_worth_seeing,
+    nearby_player_names,
     nearest_places,
 )
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
@@ -910,3 +911,54 @@ def test_glance_self_surfaces_damaged_inventory_durability_and_low_gear_bars() -
     )
     assert legacy_view["inventory"] == ["minecraft:cobblestone ×32"]
     assert "low_durability" not in legacy_view["body"]
+
+
+async def test_glance_scene_and_nearby_player_names_merge_online_players_and_keep_empty_list() -> None:
+    """全服在线玩家感知与脱敏覆盖：合并视野内玩家实体与视野外在线玩家名单（去重保序），无其他玩家时保留空列表区分读取失败。"""
+    populated = MaicraftReply(
+        ok=True,
+        data={
+            "entities": [
+                {"type": "minecraft:player", "name": "Steve", "distance": 6},
+                {"type": "minecraft:player", "name": "Alex", "distance": 45},
+                {"type": "minecraft:cow", "name": "奶牛", "distance": 4},
+            ],
+            "online_players_not_nearby": ["Alex", "玩家甲", "  ", "Steve"],
+        },
+    )
+    view = glance_scene(populated)
+    assert view["online_players"] == ["Steve", "Alex", "玩家甲"]
+    assert nearby_player_names(populated) == ("Steve", "Alex", "玩家甲")
+
+    # 服内除角色自己外没有其他玩家在线：online_players 必须保留为空列表，不省略键
+    alone_view = glance_scene(MaicraftReply(ok=True, data={"entities": [{"type": "minecraft:pig", "distance": 5}]}))
+    assert "online_players" in alone_view and alone_view["online_players"] == []
+
+    # 周边读取失败：返回 nearby_error，不伪造 online_players 空列表
+    failed = MaicraftReply(ok=False, error_code="not_in_world", error_message="角色不在世界里")
+    failed_view = glance_scene(failed)
+    assert failed_view == {"nearby_error": "角色不在世界里"} and "online_players" not in failed_view
+    assert nearby_player_names(failed) == ()
+
+    # 端到端校验：游戏情境 players 同步带上视野外在线玩家名，供对外请求统一遮名
+    server = FakeMaicraft()
+    server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": _OVERWORLD}
+    server.scene_view["online_players_not_nearby"] = ["玩家甲", "Steve"]
+    registry = ToolRegistry()
+    agent, _llm, _bus = await make_minecraft_agent(server, lambda _m: _resp("好"), registry=registry)
+    await agent._glance()
+    situation = registry.current_situations(for_agent="streamer")["minecraft"]
+    assert situation.players == ("Steve", "玩家甲")
+    await agent.stop()
+
+
+def test_game_prompt_allows_survival_click_commands_while_forbidding_admin_shortcuts() -> None:
+    """游戏 Agent 提示词：禁止用管理员命令走捷径，允许在符合目标或主播要求时经 chat 发送可点击执行的生存玩家命令。"""
+    reset_prompt_manager()
+    try:
+        game = get_prompt_manager().render("amaidesu_minecraft_agent")
+    finally:
+        reset_prompt_manager()
+    assert "不用管理员命令" in game and "管理员命令默认拒收" in game
+    assert "可点击执行" in game and "可通过 `chat` 发送" in game
+    assert "`chat` 默认不执行任何游戏命令" not in game

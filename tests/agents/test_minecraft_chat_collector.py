@@ -15,7 +15,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
+import pytest
+
 from src.agents.minecraft.chat_attribution import (
+    NOTE_DEATH_BROADCAST,
     NOTE_SHOWN_AS_SELF,
     NOTE_SPEAKER_UNCONFIRMED,
     NOTE_UNVERIFIED,
@@ -290,6 +293,56 @@ async def test_death_line_carries_who_died_and_its_template() -> None:
         ("苦力怕", "0f0e0d0c-0b0a-4908-8706-050403020100"),
     ]
     assert payload.message_key == "death.attack.explosion.player"
+    assert payload.note == NOTE_DEATH_BROADCAST
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_kind", "expected_note"),
+    [
+        # 虚空掉落等原版死亡播报（字面如"掉出了这个世界"）标明是死亡播报，防止主播误判玩家退服下线
+        (
+            {"kind": "system", "text": "Steve掉出了这个世界", "translation_key": "death.attack.outOfWorld"},
+            "system",
+            NOTE_DEATH_BROADCAST,
+        ),
+        (
+            {"kind": "system", "text": "Alex从高处摔了下来", "translation_key": "death.fell.accident.generic"},
+            "system",
+            NOTE_DEATH_BROADCAST,
+        ),
+        # 真正的退服提示（multiplayer.player.left）不标死亡播报
+        (
+            {"kind": "system", "text": "Steve退出了游戏", "translation_key": "multiplayer.player.left"},
+            "system",
+            "",
+        ),
+        # 模组借名消息优先保留借名说明
+        (
+            {
+                "kind": "system",
+                "text": "Alex掉出了这个世界",
+                "shown_as": "Alex",
+                "translation_key": "death.attack.outOfWorld",
+            },
+            "system",
+            NOTE_SHOWN_AS_SELF,
+        ),
+        # "<账号名> 正文"兜底玩家聊天行仍走无凭据玩家消息分支
+        (
+            {"kind": "system", "text": "<Steve> 我掉出了这个世界", "translation_key": "death.attack.outOfWorld"},
+            "player",
+            NOTE_UNVERIFIED,
+        ),
+    ],
+    ids=["void_death", "fall_death", "real_disconnect", "shown_as_takes_precedence", "chat_line_fallback"],
+)
+def test_system_death_broadcast_is_annotated_to_distinguish_from_disconnect(
+    event: Dict[str, Any], expected_kind: str, expected_note: str
+) -> None:
+    """系统死亡播报（translation_key 以 death. 开头）附说明区分于掉线退服；退服与借名消息不受影响。"""
+    attributed = attribute_chat(event, self_name="Alex")
+    assert attributed is not None
+    assert (attributed.kind, attributed.note) == (expected_kind, expected_note)
 
 
 def test_collector_metadata_and_registration() -> None:

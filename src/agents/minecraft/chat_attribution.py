@@ -36,13 +36,26 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from src.modules.events.payloads.game_chat import GameChatMention
 
-__all__ = ["ChatAttribution", "attribute_chat", "line_speaker", "matched_self_mention", "mentions_of"]
+__all__ = [
+    "ChatAttribution",
+    "NOTE_DEATH_BROADCAST",
+    "NOTE_SHOWN_AS_SELF",
+    "NOTE_SPEAKER_UNCONFIRMED",
+    "NOTE_UNVERIFIED",
+    "SELF_MENTION_TYPE",
+    "attribute_chat",
+    "line_speaker",
+    "matched_self_mention",
+    "mentions_of",
+]
 
 #: 自提及条目在 ``GameChatMention.type`` 里用的标记：不是游戏报的点名词，是归因层按文本判定补的
 SELF_MENTION_TYPE = "self"
 
 #: 借角色名义发的机器消息的说明
 NOTE_SHOWN_AS_SELF = "模组借你的名义发的消息，不是谁说的话"
+#: 原版死亡播报（translation_key 以 death. 开头）的说明：防止把"掉出了这个世界"等虚空死因误判成掉线退服
+NOTE_DEATH_BROADCAST = "死亡播报，玩家仍在服内，不是下线退服"
 #: 没有发言人 UUID 的玩家消息的说明
 NOTE_UNVERIFIED = "没有发言人凭据，名字只是聊天栏上显示的，不一定是这个人说的"
 #: 还不知道角色账号名时，"<名字> 正文"这种系统消息的说明
@@ -95,8 +108,14 @@ def attribute_chat(event: Dict[str, Any], self_name: str = "") -> Optional[ChatA
             if speaker.casefold() == self_name.casefold():
                 return None
             return _from_chat_line(speaker, text)
-        # Mod 已经把"以角色名字显示、却没有角色 UUID"的消息改判成系统消息，并标出显示名
-        note = NOTE_SHOWN_AS_SELF if event.get("shown_as") else ""
+        # Mod 已经把"以角色名字显示、却没有角色 UUID"的消息改判成系统消息，并标出显示名；
+        # 非借名系统消息若翻译键以 death. 开头（如虚空掉落"掉出了这个世界"），标明是服内死亡而非掉线退服
+        if event.get("shown_as"):
+            note = NOTE_SHOWN_AS_SELF
+        elif str(event.get("translation_key") or "").startswith("death."):
+            note = NOTE_DEATH_BROADCAST
+        else:
+            note = ""
         return ChatAttribution(kind="system", sender="", sender_id="", content=text, note=note)
     sender = str(event.get("sender") or "")
     sender_id = str(event.get("sender_id") or "")

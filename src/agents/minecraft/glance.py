@@ -562,28 +562,46 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
     return result
 
 
-def nearby_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
-    """这次看周围看到的玩家名（按出现先后、去重）；没读到周围时为空。
+def _online_player_names(data: Dict[str, Any]) -> List[str]:
+    """汇总当前服务器在线的其他玩家名（按出现先后去重）。
 
-    主播把游戏情境（委派原话等）发给外部服务前，用它把玩家名换成"玩家"。
+    合并周边实体列表里的玩家条目（无论距离是否超出近处范围，只要在实体表里就是在线玩家）
+    与视野外在线玩家列表 ``online_players_not_nearby`` 中的非空名字。
     """
-    if not reply.ok:
-        return ()
     names: List[str] = []
-    for entity in reply.data.get("entities") or []:
+    for entity in data.get("entities") or []:
         if not isinstance(entity, dict) or entity.get("type") != "minecraft:player":
             continue
         name = str(entity.get("name") or "").strip()
         if name and name not in names:
             names.append(name)
-    return tuple(names)
+    raw_remote = data.get("online_players_not_nearby")
+    if isinstance(raw_remote, list):
+        for item in raw_remote:
+            if not isinstance(item, str):
+                continue
+            name = item.strip()
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def nearby_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
+    """这次观察读到的全部在线其他玩家名（含视野内玩家实体与视野外在线名单，按出现先后去重）；没读到时为空。
+
+    主播把游戏情境（委派原话等）发给外部服务前，用它把在服玩家名统一换成"玩家"，确保远处在线玩家的名字也一并脱敏。
+    """
+    if not reply.ok:
+        return ()
+    return tuple(_online_player_names(reply.data))
 
 
 def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """周边：时段天气、生物群系、身边的生物与设施（各带距离和大致方位），远处的生物按种类计数。
+    """周边：时段天气、生物群系、身边的生物与设施（各带距离和大致方位），远处的生物按种类计数，以及全服在线玩家名单。
 
     身边的生物带上认出它是谁的事实（驯服关系、坐着、名字、女仆皮肤、墓碑上的名字），见 ``described_entity``；
     ``nicknames`` 是生物名册给的"观察编号 → 主播起的名字"（墓碑对到死者），对上的条目带 ``nickname``。
+    ``online_players`` 始终写入（哪怕为空列表也保留），用来明确区分"此刻服内没有其他玩家在线"与周边读取失败。
     """
     if not reply.ok:
         return {"nearby_error": _failure(reply)}
@@ -592,6 +610,8 @@ def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = Non
     for key in ("time", "weather", "biome"):
         if data.get(key):
             result[key] = data[key]
+    # 合并视野内玩家实体与视野外在线名单并始终保留键，空列表明确表示服内此刻无其他玩家在线
+    result["online_players"] = _online_player_names(data)
     things = entity_things(data.get("mod_things"))
     names = nicknames or {}
     entities = []
