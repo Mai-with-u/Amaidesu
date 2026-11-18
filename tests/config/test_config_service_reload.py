@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from watchfiles import Change
@@ -81,6 +82,25 @@ async def test_reload_rereads_files(service: ConfigService, config_dir: Path) ->
     _rename_bot(config_dir, "新名字")
     await service.reload_config()
     assert _bot_name(service) == "新名字"
+
+
+async def test_reload_with_identical_content_logs_no_restart_warning(
+    service: ConfigService, config_dir: Path, loguru_capture: Any
+) -> None:
+    """文件被改回与加载时完全一致的内容：重载完成但不打"需重启"告警，只报无变化。"""
+    await service.reload_config()
+    messages = [r["message"] for r in loguru_capture.records]
+    assert not any("需重启进程" in m for m in messages)
+    assert any("内容与重载前一致" in m for m in messages)
+
+
+async def test_reload_with_changed_content_keeps_restart_warning(
+    service: ConfigService, config_dir: Path, loguru_capture: Any
+) -> None:
+    """内容确有差异的重载保留"需重启进程"告警。"""
+    _rename_bot(config_dir, "触发告警的名字")
+    await service.reload_config()
+    assert any("需重启进程" in r["message"] for r in loguru_capture.records)
 
 
 async def test_handle_reload_rereads_changed_files(service: ConfigService, config_dir: Path, tmp_path: Path) -> None:

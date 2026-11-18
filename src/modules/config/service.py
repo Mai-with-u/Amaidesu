@@ -368,6 +368,7 @@ class ConfigService:
             return True
 
         async with self._reload_lock:
+            old_config = self._main_config
             try:
                 self._main_config = self._load_main_config_from_disk()
             except Exception as exc:
@@ -377,6 +378,10 @@ class ConfigService:
 
             self._reload_revision += 1
             self.logger.info(f"配置已重载 (revision={self._reload_revision}, scopes={list(scopes)})")
+
+            if self._main_config == old_config:
+                self.logger.info("配置重载完成，内容与重载前一致，无变更")
+                return True
 
             # 内存合并视图已换新，但组件都是构造期快照，要吃到新值须重启进程；
             # 组件域的保存即生效由 WebUI 保存路径的组件重建负责（见 COMPONENT_REBUILD_SCOPES）
