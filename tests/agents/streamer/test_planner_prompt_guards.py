@@ -18,7 +18,7 @@ from src.agents.streamer.tools.social_fact import SocialFactToolProvider
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
-from src.modules.tools.models import ToolExecutionResult, ToolSpec
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
 from src.modules.utils.time_utils import now_ms
@@ -195,11 +195,22 @@ def test_prompt_template_treats_retraction_as_cancellation(prompts: Any) -> None
     assert "streamer_social_fact" not in prompt
 
 
-def _registry(with_social_fact: bool) -> ToolRegistry:
+def _registry(with_social_fact: bool, with_avatar_act: bool = False) -> ToolRegistry:
     registry = ToolRegistry()
     if with_social_fact:
         registry.register_provider(
             SocialFactToolProvider(repo=None, session_provider=lambda: None, game_scope_provider=lambda: ("", "", ""))
+        )
+    if with_avatar_act:
+
+        async def _act_ok(inv: ToolInvocation) -> ToolExecutionResult:
+            return ToolExecutionResult(tool_name=inv.tool_name, success=True)
+
+        registry.register_provider(
+            make_provider_from_specs(
+                "avatar",
+                [(ToolSpec(name="act", description="形象动作", kind="sync", provider="avatar"), _act_ok)],
+            )
         )
     return registry
 
@@ -240,6 +251,24 @@ async def test_proactive_action_options_mention_social_fact_only_when_registered
     text, failure = await planner._assemble_reference([], None, None, forced=False, proactive=True)
     assert failure is None and text is not None
     assert ("记一笔游戏里的社交事实（streamer_social_fact）" in text) is registered
+
+
+@pytest.mark.parametrize("registered", [True, False])
+def test_no_game_rules_mention_avatar_act_only_when_registered(prompts: Any, registered: bool) -> None:
+    """无游戏玩法段的 avatar_act 肢体动作分句，只在形象动作工具注册时出现。"""
+    planner = _planner(prompts, _registry(with_social_fact=False, with_avatar_act=registered))
+    rules = planner._render_game_rules()
+    assert "舞台杂谈模式" in rules
+    assert ("avatar_act" in rules) is registered
+
+
+@pytest.mark.parametrize("registered", [True, False])
+async def test_proactive_action_options_mention_avatar_act_only_when_registered(prompts: Any, registered: bool) -> None:
+    """主动窗【情境】的行动选项里"让形象动一下（avatar_act）"只在工具注册时列出。"""
+    planner = _planner(prompts, _registry(with_social_fact=False, with_avatar_act=registered))
+    text, failure = await planner._assemble_reference([], None, None, forced=False, proactive=True)
+    assert failure is None and text is not None
+    assert ("让形象动一下（avatar_act，不出声不占台词预算）" in text) is registered
 
 
 async def test_a3_and_a4_pit_trap_checks_own_recent_digging_and_explosions_before_answering(prompts: Any) -> None:

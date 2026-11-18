@@ -109,6 +109,8 @@ PLANNER_PROFILE: str = "planner"
 SOCIAL_FACT_TOOL_NAME: str = "streamer_social_fact"
 #: 场内记忆更正工具的全名：注册了才在主动窗行动选项里点名它
 MEMORY_CORRECT_TOOL_NAME: str = "streamer_memory_correct"
+#: 形象动作工具的全名：注册了才在主动窗行动选项与无游戏玩法段里点名它（皮套平台名单为空时不注册）
+AVATAR_ACT_TOOL_NAME: str = "avatar_act"
 #: 主播直发游戏公屏文字的工具全名：公屏发言只有经它真实发送成功才算在游戏内已回
 GAME_CHAT_SEND_TOOL_NAME: str = "minecraft_chat_send"
 
@@ -396,12 +398,14 @@ class Planner:
     TEMPLATE_NAME: str = "amaidesu_planner_react"
     #: 委派型游戏守则模板名：有能接收委派的 Agent 时追加进【当前游戏的玩法】
     DELEGATE_RULES_TEMPLATE: str = "amaidesu_planner_delegate_rules"
-    #: 没有任何游戏工具面时的玩法段：明说舞台杂谈语境，模型不对不存在的游戏工具硬凑动作
+    #: 没有任何游戏工具面时的玩法段基础句：明说舞台杂谈语境，模型不对不存在的游戏工具硬凑动作
     NO_GAME_RULES: str = (
         "当前没有启用任何游戏（舞台杂谈模式）：她在镜头前用虚拟形象和观众面对面聊天，没有游戏工具可用，"
         "不要安排她在游戏里动手，下文涉及游戏内行动、现场速览、背包与建筑的规则本场不适用；"
-        "让她专心陪观众聊天，可配合情绪与偶尔的 avatar_act 肢体动作。"
+        "让她专心陪观众聊天。"
     )
+    #: 无游戏玩法段的形象动作分句：avatar_act 注册了才追加
+    NO_GAME_AVATAR_CLAUSE: str = "可配合情绪与偶尔的 avatar_act 肢体动作。"
 
     def __init__(
         self,
@@ -1086,6 +1090,16 @@ class Planner:
         """场内记忆更正工具注册了没有：主动窗行动选项里只在注册时列出。"""
         return self._tool_registry is not None and self._tool_registry.has(MEMORY_CORRECT_TOOL_NAME)
 
+    def _avatar_act_tool_ready(self) -> bool:
+        """形象动作工具注册了没有：主动窗行动选项与无游戏玩法段里只在注册时点名它。"""
+        return self._tool_registry is not None and self._tool_registry.has(AVATAR_ACT_TOOL_NAME)
+
+    def _no_game_rules(self) -> str:
+        """无游戏玩法段：基础句 + avatar_act 注册了才追加的形象动作分句。"""
+        if self._avatar_act_tool_ready():
+            return self.NO_GAME_RULES + self.NO_GAME_AVATAR_CLAUSE
+        return self.NO_GAME_RULES
+
     @property
     def last_overview_text(self) -> str:
         """最近一轮决策前读取到的现场速览文本（供场内记忆更正工具核对现场回执）。"""
@@ -1260,7 +1274,7 @@ class Planner:
         has_game = any(provider not in self._NON_GAME_GUIDE_PROVIDERS for provider, _text in guides)
         lines: List[str] = []
         if not has_game:
-            lines.append(self.NO_GAME_RULES)
+            lines.append(self._no_game_rules())
         lines.extend(f"- {text}" for _provider, text in guides)
         if any(provider == FRAMEWORK_PROVIDER for provider, _text in guides):
             lines.append(self._prompt_service.render(self.DELEGATE_RULES_TEMPLATE))
@@ -1331,7 +1345,8 @@ class Planner:
                 + "查自己记得的事（memory_recall）、"
                 + ("更正简报里的旧记忆（streamer_memory_correct）、" if self._memory_correct_tool_ready() else "")
                 + ("记一笔游戏里的社交事实（streamer_social_fact）、" if self._social_fact_tool_ready() else "")
-                + "让形象动一下（avatar_act，不出声不占台词预算）；也可以什么都不做，等下一个事件。"
+                + ("让形象动一下（avatar_act，不出声不占台词预算）、" if self._avatar_act_tool_ready() else "")
+                + "也可以什么都不做，等下一个事件。"
                 "这些只是此刻能做的几类，不限于此——手上有什么活、想做什么，就做什么。"
             )
         if opening_wrapup:
