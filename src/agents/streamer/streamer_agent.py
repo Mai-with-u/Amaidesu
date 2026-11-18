@@ -287,6 +287,7 @@ class StreamerAgent(BaseAgent):
         mouth: Optional[Mouth] = None,
         memory_cues: Optional[MemoryCueProvider] = None,
         events_dir: Optional[Path] = None,
+        settle_wait_ms: int = _STREAM_END_SETTLE_WAIT_MS,
         clock: Callable[[], int] = now_ms,
     ) -> None:
         """初始化主播 Agent。
@@ -379,6 +380,7 @@ class StreamerAgent(BaseAgent):
         super().__init__(event_bus=event_bus)
         self.typed_config = config
         self._clock: Callable[[], int] = clock
+        self._settle_wait_ms: int = max(0, int(settle_wait_ms))
         self._llm = llm_manager
         # LLMManager 先于事件总线由组合根构造，挂载点在 Agent 侧：总线到手后
         # 递给它，"全部模型失败"才能旁路发布 core.error 告警（幂等，不覆盖已有总线）
@@ -1817,16 +1819,30 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"场次 {live_session_id} 的概览已写入")
 
     async def _settle_this_session(self, live_session_id: int) -> None:
-        """整理这一场（最多等 ``_STREAM_END_SETTLE_WAIT_MS``）；失败、超时都只记日志，不挡清理。"""
+        """整理这一场（最多等 ``self._settle_wait_ms``）；失败、超时都只记日志，不挡清理。"""
         if self._settler is None:
             return
+        timed_out = False
+        callback_result: Optional[bool] = None
+
+        def _on_settle_done(settled_ok: bool) -> None:
+            nonlocal callback_result
+            callback_result = settled_ok
+            # 当外层等待已因超时先行放行下播清理，而受 shield 保护的后台整理随后成功落库时，补叫醒记忆索引
+            if timed_out and settled_ok:
+                self._request_index_run()
+
         try:
-            async with asyncio.timeout(_STREAM_END_SETTLE_WAIT_MS / 1000):
-                settled = await self._settler.settle_session(live_session_id)
+            async with asyncio.timeout(self._settle_wait_ms / 1000):
+                settled = await self._settler.settle_session(live_session_id, on_complete=_on_settle_done)
         except asyncio.TimeoutError:
+            timed_out = True
             self._logger.warning(
-                f"场次 {live_session_id} 的下播整理超过 {_STREAM_END_SETTLE_WAIT_MS // 1000} 秒未结束，先执行下播清理"
+                f"场次 {live_session_id} 的下播整理超过 {self._settle_wait_ms // 1000} 秒未结束，先执行下播清理"
             )
+            # 兜住同一事件循环拍内超时与后台落库同时完成的边界，确保索引唤醒不漏调
+            if callback_result is True:
+                self._request_index_run()
             return
         except Exception as exc:  # noqa: BLE001 - 整理异常不挡清理
             self._logger.warning(f"场次 {live_session_id} 的下播整理出错（照常清理）: {exc}", exc=exc)

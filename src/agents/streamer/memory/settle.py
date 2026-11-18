@@ -701,17 +701,24 @@ class SessionSettler:
             logger.info(f"下播整理：待整理 {len(pending)} 场，成功 {settled} 场")
         return settled
 
-    async def settle_session(self, live_session_id: int) -> bool:
+    async def settle_session(
+        self,
+        live_session_id: int,
+        *,
+        on_complete: Optional[Callable[[bool], None]] = None,
+    ) -> bool:
         """整理一场：同一场的并发调用共享同一个在途任务，只付一次模型调用。
 
         下播后台整理、开播补整理与隐私清理前的等待可能同时指向同一场：第一个调用创建
         任务，其余调用等它结束，拿同一个结果。成功返回 True；失败或跳过返回 False，
-        内部异常转成 False 并记日志，不向调用方抛。
+        内部异常转成 False 并记日志，不向调用方抛。可选 ``on_complete`` 在底层整理任务
+        结束时收到最终落库成败（即使当前调用方的外层超时先行取消了等待也会如实回调）。
         """
         session_id = int(live_session_id)
         current = asyncio.current_task()
         task = self._inflight.get(session_id)
         if task is not None and not task.done() and task is not current:
+            self._attach_completion_callback(task, on_complete, session_id)
             return await asyncio.shield(task)
         if task is not None and task.done():
             self._inflight.pop(session_id, None)
@@ -725,7 +732,27 @@ class SessionSettler:
                 self._inflight.pop(session_id, None)
 
         task.add_done_callback(_forget)
+        self._attach_completion_callback(task, on_complete, session_id)
         return await asyncio.shield(task)
+
+    @staticmethod
+    def _attach_completion_callback(
+        task: asyncio.Task[bool],
+        callback: Optional[Callable[[bool], None]],
+        session_id: int,
+    ) -> None:
+        """在受 shield 保护的整理任务上挂载完成通知，确保外层等待超时后仍能感知落库完成。"""
+        if callback is None:
+            return
+
+        def _notify(done: asyncio.Task[bool]) -> None:
+            ok = not done.cancelled() and done.exception() is None and bool(done.result())
+            try:
+                callback(ok)
+            except Exception as exc:  # noqa: BLE001 - 完成回调异常不污染已落库的整理结果
+                logger.warning(f"场次 {session_id} 的整理完成回调执行出错: {exc}", exc=exc)
+
+        task.add_done_callback(_notify)
 
     def inflight_session_ids(self) -> List[int]:
         """当前正在跑下播整理的场次号（供停机与切片服务感知整理尚未结束）。"""
@@ -1661,8 +1688,9 @@ class SessionSettler:
         # 人批准的观众来源行：重新整理时接着带进快照，和接住的旧行一起按规则取舍；基底里已有的不重复带
         kept_ids = {int(item.line.id) for item in plan.kept}
         carried = [item for item in material.carried if int(item.line.id) not in kept_ids]
+        # 替换既有旧快照行的进度更新排在本场普通新事之前：旧行已从 plan.kept 摘除，优先占额可防被单场普通新事名额挤出而造成新旧双丢
         selection = select_snapshot(
-            [*new_lines, *plan.replacements], [*plan.kept, *carried], session_started_at_ms=material.started_at_ms
+            [*plan.replacements, *new_lines], [*plan.kept, *carried], session_started_at_ms=material.started_at_ms
         )
         correction_misses, dispositions = self._evaluate_corrections(material, selection.kept)
         candidates = await self._check_candidates(archive_data.get("viewer_candidates"), material, selection.lines)

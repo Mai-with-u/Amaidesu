@@ -20,10 +20,12 @@ from src.modules.background import BackgroundTaskRegistry
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.background import BackgroundTaskChangedPayload
+from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import NewCueLogEntry, SettleReport
+from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
 from tests.modules.llm.fakes import FakeLLMManager
 
 
@@ -1876,3 +1878,158 @@ async def test_viewer_self_candidates_require_familiar_viewer_and_drop_personal_
     report = SettleReport.model_validate_json(row.settle_report)
     assert report.candidates_personal_dropped == 1
     assert [(u.kind, u.what) for u in report.unregistered] == [("candidate", "ta 周末常去攀岩")]
+
+
+async def test_snapshot_replacements_precede_ordinary_new_lines_without_double_loss(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """替换旧快照行的更新排在本场普通新事之前：单场 6 条普通事件满额时优先保住替换行，防止旧行已删而新行被挤出的新旧双丢。"""
+    await _previous_archive(store)
+    session_id = await _ended_session(store, started_at_ms=5_000_000)
+    await _speech(store, session_id, "炉子点上火了", timestamp_ms=5_000_100)
+    for idx in range(1, 7):
+        await _speech(store, session_id, f"今天做了第{idx}件新小事", timestamp_ms=5_000_100 + idx * 100)
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="minecraft",
+        event_type="milestone",
+        message="炉子开始烧炼",
+        timestamp_ms=5_000_050,
+    )
+
+    archive_items = [
+        {
+            "line": idx + 1,
+            "title": f"Minecraft：第{idx}件新小事",
+            "quote": f"今天做了第{idx}件新小事",
+            "game": "minecraft",
+        }
+        for idx in range(1, 7)
+    ]
+    archive_payload = json.dumps(
+        {
+            "previous": [
+                {"old": 1, "op": "keep", "lasting": True},
+                {
+                    "old": 3,
+                    "op": "replace",
+                    "line": 1,
+                    "title": "Minecraft：炉子点上火了",
+                    "quote": "炉子点上火了",
+                    "game": "minecraft",
+                },
+            ],
+            "archive": archive_items,
+        },
+        ensure_ascii=False,
+    )
+    llm = _reply(archive_payload, '{"commitments": []}')
+    settler = _settler(store, llm, prompt_manager, games=["minecraft"])
+
+    assert await settler.settle_session(session_id) is True
+
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    snap_texts = [item.line.text for item in snapshot.lines]
+    assert "Minecraft：炉子点上火了" in snap_texts
+    assert "Minecraft：炉子还没点火" not in snap_texts
+    for idx in range(1, 6):
+        assert f"Minecraft：第{idx}件新小事" in snap_texts
+    assert "Minecraft：第6件新小事" not in snap_texts
+    all_session_texts = [line.text for line in await store.archive.list_lines(live_session_id=session_id)]
+    assert "Minecraft：第6件新小事" in all_session_texts
+
+
+class _CleanupSignalLedger:
+    """下播记账器观察替身：在 finish_stream_end 被调用时置位事件，用于确认外层整理等待已超时放行清理。"""
+
+    def __init__(self) -> None:
+        self.cleaned = asyncio.Event()
+
+    def set_cleanup_on_live_ended(self, enabled: bool) -> None:
+        del enabled
+
+    async def wait_writes_idle(self, timeout_ms: int) -> bool:
+        del timeout_ms
+        return True
+
+    async def finish_stream_end(self, *, clear_masks: bool) -> None:
+        del clear_masks
+        self.cleaned.set()
+
+
+class _ArchiveIndexSignalRepo:
+    """包装真实 MemoryIndexRepo：当全文索引写入本场新档案行时置位事件，供测试零睡眠同步断言。"""
+
+    def __init__(self, repo: Any) -> None:
+        self._repo = repo
+        self.archive_indexed = asyncio.Event()
+        self.indexed_documents: List[str] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._repo, name)
+
+    async def write_full_text(self, *, source: str, items: Any) -> int:
+        written = int(await self._repo.write_full_text(source=source, items=items))
+        if source == "archive" and written > 0:
+            self.indexed_documents.extend(doc.document for doc, _tokens in items)
+            self.archive_indexed.set()
+        return written
+
+
+async def test_settle_timeout_wakes_memory_indexer_when_shielded_task_commits(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """_settle_this_session 外层超时先行执行下播清理后，受 shield 保护的后台整理落库成功时仍经回调叫醒记忆索引。"""
+    session_id = await _ended_session(store, started_at_ms=10_000)
+    await _speech(store, session_id, "下次去海底神殿探险", timestamp_ms=10_500)
+
+    gate = asyncio.Event()
+    llm = FakeLLMManager(
+        responses=[
+            Response(
+                success=True,
+                content='{"archive": [{"line": 1, "title": "约好去海底神殿探险", "quote": "下次去海底神殿探险"}]}',
+            ),
+            Response(success=True, content='{"commitments": []}'),
+        ],
+        gate=gate,
+    )
+    bus = EventBus()
+    ledger_probe = _CleanupSignalLedger()
+    index_probe = _ArchiveIndexSignalRepo(store.memory_index)
+    agent = make_streamer_agent(
+        {"background": {"enabled": False}, "mouth": {"enabled": False}},
+        llm=llm,
+        prompt=prompt_manager,
+        event_bus=bus,
+        round_executor=FakeRoundExecutor(),
+        chat_repo=store.chat,
+        sessions_repo=store.sessions,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        memory_index_repo=index_probe,
+        stream_ledger=ledger_probe,
+        settle_wait_ms=0,
+    )
+    await agent.start()
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_ENDED,
+            LiveEndedPayload(
+                live_session_id=session_id,
+                ended_at_ms=1_810_000,
+                duration_ms=1_800_000,
+                kind="live",
+            ),
+            "test",
+        )
+        await asyncio.wait_for(ledger_probe.cleaned.wait(), timeout=5.0)
+        await asyncio.wait_for(llm.gate_reached.wait(), timeout=5.0)
+        assert index_probe.archive_indexed.is_set() is False
+
+        gate.set()
+        await asyncio.wait_for(index_probe.archive_indexed.wait(), timeout=5.0)
+        assert any("约好去海底神殿探险" in doc for doc in index_probe.indexed_documents)
+    finally:
+        await agent.stop()
+        await bus.cleanup()
