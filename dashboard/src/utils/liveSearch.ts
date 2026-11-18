@@ -12,12 +12,26 @@
 import type { SessionTimelineItem } from '@/types';
 import type { RequestMessage, RequestRecord } from './requestRecords';
 import type { ShowEntry } from './liveFeed';
+import { isGameTool } from './liveLanes';
 
 /** 片段的一段：hit=true 的段是关键词本身 */
 export interface SnippetPart {
   text: string;
   hit: boolean;
 }
+
+/** 命中分类：按"你在找什么"归的五桶（不按条目种类细分——kind 有 20+ 种、
+ *  事件名近 60 种，直接展示或按它们过滤都会碎成一排杂名） */
+export type LiveHitCategory = 'audience' | 'speech' | 'agent' | 'game' | 'system';
+
+/** 分类的中文短名（清单 tag 列与过滤 chips 共用） */
+export const HIT_CATEGORY_LABEL: Record<LiveHitCategory, string> = {
+  audience: '观众',
+  speech: '发言',
+  agent: '决策调用',
+  game: '游戏',
+  system: '系统',
+};
 
 /** 一条搜索结果 */
 export interface SearchHit {
@@ -27,6 +41,8 @@ export interface SearchHit {
   tsMs: number;
   /** 类型标签（弹幕 / 发言 / 工具…；决策轨迹档是请求结果） */
   tag: string;
+  /** 所属分类（过滤 chips 的数据源） */
+  category: LiveHitCategory;
   /** 主体（说话人 / 工具名 / 载荷字段名） */
   actor: string;
   /** 命中片段 */
@@ -70,6 +86,117 @@ const KIND_SHORT_LABEL: Record<string, string> = {
 /** 条目种类的中文短名（未知种类回落到原值） */
 export function kindShortLabel(kind: string): string {
   return KIND_SHORT_LABEL[kind] ?? kind;
+}
+
+// ---------------------------------------------------------------------------
+// 分类：三类命中来源（本地条目 / 服务端明细行 / 服务端事件）归到同一套五桶
+// ---------------------------------------------------------------------------
+
+/** 本地条目 → 分类。工具与思考行按调用来源分侧（与双轨归属同一判据）；
+ *  递话语义上是下个决策参考块的输入，归决策调用 */
+export function entryCategoryOf(entry: ShowEntry): LiveHitCategory {
+  switch (entry.kind) {
+    case 'danmaku':
+    case 'gift':
+    case 'super_chat':
+    case 'guard':
+    case 'enter':
+      return 'audience';
+    case 'speech':
+      return 'speech';
+    case 'game':
+    case 'game_chat':
+    case 'game_body':
+    case 'others_things':
+    case 'milestone':
+    case 'agent_reply':
+    case 'delegate_receipt':
+      return 'game';
+    case 'rundown':
+    case 'boundary':
+    case 'stage':
+    case 'tts':
+    case 'tool_health':
+    case 'system':
+      return 'system';
+    default:
+      // tool / thinking / prompt / verdict / decision：工具按来源分侧，其余属决策过程
+      return isGameTool(entry) ? 'game' : 'agent';
+  }
+}
+
+/** 服务端事件 → 分类：按事件名前缀归桶；工具结果看载荷里的 tool_name 分侧。
+ *  未知事件名兜底进系统（机器行宁可多归系统，不冒充实内容） */
+export function eventItemCategoryOf(
+  eventType: string,
+  data: Record<string, unknown>,
+): LiveHitCategory {
+  if (eventType.startsWith('room.')) return 'audience';
+  if (eventType === 'streamer.speech') return 'speech';
+  if (eventType.startsWith('planner.')) return 'agent';
+  if (eventType === 'agent.prompted') return 'agent';
+  if (eventType === 'agent.replied') return 'game';
+  if (eventType.startsWith('game.') || eventType.startsWith('task.')) return 'game';
+  if (eventType.startsWith('tool.')) {
+    const toolName = String(data.tool_name ?? '');
+    return /^(minecraft|maicraft)_/.test(toolName) ? 'game' : 'agent';
+  }
+  return 'system';
+}
+
+/** 服务端事件的清单标签：能细到具体动作就细（决策/裁决/工具/递话…），
+ *  认不出的回落到桶名——tag 列不出现英文事件名原文 */
+export function eventTagLabel(eventType: string, category: LiveHitCategory): string {
+  if (eventType.startsWith('room.')) return '弹幕';
+  if (eventType === 'streamer.speech') return '发言';
+  if (eventType === 'streamer.stage') return '阶段';
+  if (eventType.startsWith('streamer.rundown')) return '环节';
+  if (eventType === 'planner.decision') return '决策';
+  if (eventType === 'planner.verdict') return '裁决';
+  if (eventType.startsWith('tool.result.')) return '工具';
+  if (eventType.startsWith('tool.health.')) return '工具健康';
+  if (eventType === 'agent.prompted') return '递话';
+  if (eventType === 'agent.replied') return 'Agent 步骤';
+  if (eventType === 'task.changed') return '任务';
+  if (eventType.startsWith('game.')) return '游戏';
+  if (eventType.startsWith('tts.utterance.')) return '播报';
+  if (eventType.startsWith('live.')) return '场次';
+  return HIT_CATEGORY_LABEL[category];
+}
+
+/** 服务端命中条目 → 分类（明细行按 kind 直查，事件条目走前缀规则） */
+export function itemCategoryOf(item: SessionTimelineItem): LiveHitCategory {
+  const kind = String(item.kind ?? '');
+  if (kind === 'event') {
+    return eventItemCategoryOf(
+      String(item.event_type ?? ''),
+      (item.data ?? {}) as Record<string, unknown>,
+    );
+  }
+  switch (kind) {
+    case 'danmaku':
+    case 'guard':
+    case 'enter':
+    case 'gift_row':
+    case 'super_chat_row':
+      return 'audience';
+    case 'speech':
+      return 'speech';
+    default:
+      return 'system';
+  }
+}
+
+/** 各分类的命中计数（固定桶序，只出数量大于 0 的桶——过滤 chips 的数据源） */
+export function countByCategory(
+  hits: SearchHit[],
+): Array<{ key: LiveHitCategory; label: string; count: number }> {
+  const order: LiveHitCategory[] = ['audience', 'speech', 'agent', 'game', 'system'];
+  const counts = new Map<LiveHitCategory, number>();
+  for (const hit of hits) counts.set(hit.category, (counts.get(hit.category) ?? 0) + 1);
+  return order
+    .filter(key => (counts.get(key) ?? 0) > 0)
+    .map(key => ({ key, label: HIT_CATEGORY_LABEL[key], count: counts.get(key) ?? 0 }));
 }
 
 /** 条目参与匹配的文本：正文 + 备注 + 说话人 */
@@ -128,6 +255,7 @@ export function hitFromEntry(entry: ShowEntry, keyword: string): SearchHit {
     id: entry.id,
     tsMs: entry.tsMs,
     tag: entry.badge || kindShortLabel(entry.kind),
+    category: entryCategoryOf(entry),
     actor: entry.actor,
     parts: entrySnippet(entry, keyword),
     entry,
@@ -180,10 +308,13 @@ export function hitFromItem(item: SessionTimelineItem, keyword: string): SearchH
     const data = (item.data ?? {}) as Record<string, unknown>;
     const found = payloadHit(data, needle);
     if (!found) return null;
+    const eventType = String(item.event_type ?? '');
+    const category = eventItemCategoryOf(eventType, data);
     return {
-      id: `srv-${tsMs}-${String(item.event_type ?? '')}`,
+      id: `srv-${tsMs}-${eventType}`,
       tsMs,
-      tag: String(item.event_type ?? '事件'),
+      tag: eventTagLabel(eventType, category),
+      category,
       actor: found.label,
       parts: hitSnippet(found.text, needle),
     };
@@ -202,6 +333,7 @@ export function hitFromItem(item: SessionTimelineItem, keyword: string): SearchH
     tag: kindShortLabel(
       kind === 'gift_row' ? 'gift' : kind === 'super_chat_row' ? 'super_chat' : kind,
     ),
+    category: itemCategoryOf(item),
     actor: name || '—',
     parts,
   };
@@ -219,7 +351,8 @@ export function recordMatches(record: RequestRecord, keyword: string): boolean {
   return recordHitMessage(record, keyword) !== null;
 }
 
-/** 请求记录 → 结果行（决策轨迹档） */
+/** 请求记录 → 结果行（决策轨迹档；记录都是决策轮，固定归决策调用——
+ *  该档的过滤 chips 不渲染，这个值只为接口完整） */
 export function hitFromRecord(record: RequestRecord, keyword: string): SearchHit | null {
   const message = recordHitMessage(record, keyword);
   if (!message) return null;
@@ -227,6 +360,7 @@ export function hitFromRecord(record: RequestRecord, keyword: string): SearchHit
     id: record.id,
     tsMs: record.tsMs,
     tag: record.outcomeLabel || '请求',
+    category: 'agent',
     actor: record.trigger || '—',
     parts: hitSnippet(message.text, keyword),
     record,

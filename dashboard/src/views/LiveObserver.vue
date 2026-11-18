@@ -255,11 +255,14 @@
             :scope-note="searchScopeNote"
             :show-list="searchExpanded"
             :has-more="searchHasMore"
+            :categories="searchBarCategories"
+            :active-category="searchActiveCategory"
             @next="searchNext()"
             @previous="searchPrevious()"
             @confirm="onSearchConfirm"
             @select="onSearchSelect"
             @hover="onSearchHover"
+            @set-category="searchSetCategory"
             @clear="searchClear()"
             @collapse="searchExpanded = false"
           />
@@ -947,7 +950,10 @@ async function onSearchJump(hit: SearchHit): Promise<void> {
 
 const {
   query: searchQuery,
-  hits: searchHits,
+  filteredHits: searchHits,
+  categoryCounts: searchCategoryCounts,
+  activeCategory: searchActiveCategory,
+  setCategory: searchSetCategory,
   index: searchIndex,
   loading: searchLoading,
   scopeNote: searchScopeNote,
@@ -965,6 +971,11 @@ const {
   sessionId: searchSessionId,
   jump: onSearchJump,
 });
+
+/** 决策轨迹档的命中是请求记录粒度，没有五桶分类——chips 不传，清单自然不渲染 */
+const searchBarCategories = computed(() =>
+  stageView.value === 'trajectory' ? [] : searchCategoryCounts.value,
+);
 
 /** Enter：跳到当前选中的命中 */
 function onSearchConfirm(): void {

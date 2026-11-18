@@ -15,10 +15,12 @@ import { computed, ref, watch, type Ref } from 'vue';
 import { liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import {
+  countByCategory,
   hitFromEntry,
   hitFromItem,
   hitFromRecord,
   matchEntries,
+  type LiveHitCategory,
   type SearchHit,
 } from '@/utils/liveSearch';
 import type { RequestRecord } from '@/utils/requestRecords';
@@ -48,7 +50,8 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
 
   const query = ref('');
   const hits = ref<SearchHit[]>([]);
-  /** 当前命中的序号（-1 = 没有选中） */
+  /** 当前命中的序号：filteredHits 内的下标（-1 = 没有选中）。导航与选中都
+   * 基于过滤后的清单——键盘选中的项必须能在清单里看见 */
   const index = ref(-1);
   const loading = ref(false);
   /** 检索范围：整场 / 已加载 / 已加载记录（决策轨迹档） */
@@ -59,14 +62,27 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
   const expanded = ref(false);
   /** 服务端还有更早的命中没返回 */
   const hasMore = ref(false);
+  /** 当前选中的分类（'all' = 不过滤；过滤只作用于清单，竖条标记仍全量） */
+  const activeCategory = ref<'all' | LiveHitCategory>('all');
 
   /** 命中时刻集合：主时间线据此给命中的行加标记（按时刻而非 id 匹配——
-   * 服务端命中的 id 与本地条目不同，时刻才是两边一致的东西） */
+   * 服务端命中的 id 与本地条目不同，时刻才是两边一致的东西）。取全量命中，
+   * 不随分类过滤收窄——清单滤掉的是"看"的方式，不是命中本身 */
   const matchedTimestamps = computed<Set<number>>(() => new Set(hits.value.map(hit => hit.tsMs)));
+
+  /** 过滤后的命中清单（分类 chips 的作用对象） */
+  const filteredHits = computed<SearchHit[]>(() =>
+    activeCategory.value === 'all'
+      ? hits.value
+      : hits.value.filter(hit => hit.category === activeCategory.value),
+  );
+
+  /** 各分类的命中计数（全量口径；chips 上的数字不随过滤变） */
+  const categoryCounts = computed(() => countByCategory(hits.value));
 
   /** 当前命中的那一条 */
   const activeHit = computed<SearchHit | null>(() =>
-    index.value >= 0 ? (hits.value[index.value] ?? null) : null,
+    index.value >= 0 ? (filteredHits.value[index.value] ?? null) : null,
   );
 
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -83,12 +99,14 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
     return matchEntries(entries.value, keyword).map(entry => hitFromEntry(entry, keyword));
   }
 
-  /** 检索一次：整场优先，不可用时退回已加载窗口 */
+  /** 检索一次：整场优先，不可用时退回已加载窗口。新结果落位时分类过滤
+   *  一并归零——旧过滤是针对上一轮结果的，套在新结果上没有意义 */
   async function runSearch(): Promise<void> {
     const keyword = query.value.trim();
     if (!keyword) {
       hits.value = [];
       index.value = -1;
+      activeCategory.value = 'all';
       scopeNote.value = '';
       hasMore.value = false;
       expanded.value = false;
@@ -102,6 +120,7 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
         const local = localHits(keyword);
         if (seq !== requestSeq) return;
         hits.value = local;
+        activeCategory.value = 'all';
         index.value = local.length ? 0 : -1;
         scope.value = 'records';
         scopeNote.value = '决策轨迹只检索已加载的请求记录';
@@ -115,6 +134,7 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
         const local = localHits(keyword);
         if (seq !== requestSeq) return;
         hits.value = local;
+        activeCategory.value = 'all';
         index.value = local.length ? 0 : -1;
         scope.value = 'local';
         scopeNote.value = '当前没有可检索的场次，只搜到已加载的内容';
@@ -129,6 +149,7 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
         .map(item => hitFromItem(item, keyword))
         .filter((hit): hit is SearchHit => hit !== null);
       hits.value = found;
+      activeCategory.value = 'all';
       index.value = found.length ? 0 : -1;
       hasMore.value = response.data.has_more;
       scope.value = 'session';
@@ -141,6 +162,7 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
       // 服务端检索不可用时退回已加载窗口，不把"搜不到"说成"没有"
       const local = localHits(keyword);
       hits.value = local;
+      activeCategory.value = 'all';
       index.value = local.length ? 0 : -1;
       hasMore.value = false;
       scope.value = 'local';
@@ -165,9 +187,9 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
     void runSearch();
   });
 
-  /** 跳到第 i 条命中（越界时忽略） */
+  /** 跳到过滤后清单的第 i 条命中（越界时忽略） */
   async function goTo(i: number): Promise<void> {
-    const hit = hits.value[i];
+    const hit = filteredHits.value[i];
     if (!hit) return;
     index.value = i;
     await jump(hit);
@@ -175,16 +197,25 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
 
   /** 下一条命中（到末尾回到第一条） */
   async function next(): Promise<void> {
-    if (!hits.value.length) return;
-    const i = hits.value.length > 1 ? (index.value + 1) % hits.value.length : 0;
+    const total = filteredHits.value.length;
+    if (!total) return;
+    const i = total > 1 ? (index.value + 1) % total : 0;
     await goTo(i);
   }
 
   /** 上一条命中（到第一条回到最后一条） */
   async function previous(): Promise<void> {
-    if (!hits.value.length) return;
-    const i = hits.value.length > 1 ? (index.value - 1 + hits.value.length) % hits.value.length : 0;
+    const total = filteredHits.value.length;
+    if (!total) return;
+    const i = total > 1 ? (index.value - 1 + total) % total : 0;
     await goTo(i);
+  }
+
+  /** 切换分类过滤：清单换血，选中回到第一条 */
+  function setCategory(category: 'all' | LiveHitCategory): void {
+    if (activeCategory.value === category) return;
+    activeCategory.value = category;
+    index.value = filteredHits.value.length ? 0 : -1;
   }
 
   /** 清空搜索：关键词、命中、说明一起归零（挂起的防抖一并取消） */
@@ -193,6 +224,7 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
     query.value = '';
     hits.value = [];
     index.value = -1;
+    activeCategory.value = 'all';
     scope.value = 'local';
     scopeNote.value = '';
     hasMore.value = false;
@@ -202,6 +234,10 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
   return {
     query,
     hits,
+    filteredHits,
+    categoryCounts,
+    activeCategory,
+    setCategory,
     index,
     activeHit,
     loading,

@@ -7,8 +7,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  countByCategory,
+  entryCategoryOf,
   entryMatches,
   entrySnippet,
+  eventItemCategoryOf,
+  eventTagLabel,
   hitFromEntry,
   hitFromItem,
   hitFromRecord,
@@ -153,6 +157,98 @@ describe('hitFromItem（服务端命中 → 结果行）', () => {
       hitFromItem({ kind: 'danmaku', ts_ms: 1, user_name: 'x', content: '无关' }, '破防'),
     ).toBeNull();
     expect(hitFromItem({ kind: 'event', ts_ms: 1, event_type: 't', data: {} }, '破防')).toBeNull();
+  });
+});
+
+describe('entryCategoryOf（本地条目 → 五桶，走 hitFromEntry 的 category 字段）', () => {
+  it.each([
+    ['danmaku', 'audience'],
+    ['super_chat', 'audience'],
+    ['gift', 'audience'],
+    ['guard', 'audience'],
+    ['enter', 'audience'],
+    ['speech', 'speech'],
+    ['decision', 'agent'],
+    ['verdict', 'agent'],
+    ['thinking', 'agent'],
+    ['prompt', 'agent'],
+    ['game', 'game'],
+    ['game_body', 'game'],
+    ['others_things', 'game'],
+    ['milestone', 'game'],
+    ['agent_reply', 'game'],
+    ['delegate_receipt', 'game'],
+    ['rundown', 'system'],
+    ['stage', 'system'],
+    ['tts', 'system'],
+    ['tool_health', 'system'],
+    ['system', 'system'],
+  ] as const)('kind=%s → %s', (kind, expected) => {
+    const hit = hitFromEntry(entryOf({ id: 'x', text: 't', kind }), 't');
+    expect(hit.category).toBe(expected);
+  });
+
+  it('工具按调用来源分侧：游戏 Agent 来源进游戏桶，其余进决策调用（与双轨同一判据）', () => {
+    expect(
+      hitFromEntry(entryOf({ id: 'g', text: 't', kind: 'tool', source: '游戏 Agent' }), 't')
+        .category,
+    ).toBe('game');
+    expect(
+      hitFromEntry(entryOf({ id: 's', text: 't', kind: 'tool', source: '主播' }), 't').category,
+    ).toBe('agent');
+  });
+
+  it('entryCategoryOf 与 hitFromEntry 的分类一致（同一判据两个入口）', () => {
+    const entry = entryOf({ id: 'p', text: 't', kind: 'prompt' });
+    expect(entryCategoryOf(entry)).toBe('agent');
+  });
+});
+
+describe('eventItemCategoryOf / eventTagLabel（服务端事件 → 分类与中文标签）', () => {
+  it.each([
+    ['room.message', {}, 'audience'],
+    ['streamer.speech', {}, 'speech'],
+    ['planner.decision', {}, 'agent'],
+    ['planner.verdict', {}, 'agent'],
+    ['agent.prompted', {}, 'agent'],
+    ['agent.replied', {}, 'game'],
+    ['game.body.hit', {}, 'game'],
+    ['task.changed', {}, 'game'],
+    ['tool.result.minecraft_glance', { tool_name: 'minecraft_glance' }, 'game'],
+    ['tool.result.maicraft_execute', { tool_name: 'maicraft_execute' }, 'game'],
+    ['tool.result.streamer_reply', { tool_name: 'streamer_reply' }, 'agent'],
+    ['streamer.stage', {}, 'system'],
+    ['tts.utterance.started', {}, 'system'],
+    ['live.started', {}, 'system'],
+    ['core.error', {}, 'system'],
+    ['background.task.changed', {}, 'system'],
+    ['unknown.event.name', {}, 'system'],
+  ] as const)('%s → %s', (eventType, data, expected) => {
+    expect(eventItemCategoryOf(eventType, data as Record<string, unknown>)).toBe(expected);
+  });
+
+  it('事件标签能细则细，认不出回落到桶名，不出现英文事件名原文', () => {
+    expect(eventTagLabel('planner.verdict', 'agent')).toBe('裁决');
+    expect(eventTagLabel('tool.result.maicraft_observe', 'game')).toBe('工具');
+    expect(eventTagLabel('tts.utterance.started', 'system')).toBe('播报');
+    expect(eventTagLabel('brand.new.event', 'system')).toBe('系统');
+  });
+});
+
+describe('countByCategory（过滤 chips 的计数）', () => {
+  it('按固定桶序只出非零桶，计数是全量口径', () => {
+    const hits = [
+      hitFromEntry(entryOf({ id: '1', text: 't', kind: 'danmaku' }), 't'),
+      hitFromEntry(entryOf({ id: '2', text: 't', kind: 'speech', speak: true }), 't'),
+      hitFromEntry(entryOf({ id: '3', text: 't', kind: 'speech', speak: true }), 't'),
+      hitFromEntry(entryOf({ id: '4', text: 't', kind: 'system' }), 't'),
+    ];
+    expect(countByCategory(hits)).toEqual([
+      { key: 'audience', label: '观众', count: 1 },
+      { key: 'speech', label: '发言', count: 2 },
+      { key: 'system', label: '系统', count: 1 },
+    ]);
+    expect(countByCategory([])).toEqual([]);
   });
 });
 

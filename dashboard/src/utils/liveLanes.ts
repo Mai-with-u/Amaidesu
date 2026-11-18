@@ -56,8 +56,9 @@ export interface SegmentBoundary {
   endMs: number | null;
 }
 
-/** 游戏侧工具：工具条目没有独立通道字段，只能看调用来源（游戏 Agent 命名下发） */
-function isGameTool(entry: ShowEntry): boolean {
+/** 游戏侧工具：工具条目没有独立通道字段，只能看调用来源（游戏 Agent 命名下发）。
+ *  双轨归属与搜索分类共用同一判据，改动需同步两处消费方 */
+export function isGameTool(entry: ShowEntry): boolean {
   if (entry.kind !== 'tool' && entry.kind !== 'thinking') return false;
   return entry.source === '游戏 Agent';
 }

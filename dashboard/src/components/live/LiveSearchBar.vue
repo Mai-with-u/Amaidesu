@@ -55,13 +55,35 @@
       <el-icon><Close /></el-icon>
     </button>
 
-    <!-- 命中清单：主时间线不因搜索变形，这里给出全部命中，点一条跳到那一刻 -->
+    <!-- 命中清单：主时间线不因搜索变形，这里给出全部命中，点一条跳到那一刻。
+         顶部类别 chips 按桶过滤清单（≥2 个分类才出——单分类没有过滤可言）；
+         传进来的 hits 已是页面过滤后的清单，chips 数字是全量口径 -->
     <div
       v-if="showList && hits.length"
       class="search-hits"
       role="listbox"
       aria-label="搜索命中清单"
     >
+      <div v-if="categories.length > 1" class="hit-cats" role="group" aria-label="按分类过滤命中">
+        <button
+          type="button"
+          class="hit-cat"
+          :class="{ 'is-on': activeCategory === 'all' }"
+          @click="emit('set-category', 'all')"
+        >
+          全部 {{ total }}
+        </button>
+        <button
+          v-for="cat in categories"
+          :key="cat.key"
+          type="button"
+          class="hit-cat"
+          :class="{ 'is-on': activeCategory === cat.key }"
+          @click="emit('set-category', cat.key)"
+        >
+          {{ cat.label }} {{ cat.count }}
+        </button>
+      </div>
       <button
         v-for="(hit, i) in hits"
         :key="`${hit.id}-${i}`"
@@ -104,14 +126,15 @@
  * （页面级快捷键经 defineExpose 的 focus 调用）。清单的选中项变化时
  * 自动滚进可视区。
  */
-import { nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { ArrowDown, ArrowUp, Close, Search } from '@element-plus/icons-vue';
 import { formatTimeHMS } from '@/utils/format';
-import type { SearchHit } from '@/utils/liveSearch';
+import type { LiveHitCategory, SearchHit } from '@/utils/liveSearch';
 
 const props = withDefaults(
   defineProps<{
     query: string;
+    /** 过滤后的命中清单（分类过滤在页面层做，这里只展示） */
     hits: SearchHit[];
     index: number;
     loading: boolean;
@@ -121,10 +144,22 @@ const props = withDefaults(
     showList: boolean;
     /** 服务端还有更早的命中没返回 */
     hasMore: boolean;
+    /** 各分类的全量计数（chips 上的数字；空数组 = 该档不提供分类） */
+    categories?: Array<{ key: LiveHitCategory; label: string; count: number }>;
+    /** 当前选中的分类 */
+    activeCategory?: 'all' | LiveHitCategory;
     placeholder?: string;
   }>(),
-  { placeholder: '搜索这一场的内容：弹幕、发言、工具调用…', hasMore: false },
+  {
+    placeholder: '搜索这一场的内容：弹幕、发言、工具调用…',
+    hasMore: false,
+    categories: () => [],
+    activeCategory: 'all',
+  },
 );
+
+/** 全量命中数：各分类计数之和（"全部"chip 上显示） */
+const total = computed(() => props.categories.reduce((sum, cat) => sum + cat.count, 0));
 
 const emit = defineEmits<{
   'update:query': [value: string];
@@ -142,6 +177,8 @@ const emit = defineEmits<{
   clear: [];
   /** Esc 在输入框按下：收起清单 */
   collapse: [];
+  /** 切换分类过滤 */
+  'set-category': [category: 'all' | LiveHitCategory];
 }>();
 
 const inputRef = ref<HTMLInputElement | null>(null);
@@ -277,6 +314,40 @@ defineExpose({ focus });
   border-radius: var(--radius-md);
   background: var(--bg-overlay);
   box-shadow: var(--shadow-md);
+}
+
+/* 分类过滤 chips：吸在清单顶（清单滚动时不跟着滚走） */
+.hit-cats {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 4px 6px;
+  background: var(--bg-overlay);
+}
+
+.hit-cat {
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.hit-cat:hover {
+  border-color: var(--border-color-dark);
+  color: var(--text-primary);
+}
+
+.hit-cat.is-on {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
 }
 
 .search-hit {
