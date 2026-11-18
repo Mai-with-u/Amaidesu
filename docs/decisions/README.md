@@ -98,3 +98,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-077：常驻简报按种类分区、开播接上次收尾、承诺过期搁置与场内更正（部分取代 ADR-066 / ADR-071 的名额与轮播规则 / 整理逐调用断点续跑）](077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
 - [ADR-078：游戏社交事实的定位、与三类记忆的分工边界及证据隐私治理（对齐 ADR-068 / ADR-074）](078-game-social-facts-boundaries-and-governance.md)
 - [ADR-079：记忆检索抗干扰降噪、双侧记忆桥接与档案名场面分层（扩展 ADR-071 / ADR-072 / ADR-077 / ADR-078）](079-memory-anti-noise-cross-agent-bridge-and-highlights.md)
+- [ADR-080：思考节拍与发言节拍解耦（开窗连续 / 发言侧限速 / 队列上限 / 核对器三选一与独立档）](080-speech-thinking-cadence-decouple.md)
