@@ -311,10 +311,12 @@ async def reconcile_with_mouth(
         "请给出核对结论（放行 / 重复 / 保留：… / 作废：…）："
     )
     try:
+        # 出声前与嘴对账仅做四态轻量判别，显式传低思考档位消除长思考带来的发声卡顿
         response = await llm_service.generate(
             [{"role": "user", "content": user_prompt}],
             system=_RECONCILE_SYSTEM,
             profile=profile,
+            reasoning_effort="low",
         )
     except Exception as exc:  # noqa: BLE001 - 辅助核对异常不阻断正常说话
         _LOGGER.warning(f"出声前与嘴对账调用异常，保守放行: {exc}", exc=True)

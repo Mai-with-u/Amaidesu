@@ -138,6 +138,7 @@ async def test_reconcile_parses_four_verdicts_when_mouth_spoke(
     assert verdict.action == expected_action
     assert verdict.speech == expected_speech
     assert len(llm.calls) == 1
+    assert llm.calls[0]["reasoning_effort"] == "low"
 
 
 def _reply_tool_call(call_id: str, summary: str) -> ToolCall:

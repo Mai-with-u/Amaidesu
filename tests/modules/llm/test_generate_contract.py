@@ -20,6 +20,7 @@ from src.modules.llm.client import BaseLLMClient
 from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.engine import LLMManager, _content_to_parts
 from src.modules.llm.payload import GenerateRequest, Response, ToolCall, ToolSpec, Usage
+from tests.modules.llm.fakes import engine_with
 
 PAYLOAD_FILE = Path(__file__).resolve().parents[3] / "src" / "modules" / "llm" / "payload.py"
 
@@ -168,3 +169,14 @@ def test_message_content_normalizes_to_parts_and_rejects_inline_images() -> None
     # 历史里图的唯一合法形态是引用：任何整体序列化消费者（压缩器/预算）都不该见到 base64
     with pytest.raises(TypeError, match="不允许内联图像"):
         _content_to_parts([{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}])
+
+
+async def test_generate_explicit_reasoning_effort_overrides_profile_default() -> None:
+    """generate 显式传入非空 reasoning_effort 时写入请求对象覆盖 profile 默认思考强度；缺省或空白时回退 profile 默认值。"""
+    vendor = FakeVendorClient({"api_key": "k", "base_url": "fake://local"})
+    async with engine_with(vendor, {"planner": {"temperature": 0.7, "reasoning_effort": "high"}}) as manager:
+        await manager.generate("快速核对", profile="planner", reasoning_effort="low")
+        await manager.generate("常规规划", profile="planner")
+        await manager.generate("空串回退", profile="planner", reasoning_effort="   ")
+
+    assert [req.reasoning_effort for req in vendor.requests] == ["low", "high", "high"]

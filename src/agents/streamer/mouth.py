@@ -54,9 +54,107 @@ _MAX_REACTION_AGE_MS = 20_000
 #: 反应插到其他待播台词前面的优先级
 _PRIORITY = 5
 _SILENCE = "[沉默]"
-# 行首英文情绪标签（允许空格、连字符、下划线与可选外层括号，如 "so happy："、"[scared]:"）：
-# 合法枚举值按枚举走，其余不合法标签连同冒号一并剥除，防止把情绪标签当成台词念给观众听
-_EMOTION_LINE = re.compile(r"^\s*[\[【(]?\s*([A-Za-z][A-Za-z _-]{0,30}?)\s*[\]】)]?\s*[：:]\s*(.*)$")
+# 行首中英文情绪标签候选（兼容可选外层括号 []【】()（） 与中英文冒号）：
+# 英文仅剥除合法枚举、已知近义词、带空格/连字符的多词标签或括号小写标签，不误剥 PlayerA 等玩家名；
+# 中文严格匹配受控情绪词表（未知情绪词归 neutral），绝不误剥“问题是：”“注意：”“大家：”等正常台词冒号
+_EMOTION_LINE = re.compile(
+    r"^\s*([\[【(（]?)\s*([A-Za-z][A-Za-z _-]{0,30}|[\u4e00-\u9fff]{1,6})\s*([\]】)）]?)\s*[：:]\s*(.*)$"
+)
+_EN_NEUTRAL_ALIASES: frozenset[str] = frozenset("calm relaxed chill normal plain quiet peaceful".split())
+_EN_UNKNOWN_EMOTION_WORDS: frozenset[str] = frozenset(
+    (
+        "sigh gasp panic panicked laugh laughing giggle relief disbelief stunned dazed bitter "
+        "shyly happily sadly angrily nervously excitedly awkwardly fear joy anger sorrow grief "
+        "guilty ashamed jealous touched moved despair hopeful awe chuckle smile smiling grin "
+        "pout pouting whine groan embarrassment frustration annoyance boredom"
+    ).split()
+)
+_ZH_EMOTION_MAP: Dict[str, Emotion] = {
+    **dict.fromkeys(
+        "平静 淡定 普通 正常 平和 冷静 自然 淡然 释然 感慨 唏嘘 感叹 纠结 复杂 思索 嘀咕 嘟囔 小声 轻声".split(),
+        Emotion.NEUTRAL,
+    ),
+    **dict.fromkeys(
+        "开心 高兴 愉快 喜悦 快乐 欣喜 满足 庆幸 安心 松口气 松了口气 窃喜 暗喜 傻笑 微笑".split(), Emotion.HAPPY
+    ),
+    **dict.fromkeys("兴奋 激动 亢奋 狂喜 振奋 雀跃 期待".split(), Emotion.EXCITED),
+    **dict.fromkeys("害羞 羞涩 不好意思 脸红 扭捏 娇羞 羞恼 娇嗔 羞愧".split(), Emotion.SHY),
+    **dict.fromkeys("尴尬 窘迫 心虚 社死 难为情 汗颜".split(), Emotion.EMBARRASSED),
+    **dict.fromkeys("无语 无奈 汗 麻了 叹气 吐槽 苦笑 干笑 冷汗 扶额 头大".split(), Emotion.SPEECHLESS),
+    **dict.fromkeys(
+        "害怕 紧张 惊恐 恐惧 慌张 惊慌 心慌 发怵 吓一跳 受惊 吓坏 慌神 发抖 胆怯 担心 担忧 焦虑".split(), Emotion.SCARED
+    ),
+    **dict.fromkeys("惊讶 吃惊 震惊 意外 诧异 愕然 好奇 呆住 怔住 惊呼 惊叹 傻眼".split(), Emotion.SURPRISED),
+    **dict.fromkeys("困惑 疑惑 迷茫 懵 发懵 不解 纳闷 茫然 迷糊".split(), Emotion.CONFUSED),
+    **dict.fromkeys("疲惫 累 困 心累 疲倦 困倦 乏力 犯困 无聊 倦怠".split(), Emotion.TIRED),
+    **dict.fromkeys(
+        "难过 伤心 委屈 沮丧 失落 悲伤 郁闷 遗憾 惋惜 心疼 叹息 低落 懊恼 懊悔 后悔 心酸 难受".split(), Emotion.SAD
+    ),
+    **dict.fromkeys("哭泣 大哭 流泪 哭 呜咽 泪目 崩溃 痛哭".split(), Emotion.CRYING),
+    **dict.fromkeys("生气 愤怒 恼火 气愤 火大 暴躁 不爽 急眼 恼怒 气急 狂怒 抓狂 暴怒 咬牙".split(), Emotion.ANGRY),
+    **dict.fromkeys("得意 骄傲 自豪 傲娇 坏笑 偷笑 调皮 戏谑 狡黠 自信 神气".split(), Emotion.SMUG),
+    **dict.fromkeys("严肃 认真 专注 凝重 郑重 正经 果断 坚定 沉思".split(), Emotion.SERIOUS),
+    **dict.fromkeys("嫌弃 厌恶 恶心 反感 鄙视".split(), Emotion.DISGUSTED),
+    **dict.fromkeys("喜欢 喜爱 感动 宠溺 温柔 贴心 欣慰".split(), Emotion.LOVE),
+}
+_ZH_DEGREE_PREFIXES: Tuple[str, ...] = tuple("有点 有些 略微 超级 非常 特别 十分 略 微 好 超 很 太".split())
+
+
+def _is_known_en_emotion_word(word: str) -> bool:
+    """判断单个英文词是否属于合法情绪枚举、近义词或常见英文情绪词（排除 PlayerA 等玩家昵称）。"""
+    lowered = word.strip().lower()
+    if not lowered:
+        return False
+    coerced, note = coerce_emotion(lowered)
+    if not note or coerced is not Emotion.NEUTRAL:
+        return True
+    return lowered in _EN_NEUTRAL_ALIASES or lowered in _EN_UNKNOWN_EMOTION_WORDS
+
+
+def _parse_emotion_prefix(line: str) -> Optional[Tuple[Emotion, str, str]]:
+    """识别并剥除行首中英文情绪标签，返回 ``(情绪枚举, 剩余台词, 改写说明)``；普通冒号台词返回 ``None``。
+
+    触发条件与防误剥顺序：
+    1. 先匹配行首可选成对括号与冒号；括号不成对时直接按普通台词放行。
+    2. 若前缀为短中文词，仅当命中受控中文情绪词表（含可选程度副词）时剥除并映射枚举（无专属枚举词归 neutral），
+       防止把“问题是：…”“注意：…”“大家：…”等正常口播句子误剥。
+    3. 若前缀为英文，仅对已知英文情绪词、含空格/连字符的多词情绪标签或括号小写标签剥除收敛，
+       防止把“PlayerA：…”“Player_abc：…”等玩家名误当成情绪标签吞掉。
+    """
+    match = _EMOTION_LINE.match(line)
+    if match is None:
+        return None
+    open_bracket, raw_tag, close_bracket, rest = match.groups()
+    if bool(open_bracket) != bool(close_bracket):
+        return None
+    tag = raw_tag.strip()
+    rest_text = rest.strip()
+    if not tag:
+        return None
+    if "\u4e00" <= tag[0] <= "\u9fff":
+        mapped = _ZH_EMOTION_MAP.get(tag)
+        if mapped is None:
+            for prefix in _ZH_DEGREE_PREFIXES:
+                if tag.startswith(prefix) and len(tag) > len(prefix):
+                    mapped = _ZH_EMOTION_MAP.get(tag[len(prefix) :])
+                    if mapped is not None:
+                        break
+        if mapped is None:
+            return None
+        return mapped, rest_text, f"{tag!r} 为中文情绪前缀，按 {mapped.value} 处理"
+    if _is_known_en_emotion_word(tag):
+        emotion, note = coerce_emotion(tag)
+        return emotion, rest_text, note
+    has_space_or_hyphen = " " in tag or "-" in tag
+    tokens = [tok for tok in re.split(r"[\s_-]+", tag) if tok]
+    has_emotion_token = any(_is_known_en_emotion_word(tok) for tok in tokens)
+    is_bracketed_lower = bool(open_bracket) and tag == tag.lower()
+    if has_space_or_hyphen or has_emotion_token or is_bracketed_lower:
+        emotion, note = coerce_emotion(tag)
+        return emotion, rest_text, note
+    return None
+
+
 #: 一次反应最多拆成几行（每行一个情绪）：再多就成了讲一段，那是 Planner 的活
 _MAX_LINES = 3
 #: 整行都包在括号里的是旁白或动作说明（"（挠头）"），不是要念出来的话
@@ -396,12 +494,12 @@ class Mouth:
         for line in lines:
             if len(segments) >= _MAX_LINES or _SILENCE in line or "【沉默】" in line:
                 break
-            match = _EMOTION_LINE.match(line)
-            if match:
-                current, note = coerce_emotion(match.group(1))
+            parsed_prefix = _parse_emotion_prefix(line)
+            if parsed_prefix is not None:
+                # 识别到行首中英文情绪标签时更新当前行情绪并剥除标签前缀，防止“害羞：”之类直念进语音合成
+                current, line, note = parsed_prefix
                 if note:
                     self._logger.debug(f"嘴情绪标签收敛（标签已剥除不念）: {note}")
-                line = match.group(2).strip()
             if line and not _STAGE_DIRECTION.match(line):
                 segments.append((current, line))
         return segments

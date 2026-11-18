@@ -772,6 +772,7 @@ class LLMManager:
         system: Optional[str] = None,
         tools: Optional[List[Union[ToolSpec, Dict[str, Any]]]] = None,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         strict_tool_arguments: bool = False,
         on_delta: Optional[Callable[[str, str], None]] = None,
         interrupt: Optional[asyncio.Event] = None,
@@ -781,12 +782,15 @@ class LLMManager:
         签名宽是刻意的容错设计：``input`` 接受裸字符串（单轮用户消息）、
         中立 ``Message`` 列表或 OpenAI 风格 dict 列表——Engine 统一归一化
         到 payload 再调度，消费方不必为迁就契约改自己的输入形状。
-        生成温度缺省时回退 profile 档位，完整结构化产物可要求严格解析工具参数；
+        生成温度与思考强度缺省时回退 profile 档位，完整结构化产物可要求严格解析工具参数；
         响应结束原因原样保留，由调用方拒绝未完成的产物。
         """
         profile_name = self._resolve_profile_name(profile)
         request = _normalize_generate_input(input, system=system, tools=tools, temperature=temperature)
         request.strict_tool_arguments = strict_tool_arguments
+        if isinstance(reasoning_effort, str) and reasoning_effort.strip():
+            # 单次调用显式指定思考强度档位时写入请求对象，覆盖用途档默认思考强度
+            request.reasoning_effort = reasoning_effort.strip()
         # 图像引用先注水（引用→内联，越窗降级），再守卫（拒发内联大载荷）；
         # 都在故障切换之前——结构性问题重试无意义
         _hydrate_image_refs(request)

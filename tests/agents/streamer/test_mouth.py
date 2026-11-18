@@ -559,3 +559,73 @@ async def test_mouth_strips_duplicate_greeting_for_already_welcomed_player(promp
 
     assert spoken == "这苦力怕怎么贴脸炸我呀！"
     assert "欢迎" not in spoken
+
+
+@pytest.mark.parametrize(
+    ("raw_line", "expected_emotion", "expected_text"),
+    [
+        ("害羞：哪有你说的那么厉害啦！", "shy", "哪有你说的那么厉害啦！"),
+        ("【尴尬】：刚才那一脚踩空没人看见吧……", "embarrassed", "刚才那一脚踩空没人看见吧……"),
+        ("(无语): 这苦力怕怎么还带拐弯的。", "speechless", "这苦力怕怎么还带拐弯的。"),
+        ("[开心]：捡到金苹果啦！", "happy", "捡到金苹果啦！"),
+        ("高兴: 铁锭终于烧好了！", "happy", "铁锭终于烧好了！"),
+        ("兴奋：前面露出一大片钻石矿！", "excited", "前面露出一大片钻石矿！"),
+        ("【激动】: 快看箱子里的附魔书！", "excited", "快看箱子里的附魔书！"),
+        ("害怕：谁在背后射我？！", "scared", "谁在背后射我？！"),
+        ("(紧张)：底下全是岩浆声。", "scared", "底下全是岩浆声。"),
+        ("惊恐：监守者钻出来了！", "scared", "监守者钻出来了！"),
+        ("惊讶：这箱子里居然有海绵！", "surprised", "这箱子里居然有海绵！"),
+        ("[吃惊]: 一下出了四只小鸡！", "surprised", "一下出了四只小鸡！"),
+        ("困惑：这红石线怎么没亮呢？", "confused", "这红石线怎么没亮呢？"),
+        ("疑惑：刚才明明放这儿的呀。", "confused", "刚才明明放这儿的呀。"),
+        ("疲惫：总算把这层石头挖通了。", "tired", "总算把这层石头挖通了。"),
+        ("累：跑了大半张地图。", "tired", "跑了大半张地图。"),
+        ("难过：钻石镐还是断掉了……", "sad", "钻石镐还是断掉了……"),
+        ("伤心：小狼没跟上来。", "sad", "小狼没跟上来。"),
+        ("（委屈）：明明我已经举盾了嘛！", "sad", "明明我已经举盾了嘛！"),
+        ("哭泣：全掉进岩浆里了呜呜！", "crying", "全掉进岩浆里了呜呜！"),
+        ("生气：这骷髅没完了是吧！", "angry", "这骷髅没完了是吧！"),
+        ("愤怒：还敢来偷袭！", "angry", "还敢来偷袭！"),
+        ("得意：这波落地水帅不帅！", "smug", "这波落地水帅不帅！"),
+        ("严肃：这下面得慢点探。", "serious", "这下面得慢点探。"),
+        ("认真：先把退路搭稳。", "serious", "先把退路搭稳。"),
+        ("平静：先把火把插一圈。", "neutral", "先把火把插一圈。"),
+        ("感慨：这片山谷风景真不错。", "neutral", "这片山谷风景真不错。"),
+    ],
+)
+async def test_short_chinese_emotion_prefixes_are_stripped_and_mapped(
+    prompts: Any, raw_line: str, expected_emotion: str, expected_text: str
+) -> None:
+    """行首常见短中文情绪词前缀（含可选括号与中英文冒号）识别后剥除不念进 TTS，并映射对应 Emotion 枚举（未知情绪词归 neutral）。"""
+    llm, speech = _LLM(raw_line), _Speech()
+    mouth = _mouth(llm, speech, prompts)
+
+    spoken = await mouth.react_once([_trigger()])
+
+    assert spoken == expected_text
+    assert speech.calls[0]["emotion"] == expected_emotion
+
+
+@pytest.mark.parametrize(
+    "normal_line",
+    [
+        "问题是：现在包里一把铁镐都没了。",
+        "注意：脚底下就是岩浆池！",
+        "PlayerA：你怎么突然跑到我后面来了！",
+        "Player_B: 等我先把这边火把插上。",
+        "Alice：谢谢你扔过来的面包呀！",
+        "Bob: 前头那座桥是你搭的吗？",
+        "大家：这话说的，我都不好意思了。",
+    ],
+)
+async def test_normal_colon_clauses_and_player_names_are_never_stripped_as_emotion(
+    prompts: Any, normal_line: str
+) -> None:
+    """正常台词开头的提示词冒号与玩家名冒号绝不能误判成情绪标签剥除。"""
+    llm, speech = _LLM(normal_line), _Speech()
+    mouth = _mouth(llm, speech, prompts)
+
+    spoken = await mouth.react_once([_trigger()])
+
+    assert spoken == normal_line
+    assert speech.calls[0]["emotion"] == "neutral"
