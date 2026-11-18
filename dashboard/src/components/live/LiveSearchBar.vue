@@ -44,10 +44,11 @@
         <el-icon><ArrowDown /></el-icon>
       </button>
     </template>
+    <!-- 空查询时整个隐藏，不做成可见但禁用——否则看着像"关闭搜索条" -->
     <button
+      v-if="query.trim()"
       type="button"
       class="search-nav"
-      :disabled="!query"
       title="清空搜索（Esc）"
       aria-label="清空搜索"
       @click="emit('clear')"
