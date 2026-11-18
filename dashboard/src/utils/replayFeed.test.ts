@@ -119,7 +119,7 @@ describe('buildReplayEntries：事件类明细', () => {
     expect(entries[0]).toMatchObject({
       kind: 'rundown',
       text: '唱歌',
-      note: '环节 1/3',
+      note: '环节 2/3',
       badge: '手动',
     });
     // 完成态形状与实时 fromRundown 对齐（note 留空，完成语义由 text 承载）
