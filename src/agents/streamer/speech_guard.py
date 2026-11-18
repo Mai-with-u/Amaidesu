@@ -30,6 +30,7 @@ __all__ = [
     "find_verbatim_repeat",
     "fit_to_budget",
     "guard",
+    "normalize_spoken_punctuation",
     "strip_memory_numbers",
 ]
 
@@ -58,6 +59,37 @@ def fit_to_budget(speech: str, budget: int) -> str:
         kept += sentence
     # 全是标点（切不出句子）时原样返回，不把台词截成空串
     return kept or text
+
+
+# ============================================================================
+# 书面标点规范化
+# ============================================================================
+
+# 台词是当场说出口的话：破折号与省略号是书面标点，念出来不成话。无论模型写成什么，
+# 出声与字幕统一在出口处把这两类（含连用）换成逗号，再清掉由此产生的重复标点与句尾悬挂逗号
+_EM_DASH_RUN = re.compile(r"—+")
+_ELLIPSIS_RUN = re.compile(r"…+")
+_REPEATED_COMMA = re.compile(r"[，,]{2,}")
+_END_PUNCT_THEN_COMMA = re.compile(r"([。！？!?~～])[，,]")
+_COMMA_THEN_END_PUNCT = re.compile(r"[，,]([。！？!?])")
+_LEADING_COMMA = re.compile(r"^[，,]")
+_TRAILING_COMMA = re.compile(r"[，,]\s*$")
+
+
+def normalize_spoken_punctuation(text: str) -> str:
+    """把台词里的书面标点换成口语标点，返回可直接出声与上字幕的文本。
+
+    映射：破折号"——"（含连用与单个）→"，"；省略号"……"（含连用与单个"…"）→"，"；
+    随后清理重复标点、句末标点两侧的逗号、句首逗号与句尾悬挂逗号（句尾悬挂逗号补成句号）。
+    无书面标点的文本原样返回。
+    """
+    cleaned = _EM_DASH_RUN.sub("，", text)
+    cleaned = _ELLIPSIS_RUN.sub("，", cleaned)
+    cleaned = _REPEATED_COMMA.sub("，", cleaned)
+    cleaned = _END_PUNCT_THEN_COMMA.sub(r"\1", cleaned)
+    cleaned = _COMMA_THEN_END_PUNCT.sub(r"\1", cleaned)
+    cleaned = _LEADING_COMMA.sub("", cleaned)
+    return _TRAILING_COMMA.sub("。", cleaned).strip()
 
 
 # ============================================================================

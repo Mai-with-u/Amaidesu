@@ -30,6 +30,7 @@ from src.modules.subtitle.playback_follower import bind_playback_subtitle, unbin
 from src.modules.subtitle.protocol import ReplyQuote
 from src.modules.utils.time_utils import now_ms
 
+from .speech_guard import normalize_spoken_punctuation
 from .talk.speech_mode import split_talk_paragraph
 from .utterance_queue import (
     DEFAULT_MAX_PENDING,
@@ -378,7 +379,8 @@ class SpeechDispatcher:
         speech = reply_payload.get("speech", "")
         emotion = reply_payload.get("emotion", {})
 
-        cleaned_speech = speech.strip() if isinstance(speech, str) else ""
+        # 书面标点规范化：无论表达侧写了什么，出声、字幕与落库文本统一在此换成口语标点
+        cleaned_speech = normalize_spoken_punctuation(speech.strip()) if isinstance(speech, str) else ""
         # 情绪契约：replyer 保证 emotion 为 {name, intensity} 且 name 已降级为
         # 合法枚举值（缺失→neutral）、intensity 已 clamp——此处规范化后透传，
         # 使 ``streamer.speech`` 事件的 emotion/emotion_intensity 必有值；
@@ -403,7 +405,7 @@ class SpeechDispatcher:
                 # 占住播放空档后、真正发出业务事件前做最后一道核对：拦截等前一句播放期间被嘴抢先说完或推翻的旧话
                 if before_emit is not None:
                     revised = await before_emit(cleaned_speech)
-                    cleaned_speech = revised.strip() if isinstance(revised, str) else ""
+                    cleaned_speech = normalize_spoken_punctuation(revised.strip()) if isinstance(revised, str) else ""
                     if not cleaned_speech:
                         return None
                 utterance_id = self._next_utterance_id()
@@ -468,12 +470,15 @@ class SpeechDispatcher:
         Returns:
             本句的 utterance_id；空台词或作废时返回 None。
         """
-        text = speech.strip()
+        # 书面标点规范化：嘴的突发反应与 Planner 发言同走这一出口，出声与字幕统一无书面标点
+        text = normalize_spoken_punctuation(speech.strip())
         if not text:
             return None
         queue = self._utterance_queue
         playing = self._tts_enabled and queue is not None
-        follow = [(line.strip(), mood) for line, mood in follow_ups if line and line.strip()]
+        follow = [
+            (normalize_spoken_punctuation(line.strip()), mood) for line, mood in follow_ups if line and line.strip()
+        ]
         if follow and not playing:
             text += "".join(line for line, _ in follow)
             follow = []

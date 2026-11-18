@@ -10,6 +10,7 @@ from src.agents.streamer.speech_guard import (
     find_verbatim_repeat,
     fit_to_budget,
     guard,
+    normalize_spoken_punctuation,
     strip_memory_numbers,
 )
 
@@ -113,3 +114,36 @@ def test_find_verbatim_repeat_catches_near_verbatim_without_false_positives(
     assert (hit is not None) is should_hit
     if hit is not None:
         assert hit.ratio >= 0.9
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # 破折号（含连用折叠）换逗号
+        ("血见底了——快跑", "血见底了，快跑"),
+        ("血见底了————快跑", "血见底了，快跑"),
+        # 省略号（含连用）换逗号
+        ("完了完了……我床呢", "完了完了，我床呢"),
+        ("完了完了………我床呢", "完了完了，我床呢"),
+        ("真的吗…！！", "真的吗！！"),
+        # 逗号不重复、不挂在句末标点两侧
+        ("好，，好", "好，好"),
+        ("真的吗…………！！", "真的吗！！"),
+        ("走吧。……好吧", "走吧。好吧"),
+        # 句首逗号剥掉、句尾悬挂逗号补句号
+        ("…我看看", "我看看"),
+        ("好耶，", "好耶。"),
+        # 无书面标点的文本原样返回
+        ("一次只说一件事，说完就停。", "一次只说一件事，说完就停。"),
+    ],
+)
+def test_normalize_spoken_punctuation_maps_written_punctuation(raw: str, expected: str) -> None:
+    assert normalize_spoken_punctuation(raw) == expected
+
+
+def test_normalize_spoken_punctuation_coexists_with_word_filter() -> None:
+    """规范化与敏感词净化互不干扰：先洗词再规范化，两道结果都成立。"""
+    flt = WordFilter(words=["脏话"], replacement="***")
+    cleaned, dropped = flt.filter("这句——真脏话……啊")
+    assert dropped is True
+    assert normalize_spoken_punctuation(cleaned) == "这句，真***，啊"

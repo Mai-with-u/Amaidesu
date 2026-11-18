@@ -681,12 +681,13 @@ async def test_reaction_follow_ups_play_as_one_segment_with_their_own_emotions(s
 
     speeches = [(payload.text, payload.emotion, payload.emotion_at_playback) for _, payload in captured]
     if tts_on:
-        assert speeches == [("哇！什么东西？！", "scared", False), ("……原来是只鸡。", "speechless", True)]
+        # 出口规范化把书面省略号换成逗号再清掉句首逗号：出声与字幕统一无书面标点
+        assert speeches == [("哇！什么东西？！", "scared", False), ("原来是只鸡。", "speechless", True)]
         await _until(lambda: len(engine.calls) == 2)
-        assert [text for text, _ in engine.calls] == ["哇！什么东西？！", "……原来是只鸡。"]
+        assert [text for text, _ in engine.calls] == ["哇！什么东西？！", "原来是只鸡。"]
         assert engine.calls[0][1] == utterance_id
     else:
-        assert speeches == [("哇！什么东西？！……原来是只鸡。", "scared", False)]
+        assert speeches == [("哇！什么东西？！原来是只鸡。", "scared", False)]
 
 
 async def test_talk_mode_splits_clauses_and_records_interrupted_tail_on_viewer_reply(started) -> None:
