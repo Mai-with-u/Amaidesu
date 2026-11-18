@@ -31,6 +31,7 @@ from src.modules.tools.tasks import TERMINAL_TASK_STATES
 from .context import json_text
 from .maicraft import AWAITING_ANSWER, EXECUTE, PROVIDER, PAUSED, GoalRun, ledger_status_of, ledger_task_id
 from .mod_facts import goal_mining_and_pits_notes
+from .stop_receipt import stop_goal_label
 
 __all__ = [
     "GoalLedger",
@@ -58,8 +59,23 @@ _BARE_PAUSE_DOING = re.compile(r"目标 \S+ 已暂停（第 \d+ 步）")
 
 
 def goal_label(run: GoalRun) -> str:
-    """目标在通知里的人读标签：能力名 + 目的（有目的时）。"""
+    """目标在通知里的人读标签：能力名 + 目的（有目的时）。
+
+    只给游戏 Agent 自己的内部通知用（结束/暂停/等回答/停滞），刻意保留带
+    命名空间的能力名，模型读得懂工具口径；给主播的行走 ``_streamer_label``。
+    """
     return f"{run.ability}，{run.purpose}" if run.purpose else run.ability
+
+
+def _streamer_label(run: GoalRun) -> str:
+    """主播侧怎么称呼一个目标：有目的说目的，没有就说去掉工具前缀的能力名（与叫停回执同一规则）。"""
+    return stop_goal_label(run.ability, run.purpose)
+
+
+def _streamer_summary_facts(summary: str) -> str:
+    """把 Mod 摘要里的冒号链拆成句读分明的分句：分句内容原样保留，只把分隔标点从冒号换成"；"。"""
+    segments = [segment.strip() for segment in summary.split("：") if segment.strip()]
+    return "；".join(segments)
 
 
 def is_use_on_air_misuse(run: GoalRun) -> bool:
@@ -118,21 +134,25 @@ def finish_notice(run: GoalRun, self_brief: str) -> str:
 def goal_failure_line(run: GoalRun) -> str:
     """目标没做成/只做了一半时给主播的一句话（milestone 事件用）；其余状态返回空串。
 
-    目标结束（做成与没做成）只走 ``finish_notice`` 注入游戏 Agent 自己的
-    队列，主播侧要等下一个决策窗才看得到——失败尤其值得当场说（场 65：
-    压机问题驻留 63 分钟，她每次都晚一拍）。做成不在此列：委派交付已有
-    delivery 上报当场触发，非委派的中间成果逐个播报会刷屏。
+    给主播的行走中性事实白话：不点工具名（说目的，不说 ``maicraft:obtain`` 这类
+    能力 ID），Mod 摘要里的冒号链拆成分句序列，保留事实全要素（做了什么、结果、
+    数量缺口、Mod 写明的原因——没有就不编）；不带口语压缩与评价词。目标结束
+    （做成与没做成）都会经 ``finish_notice`` 注入游戏 Agent 自己的队列，主播侧
+    要等下一个决策窗才看得到——失败尤其值得当场说（场 65：压机问题驻留 63
+    分钟，她每次都晚一拍）。做成不在此列：委派交付已有 delivery 上报当场触发，
+    非委派的中间成果逐个播报会刷屏。
     """
     status = run.result_status
     if status not in ("failed", "partial"):
         return ""
+    label = _streamer_label(run)
     if is_use_on_air_misuse(run):
         # 场 65 魂符教训：对着空气用没生效是用错了对象，明说点空了，避免主播误读成"这个号放不出来"
-        return f"{goal_label(run)}对着空气用没生效（用法不对，得对着脚下地面或目标方块用，不是东西用不了）"
-    label = "没做成" if status == "failed" else "只做了一半"
-    summary = (run.summary or "").strip()
-    body = f"：{summary}" if summary else ""
-    return f"{goal_label(run)}{label}{body}"
+        return f"{label}对着空气用没生效（用法不对，得对着脚下地面或目标方块用，不是东西用不了）"
+    verdict = "未完成" if status == "failed" else "只做了一半"
+    facts = _streamer_summary_facts((run.summary or "").strip())
+    body = f"：{facts}" if facts else ""
+    return f"{label}{verdict}{body}"
 
 
 def pause_notice(

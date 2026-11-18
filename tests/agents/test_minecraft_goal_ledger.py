@@ -190,18 +190,35 @@ def test_finish_notice_mentions_folded_path_and_self_brief() -> None:
 
 
 def test_goal_failure_line_names_failure_with_summary() -> None:
-    """没做成/只做一半：一行给主播的结果（能力+目的+结论句），不带目标编号。"""
+    """没做成/只做一半：一行给主播的结果（目的+结论句），中性口径不带工具名与目标编号。"""
     failed = _run(
         state="done",
         purpose="找蒲公英",
         result={"status": "failed", "summary": "这一片没有找到蒲公英"},
     )
     line = goal_failure_line(failed)
-    assert "没做成" in line and "找蒲公英" in line and "这一片没有找到蒲公英" in line
+    assert "未完成" in line and "找蒲公英" in line and "这一片没有找到蒲公英" in line
+    assert "maicraft:" not in line, "工具能力名是内部口径，不进主播侧"
     assert str(failed.goal_id) not in line, "目标编号是任务系统内部信息，不进主播侧"
 
     partial = _run(state="done", purpose="搭水车", result={"status": "partial", "summary": "架子立了轮子没装"})
     assert "只做了一半" in goal_failure_line(partial)
+
+
+def test_goal_failure_line_splits_summary_colon_chain_into_clauses() -> None:
+    """Mod 摘要的冒号链拆成句读分明的分句，内容原样保留；没写目的时说去掉前缀的能力名。"""
+    chained = _run(
+        state="done",
+        purpose="挖够 22 红石",
+        result={"status": "failed", "summary": "拿东西没有完成：有几个没弄齐：还差 22"},
+    )
+    line = goal_failure_line(chained)
+    assert "挖够 22 红石未完成" in line
+    assert "拿东西没有完成；有几个没弄齐；还差 22" in line
+    assert "maicraft:" not in line
+
+    no_purpose = _run(state="done", result={"status": "failed", "summary": "附近没有水源"})
+    assert goal_failure_line(no_purpose).startswith("gather未完成")
 
 
 def test_goal_failure_line_empty_for_done_and_cancelled() -> None:
