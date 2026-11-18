@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from src.agents.streamer.delegation_posture import snapshot_awaits_decision
 from src.agents.streamer.planner_context import age_text
@@ -494,17 +494,8 @@ def render_social_facts(
     return "【游戏社交事实】\n" + "\n".join(lines)
 
 
-def nearby_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
-    """从本轮参考工具产出的现场速览文本里取出当前在角色身边的玩家名集合。
-
-    仅当速览成功返回了身体与周边场景快照（不含 unavailable / nearby_error）时返回集合：
-    只读取周边实体列表里的玩家条目，忽略设施归属人或生物驯服者字段，防止把远在别处探索、但早先在营地
-    放过机器的玩家误判成就在身边；未开启速览或周边读取失败时返回 None（在场关系未知）。
-    """
-    if not overview or not overview.strip():
-        return None
-    found_scene = False
-    players: set[str] = set()
+def _overview_scene_snapshots(overview: str) -> Iterator[Dict[str, Any]]:
+    """现场速览文本里的场景快照：逐行取 JSON 对象，跳过读取失败（unavailable / nearby_error）的行。"""
     for raw_line in overview.splitlines():
         _, sep, payload = raw_line.partition(": ")
         candidate = payload.strip() if sep else raw_line.strip()
@@ -518,17 +509,39 @@ def nearby_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
             continue
         if data.get("unavailable") or data.get("nearby_error"):
             continue
+        yield data
+
+
+def _player_names_in_entities(data: Mapping[str, Any]) -> set:
+    """快照周边实体列表里的玩家名：只认玩家条目，忽略设施归属人或生物驯服者字段。"""
+    names: set = set()
+    for entity in data.get("entities") or ():
+        if not isinstance(entity, dict):
+            continue
+        raw_type = str(entity.get("type") or "").lower()
+        is_player = raw_type.split(":")[-1] == "player" or entity.get("kind") == "玩家"
+        name = str(entity.get("name") or "").strip()
+        if is_player and name:
+            names.add(name)
+    return names
+
+
+def nearby_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
+    """从本轮参考工具产出的现场速览文本里取出当前在角色身边的玩家名集合。
+
+    仅当速览成功返回了身体与周边场景快照（不含 unavailable / nearby_error）时返回集合：
+    只读取周边实体列表里的玩家条目，防止把远在别处探索、但早先在营地
+    放过机器的玩家误判成就在身边；未开启速览或周边读取失败时返回 None（在场关系未知）。
+    """
+    if not overview or not overview.strip():
+        return None
+    found_scene = False
+    players: set = set()
+    for data in _overview_scene_snapshots(overview):
         if "body" not in data and "entities" not in data and "online_players" not in data:
             continue
         found_scene = True
-        for entity in data.get("entities") or ():
-            if not isinstance(entity, dict):
-                continue
-            raw_type = str(entity.get("type") or "").lower()
-            is_player = raw_type.split(":")[-1] == "player" or entity.get("kind") == "玩家"
-            name = str(entity.get("name") or "").strip()
-            if is_player and name:
-                players.add(name)
+        players |= _player_names_in_entities(data)
     return frozenset(players) if found_scene else None
 
 
@@ -541,20 +554,8 @@ def online_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
     if not overview or not overview.strip():
         return None
     found_online = False
-    players: set[str] = set()
-    for raw_line in overview.splitlines():
-        _, sep, payload = raw_line.partition(": ")
-        candidate = payload.strip() if sep else raw_line.strip()
-        if not candidate.startswith("{"):
-            continue
-        try:
-            data = json.loads(candidate)
-        except ValueError:
-            continue
-        if not isinstance(data, dict):
-            continue
-        if data.get("unavailable") or data.get("nearby_error"):
-            continue
+    players: set = set()
+    for data in _overview_scene_snapshots(overview):
         raw_online = data.get("online_players")
         if not isinstance(raw_online, list):
             continue
@@ -563,14 +564,7 @@ def online_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
             if isinstance(item, str) and item.strip():
                 players.add(item.strip())
         # 同快照周边实体里的玩家此刻必然在线，一并并入集合以保证在场与在线集合自洽
-        for entity in data.get("entities") or ():
-            if not isinstance(entity, dict):
-                continue
-            raw_type = str(entity.get("type") or "").lower()
-            is_player = raw_type.split(":")[-1] == "player" or entity.get("kind") == "玩家"
-            name = str(entity.get("name") or "").strip()
-            if is_player and name:
-                players.add(name)
+        players |= _player_names_in_entities(data)
     return frozenset(players) if found_online else None
 
 
