@@ -507,7 +507,7 @@ async def test_unset_voice_examples_and_style_leave_no_gap(prompts: Any) -> None
 @pytest.mark.parametrize(
     "rule",
     [
-        "平时一次只说一件事、干脆收住",
+        "一次只说一件事",
         "照顾只听声音的观众",
         "事实以交接稿和下面给的材料为准，都没写的不补",
         "干活的是自己，用第一人称",

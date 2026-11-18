@@ -152,9 +152,8 @@ async def test_budget_follows_speech_mode_and_target(
     if mode == "talk":
         assert "两三句" in system["speech_style_rule"] and "两三个短句" in turn["pace_rule"]
     else:
-        assert "平时一次只说一件事、干脆收住" in system["speech_style_rule"]
-        assert "先顺口带出对方问的事再答，两三句短话自然说完就停" in system["speech_style_rule"]
-        assert "一句话说完就停" not in system["speech_style_rule"]
+        assert "一次只说一件事，说完就停" in system["speech_style_rule"]
+        assert "先带出对方问的事再答，答完就停" in system["speech_style_rule"]
 
 
 async def test_shorten_with_target_keeps_the_opening_hook() -> None:

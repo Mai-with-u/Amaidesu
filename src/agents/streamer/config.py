@@ -619,7 +619,7 @@ class StreamerConfig(BaseConfig):
     # 所以在表达引擎出口再卡一道——超出先让模型重说短一点，仍超就截到预算内最后一个完整句子
     speech_max_chars: int = Field(
         title="台词长度预算",
-        default=60,
+        default=30,
         ge=0,
         description="一句台词最多多少字；超出时先让模型重说短一点，仍超就截到预算内最后一个完整句子（0 = 不限制）",
         json_schema_extra={"x-ui-advanced": True},
