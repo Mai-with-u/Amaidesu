@@ -393,6 +393,179 @@ def close_user_prompt(material: SettleMaterial) -> str:
     )
 
 
+@dataclass(frozen=True)
+class _ExtractStep:
+    """一笔模型调用的步骤描述：``SettleState._extract`` 按这张表逐笔执行。
+
+    每笔跑同一条流水线——拼提示词 → 算断点指纹 → 查断点 → 调模型 → 解析 → 存断点；
+    各笔的差异全部由字段承载（提示词来源、调模型的入口、输出解析、断点容器类型）。
+    断点键与提示词指纹会持久化（续跑状态），改字段等于换断点，不可随意改动。
+    """
+
+    key: str
+    template: str
+    label: str
+    build_prompt: Callable[[SettleMaterial], str]
+    container: type
+    call: Callable[[Any, str, Any], Awaitable[Any]]
+    ordinal: Optional[int] = None
+    parse: Optional[Callable[[Any, SettleMaterial], Any]] = None
+    #: 本场没有对应原料时跳过这笔（未了结承诺 / 游戏社交原料）
+    runs: Callable[[SettleMaterial], bool] = lambda material: True
+    #: 调用后必存断点（了结那笔）；缺省 False 表示只在断点缺失时补存
+    save_always: bool = False
+    #: 断点缺失时不立即存，改由 ``after`` 在校验通过后存（档案、社交那两笔：
+    #: 校验不过的输出不能留成断点，否则续跑会卡在同一份坏输出上）
+    defer_save: bool = False
+    #: 这笔拿到数据后立刻做的收尾（校验输出、按结果落断点）；断点命中时同样要跑
+    after: Optional[Callable[[Any, SettleMaterial, Any, str, bool], Awaitable[Any]]] = None
+
+
+def _archive_prompt_of(material: SettleMaterial) -> str:
+    return (
+        f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
+        + (f"{material.corrections_text}\n\n" if material.corrections_text else "")
+        + f"【现行承诺台账】\n{material.open_text or '没有'}\n\n"
+        + f"【本场她说的话】\n{material.speech_text}\n\n"
+        + f"{material.games_text or '【本场没有玩游戏】'}\n\n"
+        + (f"{material.records_text}\n\n" if material.records_text else "")
+        + f"{render_places(material.places)}\n\n"
+        "请写出这一场的档案。"
+    )
+
+
+def _commitment_prompt_of(material: SettleMaterial) -> str:
+    return (
+        f"【她能做的事】\n{material.abilities_text}\n\n"
+        f"{material.games_text or '【本场没有玩游戏】'}\n\n"
+        f"【还没了结的承诺】\n{material.open_text or '没有'}\n\n"
+        f"【已了结的承诺】\n{material.closed_text or '没有'}\n\n"
+        f"【已判误记的承诺（这些话不是承诺）】\n{material.void_text or '没有'}\n\n"
+        f"【本场她说的话】\n{material.speech_text}\n\n"
+        + (f"{material.players.text}\n\n" if material.players.text else "")
+        + "请找出这一场她新答应的、还没兑现的事。"
+    )
+
+
+def _social_prompt_of(material: SettleMaterial) -> str:
+    return (
+        f"{material.social.text}\n\n"
+        "场内已登记的条目只做应答与了结，不新建：同一件事已经有一行时，变了就取代那一行。\n"
+        "请更新这个游戏环境的社交事实。"
+    )
+
+
+def _ask_archive(owner: Any, prompt: str, on_delta: Any) -> Awaitable[Any]:
+    return owner._ask(template=_ARCHIVE_TEMPLATE, prompt=prompt, on_delta=on_delta)
+
+
+def _ask_commitment_text(owner: Any, prompt: str, on_delta: Any) -> Awaitable[Any]:
+    return owner._ask_text(template=_COMMITMENT_TEMPLATE, prompt=prompt, on_delta=on_delta)
+
+
+def _ask_closure_list(owner: Any, prompt: str, on_delta: Any) -> Awaitable[Any]:
+    return owner._ask_for_list(template=_CLOSE_TEMPLATE, prompt=prompt, key="closed", on_delta=on_delta)
+
+
+def _ask_social(owner: Any, prompt: str, on_delta: Any) -> Awaitable[Any]:
+    return owner._ask(template=_SOCIAL_TEMPLATE, prompt=prompt, on_delta=on_delta)
+
+
+def _parse_commitment_step(raw: Any, material: SettleMaterial) -> Dict[str, Any]:
+    """找承诺那笔的输出解析：顺带报告自述段被截断丢掉的情况。"""
+    data, candidates_cut = parse_commitment_output(raw)
+    if candidates_cut:
+        logger.warning(f"场次 {material.live_session_id}：找承诺那次的输出断在玩家自述那段，本场不出自述候选")
+    return data
+
+
+async def _after_archive_step(
+    owner: Any, material: SettleMaterial, data: Any, fingerprint: str, cache_missing: bool
+) -> Tuple[Any, List[Any], List[Any]]:
+    """档案那笔的收尾：校验输出结构，过了才落断点（坏输出留成断点会卡住续跑）。
+
+    返回（挑行计划, 新档案行, 未登记清单）给 ``_extract`` 后续步骤用。
+    """
+    archive_rows = data.get("archive")
+    if archive_rows is None:
+        archive_rows = []
+    if not isinstance(archive_rows, list):
+        raise SettleError("模型输出的 archive 不是列表")
+    # 旧行只挑不改写：没列出的保留，去掉要本场证据，替换出的新行过同一个校验器
+    try:
+        plan = plan_from_ops(
+            data.get("previous"),
+            material.previous.lines if material.previous is not None else [],
+            session_started_at_ms=material.started_at_ms,
+            line_of=lambda raw: owner._line_of(raw, material),
+            validate_new=lambda raw: owner._validate_archive([raw], material),
+            correction_of=lambda raw: owner._correction_evidence_of(raw, material),
+        )
+    except ValueError as exc:
+        raise SettleError(str(exc)) from exc
+    new_lines, archive_misses = owner._validate_archive(archive_rows, material)
+    if cache_missing:
+        await owner._save_checkpoint_json(material.live_session_id, "archive", fingerprint, data)
+    return (plan, new_lines, archive_misses)
+
+
+async def _after_social_step(
+    owner: Any, material: SettleMaterial, data: Any, fingerprint: str, cache_missing: bool
+) -> Any:
+    """社交事实那笔的收尾：校验模型输出；校验过了才落断点。返回核对结果。"""
+    social_check = validate_social_output(data, material.social, live_session_id=material.live_session_id)
+    if cache_missing:
+        await owner._save_checkpoint_json(material.live_session_id, "social", fingerprint, data)
+    return social_check
+
+
+_EXTRACT_STEPS: Tuple[_ExtractStep, ...] = (
+    _ExtractStep(
+        key="archive",
+        template=_ARCHIVE_TEMPLATE,
+        label="整理本场档案",
+        build_prompt=_archive_prompt_of,
+        container=dict,
+        call=_ask_archive,
+        ordinal=1,
+        defer_save=True,
+        after=_after_archive_step,
+    ),
+    _ExtractStep(
+        key="commitment",
+        template=_COMMITMENT_TEMPLATE,
+        label="找新承诺",
+        build_prompt=_commitment_prompt_of,
+        container=dict,
+        call=_ask_commitment_text,
+        ordinal=2,
+        parse=_parse_commitment_step,
+    ),
+    _ExtractStep(
+        key="closure",
+        template=_CLOSE_TEMPLATE,
+        label="了结旧承诺",
+        build_prompt=close_user_prompt,
+        container=list,
+        call=_ask_closure_list,
+        ordinal=3,
+        runs=lambda material: bool(material.open_commitments),
+        save_always=True,
+    ),
+    _ExtractStep(
+        key="social",
+        template=_SOCIAL_TEMPLATE,
+        label="更新游戏社交事实",
+        build_prompt=_social_prompt_of,
+        container=dict,
+        call=_ask_social,
+        runs=lambda material: not material.social.empty,
+        defer_save=True,
+        after=_after_social_step,
+    ),
+)
+
+
 def _clip(text: str, limit: int) -> str:
     """按字数截断（标题用；引文不截断，截过的引文已经不是逐字引文）。"""
     cleaned = (text or "").strip()
@@ -1496,148 +1669,41 @@ class SessionSettler:
                 return None
 
         total_calls = (3 if material.open_commitments else 2) + (0 if material.social.empty else 1)
-        # 第 1 步（固定排最前）：档案与候选
-        archive_prompt = (
-            f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
-            + (f"{material.corrections_text}\n\n" if material.corrections_text else "")
-            + f"【现行承诺台账】\n{material.open_text or '没有'}\n\n"
-            + f"【本场她说的话】\n{material.speech_text}\n\n"
-            + f"{material.games_text or '【本场没有玩游戏】'}\n\n"
-            + (f"{material.records_text}\n\n" if material.records_text else "")
-            + f"{render_places(material.places)}\n\n"
-            "请写出这一场的档案。"
-        )
-        archive_fp = self._checkpoint_fingerprint(_ARCHIVE_TEMPLATE, archive_prompt)
-        archive_cached = await self._load_checkpoint_json(material.live_session_id, "archive", archive_fp)
-        archive_label = f"第 1 笔/共 {total_calls} 笔：整理本场档案"
-        if isinstance(archive_cached, dict):
-            await progress(f"{archive_label}（断点恢复）")
-            archive_data = archive_cached
-        else:
-            await progress(archive_label)
-            archive_data = await self._call_with_liveness(
-                label=archive_label,
-                progress=progress,
-                live=live,
-                call=lambda on_delta: self._ask(
-                    template=_ARCHIVE_TEMPLATE,
-                    prompt=archive_prompt,
-                    on_delta=on_delta,
-                ),
-            )
-        archive_rows = archive_data.get("archive")
-        if archive_rows is None:
-            archive_rows = []
-        if not isinstance(archive_rows, list):
-            raise SettleError("模型输出的 archive 不是列表")
-        # 旧行只挑不改写：没列出的保留，去掉要本场证据，替换出的新行过同一个校验器
-        try:
-            plan = plan_from_ops(
-                archive_data.get("previous"),
-                material.previous.lines if material.previous is not None else [],
-                session_started_at_ms=material.started_at_ms,
-                line_of=lambda raw: self._line_of(raw, material),
-                validate_new=lambda raw: self._validate_archive([raw], material),
-                correction_of=lambda raw: self._correction_evidence_of(raw, material),
-            )
-        except ValueError as exc:
-            raise SettleError(str(exc)) from exc
-        new_lines, archive_misses = self._validate_archive(archive_rows, material)
-        if archive_cached is None:
-            await self._save_checkpoint_json(material.live_session_id, "archive", archive_fp, archive_data)
+        steps = [step for step in _EXTRACT_STEPS if step.runs(material)]
+        step_data: Dict[str, Any] = {}
+        step_extras: Dict[str, Any] = {}
+        for step in steps:
+            prompt = step.build_prompt(material)
+            fingerprint = self._checkpoint_fingerprint(step.template, prompt)
+            cached = await self._load_checkpoint_json(material.live_session_id, step.key, fingerprint)
+            ordinal = step.ordinal if step.ordinal is not None else total_calls
+            label = f"第 {ordinal} 笔/共 {total_calls} 笔：{step.label}"
+            if isinstance(cached, step.container):
+                await progress(f"{label}（断点恢复）")
+                data = cached
+            else:
+                await progress(label)
+                raw = await self._call_with_liveness(
+                    label=label,
+                    progress=progress,
+                    live=live,
+                    call=lambda on_delta, step=step, prompt=prompt: step.call(self, prompt, on_delta),
+                )
+                data = step.parse(raw, material) if step.parse is not None else raw
+                # 断点缺失或该笔必存时落断点；档案与社交那两笔的断点由 after
+                # 在输出校验通过后再存
+                if not step.defer_save and (step.save_always or cached is None):
+                    await self._save_checkpoint_json(material.live_session_id, step.key, fingerprint, data)
+            if step.after is not None:
+                step_extras[step.key] = await step.after(self, material, data, fingerprint, cached is None)
+            step_data[step.key] = data
 
-        # 第 2 步：找新承诺、她说欠着的与玩家自述
-        commitment_prompt = (
-            f"【她能做的事】\n{material.abilities_text}\n\n"
-            f"{material.games_text or '【本场没有玩游戏】'}\n\n"
-            f"【还没了结的承诺】\n{material.open_text or '没有'}\n\n"
-            f"【已了结的承诺】\n{material.closed_text or '没有'}\n\n"
-            f"【已判误记的承诺（这些话不是承诺）】\n{material.void_text or '没有'}\n\n"
-            f"【本场她说的话】\n{material.speech_text}\n\n"
-            + (f"{material.players.text}\n\n" if material.players.text else "")
-            + "请找出这一场她新答应的、还没兑现的事。"
-        )
-        commitment_fp = self._checkpoint_fingerprint(_COMMITMENT_TEMPLATE, commitment_prompt)
-        commitment_cached = await self._load_checkpoint_json(material.live_session_id, "commitment", commitment_fp)
-        commitment_label = f"第 2 笔/共 {total_calls} 笔：找新承诺"
-        if isinstance(commitment_cached, dict):
-            await progress(f"{commitment_label}（断点恢复）")
-            commitment_data = commitment_cached
-        else:
-            await progress(commitment_label)
-            commitment_text = await self._call_with_liveness(
-                label=commitment_label,
-                progress=progress,
-                live=live,
-                call=lambda on_delta: self._ask_text(
-                    template=_COMMITMENT_TEMPLATE,
-                    prompt=commitment_prompt,
-                    on_delta=on_delta,
-                ),
-            )
-            commitment_data, candidates_cut = parse_commitment_output(commitment_text)
-            if candidates_cut:
-                logger.warning(f"场次 {material.live_session_id}：找承诺那次的输出断在玩家自述那段，本场不出自述候选")
+        plan, new_lines, archive_misses = step_extras["archive"]
+        archive_data = step_data["archive"]
+        commitment_data = step_data["commitment"]
         commitment_rows = _list_field(commitment_data, "commitments")
-        if commitment_cached is None:
-            await self._save_checkpoint_json(material.live_session_id, "commitment", commitment_fp, commitment_data)
-
-        # 第 3 步（有未了结旧承诺时）：了结旧承诺
-        closure_rows: List[Any] = []
-        if material.open_commitments:
-            closure_prompt = close_user_prompt(material)
-            closure_fp = self._checkpoint_fingerprint(_CLOSE_TEMPLATE, closure_prompt)
-            closure_cached = await self._load_checkpoint_json(material.live_session_id, "closure", closure_fp)
-            closure_label = f"第 3 笔/共 {total_calls} 笔：了结旧承诺"
-            if isinstance(closure_cached, list):
-                await progress(f"{closure_label}（断点恢复）")
-                closure_rows = closure_cached
-            else:
-                await progress(closure_label)
-                closure_rows = await self._call_with_liveness(
-                    label=closure_label,
-                    progress=progress,
-                    live=live,
-                    call=lambda on_delta: self._ask_for_list(
-                        template=_CLOSE_TEMPLATE,
-                        prompt=closure_prompt,
-                        key="closed",
-                        on_delta=on_delta,
-                    ),
-                )
-                await self._save_checkpoint_json(material.live_session_id, "closure", closure_fp, closure_rows)
-
-        # 第 4 步（本场有游戏社交原料时）：更新游戏社交事实
-        social_check = None
-        if not material.social.empty:
-            social_prompt = (
-                f"{material.social.text}\n\n"
-                "场内已登记的条目只做应答与了结，不新建：同一件事已经有一行时，变了就取代那一行。\n"
-                "请更新这个游戏环境的社交事实。"
-            )
-            social_fp = self._checkpoint_fingerprint(_SOCIAL_TEMPLATE, social_prompt)
-            social_cached = await self._load_checkpoint_json(material.live_session_id, "social", social_fp)
-            social_label = f"第 {total_calls} 笔/共 {total_calls} 笔：更新游戏社交事实"
-            if isinstance(social_cached, dict):
-                await progress(f"{social_label}（断点恢复）")
-                social_data = social_cached
-            else:
-                await progress(social_label)
-                social_data = await self._call_with_liveness(
-                    label=social_label,
-                    progress=progress,
-                    live=live,
-                    call=lambda on_delta: self._ask(
-                        template=_SOCIAL_TEMPLATE,
-                        prompt=social_prompt,
-                        on_delta=on_delta,
-                    ),
-                )
-            social_check = validate_social_output(
-                social_data, material.social, live_session_id=material.live_session_id
-            )
-            if social_cached is None:
-                await self._save_checkpoint_json(material.live_session_id, "social", social_fp, social_data)
+        closure_rows: List[Any] = step_data.get("closure", [])
+        social_check = step_extras.get("social")
         # 先认了结、再认新承诺：一行台词点名了某条旧承诺时，那条旧承诺本场有没有了结，
         # 决定这一行里的新答应是"换了个做法"（照常登记）还是"又提了一遍旧事"（不登记、进报告）
         closures, closure_misses = self._validate_closures(closure_rows, material)
