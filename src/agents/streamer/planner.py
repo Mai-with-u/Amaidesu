@@ -222,6 +222,55 @@ class RoundOutcome:
     use_card_id: Optional[int] = None
 
 
+@dataclass
+class RoundContext:
+    """一个决策窗的轮次上下文：plan() 开窗时装配一次，随取料、渲染与工具执行的调用链显式传递。
+
+    窗内的工具回执会改写其中的字段（公屏已发出、台词被退回的标记等），这些改动
+    全部落在这一份对象里，不再散成实例字段靠读写顺序隐式约定；窗结束即弃，
+    下一窗重新装配，字段之间没有跨窗残留。
+    """
+
+    # 本窗说话档位（"play" / "talk"），开窗按环节与游戏态势刷新
+    speech_mode: str = "play"
+    # 本轮新入账的游戏事件素材：状态跃迁事实块与表达侧交接各用一份
+    facts_text: str = ""
+    game_events: List[str] = field(default_factory=list)
+    # 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)：这一窗说的话落库时记成在回应他
+    reply_player: Tuple[str, str] = ("", "")
+    # 本窗的弹幕（编号, 原文）：她这句的回应目标对得上其中一条时，这句在回那条弹幕，不记成在回应玩家
+    danmaku: Tuple[Tuple[str, str], ...] = ()
+    # 本窗付过费的观众身份键集合：这些观众的弹幕行加「（付费观众）」标注，
+    # 她据此权衡"谁的要求优先满足"（事实基础，见 paid_viewers 模块）
+    paid_identities: Set[str] = field(default_factory=set)
+    # 本窗交来的历史：回应目标是更早一窗的观众弹幕时，在这里查得到
+    history: List[Any] = field(default_factory=list)
+    # 本批的现行游戏社交事实（每批从库现读，参考段【游戏社交事实】渲染用）
+    social_facts: List[Any] = field(default_factory=list)
+    # 本窗由观众弹幕或玩家开口推上来的档案行（线索卡来源里有人提到）
+    asked_archive_ids: Set[int] = field(default_factory=set)
+    # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次照常说（点名留着，照样记成提过）
+    memory_bounced: bool = False
+    # 本窗游戏公屏回话追踪：是否已真实业务成功发送公屏文字、是否已因漏发公屏回字退回过一次口播
+    game_chat_sent: bool = False
+    game_chat_bounced: bool = False
+    # 本轮可用工具名集合及已按回应对象结算过公屏已回的玩家名单
+    tool_names: Optional[Set[str]] = None
+    answered_chat_players: Set[str] = field(default_factory=set)
+    # 本窗开窗时刻（毫秒）与是否已因嘴带来的新事实推翻退回过一次（每窗最多退一次重想）
+    started_ms: int = 0
+    mouth_bounced: bool = False
+    # 本窗非遗忘熟客弹幕 message_id → 熟悉度档位，随 reply 调用单交表达侧
+    familiarity_by_msg_id: Dict[str, str] = field(default_factory=dict)
+    # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
+    game_players: Tuple[Tuple[str, str], ...] = ()
+    # 玩家找她的条目：本窗新到的（定回应对象；表达侧拿的是 _recent_player_notes 里最近几分钟的）
+    player_notes: Tuple[PlayerNote, ...] = ()
+    # 本窗合法的点名编号：常驻简报里标着编号的加本批卡片里的
+    memory_ids: Set[int] = field(default_factory=set)
+    archive_ids: Set[int] = field(default_factory=set)
+
+
 @dataclass(frozen=True)
 class PlannerEnv:
     """Planner 运行环境：构造期一次性注入的迟绑定依赖集合。
@@ -452,8 +501,6 @@ class Planner:
         self._inside_jokes: str = inside_jokes or ""
         # 结构化人物设定档案（已渲染文本）：整场静态，拼在「她是谁」里吃前缀缓存
         self._persona_profile: str = (persona_profile or "").strip()
-        # 本决策窗说话档位（"play" / "talk"），每窗在 plan() 入口按环节与游戏态势刷新
-        self._round_speech_mode: str = "play"
         self._reply_provider: Any = None
         self._reply_provider_factory: Optional[Callable[[], Any]] = env.reply_provider_factory if env else None
         self._elapsed_live_provider = env.elapsed_live_provider if env else None
@@ -473,41 +520,7 @@ class Planner:
             delegation_status_provider=env.delegation_status_provider if env else None,
             delegation_boards_provider=env.delegation_boards_provider if env else None,
         )
-        # 本决策窗的游戏事件素材：本轮新入账批次（决策窗边界批量追加进时间线的那一批，
-        # 每轮 plan() 入口重置）。状态跃迁事实块（planner 参考段与表达侧交接各一份）
-        # 随批次由账本产出；回执随本窗 ReAct 循环累积，reply 交接时合成全量
-        self._round_facts_text = ""
-        self._round_game_events: List[str] = []
-        # 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)：这一窗说的话落库时记成在回应他
-        self._round_reply_player: Tuple[str, str] = ("", "")
-        # 本窗的弹幕（编号, 原文）：她这句的回应目标对得上其中一条时，这句在回那条弹幕，不记成在回应玩家
-        self._round_danmaku: Tuple[Tuple[str, str], ...] = ()
-        # 本窗付过费的观众身份键集合：这些观众的弹幕行加「（付费观众）」标注，
-        # 她据此权衡"谁的要求优先满足"（事实基础，见 paid_viewers 模块）
-        self._round_paid_identities: Set[str] = set()
-        # 本窗交来的历史：回应目标是更早一窗的观众弹幕时，在这里查得到
-        self._round_history: List[Any] = []
-        # 本批的现行游戏社交事实（每批从库现读，参考段【游戏社交事实】渲染用）
-        self._round_social_facts: List[Any] = []
-        # 本窗由观众弹幕或玩家开口推上来的档案行（线索卡来源里有人提到）
-        self._round_asked_archive_ids: Set[int] = set()
-        # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次照常说（点名留着，照样记成提过）
-        self._round_memory_bounced: bool = False
-        # 本窗游戏公屏回话追踪：是否已真实业务成功发送公屏文字、是否已因漏发公屏回字退回过一次口播、
-        # 本轮可用工具名集合及已按回应对象结算过公屏已回的玩家名单
-        self._round_game_chat_sent: bool = False
-        self._round_game_chat_bounced: bool = False
-        self._round_tool_names: Optional[Set[str]] = None
-        self._round_answered_chat_players: Set[str] = set()
-        # 本窗开窗时刻（毫秒）与是否已因嘴带来的新事实推翻退回过一次（每窗最多退一次重想）
-        self._round_started_ms: int = 0
-        self._round_mouth_bounced: bool = False
-        # 本窗非遗忘熟客弹幕 message_id → 熟悉度档位，随 reply 调用单交表达侧
-        self._round_familiarity_by_msg_id: Dict[str, str] = {}
-        # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
-        self._round_game_players: Tuple[Tuple[str, str], ...] = ()
-        # 玩家找她的条目：本窗新到的（定回应对象）与最近几分钟的（交给表达侧，说清谁说的、谁做的）
-        self._round_player_notes: Tuple[PlayerNote, ...] = ()
+        # 玩家找她的条目里最近几分钟的部分（旧→新）：交给表达侧，说清谁说的、谁做的
         self._recent_player_notes: Tuple[PlayerNote, ...] = ()
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
         self._brief_provider = env.brief_provider if env else None
@@ -531,10 +544,7 @@ class Planner:
         self._talk_cards_provider = env.talk_cards_provider if env else None
         self._proactive_silent_provider = env.proactive_silent_provider if env else None
 
-        # 本窗合法的点名编号与卡片称呼（每窗在 plan() 入口重算，这里给默认值）
-        self._round_memory_ids: Set[int] = set()
-        # 本窗能点名的档案行：常驻简报里标着编号的加本批卡片里的
-        self._round_archive_ids: Set[int] = set()
+        # 本窗卡片称呼（每窗在 plan() 入口重算）
         self._memory_labels: Dict[int, str] = {}
         # 最近一轮决策前读取到的现场速览文本，供场内更正工具逐字核对游戏现场回执
         self._last_overview_text: str = ""
@@ -556,7 +566,6 @@ class Planner:
         条目按发生时刻留几分钟，同一进程里下播后紧接着开下一场时，上一场末尾的条目还没过期，
         不清的话新一场开头她会接上一场的玩家的话、谢上一场送的礼。
         """
-        self._round_player_notes = ()
         self._recent_player_notes = ()
 
     @property
@@ -653,29 +662,25 @@ class Planner:
         """
         # 上一窗没来得及看的截图属于旧画面，新的决策窗不带
         self._transient_images.drain()
-        # 本窗游戏事件素材重置（本轮新入账批次；回执随 ReAct 循环逐步累积，reply 交接时取全量）
+        # 本窗轮次上下文装配（本轮新入账批次；回执随 ReAct 循环逐步累积，reply 交接时取全量）
         resolved_batch = game_batch or GameEventBatch()
-        self._round_facts_text = resolved_batch.facts_text
-        self._round_game_events = list(resolved_batch.events)
-        self._round_reply_player = sole_chat_player(resolved_batch.chat_speakers)
-        self._round_danmaku = tuple(
-            (str(getattr(msg, "message_id", "") or ""), str(getattr(msg, "content", "") or "")) for msg in batch
+        ctx = RoundContext(
+            facts_text=resolved_batch.facts_text,
+            game_events=list(resolved_batch.events),
+            reply_player=sole_chat_player(resolved_batch.chat_speakers),
+            danmaku=tuple(
+                (str(getattr(msg, "message_id", "") or ""), str(getattr(msg, "content", "") or "")) for msg in batch
+            ),
+            history=list(history or []),
+            # 本批付过费的观众：查一次（三表只读查询），标注挂在给决策侧的消息行上
+            paid_identities=await self._collect_paid_identities(batch),
+            # 本批的现行社交事实从库现读（场内登记下一轮可见；读失败只少一段参考，不挡决策）
+            social_facts=await self._load_social_facts(),
+            started_ms=self._clock(),
+            game_players=resolved_batch.addressed_players,
+            # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
+            player_notes=resolved_batch.player_notes,
         )
-        self._round_history = list(history or [])
-        # 本批付过费的观众：查一次（三表只读查询），标注挂在给决策侧的消息行上
-        self._round_paid_identities = await self._collect_paid_identities(batch)
-        # 本批的现行社交事实从库现读（场内登记下一轮可见；读失败只少一段参考，不挡决策）
-        self._round_social_facts = await self._load_social_facts()
-        self._round_memory_bounced = False
-        self._round_game_chat_sent = False
-        self._round_game_chat_bounced = False
-        self._round_tool_names = None
-        self._round_answered_chat_players = set()
-        self._round_started_ms = self._clock()
-        self._round_mouth_bounced = False
-        self._round_game_players = resolved_batch.addressed_players
-        # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
-        self._round_player_notes = resolved_batch.player_notes
         self._recent_player_notes = keep_recent_notes(
             self._recent_player_notes, resolved_batch.player_notes, self._clock()
         )
@@ -695,21 +700,21 @@ class Planner:
         if brief_text:
             system_prompt = f"{system_prompt}\n\n{brief_text}"
         # 线索推送每批评一次：卡片与提示行进参考段，编号进本窗合法点名名单
-        memory_cues = await self._collect_memory_cues(batch)
+        memory_cues = await self._collect_memory_cues(batch, ctx)
         opening_wrapup = await self._load_opening_wrapup()
         opening_wrapup_text = (getattr(opening_wrapup, "text", "") or "").strip() if opening_wrapup is not None else ""
         opening_wrapup_ids = getattr(opening_wrapup, "commitment_ids", ()) if opening_wrapup is not None else ()
-        self._round_memory_ids = self._round_commitment_ids(memory_cues) | {int(item) for item in opening_wrapup_ids}
-        self._round_archive_ids = self._round_archive_line_ids(memory_cues)
-        self._round_asked_archive_ids = {
+        ctx.memory_ids = self._round_commitment_ids(memory_cues) | {int(item) for item in opening_wrapup_ids}
+        ctx.archive_ids = self._round_archive_line_ids(memory_cues)
+        ctx.asked_archive_ids = {
             int(item) for item in (getattr(memory_cues, "asked_archive_ids", ()) if memory_cues is not None else ())
         }
         self._memory_labels = dict(getattr(memory_cues, "labels", {}) or {})
-        self._round_familiarity_by_msg_id = dict(getattr(memory_cues, "familiarity_by_message_id", {}) or {})
+        ctx.familiarity_by_msg_id = dict(getattr(memory_cues, "familiarity_by_message_id", {}) or {})
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
         # 不必先花一步请求去查再决定说什么。
-        self._round_speech_mode = self._resolve_speech_mode()
+        ctx.speech_mode = self._resolve_speech_mode()
         # 本窗若由游戏待定夺唤醒、新入账突发遭遇/急事上报或有待回的游戏内聊天，按游戏急事通知工作台清空场外余温
         urgent_game = (
             (trigger_cause is not None and trigger_cause.kind is TriggerKind.GAME)
@@ -731,7 +736,7 @@ class Planner:
             reminders,
             resume_replay=resume_replay,
             opening_wrapup=opening_wrapup_text,
-            game_events=self._round_game_events,
+            game_events=ctx.game_events,
             fresh_game_chat=fresh_game_chat,
             private_game_chat=private_game_chat,
             overview=overview,
@@ -739,18 +744,19 @@ class Planner:
             memory_cues=memory_cues,
             talk_workbench_text=talk_workbench_text,
             talk_cards_text=talk_cards_text,
+            ctx=ctx,
         )
         if reference_text is None:
             return replace(outcome, error=reference_failure, silent_reason="assembler_failed")
 
         tool_list = self._build_tool_list()
-        self._round_tool_names = {
+        ctx.tool_names = {
             str(item.get("name") or "") for item in tool_list if isinstance(item, Mapping) and item.get("name")
         }
         # 消息序列：[system] + 历史（user/assistant 原生消息）+ 本批（user）+ 参考段（user，序列尾）；
         # ReAct 循环的 assistant/tool 消息 append-only 追加在参考段之后，绝不插中间。
         messages = assemble_request_messages(
-            system_prompt, self._build_dialogue_messages(batch, history, mark_paid=True), reference_text
+            system_prompt, self._build_dialogue_messages(batch, history, mark_paid=True, ctx=ctx), reference_text
         )
         # 游戏委派与补充要求同时保留本窗观众原话与近期游戏公屏原话（路点、坐标、物品名逐字送达，不只剩口头概括）
         source_dialogue = self._build_source_dialogue(batch, fresh_game_chat)
@@ -791,12 +797,12 @@ class Planner:
                 )
             except Exception as e:
                 self.logger.warning(f"Planner LLM 调用异常: {e}")
-                self._settle_round_game_chat()
+                self._settle_round_game_chat(ctx)
                 return replace(outcome, error=f"llm_error: {e}", silent_reason="llm_error")
 
             if not response.ok:
                 error = response.error or "unknown"
-                self._settle_round_game_chat()
+                self._settle_round_game_chat(ctx)
                 return replace(outcome, error=f"llm_failed: {error}", silent_reason="llm_failed")
 
             outcome = replace(
@@ -815,8 +821,8 @@ class Planner:
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话
             if not tool_calls:
-                self._settle_round_game_chat()
-                return replace(outcome, silent_reason=self._silent_reason(held_once, "natural"))
+                self._settle_round_game_chat(ctx)
+                return replace(outcome, silent_reason=self._silent_reason(ctx, held_once, "natural"))
 
             stop_round = False
             # 同一步里给游戏的安排（开始做事 / 补充要求）没送到时，记下是哪个调用和它的拒绝回执：这一步的话先不说
@@ -856,6 +862,7 @@ class Planner:
                         round_id=round_id,
                         game_chat=fresh_game_chat,
                         speech_history=speech_history,
+                        ctx=ctx,
                     )
                 else:
                     observation = await self._invoke_registry_tool(
@@ -864,6 +871,7 @@ class Planner:
                         round_id=round_id,
                         source_dialogue=source_dialogue,
                         relay_without_input=relay_without_input,
+                        ctx=ctx,
                     )
                     refusal = _observation_error(observation) if self.workbench.handles(name) else None
                     if refusal is not None:
@@ -876,20 +884,20 @@ class Planner:
                     }
                 )
                 if stop_round:
-                    self._settle_round_game_chat()
+                    self._settle_round_game_chat(ctx)
                     return outcome
 
         # 超步：未完成说话即收场（压住过一句又没再开口时记成 reply_held）
-        self._settle_round_game_chat()
-        return replace(outcome, silent_reason=self._silent_reason(held_once, "max_steps"))
+        self._settle_round_game_chat(ctx)
+        return replace(outcome, silent_reason=self._silent_reason(ctx, held_once, "max_steps"))
 
-    def _silent_reason(self, held_once: bool, default: str) -> str:
+    def _silent_reason(self, ctx: RoundContext, held_once: bool, default: str) -> str:
         """这一窗没开口的原因：被压住过一句、被嘴的新事实推翻作废过、因提过的旧事被退回过，都单独记。"""
         if held_once:
             return "reply_held"
-        if self._round_mouth_bounced:
+        if ctx.mouth_bounced:
             return "mouth_superseded"
-        return "memory_repeat_held" if self._round_memory_bounced else default
+        return "memory_repeat_held" if ctx.memory_bounced else default
 
     def _collect_speech_history(self, history: Optional[List[Any]]) -> Optional[List[str]]:
         """合成本窗表达侧可见的已说台词（历史中的台词 + 实时口头流水里尚未入历史的近期台词）。"""
@@ -920,7 +928,7 @@ class Planner:
             self.logger.warning(f"拉取对账最新现场失败: {exc}", exc=True)
             return {}
 
-    async def _resolve_use_memory(self, args: Dict[str, Any]) -> Tuple[str, List[str]]:
+    async def _resolve_use_memory(self, args: Dict[str, Any], ctx: RoundContext) -> Tuple[str, List[str]]:
         """解析 reply 的 use_memory：编号在本窗名单内才认，渲染成说话档交表达侧。
 
         返回（说话档文本, 编号写法列表）。编号不在本窗常驻简报或本批卡片里、取不到那一条、
@@ -936,9 +944,9 @@ class Planner:
             return "", []
         kind, number = parsed
         if kind == MEMORY_REF_ARCHIVE:
-            return await self._resolve_archive_ref(number)
+            return await self._resolve_archive_ref(number, ctx)
         commitment_id = number
-        if commitment_id not in self._round_memory_ids:
+        if commitment_id not in ctx.memory_ids:
             self.logger.info(f"use_memory 的编号 {commitment_id} 不在本窗简报或卡片里，忽略")
             return "", []
         if self._commitment_lookup is None:
@@ -974,18 +982,18 @@ class Planner:
             return None
         return parsed[1] if parsed[1] in used else None
 
-    def _reply_player_name(self, args: Dict[str, Any]) -> str:
+    def _reply_player_name(self, args: Dict[str, Any], ctx: RoundContext) -> str:
         """这句在回应游戏里的哪位玩家（口径见 :func:`answering_player`）；点名对不上时记一笔日志。"""
         written = str(args.get("to_player") or "").strip()
         # 本窗新到的加最近几分钟留着的都认：送礼常在上一窗入账、这一窗才谢
         name = answering_player(
-            written, str(args.get("topic_summary") or ""), self._round_player_notes, self._recent_player_notes
+            written, str(args.get("topic_summary") or ""), ctx.player_notes, self._recent_player_notes
         )
         if written and not name:
             self.logger.info(f"to_player 写的「{written}」不在最近找她的玩家里，不填回应对象")
         return name
 
-    def _reply_player_identity(self, to_player: str, answering_player: str) -> Tuple[str, str]:
+    def _reply_player_identity(self, to_player: str, answering_player: str, ctx: RoundContext) -> Tuple[str, str]:
         """这句落库时记成在回应哪位玩家，(游戏, UUID)；记不下时两个空串。
 
         Planner 在 ``to_player`` 点了名、对得上最近找过她的玩家：按他的条目记（她谢送礼的乙，同窗甲在公屏
@@ -996,15 +1004,15 @@ class Planner:
             return "", ""
         if to_player.strip():
             # 最近的条目在后：同名的取最新那条
-            for note in reversed((*self._recent_player_notes, *self._round_player_notes)):
+            for note in reversed((*self._recent_player_notes, *ctx.player_notes)):
                 if note.who == answering_player and note.uuid:
                     return note.game, note.uuid
             return "", ""
-        if answering_player == sole_speaker_name(self._round_player_notes):
-            return self._round_reply_player
+        if answering_player == sole_speaker_name(ctx.player_notes):
+            return ctx.reply_player
         return "", ""
 
-    def _answers_someone(self, line_id: int, answers_viewer: bool, answering_player: str) -> bool:
+    def _answers_someone(self, line_id: int, answers_viewer: bool, answering_player: str, ctx: RoundContext) -> bool:
         """提过的旧事这一句再接算不算在回人：三种情形任一成立就不退回。
 
         回的是本场的一条观众弹幕（本窗的，或观众上一窗问、这一窗才回的）；这句在回应游戏里的一位玩家
@@ -1012,11 +1020,11 @@ class Planner:
         问起旧事、Planner 只在摘要里写了他，退回去她就换话题不答了）；这一条是本窗观众弹幕或玩家开口推上来
         的线索卡。只是本窗有弹幕、有玩家开口不算：热闹时段几乎每窗都有，按这个放行，冷场时主动复提就拦不住了。
         """
-        return answers_viewer or bool(answering_player) or line_id in self._round_asked_archive_ids
+        return answers_viewer or bool(answering_player) or line_id in ctx.asked_archive_ids
 
-    async def _resolve_archive_ref(self, line_id: int) -> Tuple[str, List[str]]:
+    async def _resolve_archive_ref(self, line_id: int, ctx: RoundContext) -> Tuple[str, List[str]]:
         """点名一行档案：在本窗名单里、取得到这一行，台词拿到它的标题（不带编号与原话）。"""
-        if line_id not in self._round_archive_ids:
+        if line_id not in ctx.archive_ids:
             self.logger.info(f"use_memory 的档案行编号 {line_id} 不在本窗简报或卡片里，忽略")
             return "", []
         if self._archive_lookup is None:
@@ -1122,7 +1130,7 @@ class Planner:
             self.logger.warning(f"读取常驻简报失败，本场系统提示词省略简报: {exc}", exc=True)
             return ""
 
-    async def _collect_memory_cues(self, batch: List[Any]) -> Any:
+    async def _collect_memory_cues(self, batch: List[Any], ctx: RoundContext) -> Any:
         """算本批的线索（承诺卡、老观众在场一行、回执行）；没注入或出错都返回 None。"""
         if self._memory_cues_provider is None:
             return None
@@ -1133,7 +1141,7 @@ class Planner:
             except Exception as exc:
                 self.logger.warning(f"读当前开着的游戏失败（本批不出游戏承诺卡）: {exc}", exc=True)
         try:
-            return await self._memory_cues_provider(list(batch), open_games, self._round_game_players)
+            return await self._memory_cues_provider(list(batch), open_games, ctx.game_players)
         except Exception as exc:
             self.logger.warning(f"线索推送失败（本批不带提示行，不挡决策）: {exc}", exc=True)
             return None
@@ -1278,6 +1286,7 @@ class Planner:
         memory_cues: Any = None,
         talk_workbench_text: str = "",
         talk_cards_text: str = "",
+        ctx: Optional[RoundContext] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """构造参考段，返回（参考段文本, 失败原因）。
 
@@ -1287,6 +1296,7 @@ class Planner:
         常驻简报与老梗栏在系统提示词里，不占参考段。
         组装失败时文本为 None，失败原因随 outcome.error 写进决策事件。
         """
+        ctx = ctx or RoundContext()
         signoff_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
         resume_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.RESUME
         lines: List[str] = []
@@ -1309,7 +1319,7 @@ class Planner:
             # 主动窗按当前实际装配说明触发来源与可选行动：没接委派游戏时不提派单与游戏工作日志，
             # 纯杂谈场不会对着空气找游戏工具
             has_game_activity = self._has_any_game() or bool(
-                game_events or fresh_game_chat or private_game_chat or self._round_player_notes
+                game_events or fresh_game_chat or private_game_chat or ctx.player_notes
             )
             sources = "定时、环节推进或游戏里有新动静" if has_game_activity else "定时或环节推进"
             delegate_actions = (
@@ -1342,7 +1352,7 @@ class Planner:
         if not silence and proactive and not batch:
             # 解开 rundown_ready（15~30s）与【冷场】（45s）的死锁：
             # 杂谈档无弹幕时直接点亮找话提示；边玩边说档在游戏无新事件且上一轮主动窗已沉默过一次时同样点亮
-            if self._round_speech_mode == "talk":
+            if ctx.speech_mode == "talk":
                 silence = (
                     "【冷场】当前为杂谈节奏且本窗没有新弹幕：按本节提纲或话题卡推进话头，"
                     "也可从设定档案与冷场素材里挑本场没聊过的内容开口"
@@ -1364,15 +1374,15 @@ class Planner:
             lines.append("【私密游戏聊天】（只发给我，不在直播里念出或转述）\n" + "\n".join(private_game_chat))
         # 本窗有玩家在游戏公屏说话时，先结合本轮自动读取的现场速览核对发言玩家是否在角色身边，
         # 再生成回话提醒与全服广播归属提示，避免把远处玩家的环境感叹误认成自己工位脚下的状况
-        speakers = render_game_speakers(self._round_player_notes, overview=overview)
+        speakers = render_game_speakers(ctx.player_notes, overview=overview)
         if speakers:
             lines.append(speakers)
-        state_facts = self._round_facts_text
+        state_facts = ctx.facts_text
         if state_facts:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
             # 供客观核对——叙事讲经历，这里只列可核对的状态
             lines.append(f"【当前状态（客观事实）】\n{state_facts}")
-        social_facts_text = render_social_facts(self._round_social_facts, current_ms, age_text)
+        social_facts_text = render_social_facts(ctx.social_facts, current_ms, age_text)
         if social_facts_text:
             # 游戏社交事实：环境里人与人怎么相处的现行事实（登记下一轮可见）；
             # 游戏里接话、安排给谁做什么时照这里的现状说
@@ -1413,7 +1423,7 @@ class Planner:
             # 话题，再考虑沉默。
             # 这段话与提示词模板 amaidesu_planner_react.md 的"已聊话题必须有新角度"一条讲的是同一件事，
             # 措辞保持逐字一致（模板里那条是常驻版本，这里是每窗按实况注入的版本）
-            if self._round_speech_mode == "talk":
+            if ctx.speech_mode == "talk":
                 talk_tail = (
                     "杂谈环节围绕当前提纲要点或话题卡顺着讲出新的具体细节、来龙去脉算推进话头；"
                     "把讲过的同一层意思换词重讲才算重复。"
@@ -1538,6 +1548,7 @@ class Planner:
         history: Optional[List[Any]],
         *,
         mark_paid: bool = False,
+        ctx: Optional[RoundContext] = None,
     ) -> List[Dict[str, Any]]:
         """历史 + 本批 → 原生消息序列（user=观众 / assistant=主播）。
 
@@ -1549,10 +1560,9 @@ class Planner:
         ``mark_paid=True`` 时给付过费的观众行加「（付费观众）」标注——只在
         给决策侧的请求里标（表达侧与委派上下文不需要这个事实）。
         """
+        paid_ids = ctx.paid_identities if ctx is not None else set()
         batch_messages = [
-            canonical.batch_item_to_message(
-                msg, paid=mark_paid and paid_viewers.identity_key(msg) in self._round_paid_identities
-            )
+            canonical.batch_item_to_message(msg, paid=mark_paid and paid_viewers.identity_key(msg) in paid_ids)
             for msg in batch
         ]
         if not history:
@@ -1649,6 +1659,7 @@ class Planner:
         round_id: str = "",
         game_chat: Optional[List[str]] = None,
         speech_history: Optional[List[str]] = None,
+        ctx: Optional[RoundContext] = None,
     ) -> tuple[str, RoundOutcome, bool]:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出并进 outcome 并返回 (观察, 更新后 outcome, replied=True)。
 
@@ -1660,6 +1671,7 @@ class Planner:
         新颖自检（``is_novel`` 申报）在 reply 工具内部执行：打回以工具错误
         形态回到 ReAct 循环。
         """
+        ctx = ctx or RoundContext()
         if self._tool_registry is None:
             return (
                 json.dumps({"ok": False, "error": "reply 工具不可用（tool_registry 未注入）"}, ensure_ascii=False),
@@ -1669,18 +1681,18 @@ class Planner:
         invoke_started_ms = now_ms()
         # 这句的回应目标对得上本窗一条弹幕（编号或原文）：对象是那位观众。即使本窗只有一位玩家在公屏开口，
         # 也不记成在回应他——否则答应观众的事会被整理记到玩家头上。对不上的（拿公屏原话当目标）照旧在回玩家
-        answers_danmaku = _answers_danmaku(args.get("target"), self._round_danmaku)
+        answers_danmaku = _answers_danmaku(args.get("target"), ctx.danmaku)
         # 回的是本场更早一窗的观众弹幕（上一窗问的、这一窗才回）同样是在回观众，不是在回游戏里的玩家
-        answers_viewer = answers_danmaku or _viewer_message_in(args.get("target"), self._round_history)
-        answering_player = "" if answers_viewer else self._reply_player_name(args)
+        answers_viewer = answers_danmaku or _viewer_message_in(args.get("target"), ctx.history)
+        answering_player = "" if answers_viewer else self._reply_player_name(args, ctx)
         # 本场已经提过的旧事又被点名、这句又不是在回人：先退回一次，让她换个话题。第 58 场 14 条旧事里
         # 8 条各提了两次，第二次全是冷场时主动点名的。每窗只退一次：退过还点名就照常说出去，免得一窗里
         # 接连被退、整窗哑掉；点名留着，这句照样记成提过、计进唠叨指标
         repeated = self._repeated_archive_id(args)
-        if repeated is not None and not self._answers_someone(repeated, answers_viewer, answering_player):
+        if repeated is not None and not self._answers_someone(repeated, answers_viewer, answering_player, ctx):
             number = render_archive_number(repeated)
-            if not self._round_memory_bounced:
-                self._round_memory_bounced = True
+            if not ctx.memory_bounced:
+                ctx.memory_bounced = True
                 self.logger.info(f"{number} 本场已提过、没人问起，这句先退回")
                 return (
                     json.dumps({"ok": False, "error": _repeated_memory_error(number)}, ensure_ascii=False),
@@ -1693,13 +1705,13 @@ class Planner:
         # 同一轮仅拦截一次且要求还有剩余步数，若模型第二次仍直接调用 streamer_reply 则放行出声以免整窗静默。
         if (
             answering_player
-            and self._has_unanswered_player_chat(answering_player)
-            and self._has_round_tool(GAME_CHAT_SEND_TOOL_NAME)
-            and not self._round_game_chat_sent
-            and not self._round_game_chat_bounced
+            and self._has_unanswered_player_chat(answering_player, ctx)
+            and self._has_round_tool(GAME_CHAT_SEND_TOOL_NAME, ctx)
+            and not ctx.game_chat_sent
+            and not ctx.game_chat_bounced
             and outcome.steps < self.max_steps
         ):
-            self._round_game_chat_bounced = True
+            ctx.game_chat_bounced = True
             held = _held_reply_words(args)
             self.logger.info(f"回应公屏玩家「{answering_player}」前尚未成功发送游戏聊天，先退回一次口播")
             return (
@@ -1715,7 +1727,7 @@ class Planner:
                 False,
             )
         try:
-            remembered, memory_ids = await self._resolve_use_memory(args)
+            remembered, memory_ids = await self._resolve_use_memory(args, ctx)
             attachment = ReplyRoundAttachment(
                 # 思考流回调只在调用单上活一次，不经 LLM、模型不可伪造
                 thinking_callback=thinking.callback_for("replyer", 1) if thinking else None,
@@ -1726,15 +1738,15 @@ class Planner:
                 # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧
                 game_chat=list(game_chat or []),
                 # 状态跃迁事实块：表达侧的客观事实底稿（含本轮观察工具回执要点）
-                state_facts=GameLedger.compose_facts(self._round_facts_text, self.workbench.round_receipts),
+                state_facts=GameLedger.compose_facts(ctx.facts_text, self.workbench.round_receipts),
                 # 她本窗开始前说过的台词：表达侧据此看见自己刚说过什么（None = 本窗无历史可查）
                 speech_history=speech_history,
                 # 最近几分钟玩家找她的条目：谁在公屏说了什么、谁冲她扔了什么，台词照这个归到人头上
                 game_people=list(self._recent_player_notes),
                 # 回应对象：Planner 在 to_player 点名的玩家；没点名时，本窗唯一在公屏开口、话题摘要里又提到的那位
                 reply_to=answering_player,
-                speech_mode=self._round_speech_mode,
-                familiarity_by_message_id=dict(self._round_familiarity_by_msg_id),
+                speech_mode=ctx.speech_mode,
+                familiarity_by_message_id=dict(ctx.familiarity_by_msg_id),
             )
             result = await self._tool_registry.invoke(
                 ToolInvocation(
@@ -1772,7 +1784,7 @@ class Planner:
         checked_ms = self._clock()
         if raw_speech and self._mouth_reconciler is not None:
             # 出声前第一道关口：对照本轮开窗后嘴说出口的话及本场已欢迎名单，拦住重复欢迎、重复反应与相邻矛盾
-            verdict = await self._mouth_reconciler(raw_speech, self._round_started_ms)
+            verdict = await self._mouth_reconciler(raw_speech, ctx.started_ms)
             if verdict.action == "duplicate":
                 self.logger.info(f"Planner 台词已被嘴覆盖或属重复欢迎，本轮不再出声: {raw_speech!r}")
                 return (
@@ -1781,10 +1793,10 @@ class Planner:
                     True,
                 )
             if verdict.action == "contradicted":
-                if not self._round_mouth_bounced and outcome.steps < self.max_steps:
-                    self._round_mouth_bounced = True
-                    fresh_ctx = await self._load_fresh_context(self._round_started_ms)
-                    self._round_started_ms = checked_ms
+                if not ctx.mouth_bounced and outcome.steps < self.max_steps:
+                    ctx.mouth_bounced = True
+                    fresh_ctx = await self._load_fresh_context(ctx.started_ms)
+                    ctx.started_ms = checked_ms
                     self.logger.info(
                         f"Planner 台词与本窗嘴/新事件矛盾（{verdict.reason}），退回按新现场重想一步: {raw_speech!r}"
                     )
@@ -1834,7 +1846,7 @@ class Planner:
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
             memory_refs=memory_ids,
             # 落库的"回应哪位玩家"和交给表达侧的回应对象同一口径：点了名的按他记，没点名时是本窗唯一开口的那位
-            reply_player=self._reply_player_identity(str(args.get("to_player") or ""), answering_player),
+            reply_player=self._reply_player_identity(str(args.get("to_player") or ""), answering_player, ctx),
             mouth_checked_ms=checked_ms,
             beat_done=bool(metadata.get("beat_done") or args.get("beat_done") is True),
             use_card_id=parsed_card_id,
@@ -1845,17 +1857,17 @@ class Planner:
             self._recent_player_notes = mark_answered(
                 self._recent_player_notes,
                 answering_player,
-                include_chat=self._round_game_chat_sent,
+                include_chat=ctx.game_chat_sent,
                 include_actions=True,
             )
-            self._round_player_notes = mark_answered(
-                self._round_player_notes,
+            ctx.player_notes = mark_answered(
+                ctx.player_notes,
                 answering_player,
-                include_chat=self._round_game_chat_sent,
+                include_chat=ctx.game_chat_sent,
                 include_actions=True,
             )
-            if self._round_game_chat_sent:
-                self._round_answered_chat_players.add(answering_player)
+            if ctx.game_chat_sent:
+                ctx.answered_chat_players.add(answering_player)
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self.workbench.note_intent(
             Intent(
@@ -1877,6 +1889,7 @@ class Planner:
         round_id: str = "",
         source_dialogue: Optional[List[Dict[str, Any]]] = None,
         relay_without_input: bool = False,
+        ctx: Optional[RoundContext] = None,
     ) -> str:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。
 
@@ -1917,43 +1930,43 @@ class Planner:
             data = observation_data(result)
             # 直发游戏公屏工具返回 dict 经外层包装后可能带 success=False，需核对业务载荷确认真实发出去才计入已发
             if name == GAME_CHAT_SEND_TOOL_NAME and self._is_game_chat_send_succeeded(result):
-                self._round_game_chat_sent = True
+                if ctx is None:
+                    ctx = RoundContext()
+                ctx.game_chat_sent = True
             # 本轮回执进状态素材：reply 交接时的状态跃迁事实块从这里取观察工具的关键字段
             self.workbench.note_receipt(name, data)
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return render_observation(data)
 
-    def _has_round_tool(self, tool_name: str) -> bool:
+    def _has_round_tool(self, tool_name: str, ctx: RoundContext) -> bool:
         """本轮请求的工具表里是否存在指定工具（未走 plan 入口的单测按实时工具表兜底）。"""
-        if self._round_tool_names is not None:
-            return tool_name in self._round_tool_names
+        if ctx.tool_names is not None:
+            return tool_name in ctx.tool_names
         return any(isinstance(item, Mapping) and item.get("name") == tool_name for item in self._build_tool_list())
 
-    def _has_unanswered_player_chat(self, who: str) -> bool:
+    def _has_unanswered_player_chat(self, who: str, ctx: RoundContext) -> bool:
         """指定玩家在最近或本窗互动条目里，是否仍有未在游戏公屏回复过的公屏发言。"""
         if not who:
             return False
         return any(
             note.who == who and note.said and not note.answered
-            for note in (*self._recent_player_notes, *self._round_player_notes)
+            for note in (*self._recent_player_notes, *ctx.player_notes)
         )
 
-    def _settle_round_game_chat(self) -> None:
+    def _settle_round_game_chat(self, ctx: RoundContext) -> None:
         """本轮已真实成功发出游戏公屏文字但未走口播点名结算时，将该轮待回的公屏发言标为已回。"""
-        if not self._round_game_chat_sent or self._round_answered_chat_players:
+        if not ctx.game_chat_sent or ctx.answered_chat_players:
             return
-        targets = {note.who for note in self._round_player_notes if note.said and not note.answered and note.who}
+        targets = {note.who for note in ctx.player_notes if note.said and not note.answered and note.who}
         if not targets:
             targets = {note.who for note in self._recent_player_notes if note.said and not note.answered and note.who}
         for who in targets:
             self._recent_player_notes = mark_answered(
                 self._recent_player_notes, who, include_chat=True, include_actions=False
             )
-            self._round_player_notes = mark_answered(
-                self._round_player_notes, who, include_chat=True, include_actions=False
-            )
-            self._round_answered_chat_players.add(who)
+            ctx.player_notes = mark_answered(ctx.player_notes, who, include_chat=True, include_actions=False)
+            ctx.answered_chat_players.add(who)
 
     @staticmethod
     def _is_game_chat_send_succeeded(result: Any) -> bool:
