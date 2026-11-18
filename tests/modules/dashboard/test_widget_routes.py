@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.modules.dashboard.widget.game2048_service import Game2048WidgetService
+from src.modules.dashboard.widget.models import DanmakuWidgetConfig, DanmakuWidgetMessage, MessageType
 from src.modules.dashboard.widget.routes import WidgetGateway, create_widget_router
 from src.modules.dashboard.widget.service import DanmakuWidgetService
 from src.modules.events.event_bus import EventBus
@@ -45,13 +46,33 @@ def test_ws_pushes_the_latest_state_on_connect_and_stays_silent_without_a_snapsh
         assert len(gateway._game2048_clients) == 1
 
 
-def test_danmaku_socket_sends_history_then_configured_style() -> None:
+def test_danmaku_socket_sends_style_before_history_with_configured_limits() -> None:
+    """首帧序列 style → history：前端须先拿到缓冲上限再收历史，否则配置超默认上限的部分被截断。"""
     client, _ = _client(with_danmaku=True)
     with client.websocket_connect("/ws/widget/danmaku") as ws:
+        style = ws.receive_json()
+        # 默认配置：字号 16、条数上限 30
+        assert style == {"type": "style", "font_size": 16, "max_messages": 30}
         history = ws.receive_json()
         assert history["type"] == "history" and history["messages"] == []
-        style = ws.receive_json()
-        assert style == {"type": "style", "font_size": 16}  # 默认配置字号
+
+
+def test_danmaku_history_count_follows_configured_max_messages() -> None:
+    """握手历史条数取配置 max_messages，不再硬编码 15。"""
+    config = DanmakuWidgetConfig(max_messages=5)
+    service = DanmakuWidgetService(event_bus=EventBus(), config=config)
+    for i in range(8):
+        service.messages.append(DanmakuWidgetMessage(user_name=f"u{i}", content=str(i), message_type=MessageType.TEXT))
+    gateway = WidgetGateway()
+    gateway.widget_service = service
+    app = FastAPI()
+    app.include_router(create_widget_router(gateway))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/widget/danmaku") as ws:
+        ws.receive_json()  # style 在前
+        history = ws.receive_json()
+        # 8 条缓冲只按配置上限回放最近 5 条
+        assert [m["content"] for m in history["messages"]] == ["3", "4", "5", "6", "7"]
 
 
 def test_retired_legacy_page_and_query_routes_are_gone() -> None:

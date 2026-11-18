@@ -58,7 +58,11 @@ class WidgetGateway:
     async def run_danmaku_socket(self, websocket: WebSocket) -> None:
         style_payload: Optional[dict] = None
         if self.widget_service is not None:
-            style_payload = {"type": "style", "font_size": self.widget_service.config.font_size}
+            style_payload = {
+                "type": "style",
+                "font_size": self.widget_service.config.font_size,
+                "max_messages": self.widget_service.config.max_messages,
+            }
         await self._run_socket(websocket, self._danmaku_clients, with_history=True, style_payload=style_payload)
 
     async def run_subtitle_socket(self, websocket: WebSocket) -> None:
@@ -100,12 +104,14 @@ class WidgetGateway:
         clients.add(websocket)
 
         try:
-            if with_history and self.widget_service is not None:
-                history = self.widget_service.get_recent_messages(15)
-                await websocket.send_json({"type": "history", "messages": history})
-
+            # style 必须先于 history 下发：前端按 history 到达时的 max_messages
+            # 决定缓冲上限，若 history 在前，配置超过前端默认上限的部分会被立刻截断
             if style_payload:
                 await websocket.send_json(style_payload)
+
+            if with_history and self.widget_service is not None:
+                history = self.widget_service.get_recent_messages(self.widget_service.config.max_messages)
+                await websocket.send_json({"type": "history", "messages": history})
 
             while True:
                 await websocket.receive_text()

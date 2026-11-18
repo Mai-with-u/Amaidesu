@@ -1,5 +1,11 @@
 <template>
   <div class="subtitle-container" :style="containerStyle">
+    <div v-if="isPreview && widgetDisabled" class="preview-disabled-banner">
+      字幕小部件已停用，到管理页开启并重启后生效
+    </div>
+    <div v-else-if="isPreview && !everReceivedSubtitle" class="preview-placeholder">
+      字幕小部件预览——主播说话后此处显示实时字幕
+    </div>
     <div v-if="subtitle" class="subtitle-area" :style="areaStyle">
       <div v-if="replyQuote" class="reply-quote" :style="replyQuoteStyle">
         <span class="reply-quote-name">{{ replyQuote.name }}</span>
@@ -14,7 +20,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 
+import { configApi } from '@/api';
 import { useRawWebSocket } from '@/composables/useRawWebSocket';
+import { isPreviewMode } from '@/composables/useWidgetCatalog';
 import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
 
 /**
@@ -52,6 +60,12 @@ const backgroundColor = ref<string>('rgba(0,0,0,0.45)');
 const borderColor = ref<string>('#ff8800');
 const position = ref<SubtitlePosition>('bottom');
 const replyQuote = ref<{ name: string; text: string } | null>(null);
+/** 是否收到过至少一条字幕：预览态空态占位据此撤下（字幕被清空不算"从未收到"） */
+const everReceivedSubtitle = ref(false);
+/** 预览态（管理页"打开"带 ?preview=1）才显示占位与停用提示；嵌入态保持全透明 */
+const isPreview = isPreviewMode();
+/** 预览态停用判定：false 才显示横幅，读取失败按"未知"处理（不显示横幅，占位照旧） */
+const widgetDisabled = ref(false);
 
 const containerStyle = computed(() => ({
   alignItems:
@@ -92,6 +106,7 @@ const { status } = useRawWebSocket('/ws/widget/subtitle', {
       const data: SubtitleData = JSON.parse(event.data);
       if (data.type === 'subtitle') {
         subtitle.value = data.text || '';
+        everReceivedSubtitle.value = true;
         if (data.font_size) fontSize.value = data.font_size;
         if (data.font_color) fontColor.value = data.font_color;
         if (data.background_color) backgroundColor.value = data.background_color;
@@ -110,6 +125,28 @@ const { status } = useRawWebSocket('/ws/widget/subtitle', {
     }
   },
 });
+
+// 预览态停用判定：只读配置做展示，不改字幕数据流。读取失败按"未知"处理
+if (isPreview) {
+  void (async () => {
+    try {
+      const resp = await configApi.getConfig();
+      const cfg = (resp.data?.config ?? {}) as Record<string, unknown>;
+      const dashboard = cfg['dashboard'];
+      const widget =
+        dashboard && typeof dashboard === 'object'
+          ? (dashboard as Record<string, unknown>)['subtitle_widget']
+          : undefined;
+      const enabled =
+        widget && typeof widget === 'object'
+          ? (widget as Record<string, unknown>)['enabled']
+          : undefined;
+      widgetDisabled.value = enabled === false;
+    } catch (error) {
+      console.error('读取字幕小部件配置失败', error);
+    }
+  })();
+}
 </script>
 
 <style>
@@ -135,6 +172,21 @@ body,
 .subtitle-area {
   text-align: center;
   z-index: 100;
+}
+
+/* 以下两条只在预览态渲染（嵌入态不进模板分支），样式轻量、不遮全屏 */
+.preview-placeholder {
+  color: rgba(128, 128, 128, 0.85);
+  font-size: 18px;
+}
+
+.preview-disabled-banner {
+  padding: 10px 18px;
+  border-radius: 6px;
+  background: rgba(255, 136, 0, 0.85);
+  color: #fff;
+  font-size: 18px;
+  font-weight: bold;
 }
 
 .reply-quote {

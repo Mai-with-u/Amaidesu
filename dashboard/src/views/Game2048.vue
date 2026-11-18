@@ -1,5 +1,11 @@
 <template>
   <div class="game2048-container">
+    <div v-if="isPreview && widgetDisabled" class="preview-disabled-banner">
+      2048 小部件已停用，到管理页开启并重启后生效
+    </div>
+    <div v-else-if="isPreview && !everReceivedState" class="preview-placeholder">
+      2048 小部件预览——等待棋盘状态，观众发弹幕指令后此处显示实时棋盘
+    </div>
     <WidgetStatusBadge :status="status" />
     <div class="left-panel">
       <div class="stat">
@@ -57,7 +63,9 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { configApi } from '@/api';
 import { useRawWebSocket } from '@/composables/useRawWebSocket';
+import { isPreviewMode } from '@/composables/useWidgetCatalog';
 import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
 
 /** game.state.changed 快照载荷（/ws/game2048 单槽推送，与 GameBoardStatePayload 对齐） */
@@ -104,6 +112,13 @@ const keyRight = ref<HTMLElement | null>(null);
 const keyRestart = ref<HTMLElement | null>(null);
 
 const historyShown = computed(() => [...historyRef.value].reverse().slice(0, HISTORY_SHOWN));
+
+/** 是否收到过至少一次棋盘快照：预览态空态占位据此撤下 */
+const everReceivedState = ref(false);
+/** 预览态（管理页"打开"带 ?preview=1）才显示占位与停用提示；嵌入态保持全透明 */
+const isPreview = isPreviewMode();
+/** 预览态停用判定：false 才显示横幅，读取失败按"未知"处理（不显示横幅，占位照旧） */
+const widgetDisabled = ref(false);
 
 // tile 实体表（命令式动画：与后端透明页同构，保证两处呈现一致）
 interface TileEntity {
@@ -327,6 +342,7 @@ const { status } = useRawWebSocket('/ws/widget/game2048', {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'state' && data.state) {
+        everReceivedState.value = true;
         applyFrame(data.state as Game2048State);
       }
     } catch (e) {
@@ -334,6 +350,28 @@ const { status } = useRawWebSocket('/ws/widget/game2048', {
     }
   },
 });
+
+// 预览态停用判定：只读配置做展示。读取失败按"未知"处理
+if (isPreview) {
+  void (async () => {
+    try {
+      const resp = await configApi.getConfig();
+      const cfg = (resp.data?.config ?? {}) as Record<string, unknown>;
+      const dashboard = cfg['dashboard'];
+      const widget =
+        dashboard && typeof dashboard === 'object'
+          ? (dashboard as Record<string, unknown>)['game2048_widget']
+          : undefined;
+      const enabled =
+        widget && typeof widget === 'object'
+          ? (widget as Record<string, unknown>)['enabled']
+          : undefined;
+      widgetDisabled.value = enabled === false;
+    } catch (error) {
+      console.error('读取 2048 小部件配置失败', error);
+    }
+  })();
+}
 </script>
 
 <style scoped>
@@ -356,6 +394,21 @@ const { status } = useRawWebSocket('/ws/widget/game2048', {
     -1px 1px 0 rgba(0, 0, 0, 0.9),
     1px 1px 0 rgba(0, 0, 0, 0.9),
     0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+/* 以下两条只在预览态渲染（嵌入态不进模板分支），样式轻量、不遮棋盘 */
+.preview-placeholder {
+  color: rgba(128, 128, 128, 0.85);
+  font-size: 18px;
+}
+
+.preview-disabled-banner {
+  padding: 10px 18px;
+  border-radius: 6px;
+  background: rgba(255, 136, 0, 0.85);
+  color: #fff;
+  font-size: 18px;
+  font-weight: bold;
 }
 
 .left-panel {

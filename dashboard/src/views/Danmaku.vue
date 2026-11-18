@@ -1,6 +1,12 @@
 <template>
   <div class="danmaku-container">
-    <div ref="messagesRef" class="messages">
+    <div v-if="isPreview && widgetDisabled" class="preview-disabled-banner">
+      弹幕小部件已停用，到管理页开启并重启后生效
+    </div>
+    <div v-else-if="isPreview && messages.length === 0" class="preview-placeholder">
+      弹幕小部件预览——连接后此处显示实时弹幕
+    </div>
+    <div v-show="messages.length > 0" ref="messagesRef" class="messages">
       <TransitionGroup name="message">
         <div
           v-for="msg in messages"
@@ -21,7 +27,9 @@
 <script setup lang="tsx">
 import { ref, nextTick } from 'vue';
 
+import { configApi } from '@/api';
 import { useRawWebSocket } from '@/composables/useRawWebSocket';
+import { isPreviewMode } from '@/composables/useWidgetCatalog';
 import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
 
 interface DanmakuMessage {
@@ -40,7 +48,12 @@ interface DanmakuMessage {
 
 const messages = ref<DanmakuMessage[]>([]);
 const messagesRef = ref<HTMLElement | null>(null);
-const maxMessages = 15;
+/** 弹幕缓冲上限；连接握手时随 style 消息以配置值覆盖（后端保证 style 先于 history 下发） */
+const maxMessages = ref<number>(15);
+/** 预览态（管理页"打开"带 ?preview=1）才显示占位与停用提示；嵌入态保持全透明 */
+const isPreview = isPreviewMode();
+/** 预览态停用判定：undefined = 未知（读取失败），不显示停用横幅 */
+const widgetDisabled = ref<boolean>(false);
 /** 弹幕字号（像素）；连接握手时随 style 消息以配置值覆盖 */
 const fontSize = ref<number>(16);
 
@@ -52,7 +65,7 @@ function addMessage(msg: DanmakuMessage) {
   const messageWithId = { ...msg, id: generateId() };
   messages.value.push(messageWithId);
 
-  if (messages.value.length > maxMessages) {
+  if (messages.value.length > maxMessages.value) {
     messages.value.shift();
   }
 
@@ -82,8 +95,8 @@ function getDisplayText(msg: DanmakuMessage): string {
 
 // /ws/widget/danmaku 专用协议（与主 WS 事件流无关）：
 // - 实时推送：{ type: "new_message", message: {...} }
-// - 连接握手：{ type: "history", messages: [...] }（最近 15 条）
-// - 连接握手：{ type: "style", font_size }（配置的弹幕字号，随历史之后下发）
+// - 连接握手：{ type: "style", font_size, max_messages }（先于 history，前端须先拿到缓冲上限再收历史）
+// - 连接握手：{ type: "history", messages: [...] }（最近 max_messages 条）
 // 模拟消息（simulated=true）不在弹幕小部件展示
 const { status } = useRawWebSocket('/ws/widget/danmaku', {
   onMessage: event => {
@@ -102,12 +115,38 @@ const { status } = useRawWebSocket('/ws/widget/danmaku', {
         if (typeof data.font_size === 'number') {
           fontSize.value = data.font_size;
         }
+        if (typeof data.max_messages === 'number' && data.max_messages >= 1) {
+          maxMessages.value = data.max_messages;
+        }
       }
     } catch (e) {
       console.error('解析消息失败:', e);
     }
   },
 });
+
+// 预览态停用判定：读 dashboard 段 danmaku_widget.enabled；读取失败按"未知"处理，
+// 不显示停用横幅，空态占位照旧。嵌入态不做此请求（直播画面不碰）
+if (isPreview) {
+  void (async () => {
+    try {
+      const resp = await configApi.getConfig();
+      const cfg = (resp.data?.config ?? {}) as Record<string, unknown>;
+      const dashboard = cfg['dashboard'];
+      const widget =
+        dashboard && typeof dashboard === 'object'
+          ? (dashboard as Record<string, unknown>)['danmaku_widget']
+          : undefined;
+      const enabled =
+        widget && typeof widget === 'object'
+          ? (widget as Record<string, unknown>)['enabled']
+          : undefined;
+      widgetDisabled.value = enabled === false;
+    } catch (error) {
+      console.error('读取弹幕小部件配置失败', error);
+    }
+  })();
+}
 </script>
 
 <style>
@@ -137,6 +176,22 @@ body,
   overflow-y: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+/* 以下两条只在预览态渲染（嵌入态不进模板分支），样式轻量、不遮全屏 */
+.preview-placeholder {
+  color: rgba(128, 128, 128, 0.85);
+  font-size: 18px;
+}
+
+.preview-disabled-banner {
+  align-self: flex-start;
+  padding: 10px 18px;
+  border-radius: 6px;
+  background: rgba(255, 136, 0, 0.85);
+  color: #fff;
+  font-size: 18px;
+  font-weight: bold;
 }
 
 .messages::-webkit-scrollbar {
