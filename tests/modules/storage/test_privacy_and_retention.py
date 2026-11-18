@@ -1276,3 +1276,93 @@ async def test_grace_fallback_timer_deletes_existing_viewer_after_24h(tmp_path: 
     finally:
         await privacy.close()
         await store.close()
+
+
+async def test_delete_viewer_with_wildcard_chars_in_nickname_does_not_hit_lookalike_names(
+    tmp_path: Path,
+) -> None:
+    """昵称含 %、_ 时按原字比对，形近但不同的名字所在行不被选中、不被误删。
+
+    旧实现把昵称直接拼进 LIKE 模式且无 ESCAPE 子句，"50%甲_号"会当通配符
+    宽匹配到"50x甲x号"，把无关内容的名字也替换掉。
+    """
+    db_file = tmp_path / "data" / "amaidesu.db"
+    store = SQLiteDatabase(db_file)
+    await store.initialize()
+    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key")
+    await privacy.initialize()
+    nickname = "50%甲_号"
+    lookalike = "50x甲x号"
+    try:
+        session_id = await store.sessions.insert_live_session(started_at_ms=1000, kind="live")
+        await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=2000)
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="UID_WILD_1",
+            user_name=nickname,
+            timestamp_ms=1100,
+            name_match_window_ms=0,
+        )
+        viewer_id = resolution.viewer_id
+        # 含昵称本人的行（应被替换为代称）
+        await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=1500,
+            sender_role="assistant",
+            content=f"欢迎{nickname}来看直播",
+            message_type="speak",
+        )
+        # 含形近名字的行（不得被动到）
+        await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=1510,
+            sender_role="assistant",
+            content=f"{lookalike}今天也很活跃",
+            message_type="speak",
+        )
+        await store.execute(
+            "INSERT INTO topics (live_session_id, label, source, score, trend, duration_ms)"
+            " VALUES (?, ?, 'chat', 1.0, 0.0, 1000)",
+            (session_id, f"和{nickname}聊天"),
+        )
+        await store.execute(
+            "INSERT INTO topics (live_session_id, label, source, score, trend, duration_ms)"
+            " VALUES (?, ?, 'chat', 1.0, 0.0, 1000)",
+            (session_id, f"和{lookalike}聊天"),
+        )
+        await store.execute(
+            "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary) VALUES (?, ?, ?, ?)",
+            (session_id, 1000, 1500, f"{nickname}点名了主播"),
+        )
+        await store.execute(
+            "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary) VALUES (?, ?, ?, ?)",
+            (session_id, 1500, 2000, f"{lookalike}点名了主播"),
+        )
+        # 游戏侧文本：含昵称本人的行替换，形近名字的行保留
+        await store.execute(
+            "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms)"
+            " VALUES (?, 'minecraft', 'chat', ?, NULL, 1600)",
+            (session_id, f"{nickname}加入了游戏"),
+        )
+        await store.execute(
+            "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms)"
+            " VALUES (?, 'minecraft', 'chat', ?, NULL, 1610)",
+            (session_id, f"{lookalike}加入了游戏"),
+        )
+
+        assert await privacy.delete_viewer(viewer_id=viewer_id, add_to_forget_list=True) is True
+
+        contents = [row["content"] for row in await store.execute("SELECT content FROM live_chat ORDER BY id")]
+        assert contents[0] == "欢迎一位观众来看直播", "昵称所在行替换为代称"
+        assert contents[1] == f"{lookalike}今天也很活跃", "形近名字所在行不被误替换"
+        labels = [row["label"] for row in await store.execute("SELECT label FROM topics ORDER BY id")]
+        assert labels == ["和一位观众聊天", f"和{lookalike}聊天"]
+        summaries = [row["summary"] for row in await store.execute("SELECT summary FROM timeline_summary ORDER BY id")]
+        assert summaries == ["一位观众点名了主播", f"{lookalike}点名了主播"]
+        messages = [row["message"] for row in await store.execute("SELECT message FROM game_events ORDER BY id")]
+        assert messages == ["一位观众加入了游戏", f"{lookalike}加入了游戏"]
+    finally:
+        if store.initialized:
+            await privacy.close()
+            await store.close()

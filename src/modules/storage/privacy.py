@@ -1167,8 +1167,9 @@ def _replace_name_in_her_game_chat(conn: sqlite3.Connection, *, nickname: str, l
     if not nickname or not table_exists(conn, "game_chat"):
         return
     conn.execute(
-        "UPDATE game_chat SET content = REPLACE(content, ?, ?) WHERE direction = 'streamer' AND content LIKE ?",
-        (nickname, label, f"%{nickname}%"),
+        "UPDATE game_chat SET content = REPLACE(content, ?, ?)"
+        " WHERE direction = 'streamer' AND content LIKE ? ESCAPE '\\'",
+        (nickname, label, _like_contains(nickname)),
     )
 
 
@@ -1238,21 +1239,22 @@ def _replace_nickname_in_sessions(
     自由文本（生物名/主人/死亡说明、游戏事件正文）不在场次集合里，按昵称全表替换。
     """
     sid_ph = ",".join("?" for _ in session_ids)
-    like_pat = f"%{nickname}%"
+    # 名字里的 %、_ 按原字比，配 ESCAPE 子句：不把名字里的通配符字符当模式展开
+    like_pat = _like_contains(nickname)
 
     conn.execute(
         f"UPDATE live_chat SET content = REPLACE(content, ?, ?)"  # noqa: S608
-        f" WHERE live_session_id IN ({sid_ph}) AND sender_role = 'assistant' AND content LIKE ?",
+        f" WHERE live_session_id IN ({sid_ph}) AND sender_role = 'assistant' AND content LIKE ? ESCAPE '\\'",
         [nickname, label, *session_ids, like_pat],
     )
     conn.execute(
         f"UPDATE topics SET label = REPLACE(label, ?, ?)"  # noqa: S608
-        f" WHERE live_session_id IN ({sid_ph}) AND label LIKE ?",
+        f" WHERE live_session_id IN ({sid_ph}) AND label LIKE ? ESCAPE '\\'",
         [nickname, label, *session_ids, like_pat],
     )
     conn.execute(
         f"UPDATE timeline_summary SET summary = REPLACE(summary, ?, ?)"  # noqa: S608
-        f" WHERE live_session_id IN ({sid_ph}) AND summary LIKE ?",
+        f" WHERE live_session_id IN ({sid_ph}) AND summary LIKE ? ESCAPE '\\'",
         [nickname, label, *session_ids, like_pat],
     )
 
@@ -1261,7 +1263,8 @@ def _replace_nickname_in_sessions(
         conn.execute(
             f"UPDATE archive_lines SET"  # noqa: S608
             f" text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?), viewer_word = REPLACE(viewer_word, ?, ?)"
-            f" WHERE live_session_id IN ({sid_ph}) AND (text LIKE ? OR quote LIKE ? OR viewer_word LIKE ?)",
+            f" WHERE live_session_id IN ({sid_ph})"
+            f" AND (text LIKE ? ESCAPE '\\' OR quote LIKE ? ESCAPE '\\' OR viewer_word LIKE ? ESCAPE '\\')",
             [nickname, label, nickname, label, nickname, label, *session_ids, like_pat, like_pat, like_pat],
         )
         _scrub_archive_cues(conn, session_ids=session_ids, nickname=nickname)
@@ -1274,7 +1277,7 @@ def _replace_nickname_in_sessions(
             f" close_quote = CASE WHEN close_quote IS NOT NULL THEN REPLACE(close_quote, ?, ?) ELSE NULL END"
             f" WHERE (created_session_id IN ({sid_ph})"
             f"        OR close_chat_id IN (SELECT id FROM live_chat WHERE live_session_id IN ({sid_ph})))"
-            f"   AND (what LIKE ? OR quote LIKE ? OR close_quote LIKE ?)",
+            f"   AND (what LIKE ? ESCAPE '\\' OR quote LIKE ? ESCAPE '\\' OR close_quote LIKE ? ESCAPE '\\')",
             [
                 nickname,
                 label,
@@ -1448,10 +1451,10 @@ def _replace_nickname_in_settle_reports(
     if not column_exists(conn, "live_sessions", "settle_report"):
         return
     sid_ph = ",".join("?" for _ in session_ids)
-    like_pat = f"%{nickname}%"
+    like_pat = _like_contains(nickname)
     rows = conn.execute(
         f"SELECT id, settle_report FROM live_sessions"  # noqa: S608 常量列名
-        f" WHERE id IN ({sid_ph}) AND settle_report IS NOT NULL AND settle_report LIKE ?",
+        f" WHERE id IN ({sid_ph}) AND settle_report IS NOT NULL AND settle_report LIKE ? ESCAPE '\\'",
         [*session_ids, like_pat],
     ).fetchall()
     for row in rows:
@@ -1503,25 +1506,25 @@ def _replace_nickname_in_game_data(
     """
     if not nickname or not session_ids:
         return
-    like_pat = f"%{nickname}%"
+    like_pat = _like_contains(nickname)
     sid_ph = ",".join("?" for _ in session_ids)
     if table_exists(conn, "game_creatures"):
         conn.execute(
             "UPDATE game_creatures SET death_note = REPLACE(death_note, ?, ?)"  # noqa: S608 常量列名
-            f" WHERE died_session_id IN ({sid_ph}) AND death_note LIKE ?",
+            f" WHERE died_session_id IN ({sid_ph}) AND death_note LIKE ? ESCAPE '\\'",
             [nickname, label, *session_ids, like_pat],
         )
     if table_exists(conn, "game_events"):
         conn.execute(
             "UPDATE game_events SET message = REPLACE(message, ?, ?)"  # noqa: S608 常量列名
-            f" WHERE live_session_id IN ({sid_ph}) AND message LIKE ?",
+            f" WHERE live_session_id IN ({sid_ph}) AND message LIKE ? ESCAPE '\\'",
             [nickname, label, *session_ids, like_pat],
         )
     if table_exists(conn, "game_chat"):
         # 她在公屏打出去的话里点过的名字（玩家说的那几行随玩家删除级联掉）
         conn.execute(
             "UPDATE game_chat SET content = REPLACE(content, ?, ?)"  # noqa: S608 常量列名
-            f" WHERE live_session_id IN ({sid_ph}) AND direction = 'streamer' AND content LIKE ?",
+            f" WHERE live_session_id IN ({sid_ph}) AND direction = 'streamer' AND content LIKE ? ESCAPE '\\'",
             [nickname, label, *session_ids, like_pat],
         )
 
