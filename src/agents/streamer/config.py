@@ -109,12 +109,12 @@ class StreamerPersonaConfig(BaseConfig):
     bot_name: str = Field(title="VTuber 名字", default="麦麦", description="VTuber 名字（注入 Replyer 表达侧）")
     personality: str = Field(
         title="性格描述",
-        default="活泼开朗，有些调皮，喜欢和观众互动",
+        default="活泼开朗，有些调皮，好奇心重，爱接梗。遇到游戏里的破事反应很大，会当场叫出来；偶尔会突然较真，较真起来一板一眼。",
         description="性格描述（注入 Replyer 表达侧）",
     )
     style_constraints: str = Field(
         title="说话风格约束",
-        default="口语化，短句为主，偶尔玩个梗，不堆网络流行语",
+        default="口语化，短句为主，偶尔玩个梗",
         description="说话风格约束（注入 Replyer 表达侧）",
     )
     behavior_style: str = Field(
@@ -152,8 +152,9 @@ class StreamerPersonaConfig(BaseConfig):
     # 本地结构化人物设定档案：承载来历、当前舞台形象、其他形态、喜好与日常，整场静态拼入人设段吃前缀缓存
     profile_file: str = Field(
         title="人物设定档案路径",
-        default="",
-        description="本地 Markdown 或 TOML 设定档案路径（相对 config/ 或仓库根解析，不入库；留空 = 不加载设定档案）",
+        default="src/agents/streamer/profiles/maimai_profile.md",
+        description="本地 Markdown 或 TOML 设定档案路径（相对 config/ 或仓库根解析；默认指向仓库自带的默认档案，"
+        "随 clone 分发，可改成自己的本地档案文件；留空 = 不加载设定档案）",
     )
     active_outfit: str = Field(
         title="当前舞台形象",

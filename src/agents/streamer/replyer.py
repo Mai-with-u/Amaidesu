@@ -43,8 +43,10 @@ from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE, PlayerNote
 # 文本与 StreamerConfig.persona 默认值对齐；不允许 config 模块反向依赖 agents 层，
 # 故这里复制文本（保持依赖方向 agents → config 干净）。
 _DEFAULT_BOT_NAME = "麦麦"
-_DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
-_DEFAULT_STYLE_CONSTRAINTS = "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
+_DEFAULT_PERSONALITY = (
+    "活泼开朗，有些调皮，好奇心重，爱接梗。遇到游戏里的破事反应很大，会当场叫出来；偶尔会突然较真，较真起来一板一眼。"
+)
+_DEFAULT_STYLE_CONSTRAINTS = "口语化，短句为主，偶尔玩个梗"
 _DEFAULT_VOICE_EXAMPLES = ""
 _DEFAULT_BOUNDARIES = "线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人"
 # 一句台词的长度上限（与 StreamerConfig.speech_max_chars 默认值对齐）；0 = 不限制
@@ -61,6 +63,7 @@ _SPEECH_STYLE_RULE = {
         "随口说话，不像写稿：一次只说一件事，说完就停。"
         "回答问话把回答讲完整；形容照着它说，指代说清楚。"
         "接弹幕先带出对方问的事再答，答完就停。"
+        "台词是当场说出口的话，停顿用逗号和句号就够了。"
     ),
     "talk": (
         "像真人主播跟朋友唠嗑，不像写稿：围绕这一个话头自然说两三句，把细节或你觉得好玩的地方讲出来，说完自然停住。"

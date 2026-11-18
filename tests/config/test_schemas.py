@@ -34,9 +34,11 @@ class TestStreamerPersonaConfig:
         p = StreamerPersonaConfig()
         # StreamerPersonaConfig 权威默认值
         assert p.bot_name == "麦麦"
-        assert p.personality == "活泼开朗，有些调皮，喜欢和观众互动"
+        assert p.personality == (
+            "活泼开朗，有些调皮，好奇心重，爱接梗。遇到游戏里的破事反应很大，会当场叫出来；偶尔会突然较真，较真起来一板一眼。"
+        )
         # 表达侧统一禁 emoji：默认值不含"适当使用emoji"（与模板指令矛盾，见 v2.0.45 钩子）
-        assert p.style_constraints == "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
+        assert p.style_constraints == "口语化，短句为主，偶尔玩个梗"
         assert p.behavior_style.startswith("积极与观众互动"), "behavior_style 默认文本与权威定义漂移"
         assert not hasattr(p, "audience_salutation")  # 称呼模板变量已退役，Schema 不再承载
 
@@ -50,9 +52,11 @@ class TestStreamerPersonaConfig:
 def test_streamer_persona_and_context_defaults() -> None:
     persona = StreamerPersonaConfig()
     assert persona.bot_name == "麦麦"
-    assert persona.personality == "活泼开朗，有些调皮，喜欢和观众互动"
+    assert persona.personality == (
+        "活泼开朗，有些调皮，好奇心重，爱接梗。遇到游戏里的破事反应很大，会当场叫出来；偶尔会突然较真，较真起来一板一眼。"
+    )
     # v2.0.45 迁移钩子后旧默认（含"适当使用emoji"）已改写，见 replyer_style_drop_emoji
-    assert persona.style_constraints == "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
+    assert persona.style_constraints == "口语化，短句为主，偶尔玩个梗"
     assert persona.behavior_style.startswith("积极与观众互动")  # Planner 决策侧注入契约，必须非空
 
     context = StreamerContextConfig()

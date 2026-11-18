@@ -149,3 +149,34 @@ class TestRenderAndLoadProfile:
 
         missing = load_persona_profile("missing_profile.md", base_dirs=[cfg_dir, tmp_path])
         assert missing is None
+
+
+class TestRepoDefaultProfile:
+    """仓库自带默认档案（src/agents/streamer/profiles/maimai_profile.md）可加载、段落齐全。"""
+
+    REPO_ROOT = Path(__file__).resolve().parents[4]
+    DEFAULT_PROFILE_FILE = "src/agents/streamer/profiles/maimai_profile.md"
+
+    def test_default_file_is_tracked_and_loadable(self) -> None:
+        path = self.REPO_ROOT / self.DEFAULT_PROFILE_FILE
+        assert path.is_file(), "默认档案文件必须随仓库分发"
+        loaded = load_persona_profile(self.DEFAULT_PROFILE_FILE, base_dirs=[self.REPO_ROOT])
+        assert loaded is not None
+
+    def test_default_file_covers_all_sections_verbatim(self) -> None:
+        loaded = load_persona_profile(self.DEFAULT_PROFILE_FILE, base_dirs=[self.REPO_ROOT])
+        assert loaded is not None
+        assert "萨卡班甲鱼意外和橙子混合而来的生物" in loaded.identity
+        assert "四叶草是人物最明确的身份标志" in loaded.other_forms
+        assert "她目前在 B 站直播玩游戏" in loaded.companions_and_routine
+        # 末行防复读引导原文在场
+        assert "同一件事当场不从头复述第二遍" in loaded.companions_and_routine
+
+    def test_plain_section_titles_classify_into_slots(self) -> None:
+        profile = parse_persona_profile_markdown(
+            "## 来历\n她从旧街机厅信号里醒来。\n\n## 形态\n平时是纸片人。\n\n## 直播\n每晚八点开播。",
+            active_outfit="",
+        )
+        assert "旧街机厅" in profile.identity
+        assert "纸片人" in profile.other_forms
+        assert "每晚八点开播" in profile.companions_and_routine

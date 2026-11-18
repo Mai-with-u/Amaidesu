@@ -1,8 +1,8 @@
 """结构化人物设定档案解析与提示词渲染。
 
 主播在杂谈或日常互动中需要稳定知道自己的来历、此刻站在镜头前的舞台外观、其他形态、
-钦定喜好与直播日常，同时严禁编造无出处的现实生活经历。本模块将本地不入库的设定档案
-（Markdown 或 TOML）解析为五个固定小节，并以不超过 900 字的静态文本拼入决策层
+钦定喜好与直播日常，同时严禁编造无出处的现实生活经历。本模块将本地设定档案
+（Markdown 或 TOML，默认档案随仓库分发，运营者可换成本地文件）解析为五个固定小节，并以不超过 900 字的静态文本拼入决策层
 「她是谁」与表达层「你是谁」末尾，整场保持不变以命中模型前缀缓存。
 """
 
@@ -153,7 +153,7 @@ def _normalize_block(text: str) -> str:
 def _classify_section(title: str) -> str | None:
     """将二级标题归类到五个标准槽位之一。"""
     normalized = title.strip()
-    if any(k in normalized for k in ("其他形态", "本体形态", "其余形态")):
+    if any(k in normalized for k in ("其他形态", "本体形态", "其余形态", "形态")):
         return "other_forms"
     if any(k in normalized for k in ("当前舞台形象", "舞台形象", "当前形象", "形象", "外观", "穿搭")):
         return "outfits"
@@ -161,7 +161,7 @@ def _classify_section(title: str) -> str | None:
         return "identity"
     if any(k in normalized for k in ("喜好", "执念", "偏好")):
         return "likes_and_quirks"
-    if any(k in normalized for k in ("身边的人", "直播日常", "日常", "伙伴")):
+    if any(k in normalized for k in ("身边的人", "直播日常", "直播", "日常", "伙伴")):
         return "companions_and_routine"
     return None
 

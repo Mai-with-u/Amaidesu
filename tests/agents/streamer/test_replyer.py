@@ -97,6 +97,7 @@ async def test_persona_goes_into_system_template_and_turn_data_into_the_turn_tem
             "随口说话，不像写稿：一次只说一件事，说完就停。"
             "回答问话把回答讲完整；形容照着它说，指代说清楚。"
             "接弹幕先带出对方问的事再答，答完就停。"
+            "台词是当场说出口的话，停顿用逗号和句号就够了。"
         ),
         "game_rule_line": ("- 干活的是自己，用第一人称；同伴听不见直播，提他们用第三人称。别提派活这类幕后词。\n"),
     }
