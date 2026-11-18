@@ -1173,13 +1173,10 @@ class MemoryCueProvider:
 
     async def _recent_session_bounds(self, session_id: int) -> Tuple[Tuple[int, ...], int, Optional[int]]:
         """本场之前最近至多三个已完结正式场的场次号、三场最早开播时刻与两场前自触发门槛时刻。"""
-        finder = getattr(self._archive, "recent_ended_session_bounds", None) or getattr(
-            self._commitments, "recent_ended_session_bounds", None
-        )
-        if finder is None:
+        if self._archive is None:
             return (), 0, None
         try:
-            bounds = await finder(
+            bounds = await self._archive.recent_ended_session_bounds(
                 kind=SESSION_KIND_LIVE,
                 min_duration_ms=self._min_session_ms,
                 exclude_session_id=session_id,

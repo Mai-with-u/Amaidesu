@@ -2130,12 +2130,11 @@ class StreamerAgent(BaseAgent):
 
     async def _recent_two_session_bounds(self, current_session_id: int) -> List[Tuple[int, int]]:
         """取本场之前最近两个已完结且时长达标的正式场边界（判进行中社交事实降级用）。"""
-        finder = getattr(self._archive_repo, "recent_ended_session_bounds", None)
-        if not callable(finder):
+        if self._archive_repo is None:
             return []
         min_ms = max(0, int(self.typed_config.memory_brief_min_session_ms))
         return list(
-            await finder(
+            await self._archive_repo.recent_ended_session_bounds(
                 kind=SESSION_KIND_LIVE,
                 min_duration_ms=min_ms,
                 exclude_session_id=int(current_session_id),

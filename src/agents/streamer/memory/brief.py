@@ -90,7 +90,6 @@ async def build_brief(
     previous_session_id, snapshot_lines = await _snapshot_lines(archive_repo, kind, min_session_ms)
     previous_is_stale, earliest_recent_ms, recent_session_ids = await _recent_window(
         archive_repo,
-        commitments_repo=commitments_repo,
         kind=kind,
         min_session_ms=min_session_ms,
         live_session_id=live_session_id,
@@ -161,20 +160,14 @@ async def _snapshot_lines(
 async def _recent_window(
     archive_repo: "ArchiveRepo",
     *,
-    commitments_repo: Optional["CommitmentRepo"] = None,
     kind: SessionKind,
     min_session_ms: int,
     live_session_id: Optional[int],
     snapshot_owner_id: Optional[int],
 ) -> Tuple[bool, int, List[int]]:
     """算三件事：快照是否落后于最近完结场、最近三场的开播时刻下界、最近三场的场次号（新到旧）。"""
-    finder = getattr(archive_repo, "recent_ended_session_bounds", None) or getattr(
-        commitments_repo, "recent_ended_session_bounds", None
-    )
-    if finder is None:
-        return False, 0, []
     try:
-        bounds = await finder(
+        bounds = await archive_repo.recent_ended_session_bounds(
             kind=kind,
             min_duration_ms=min_session_ms,
             exclude_session_id=live_session_id,

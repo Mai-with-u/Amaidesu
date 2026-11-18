@@ -13,11 +13,10 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence
 
 from src.modules.storage.models.memory import Commitment
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 from src.modules.utils.time_utils import now_ms
 
 # 承诺行读面的列（与 Commitment 字段一一对应）
@@ -256,33 +255,6 @@ class CommitmentRepo(BaseRepo):
                     live_session_id=int(live_session_id),
                     updated_at_ms=ts,
                 )
-
-        return await self._run_in_executor(_exec)
-
-    async def recent_ended_session_bounds(
-        self,
-        *,
-        kind: SessionKind = SESSION_KIND_LIVE,
-        min_duration_ms: int = 0,
-        exclude_session_id: Optional[int] = None,
-        limit: int = 3,
-    ) -> List[Tuple[int, int]]:
-        """最近几个已完结且时长达标的同类型场次 ``(id, started_at_ms)``（新到旧，供承诺过期判定用）。"""
-        where = "WHERE kind=? AND ended_at_ms IS NOT NULL AND (ended_at_ms - started_at_ms) >= ?"
-        params: List[object] = [kind, max(0, int(min_duration_ms))]
-        if exclude_session_id is not None:
-            where += " AND id <> ?"
-            params.append(int(exclude_session_id))
-        params.append(max(1, int(limit)))
-
-        def _exec() -> List[Tuple[int, int]]:
-            with self._manager.transaction() as conn:
-                rows = conn.execute(
-                    f"SELECT id, started_at_ms FROM live_sessions {where}"  # noqa: S608 条件由固定片段拼成
-                    " ORDER BY started_at_ms DESC, id DESC LIMIT ?",
-                    params,
-                ).fetchall()
-                return [(int(row[0]), int(row[1])) for row in rows]
 
         return await self._run_in_executor(_exec)
 
