@@ -17,6 +17,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from src.agents.streamer.delegation_posture import snapshot_awaits_decision
 from src.agents.streamer.planner_context import age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
@@ -264,7 +265,7 @@ def delegation_state_line(
             # 未绑定机器账查询（缺 task_ledger 的装配）：维持只有交付语的渲染
             return "还在做，还没做完。"
         return "账面上已了结这次委派，结果见游戏记录。"
-    if record.get("status") == "waiting_for_decision":
+    if snapshot_awaits_decision(record):
         return f"停着等我和观众拿主意（{age_text(current_ms - int(record.get('updated_at_ms') or 0))}前记的）。"
     stalled = (record.get("snapshot") or {}).get("stalled_goals") or {}
     if stalled:

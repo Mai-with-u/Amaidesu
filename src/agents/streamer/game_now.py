@@ -21,6 +21,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Mapping, Optional, Tuple
 
+from src.modules.tools.tasks import TASK_CANCELLED, TASK_SUCCEEDED
+
 from .planner_context import age_text
 from .planner_render import Delegation, DelegationStatusProvider, delegation_state_line
 from .term_sanitizer import sanitize_internal_terms
@@ -179,9 +181,9 @@ def goal_results_from_ledger(
         status = str(getattr(raw, "status", "") or "").strip()
         if result_status == "partial":
             outcome = "做了一半"
-        elif status == "succeeded":
+        elif status == TASK_SUCCEEDED:
             outcome = "成了"
-        elif status == "cancelled":
+        elif status == TASK_CANCELLED:
             outcome = "取消了"
         else:
             outcome = "没成"

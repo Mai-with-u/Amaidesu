@@ -20,6 +20,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
+from src.agents.streamer.delegation_posture import snapshot_awaits_decision
 from src.agents.streamer.planner_render import (
     Delegation,
     Intent,
@@ -395,7 +396,7 @@ class DelegationWorkbench:
             record = None
             if self._delegation_status_provider is not None and delegation.task_id:
                 record = self._delegation_status_provider(delegation.task_id)
-                waiting = record is not None and record.get("status") == "waiting_for_decision"
+                waiting = snapshot_awaits_decision(record)
             else:
                 waiting = delegation.report_kind == "escalation"
             if not waiting:

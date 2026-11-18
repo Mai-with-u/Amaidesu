@@ -12,6 +12,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from src.agents.streamer.delegation_posture import (
+    DelegationPosture,
+    posture_of_delegation_record,
+    was_queued,
+)
 from src.modules.logging import get_logger
 from src.modules.storage.models.events import DelegationRecord, GameSaveSpan
 from src.modules.storage.models.memory import Commitment
@@ -80,12 +85,13 @@ def classify_ending_delegation(record: DelegationRecord) -> Optional[str]:
     """
     status = (record.status or "").strip()
     summary = " ".join((record.summary or "").split())
-    if status in ("accepted", "running", "waiting_for_decision"):
-        return "当时在做"
-    if status == "queued":
+    posture = posture_of_delegation_record(record)
+    if posture is DelegationPosture.QUEUED:
         return "待办"
-    if status == "interrupted":
-        if record.prior_status == "queued" or "待办" in summary:
+    if posture in (DelegationPosture.IN_HAND, DelegationPosture.AWAITING_DECISION):
+        return "当时在做"
+    if posture is DelegationPosture.INTERRUPTED:
+        if was_queued(record):
             return "待办"
         return "当时在做，被重启打断"
     if status == "cancelled" and summary.startswith(_AUTO_CLOSE_PREFIX):

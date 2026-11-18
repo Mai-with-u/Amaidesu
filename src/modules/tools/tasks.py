@@ -77,6 +77,18 @@ IN_PROGRESS_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decisio
 # 已送到执行方、执行方手上正在做的状态（待办里的还没轮到，不算）：每个执行者任何时刻至多一件
 DELIVERED_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision"})
 
+# 单个状态值的命名常量：比较与写入点引用常量而非裸字符串，词表改动时全局可检索
+TASK_ACCEPTED: TaskStatus = "accepted"
+TASK_RUNNING: TaskStatus = "running"
+TASK_WAITING_FOR_DECISION: TaskStatus = "waiting_for_decision"
+TASK_QUEUED: TaskStatus = "queued"
+TASK_SUCCEEDED: TaskStatus = "succeeded"
+TASK_CLOSED_BY_INITIATOR: TaskStatus = "closed_by_initiator"
+TASK_FAILED: TaskStatus = "failed"
+TASK_CANCELLED: TaskStatus = "cancelled"
+TASK_TIMEOUT: TaskStatus = "timeout"
+TASK_UNDELIVERED: TaskStatus = "undelivered"
+
 # 执行 Agent 最近说的一句判断与时刻（账本旁注，见 annotate）：发起方每窗决策前读它当参考；
 # 它是没脱敏的推理原文（坐标、工具名都在里面），不算进展，也不进拒受理与队列清单理由
 REPLY_NOTE_KEY = "latest_reply"

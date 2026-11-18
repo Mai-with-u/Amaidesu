@@ -38,6 +38,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
+from src.agents.streamer.delegation_posture import (
+    DelegationPosture,
+    posture_of_delegation_record,
+    was_queued,
+)
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.agents.delegation_board import (
     BACKLOG_NO_KEY,
@@ -71,6 +76,8 @@ from src.modules.tools.tasks import (
     IN_PROGRESS_TASK_STATES,
     REPLY_NOTE_AT_KEY,
     REPLY_NOTE_KEY,
+    TASK_ACCEPTED,
+    TASK_QUEUED,
 )
 from src.modules.tools.registry import ToolRegistry
 from src.modules.types.game_save import GameSave
@@ -1425,9 +1432,9 @@ class StreamerAgent(BaseAgent):
         for record in records:
             if record.initiator != PLANNER_CALL_SOURCE or record.started_ms >= self._startup_ms:
                 continue
-            if record.status not in ("accepted", "interrupted"):
+            if posture_of_delegation_record(record) not in (DelegationPosture.IN_HAND, DelegationPosture.INTERRUPTED):
                 continue
-            if record.prior_status == "queued" or "待办" in (record.summary or ""):
+            if was_queued(record):
                 continue
             if record.game in claimed_games:
                 continue
@@ -2219,21 +2226,17 @@ class StreamerAgent(BaseAgent):
                 if seq_val > next_seq:
                     next_seq = seq_val
         for record in records:
-            if record.status not in ("interrupted", "queued") or self._task_ledger.get(record.task_id) is not None:
+            record_posture = posture_of_delegation_record(record)
+            if record_posture not in (DelegationPosture.INTERRUPTED, DelegationPosture.QUEUED):
                 continue
-            if record.status == "queued" and record.started_ms >= self._startup_ms:
+            if record_posture is DelegationPosture.QUEUED and record.started_ms >= self._startup_ms:
                 continue
             executor = record.game
             board = read_board(self._task_ledger, executor)
             # 原本在待办排队（或同执行者名下已有在做单时排在后面的存量记录）保留 queued 排队次序，绝不提前按 accepted 激活
-            was_queued = (
-                record.status == "queued"
-                or record.prior_status == "queued"
-                or "待办" in (record.summary or "")
-                or board.in_hand is not None
-            )
+            queued_before_restart = was_queued(record) or board.in_hand is not None
             own = own_words_of(record.instruction)
-            if was_queued:
+            if queued_before_restart:
                 cur_max = next_backlog_no.get(executor, 0)
                 for item in board.backlog:
                     if item.backlog_no > cur_max:
@@ -2247,7 +2250,7 @@ class StreamerAgent(BaseAgent):
                     tool="framework_delegate",
                     initiator=record.initiator or "streamer",
                     executor=executor,
-                    status="queued",
+                    status=TASK_QUEUED,
                     source="agent",
                     snapshot={
                         "restored": True,
@@ -2270,7 +2273,7 @@ class StreamerAgent(BaseAgent):
                     tool="framework_delegate",
                     initiator=record.initiator or "streamer",
                     executor=executor,
-                    status="accepted",
+                    status=TASK_ACCEPTED,
                     source="agent",
                     snapshot={
                         "restored": True,

@@ -28,8 +28,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional
 
+from src.agents.streamer.delegation_posture import DelegationPosture, posture_of_task_status
 from src.modules.logging import get_logger
-from src.modules.tools.tasks import REPLY_NOTE_AT_KEY, REPLY_NOTE_KEY, TERMINAL_TASK_STATES
+from src.modules.tools.tasks import REPLY_NOTE_AT_KEY, REPLY_NOTE_KEY
 from src.modules.utils.time_utils import now_ms
 
 __all__ = ["DelegationStallWatch", "StallAlertOutcome"]
@@ -38,8 +39,6 @@ logger = get_logger("DelegationStallWatch")
 
 # 快照里不算进展的键：受理原文与执行侧旁注（口径与 src/modules/agents/control.py 看门狗一致）
 _NON_PROGRESS_KEYS = frozenset({"instruction", "own_words", REPLY_NOTE_KEY, REPLY_NOTE_AT_KEY})
-# 第 N 次告警可自动撤单的状态：仅限执行方上报卡住后停手等待主播定夺的委派；排队等待（queued）尚未开工不判停滞撤单
-_AUTO_CANCEL_STATUSES = frozenset({"waiting_for_decision"})
 
 
 def _progress_view(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -93,8 +92,9 @@ class DelegationStallWatch:
         """
         task_id = str(payload.task_id)
         status = str(payload.status)
+        posture = posture_of_task_status(status)
         # 还在排队等待前序任务释放通道的委派未轮到开工，清理残留计数并忽略告警，避免排队阶段误判卡死
-        if status == "queued":
+        if posture is DelegationPosture.QUEUED:
             self._entries.pop(task_id, None)
             return None
         snapshot = payload.snapshot if isinstance(payload.snapshot, Mapping) else {}
@@ -121,9 +121,9 @@ class DelegationStallWatch:
             f"[停滞提醒] 派去 {entry.executor} 的委派「{entry.own_words}」已停了约 {stopped_min} 分钟"
             f"没有进展（{ordinal}提醒）"
         )
-        if status in _AUTO_CANCEL_STATUSES:
+        if posture is DelegationPosture.AWAITING_DECISION:
             material += "，一直拿不出决断就把这件撤掉"
-        auto_cancel = entry.count >= self._threshold and status in _AUTO_CANCEL_STATUSES
+        auto_cancel = entry.count >= self._threshold and posture is DelegationPosture.AWAITING_DECISION
         if auto_cancel:
             logger.warning(
                 f"委派停滞决断兜底: task_id={task_id} status={status} 已 {entry.count} 次告警无决断，判自动撤单"
@@ -138,7 +138,7 @@ class DelegationStallWatch:
         entry = self._entries.get(task_id)
         if entry is None:
             return
-        if str(payload.status) in TERMINAL_TASK_STATES or str(payload.status) == "queued":
+        if posture_of_task_status(str(payload.status)) in (DelegationPosture.SETTLED, DelegationPosture.QUEUED):
             # 走到终态或被搁回待办排队时出册，等再次出队真正执行后再重新起算停滞计数
             self._entries.pop(task_id, None)
             return
