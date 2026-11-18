@@ -94,6 +94,7 @@ from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.storage.repos.viewers import ViewerRepo
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
+from src.agents.streamer.memory import refs
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
 from src.agents.streamer.memory.rolling import MAX_SESSION_HIGHLIGHTS, plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
@@ -449,48 +450,13 @@ def _clock_text(timestamp_ms: int) -> str:
 
 
 def _as_line_number(raw: Any) -> Optional[int]:
-    """模型给的台词编号：整数、纯数字或 #N 才认，其余当没给。
-
-    给模型的台词逐行写作 ``#18 12:00 你：……``，模型照抄成 ``"#18"`` 也放行；
-    带别的前缀（如 约#18、档#18）不是台词编号，不认。
-    """
-    if isinstance(raw, bool):
-        return None
-    if isinstance(raw, int):
-        return raw
-    if not isinstance(raw, str):
-        return None
-    text = raw.strip()
-    if text.startswith("#"):
-        text = text[1:].strip()
-    return int(text) if text.isdigit() else None
+    """模型给的台词编号：整数、纯数字或 #N 才认，其余当没给（口径定义见 refs.parse_line_number）。"""
+    return refs.parse_line_number(raw)
 
 
 def _as_commitment_ref(raw: Any) -> Optional[int]:
-    """模型给的承诺编号：整数、纯数字、#N、约#N 都认；档# 与其余写法返回 None。
-
-    给模型的旧承诺清单写作 #12，台词里的记忆引用写作 约#12，模型照抄哪一种都放行；
-    档# 是场次档案行的编号空间，不能落进承诺编号。
-    """
-    if isinstance(raw, bool):
-        return None
-    if isinstance(raw, int):
-        return int(raw)
-    if not isinstance(raw, str):
-        return None
-    text = raw.strip()
-    if not text:
-        return None
-    if "#" in text:
-        head, _sep, tail = text.rpartition("#")
-        if head.strip():
-            # 带前缀的只认承诺前缀；用渲染层的解析器判断，避免在两处各写一份编号格式
-            refs = memory_ref_numbers(json.dumps([text], ensure_ascii=False))
-            if len(refs) != 1:
-                return None
-            return int(next(iter(refs)))
-        text = tail.strip()
-    return int(text) if text.isdigit() else None
+    """模型给的承诺编号：整数、纯数字、#N、约#N 都认，档# 不认（口径定义见 refs.parse_commitment_ref）。"""
+    return refs.parse_commitment_ref(raw)
 
 
 # 模型表达"没有"时常写成字符串：这些写法都按没填处理，不当成认不出的编号

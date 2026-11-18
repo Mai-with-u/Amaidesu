@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Set, Tuple
 
+from src.agents.streamer.memory import refs
+
 __all__ = [
     "GuardVerdict",
     "VERBATIM_MIN_TOKENS",
@@ -62,28 +64,14 @@ def fit_to_budget(speech: str, budget: int) -> str:
 # 记忆编号
 # ============================================================================
 
-# 档案行与承诺的编号（[档#N]、档#N、约#N）是房管在简报里点名用的记号，观众听不懂。
-# 带方括号的连同括号里跟着的注记（如"·上一场"）一起去掉；没括号的只去编号本身
-_BRACKETED_MEMORY_NUMBER = re.compile(r"[\[【]\s*[档约]\s*[#＃]\s*\d+[^\]】\n]{0,12}[\]】]")
-_BARE_MEMORY_NUMBER = re.compile(r"[档约]\s*[#＃]\s*\d+")
-# 去掉编号后剩下的空括号（"（档#3）"→"（）"）
-_EMPTY_PARENS = re.compile(r"[（(]\s*[）)]")
-
 
 def strip_memory_numbers(text: str) -> Tuple[str, int]:
     """去掉文本里的记忆编号，返回（去掉后的文本，去掉了几处）；没有编号时原样返回、计数为 0。
 
     交给说话侧之前先洗一遍交接稿，说话侧生成台词后再洗一遍：编号念出来是"档井号四十一"，
-    观众听不懂，也暴露了后台的记账方式。
+    观众听不懂，也暴露了后台的记账方式。写法与清洗规则统一定义在 memory.refs。
     """
-    cleaned, bracketed = _BRACKETED_MEMORY_NUMBER.subn("", text)
-    cleaned, bare = _BARE_MEMORY_NUMBER.subn("", cleaned)
-    count = bracketed + bare
-    if not count:
-        return text, 0
-    cleaned = _EMPTY_PARENS.sub("", cleaned)
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
-    return cleaned, count
+    return refs.strip_numbers(text)
 
 
 # ============================================================================

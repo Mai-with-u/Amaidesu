@@ -18,9 +18,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
+from src.agents.streamer.memory import refs
 from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotLine
 from src.modules.storage.privacy import mask_names_in_text
 from src.modules.types.game_save import GameSave
@@ -143,9 +143,6 @@ _WHEN_STALE_PREVIOUS_HEADER = "上次已整理的那场（上一场还没整理�
 _WHEN_EARLIER_HEADER = "再往前："
 _SPOKEN_WHEN_PREVIOUS = "上次"
 _SPOKEN_WHEN_EARLIER = "之前"
-# 档案行与承诺的编号前缀（与她"说过的话""答应过的事"对应）
-_ARCHIVE_PREFIX = "档"
-_COMMITMENT_PREFIX = "约"
 # 本场她已经点名用过的档案行：行留着（她知道的事实不能一场里忘掉），只提醒别再主动提
 _USED_THIS_SESSION = "（本场已提过）"
 # 人批准的观众候选写成的档案行：库里不记是哪位观众定的，提醒她只说"大家定的"，别编出一个具体的人
@@ -182,48 +179,27 @@ def _line_texts(line: ArchiveLine) -> Tuple[str, str]:
 
 def format_memory_refs(commitment_ids: Iterable[int]) -> str:
     """把承诺编号写成记忆引用列的文本（形如 ["约#7"]）；空集合写空串。"""
-    refs = [render_commitment_number(int(item)) for item in commitment_ids]
-    return json.dumps(refs, ensure_ascii=False) if refs else ""
+    return refs.format_refs(commitment_ids, refs.COMMITMENT)
 
 
 def memory_ref_numbers(memory_refs: Optional[str]) -> Set[int]:
     """记忆引用文本里的承诺编号（形如 ["约#7"]；取不出就空集）。"""
-    return _ref_numbers(memory_refs, _COMMITMENT_PREFIX)
+    return refs.parse_refs_column(memory_refs, refs.COMMITMENT)
 
 
 def memory_ref_archive_numbers(memory_refs: Optional[str]) -> Set[int]:
     """记忆引用文本里的档案行编号（形如 ["档#41"]；取不出就空集）。"""
-    return _ref_numbers(memory_refs, _ARCHIVE_PREFIX)
-
-
-def _ref_numbers(memory_refs: Optional[str], prefix: str) -> Set[int]:
-    """记忆引用文本（JSON 字符串列表）里某一类编号。"""
-    if not memory_refs:
-        return set()
-    try:
-        refs = json.loads(memory_refs)
-    except json.JSONDecodeError:
-        return set()
-    if not isinstance(refs, list):
-        return set()
-    numbers: Set[int] = set()
-    for ref in refs:
-        if not isinstance(ref, str):
-            continue
-        head, _sep, tail = ref.partition("#")
-        if head.strip().startswith(prefix) and tail.strip().isdigit():
-            numbers.add(int(tail.strip()))
-    return numbers
+    return refs.parse_refs_column(memory_refs, refs.ARCHIVE)
 
 
 def render_commitment_number(commitment_id: int) -> str:
     """承诺编号的写法（约#7）；Planner 用它点名，说话档不用编号。"""
-    return f"{_COMMITMENT_PREFIX}#{int(commitment_id)}"
+    return refs.render_commitment_number(commitment_id)
 
 
 def render_archive_number(archive_line_id: int) -> str:
     """档案行编号的写法（档#41）：简报与线索卡里标着，Planner 用它点名；说话档不用编号。"""
-    return f"{_ARCHIVE_PREFIX}#{int(archive_line_id)}"
+    return refs.render_archive_number(archive_line_id)
 
 
 def _when_word(*, is_previous: bool, spoken: bool) -> str:

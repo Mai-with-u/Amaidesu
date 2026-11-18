@@ -13,13 +13,8 @@ import math
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from src.agents.streamer.memory import refs
 from src.agents.streamer.memory.passive import SOURCE_PLAYER
-from src.agents.streamer.memory.render import (
-    memory_ref_archive_numbers,
-    memory_ref_numbers,
-    render_archive_number,
-    render_commitment_number,
-)
 from src.modules.storage.models.chat import SettleSpeechLine
 from src.modules.storage.models.memory import CardKindStat, CueLogEntry, SideEffectStats
 
@@ -40,17 +35,17 @@ ItemKey = Tuple[str, int]
 
 def _speech_items(line: SettleSpeechLine) -> List[str]:
     """一句台词点名的条目编号（档#N 在前、约#N 在后，各自按编号排）。"""
-    archive = sorted(memory_ref_archive_numbers(line.memory_refs))
-    commitments = sorted(memory_ref_numbers(line.memory_refs))
-    return [render_archive_number(n) for n in archive] + [render_commitment_number(n) for n in commitments]
+    archive = sorted(refs.parse_refs_column(line.memory_refs, refs.ARCHIVE))
+    commitments = sorted(refs.parse_refs_column(line.memory_refs, refs.COMMITMENT))
+    return [refs.render_archive_number(n) for n in archive] + [refs.render_commitment_number(n) for n in commitments]
 
 
 def _card_item(card: CueLogEntry) -> Optional[str]:
     """线索卡指向的条目编号；玩家卡、老梗卡不指向档案行或承诺时为 None。"""
     if card.archive_line_id is not None:
-        return render_archive_number(card.archive_line_id)
+        return refs.render_archive_number(card.archive_line_id)
     if card.commitment_id is not None:
-        return render_commitment_number(card.commitment_id)
+        return refs.render_commitment_number(card.commitment_id)
     return None
 
 

@@ -46,6 +46,10 @@ from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer import paid_viewers
 from src.agents.streamer.delegation_workbench import DelegationWorkbench, observation_data
+from src.agents.streamer.memory.refs import (
+    ARCHIVE as MEMORY_REF_ARCHIVE,
+    parse_loose as _parse_memory_ref,
+)
 from src.agents.streamer.memory.render import (
     render_archive_number,
     render_commitment_number,
@@ -144,30 +148,6 @@ class PlannerConfig(BaseConfig):
     # 主播多久没开口算冷场：超过后参考段出现【冷场】行，提示词据此把"找话说"设为默认。
     # 装配期取主动发言的冷场阈值（proactive.cold_timeout_ms），0 = 不提示
     cold_silence_ms: int = Field(default=45_000, ge=0, title="冷场提示阈值（毫秒）")
-
-
-# 点名编号的两类：承诺（约#7）与档案行（档#41）——两个编号空间，同号不同义
-MEMORY_REF_COMMITMENT = "commitment"
-MEMORY_REF_ARCHIVE = "archive"
-
-
-def _parse_memory_ref(raw: Any) -> Optional[Tuple[str, int]]:
-    """点名编号解析：承诺接受"约#7""#7""7"三种写法，档案行只认"档#41"；其余返回 None。"""
-    if not isinstance(raw, str):
-        return None
-    text = raw.strip()
-    if not text:
-        return None
-    kind = MEMORY_REF_COMMITMENT
-    if "#" in text:
-        head, _sep, tail = text.rpartition("#")
-        head = head.strip()
-        if head.startswith("档"):
-            kind = MEMORY_REF_ARCHIVE
-        elif head and not head.startswith("约"):
-            return None
-        text = tail.strip()
-    return (kind, int(text)) if text.isdigit() else None
 
 
 def _single_memory_ref(raw: Any, *, logger: Any) -> Optional[str]:

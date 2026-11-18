@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -30,6 +29,8 @@ from typing import (
     Tuple,
 )
 
+from src.agents.streamer.memory.refs import ARCHIVE as _REF_KIND_ARCHIVE
+from src.agents.streamer.memory.refs import parse_strict
 from src.agents.streamer.memory.textmatch import verbatim_quote
 from src.modules.logging import get_logger
 from src.modules.storage.repos.memory_corrections import CORRECTION_VERDICT_LABELS, format_correction_note
@@ -60,8 +61,6 @@ _RECORD_SCAN_LIMIT = 500
 
 _VALID_VERDICTS = ("done", "invalid", "wrong")
 _VALID_EVIDENCE_KINDS = ("game_receipt", "player_chat", "operator", "self_seen")
-
-_TARGET_RE = re.compile(r"^\s*\[?\s*(档|约)\s*#\s*(\d+)\s*\]?\s*$")
 
 _DESCRIPTION = (
     "场内更正一条常驻简报里的记忆（档#N）或惦记的承诺（约#N）：标明做完了（done）、"
@@ -123,14 +122,11 @@ _FULL_NAME = build_memory_correct_tool_spec().full_name
 
 def parse_memory_target(raw: Any) -> Optional[Tuple[Literal["archive", "commitment"], int]]:
     """解析 ``档#42`` / ``[约#15]`` 形态的目标编号；无法识别或非正整数返回 None。"""
-    match = _TARGET_RE.match(str(raw or ""))
-    if not match:
+    parsed = parse_strict(raw)
+    if parsed is None:
         return None
-    prefix, digits = match.group(1), match.group(2)
-    target_id = int(digits)
-    if target_id <= 0:
-        return None
-    return ("archive", target_id) if prefix == "档" else ("commitment", target_id)
+    kind, target_id = parsed
+    return ("archive" if kind == _REF_KIND_ARCHIVE else "commitment", target_id)
 
 
 def _strip_msg_id(raw: Any) -> str:
