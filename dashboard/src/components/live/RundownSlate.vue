@@ -32,6 +32,7 @@
               <span class="slate-next-expected mono">预计 {{ nextExpectedLabel }}</span>
             </span>
             <span class="grow" />
+            <span class="slate-time-cap">本段</span>
             <span
               class="slate-time mono"
               :class="{ 'is-over': currentRow.overExpected }"
@@ -51,18 +52,20 @@
             <!-- 操作件：点它们不触发横幅的展开（事件不冒泡到触发元素） -->
             <span class="slate-actions" @click.stop>
               <el-button
+                v-if="live"
                 size="small"
                 text
-                :disabled="!live || actionLoading !== null"
+                :disabled="actionLoading !== null"
                 @click="emit('control', 'next')"
                 >下一环节</el-button
               >
               <el-button
+                v-if="live"
                 size="small"
                 text
-                :disabled="!live || actionLoading !== null"
+                :disabled="actionLoading !== null"
                 @click="emit('control', paused ? 'resume' : 'pause')"
-                >{{ paused ? '恢复' : '暂停' }}</el-button
+                >{{ paused ? '恢复流程' : '暂停流程' }}</el-button
               >
               <span class="slate-timeline-hint">时间轴 ▾</span>
             </span>
@@ -388,6 +391,13 @@ function submitInsert(): void {
 .slate-time {
   font-size: 11px;
   color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* 右侧时间账的口径小标：区分横幅中段"接下来"环节的预计时长 */
+.slate-time-cap {
+  font-size: 10px;
+  color: var(--text-placeholder);
   flex-shrink: 0;
 }
 
