@@ -5,7 +5,7 @@ super_chats / guards）按内部观众 ID（``viewer_id``）的聚合查询，�
 的人工处理（待确认、合并、取消关联）。装配逻辑在
 ``services.viewer_profiles``，本模块只做 HTTP 协议转换。
 
-- ``GET /viewers``                         观众列表（平台过滤 / 搜索 / 排序 / 分页）
+- ``GET /viewers``                         观众列表（平台过滤 / 搜索 / 活跃时段 / 排序 / 分页）
 - ``GET /viewers/insights``                互动分析聚合（活跃分桶 / 回复覆盖 / 按天弹幕量）
 - ``GET /viewers/pending``                 待确认观众及其建议并入的老观众
 - ``GET /viewers/{viewer_id}``             单观众档案（统计 + 外部 ID + 用过的昵称 + 贡献汇总）
@@ -87,12 +87,17 @@ async def list_viewers_endpoint(
     search: Annotated[Optional[str], Query(description="外部 ID / 昵称模糊搜索")] = None,
     platform: Annotated[Optional[str], Query(description="平台过滤；不传返回全部平台")] = None,
     order_by: str = "message_count",
+    order_dir: str = "DESC",
+    active_within: Annotated[
+        Optional[str], Query(description="活跃时段过滤：today=今日零点后 / week=近 7 天；不传返回全部")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ViewerListResponse:
-    """列出观众（平台过滤 / 搜索 / 排序 / 分页）。
+    """列出观众（平台过滤 / 搜索 / 活跃时段 / 排序 / 分页）。
 
-    ``order_by`` 合法性由存储层白名单兜底，非法值转 400。
+    ``order_by`` / ``order_dir`` / ``active_within`` 合法性由存储层白名单兜底，
+    非法值转 400。
     """
     try:
         return await list_viewers(
@@ -102,6 +107,8 @@ async def list_viewers_endpoint(
             limit=limit,
             offset=offset,
             order_by=order_by,
+            order_dir=order_dir,
+            active_within=active_within,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

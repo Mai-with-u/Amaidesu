@@ -52,6 +52,18 @@ async def test_list_rejects_illegal_order_by_with_400(viewers_client) -> None:
     assert bad.status_code == 400
 
 
+async def test_list_active_within_filter_and_illegal_values(viewers_client, store) -> None:
+    await _message(store, "u0", "观众0", BASE)  # 2023 年锚点，必落在今日 / 近 7 天窗口外
+
+    filtered = (await viewers_client.get("/api/v1/viewers", params={"active_within": "week"})).json()
+    assert filtered["total"] == 0
+
+    # 取值合法性由存储层白名单兜底，经 HTTP 映射为 400（语义断言在仓储层）
+    for params in ({"active_within": "month"}, {"order_dir": "sideways"}):
+        bad = await viewers_client.get("/api/v1/viewers", params=params)
+        assert bad.status_code == 400
+
+
 async def test_detail_contract_and_404(viewers_client, store) -> None:
     vid = await _message(store, "u0", "观众0", BASE)
     body = (await viewers_client.get(f"/api/v1/viewers/{vid}")).json()

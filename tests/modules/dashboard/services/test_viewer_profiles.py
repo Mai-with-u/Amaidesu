@@ -49,9 +49,11 @@ class _FakeViewerRepo:
         self.names = names or {}
         self.buckets = buckets or {}
         self.list_names_calls: List[int] = []
+        self.list_stats_calls: List[Dict[str, Any]] = []
 
     async def list_viewer_stats(self, **kwargs: Any):  # type: ignore[no-untyped-def]
-        if kwargs.get("order_by") not in (None, "message_count", "gift_count"):
+        self.list_stats_calls.append(kwargs)
+        if kwargs.get("order_by") not in (None, "message_count", "gift_count", "last_active_ms"):
             raise ValueError(f"非法排序字段: {kwargs.get('order_by')}")
         return [SimpleNamespace(**row) for row in self.stats_rows], len(self.stats_rows)
 
@@ -182,6 +184,22 @@ async def test_非法排序字段上抛ValueError() -> None:
     repo = _FakeViewerRepo()
     with pytest.raises(ValueError):
         await list_viewers(repo, platform=None, search=None, limit=20, offset=0, order_by="user_id; DROP")
+
+
+async def test_活跃时段与排序方向透传仓储() -> None:
+    repo = _FakeViewerRepo()
+    await list_viewers(
+        repo,
+        platform=None,
+        search=None,
+        limit=20,
+        offset=0,
+        order_by="last_active_ms",
+        order_dir="ASC",
+        active_within="week",
+    )
+    call = repo.list_stats_calls[-1]
+    assert (call["order_dir"], call["active_within"]) == ("ASC", "week")
 
 
 async def test_空值字段补缺省() -> None:

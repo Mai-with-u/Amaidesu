@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.utils.time_utils import now_ms
 from tests.modules.storage.viewer_seed import seed_gift, seed_message
@@ -78,6 +80,33 @@ async def test_list_search_and_pagination(store: SQLiteDatabase) -> None:
     assert await ids(limit=2, offset=100) == ([], 5)
     rows, total = await ids(search="vip", limit=2, offset=2)
     assert (len(rows), total) == (2, 4)
+
+
+async def test_list_filters_by_active_within_and_order_dir(store: SQLiteDatabase) -> None:
+    now = now_ms()
+    # 以 now 为锚取远离本地零点临界的龄期：3 天前必在近 7 天窗口内、必不在今日零点后
+    await _seed_viewer(store, "u_now", "今天", last_active_ms=now)
+    await _seed_viewer(store, "u_mid", "三天前", last_active_ms=now - 3 * DAY)
+    await _seed_viewer(store, "u_old", "两个月前", last_active_ms=now - 60 * DAY)
+
+    async def ids(**kwargs: Any) -> list[str]:
+        rows, _ = await store.viewers.list_viewer_stats(**kwargs)
+        return [r.user_id for r in rows]
+
+    # 活跃时段过滤：今日只留今天；近 7 天含三天前；total 同步收窄
+    assert await ids(active_within="today", order_by="last_active_ms") == ["u_now"]
+    rows, total = await store.viewers.list_viewer_stats(active_within="week")
+    assert sorted(r.user_id for r in rows) == ["u_mid", "u_now"] and total == 2
+    assert (await store.viewers.list_viewer_stats(active_within="today"))[1] == 1
+
+    # 排序方向：按最近活跃升序时最久的排最前，降序反之
+    assert await ids(order_by="last_active_ms", order_dir="ASC") == ["u_old", "u_mid", "u_now"]
+    assert await ids(order_by="last_active_ms", order_dir="DESC") == ["u_now", "u_mid", "u_old"]
+
+    # 白名单外取值直接拒绝
+    for bad_kwargs in ({"order_dir": "sideways"}, {"active_within": "month"}):
+        with pytest.raises(ValueError):
+            await store.viewers.list_viewer_stats(**bad_kwargs)
 
 
 async def test_insight_buckets_are_mutually_exclusive(store: SQLiteDatabase) -> None:

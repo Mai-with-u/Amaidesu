@@ -453,8 +453,14 @@ export const logsApi = {
 // `GET /viewers/pending` + `POST /viewers/{viewerId}/merge|keep|unlink`：
 // 与老观众同名、待人工确认的观众，及合并 / 保持新建 / 取消关联。
 export const viewersApi = {
-  list: (params?: { search?: string; order_by?: string; limit?: number; offset?: number }) =>
-    api.get<ViewerListResponse>('/viewers', { params }),
+  list: (params?: {
+    search?: string;
+    order_by?: string;
+    order_dir?: 'ASC' | 'DESC';
+    active_within?: 'today' | 'week';
+    limit?: number;
+    offset?: number;
+  }) => api.get<ViewerListResponse>('/viewers', { params }),
   insights: (params?: { days?: number }) =>
     api.get<ViewerInsights>('/viewers/insights', { params }),
   detail: (viewerId: number) => api.get<ViewerDetail>(`/viewers/${viewerId}`),

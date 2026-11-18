@@ -95,14 +95,18 @@ async def list_viewers(
     limit: int,
     offset: int,
     order_by: str,
+    order_dir: str = "DESC",
+    active_within: Optional[str] = None,
 ) -> ViewerListResponse:
-    """观众列表（平台过滤 / 搜索 / 排序 / 分页）；非法排序字段由仓储抛 ValueError。"""
+    """观众列表（平台过滤 / 搜索 / 活跃时段 / 排序 / 分页）；非法取值由仓储抛 ValueError。"""
     rows, total = await viewer_repo.list_viewer_stats(
         platform=(platform or "").strip() or None,
         search=(search or "").strip() or None,
         limit=limit,
         offset=offset,
         order_by=order_by,
+        order_dir=order_dir,
+        active_within=active_within,
     )
     return ViewerListResponse(total=total, items=[_viewer_to_list_item(viewer) for viewer in rows])
 

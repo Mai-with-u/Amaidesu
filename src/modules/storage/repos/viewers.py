@@ -130,6 +130,10 @@ class ViewerRepo(BaseRepo):
         "paid_amount",
         "last_active_ms",
     )
+    # 排序方向白名单，与列名同样只做白名单拼接
+    _ORDER_DIR_WHITELIST: tuple = ("ASC", "DESC")
+    # 活跃时段过滤取值：today=本地时区今日零点后，week=近 7 天（含今日）
+    _ACTIVE_WITHIN_CHOICES: tuple = ("today", "week")
 
     # -------------------- 读取 --------------------
 
@@ -190,22 +194,38 @@ class ViewerRepo(BaseRepo):
         limit: int = 20,
         offset: int = 0,
         order_by: str = "message_count",
+        order_dir: str = "DESC",
+        active_within: Optional[str] = None,
     ) -> Tuple[List[Viewer], int]:
-        """列出观众（支持平台过滤 / 搜索 / 分页），返回 ``(rows, total)``。
+        """列出观众（支持平台过滤 / 搜索 / 活跃时段 / 分页），返回 ``(rows, total)``。
 
         ``platform`` 为 None 时返回全部平台；``search`` 对账号 ID / 开放平台 ID /
         昵称做 LIKE 模糊匹配（``%`` / ``_`` / ``\\`` 按字面解释，经 ESCAPE 转义）；
-        ``total`` 为命中过滤条件的全量行数，供分页器使用。``order_by`` 仅接受
-        白名单列名，非法值直接 ``ValueError``——避免任何列名拼接。
+        ``active_within`` 为 None 时不过滤活跃时段；``total`` 为命中过滤条件的全量
+        行数，供分页器使用。``order_by`` / ``order_dir`` / ``active_within`` 仅接受
+        白名单取值，非法值直接 ``ValueError``——避免任何字符串拼接。
         """
         if order_by not in self._ORDER_BY_WHITELIST:
             raise ValueError(f"list_viewer_stats order_by 非法: {order_by!r}，允许值: {self._ORDER_BY_WHITELIST}")
+        if order_dir not in self._ORDER_DIR_WHITELIST:
+            raise ValueError(f"list_viewer_stats order_dir 非法: {order_dir!r}，允许值: {self._ORDER_DIR_WHITELIST}")
+        if active_within is not None and active_within not in self._ACTIVE_WITHIN_CHOICES:
+            raise ValueError(
+                f"list_viewer_stats active_within 非法: {active_within!r}，允许值: {self._ACTIVE_WITHIN_CHOICES}"
+            )
 
         clauses: List[str] = []
         params: List[Any] = []
         if platform:
             clauses.append("platform=?")
             params.append(platform)
+        if active_within is not None:
+            if active_within == "today":
+                threshold_ms = int(datetime.combine(datetime.now().date(), dt_time.min).timestamp() * 1000)
+            else:
+                threshold_ms = now_ms() - 7 * 86_400_000
+            clauses.append("last_active_ms >= ?")
+            params.append(threshold_ms)
         if search:
             # LIKE 元字符按字面匹配：手工转义 + ESCAPE 子句，杜绝搜索框注入通配符
             escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -221,7 +241,7 @@ class ViewerRepo(BaseRepo):
                 total_row = conn.execute("SELECT COUNT(*) AS n FROM viewers" + where_sql, params).fetchone()
                 total = int(total_row["n"]) if total_row else 0
                 cur = conn.execute(
-                    f"{_SELECT_VIEWER}{where_sql} ORDER BY {order_by} DESC LIMIT ? OFFSET ?",  # noqa: S608
+                    f"{_SELECT_VIEWER}{where_sql} ORDER BY {order_by} {order_dir} LIMIT ? OFFSET ?",  # noqa: S608
                     [*params, limit, offset],
                 )
                 return [Viewer.model_validate(dict(row)) for row in cur.fetchall()], total
