@@ -292,6 +292,21 @@ def _display_value(key: str, main_config: dict) -> Any:
     return _get_nested_value(main_config, path_in_file)
 
 
+# 设置页隐藏名单：命中前缀的键（键本身与其子键）不出现在设置页 Schema 分组里。
+# 适用场景：段拥有自己的专属管理页时，设置页保留同一批字段会形成两个编辑面。
+# 只影响展示视图的构建（build_frontend_groups），校验与写回路径不读此名单。
+_SETTINGS_HIDDEN_PREFIXES: tuple[str, ...] = (
+    # 弹幕/字幕小部件段的唯一编辑面在小部件管理页（/widgets）
+    "infra.dashboard.danmaku_widget",
+    "infra.dashboard.subtitle_widget",
+)
+
+
+def _hidden_from_settings(api_key: str) -> bool:
+    """键等于某隐藏前缀或为其子键时返回 True（段容器节点与叶子一并隐藏）。"""
+    return any(api_key == p or api_key.startswith(p + ".") for p in _SETTINGS_HIDDEN_PREFIXES)
+
+
 # 行分组布局注册表：键为字段的完整 API 键（scope 前缀点分路径），
 # 值为 (行组标记, 行标题)。同容器内同行组标记的叶子字段在前端并成一个横行，
 # 行组标记按容器隔离、可跨容器复用。行分组是纯显示层布局信息，
@@ -546,24 +561,6 @@ _FIELD_ROW_LAYOUT: dict[str, tuple[str, str]] = {
     "infra.dashboard.auto_open_browser": ("dash-dev", "开发选项"),
     "infra.dashboard.dev_mode": ("dash-dev", "开发选项"),
     "infra.dashboard.vite_dev_port": ("dash-dev", "开发选项"),
-    # 弹幕小部件
-    "infra.dashboard.danmaku_widget.font_size": ("dw-params", "显示参数"),
-    "infra.dashboard.danmaku_widget.max_messages": ("dw-params", "显示参数"),
-    "infra.dashboard.danmaku_widget.min_importance": ("dw-params", "显示参数"),
-    "infra.dashboard.danmaku_widget.show_danmaku": ("dw-show-core", "显示内容"),
-    "infra.dashboard.danmaku_widget.show_gift": ("dw-show-core", "显示内容"),
-    "infra.dashboard.danmaku_widget.show_super_chat": ("dw-show-core", "显示内容"),
-    "infra.dashboard.danmaku_widget.show_guard": ("dw-show-core", "显示内容"),
-    "infra.dashboard.danmaku_widget.show_enter": ("dw-show-more", "更多显示"),
-    "infra.dashboard.danmaku_widget.show_reply": ("dw-show-more", "更多显示"),
-    # 字幕小部件
-    "infra.dashboard.subtitle_widget.max_messages": ("sw-display", "显示参数"),
-    "infra.dashboard.subtitle_widget.auto_hide_after_ms": ("sw-display", "显示参数"),
-    "infra.dashboard.subtitle_widget.position": ("sw-display", "显示参数"),
-    "infra.dashboard.subtitle_widget.font_size": ("sw-font", "字体与颜色"),
-    "infra.dashboard.subtitle_widget.font_color": ("sw-font", "字体与颜色"),
-    "infra.dashboard.subtitle_widget.background_color": ("sw-font", "字体与颜色"),
-    "infra.dashboard.subtitle_widget.border_color": ("sw-font", "字体与颜色"),
     # 诊断
     "infra.diagnostics.enabled": ("diag", "诊断落盘"),
     "infra.diagnostics.retention_days": ("diag", "诊断落盘"),
@@ -937,6 +934,8 @@ def build_frontend_groups(config_service: "ConfigService") -> dict:
         for field in leaf_fields:
             # 文件内路径 → scope 前缀的 API 键
             field["key"] = f"{scope}.{field['key']}"
+            if _hidden_from_settings(field["key"]):
+                continue
             group_fields.append(_convert_to_api_field(field, main_config))
         group_fields.extend(_dynamic_instance_fields(scope, config_service, main_config))
         group_fields = _group_into_children(group_fields)

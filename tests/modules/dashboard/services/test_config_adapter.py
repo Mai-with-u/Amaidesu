@@ -203,6 +203,22 @@ def test_groups_cover_seven_scopes_with_self_described_labels_readonly_and_widge
     assert len(build_frontend_groups(service)["groups"]) == 7
 
 
+def test_settings_hidden_prefixes_are_absent_from_frontend_groups() -> None:
+    """隐藏名单内的键（段容器与子键）不出现在设置页 Schema 分组里：这些段唯一编辑面在专属管理页。"""
+    result = build_frontend_groups(_FakeConfigService({}))
+    keys = [f["key"] for g in result["groups"] for f in _iter_fields(g["fields"])]
+    assert not any(
+        key == "infra.dashboard.danmaku_widget" or key.startswith("infra.dashboard.danmaku_widget.") for key in keys
+    )
+    assert not any(
+        key == "infra.dashboard.subtitle_widget" or key.startswith("infra.dashboard.subtitle_widget.") for key in keys
+    )
+    # 名单只摘展示，未隐藏的相邻段照常在列
+    assert any(key.startswith("infra.dashboard.game2048_widget") for key in keys) or any(
+        key == "infra.dashboard.websocket_heartbeat" for key in keys
+    )
+
+
 def test_object_arrays_are_first_class_fields_and_secrets_are_masked_only_when_strings() -> None:
     service = _FakeConfigService(
         {"llm_providers": [{"name": "deepseek", "api_key": "sk-plain"}], "simulator": {"token_budget_per_hour": 50000}}
