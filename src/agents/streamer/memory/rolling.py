@@ -50,11 +50,13 @@ from .zones import (
     MAX_RECENT_EARLIER_LINES,
     MAX_RECENT_PREVIOUS_LINES,
     MAX_ROOM_LINES,
+    MAX_SESSION_HIGHLIGHTS,
     MAX_SNAPSHOT_HIGHLIGHTS,
     MAX_WORLD_LINES,
     MAX_WORLD_NAMES,
+    SessionHighlightGuard,
     is_naming_title,
-    name_table_row_count,
+    world_other_quota,
 )
 
 __all__ = [
@@ -79,8 +81,6 @@ MAX_SNAPSHOT_LINES = 48
 MAX_LASTING_LINES = MAX_WORLD_LINES
 # 每个游戏存档（及不挂游戏的直播间）各自独立保留的代表性名场面名额，不占稳定与普通事件名额
 MAX_HIGHLIGHT_QUOTA = MAX_SNAPSHOT_HIGHLIGHTS
-# 单场新事里最多允许保留几条代表性名场面（超出部分按顺序自动降为普通事件，防模型整场滥标）
-MAX_SESSION_HIGHLIGHTS = 2
 # 不挂游戏的直播间稳定事实名额（与直播间普通事件 MAX_ROOM_LINES 分开计，互不挤占）
 MAX_ROOM_LASTING_QUOTA = 6
 # 交给模型的旧行至多几行（大于等于 MAX_SNAPSHOT_LINES，整份快照都能给模型核对；超出的尾部原样保留）
@@ -366,15 +366,10 @@ def select_snapshot(
     被挤出的本场新事照样写成本场档案行（回想工具查得到），只是不进快照。
     """
     # 硬护栏：单场新事最多保留前 2 条 highlight=True，未经游戏记录核实的完成说法一律强制 highlight=False
-    new_highlight_count = 0
+    guard = SessionHighlightGuard()
     normalized_new: List[PendingArchiveLine] = []
     for line in new_lines:
-        want_hl = bool(line.highlight) and not line.text.endswith(UNVERIFIED_MARK)
-        if want_hl and new_highlight_count < MAX_SESSION_HIGHLIGHTS:
-            new_highlight_count += 1
-            effective_hl = True
-        else:
-            effective_hl = False
+        effective_hl = guard.allows(bool(line.highlight), unverified=line.text.endswith(UNVERIFIED_MARK))
         if effective_hl != bool(line.highlight):
             line = line.model_copy(update={"highlight": effective_hl})
         normalized_new.append(line)
@@ -442,8 +437,7 @@ def select_snapshot(
             if e.game == w_game and e.save_id == w_save and e.lasting and (e.new, e.index) not in highlight_keys
         ]
         names = [e for e in world_lasting if e.is_name][:MAX_WORLD_NAMES]
-        other_cap = max(0, MAX_LASTING_LINES - name_table_row_count(len(names)))
-        others = [e for e in world_lasting if not e.is_name][:other_cap]
+        others = [e for e in world_lasting if not e.is_name][: world_other_quota(len(names))]
         bucketed.extend(names)
         bucketed.extend(others)
 

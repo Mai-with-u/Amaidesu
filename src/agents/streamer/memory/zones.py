@@ -41,6 +41,9 @@ __all__ = [
     "select_room_zone_items",
     "select_world_zone_items",
     "select_zatsudan_highlight_items",
+    "world_other_quota",
+    "MAX_SESSION_HIGHLIGHTS",
+    "SessionHighlightGuard",
 ]
 
 # 各分区各自的名额：取名与稳定事实不挤占最近事件，代表性名场面独立保留，游戏事件不挤占直播间里的事
@@ -54,6 +57,8 @@ MAX_GAMEPLAY_HIGHLIGHT_LINES = 4  # 边玩边说模式下【忘不掉的名场�
 MAX_ZATSUDAN_HIGHLIGHT_LINES = 6  # 纯杂谈模式下【一起经历过的名场面】至多展示几行（跨存档展开）
 MAX_ROOM_LINES = 6  # 【直播间里的事】不挂游戏的行至多几行（换存档照样带着）
 MAX_BRIEF_COMMITMENTS = 5  # 【还惦记的事】最近三场内提起过的未了结承诺至多几条
+# 单场新事里最多允许保留几条代表性名场面（超出部分按顺序自动降为普通事件，防模型整场滥标）
+MAX_SESSION_HIGHLIGHTS = 2
 
 # 稳定的事里认"起名字"这一类的词：压进名字表，不逐条占行，也不挤掉住处、关系和最近事件
 _NAMING_MARKERS = ("取名", "起名", "改名", "命名", "定名", "封号", "名为", "外号", "绰号")
@@ -113,6 +118,32 @@ def name_table_row_count(name_count: int) -> int:
     """名字表会占几行展示名额（0～2 行）：快照取舍与简报渲染共用同一换算，两边名额严丝合缝。"""
     capped = max(0, min(int(name_count), MAX_WORLD_NAMES))
     return 0 if capped == 0 else math.ceil(capped / WORLD_NAMES_PER_ROW)
+
+
+def world_other_quota(naming_count: int) -> int:
+    """【这个世界里】名字类之外的稳定事实名额：总行名额减去名字表占掉的行数。
+
+    快照取舍（rolling）与简报渲染（本模块）共读这一份算式，两边给"其余稳定"留的位置不会互相挤占。
+    """
+    return max(0, MAX_WORLD_LINES - name_table_row_count(naming_count))
+
+
+class SessionHighlightGuard:
+    """单场新事的名场面护栏：未核实的完成说法一律不算名场面，单场至多保留前 ``MAX_SESSION_HIGHLIGHTS`` 条。
+
+    写档案行（rolling 的快照取舍）与核对模型输出（settle 的校验）共用这一个判定器，
+    两处的"几条、什么不算"不会漂移。
+    """
+
+    def __init__(self) -> None:
+        self._count = 0
+
+    def allows(self, wants_highlight: bool, *, unverified: bool = False) -> bool:
+        """这一条还能算名场面吗；算上时内部计数前进一格。"""
+        if not wants_highlight or unverified or self._count >= MAX_SESSION_HIGHLIGHTS:
+            return False
+        self._count += 1
+        return True
 
 
 def is_from_session(line: ArchiveLine, archive_session: Optional[int]) -> bool:
@@ -209,8 +240,9 @@ def select_world_zone_items(ctx: BriefRenderContext) -> Tuple[List[SnapshotLine]
     if not candidates:
         return [], []
     naming = pick_within_quota([item for item in candidates if is_naming_title(item.line.text)], MAX_WORLD_NAMES)
-    other_cap = max(0, MAX_WORLD_LINES - name_table_row_count(len(naming)))
-    others = pick_within_quota([item for item in candidates if not is_naming_title(item.line.text)], other_cap)
+    others = pick_within_quota(
+        [item for item in candidates if not is_naming_title(item.line.text)], world_other_quota(len(naming))
+    )
     return naming, others
 
 

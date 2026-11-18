@@ -96,7 +96,8 @@ from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory import refs
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
-from src.agents.streamer.memory.rolling import MAX_SESSION_HIGHLIGHTS, plan_from_ops, render_base, select_snapshot
+from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
+from src.agents.streamer.memory.zones import SessionHighlightGuard
 from src.agents.streamer.memory.saves import SaveTimeline
 from src.agents.streamer.memory.side_effects import compute_side_effects
 from src.agents.streamer.memory.settle_candidates import (
@@ -2113,7 +2114,7 @@ class SessionSettler:
         """
         written: List[PendingArchiveLine] = []
         missed: List[UnregisteredItem] = []
-        highlight_count = 0
+        highlight_guard = SessionHighlightGuard()
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
@@ -2169,11 +2170,7 @@ class SessionSettler:
                 raw, f"{title} {verified}", material, game_name, line
             )
             is_unverified = unverified or title.endswith(UNVERIFIED_MARK)
-            if raw.get("highlight") is True and not is_unverified and highlight_count < MAX_SESSION_HIGHLIGHTS:
-                is_highlight = True
-                highlight_count += 1
-            else:
-                is_highlight = False
+            is_highlight = highlight_guard.allows(raw.get("highlight") is True, unverified=is_unverified)
             save = material.saves.save_at(game_name, int(line.timestamp_ms))
             place = ""
             if game_name is not None:
