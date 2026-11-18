@@ -23,6 +23,7 @@ from src.modules.events.payloads.background import BackgroundTaskChangedPayload
 from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.llm.payload import Response
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.clipping import NewClipSegment
 from tests.modules.llm.fakes import FakeLLMManager
 
 # 模型给出的选段：一段 60 秒（最短 30 秒、最长 300 秒的约束内）
@@ -122,3 +123,52 @@ async def test_live_ended_skips_discarded_session(
     await event_bus.wait_until_drained()
 
     assert [payload.task_id for payload in tasks] == []
+
+
+async def test_list_recorded_sessions_counts_pending_and_done(
+    store: SQLiteDatabase,
+    event_bus: EventBus,
+    tmp_path: Path,
+) -> None:
+    """场次列表装配待切数（suggested+confirmed）与已出数（done），无段场次按 0。"""
+    recording_dir = tmp_path / "recordings"
+    recording_dir.mkdir()
+    (recording_dir / _RECORDING_NAME).write_bytes(b"x")
+
+    session_id = await store.sessions.insert_live_session(started_at_ms=_RECORDING_START_MS, source="manual")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=_RECORDING_START_MS + 3600_000)
+
+    await store.clips.add_segment(
+        segment=NewClipSegment(live_session_id=session_id, start_ms=60_000, end_ms=120_000, title="待切段")
+    )
+    await store.clips.add_segment(
+        segment=NewClipSegment(
+            live_session_id=session_id, start_ms=120_000, end_ms=180_000, title="已确认段", status="confirmed"
+        )
+    )
+    await store.clips.add_segment(
+        segment=NewClipSegment(
+            live_session_id=session_id, start_ms=180_000, end_ms=240_000, title="已出段", status="done"
+        )
+    )
+    # dismissed 不计入任何一侧
+    await store.clips.add_segment(
+        segment=NewClipSegment(
+            live_session_id=session_id, start_ms=240_000, end_ms=300_000, title="已弃段", status="dismissed"
+        )
+    )
+
+    service = ClippingService(
+        event_bus=event_bus,
+        database=store,
+        llm_manager=FakeLLMManager(),
+        config=ClippingConfigSchema(enabled=True, recording_dir=str(recording_dir)),
+        override_store=RecordingOverrideStore(tmp_path / "overrides.json"),
+    )
+    infos = await service.list_recorded_sessions()
+
+    assert len(infos) == 1
+    info = infos[0]
+    assert info.live_session_id == session_id
+    assert info.pending_count == 2
+    assert info.done_count == 1

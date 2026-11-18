@@ -34,6 +34,8 @@ class ClippedSessionItem(BaseModel):
     ended_at_ms: Optional[int] = Field(default=None, description="下播时刻；None 即进行中")
     title: str = Field(default="", description="场次标题")
     file_count: int = Field(..., description="匹配到的录播文件数")
+    pending_count: int = Field(default=0, description="待切片段数（状态为 suggested+confirmed 的段合计）")
+    done_count: int = Field(default=0, description="已出片段数（状态为 done 的段）")
 
 
 class ClippedSessionListResponse(BaseModel):

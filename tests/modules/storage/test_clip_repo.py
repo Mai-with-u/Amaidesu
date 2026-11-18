@@ -94,3 +94,37 @@ async def test_list_segments_by_ids_skips_missing_and_orders(store) -> None:
     picked = await store.clips.list_segments_by_ids(segment_ids=[first.id, second.id, 99999])
     assert [s.title for s in picked] == ["A", "B"]  # 按起点排序，缺失 id 静默跳过
     assert await store.clips.list_segments_by_ids(segment_ids=[]) == []
+
+
+async def test_count_by_status_by_session(store) -> None:
+    """按场次聚合各状态段数；无段场次不出现，上层按 0 兜底。"""
+    session_ids = await _seed(store, count=2)
+    session_a, session_b = session_ids
+    empty_session_id = (await _seed(store))[0]
+
+    await store.clips.add_segment(
+        segment=NewClipSegment(live_session_id=session_a, start_ms=1000, end_ms=31000, status="suggested")
+    )
+    await store.clips.add_segment(
+        segment=NewClipSegment(live_session_id=session_a, start_ms=32000, end_ms=62000, status="confirmed")
+    )
+    await store.clips.add_segment(
+        segment=NewClipSegment(live_session_id=session_a, start_ms=63000, end_ms=93000, status="done")
+    )
+    await store.clips.add_segment(
+        segment=NewClipSegment(live_session_id=session_a, start_ms=94000, end_ms=124000, status="failed")
+    )
+    await store.clips.add_segment(
+        segment=NewClipSegment(live_session_id=session_b, start_ms=1000, end_ms=31000, status="done")
+    )
+    await store.clips.add_segment(
+        segment=NewClipSegment(live_session_id=session_b, start_ms=32000, end_ms=62000, status="done")
+    )
+
+    counts = await store.clips.count_by_status_by_session()
+
+    assert counts == {
+        session_a: {"suggested": 1, "confirmed": 1, "done": 1, "failed": 1},
+        session_b: {"done": 2},
+    }
+    assert empty_session_id not in counts

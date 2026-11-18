@@ -330,13 +330,20 @@ function sessionListDate(ms: number): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${week} ${formatTimeHM(ms)}`;
 }
 
-/** 列表副行：自定义标题（默认命名含日期，与主行重复时不重复）+ 文件数 */
+/** 列表副行：自定义标题（默认命名含日期，与主行重复时不重复）+ 待切/已出/文件数 */
 function sessionListSub(item: ClippedSessionItem): string {
   const date = new Date(item.started_at_ms);
   const pad = (n: number): string => String(n).padStart(2, '0');
   const yearDate = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   const customTitle = item.title && !item.title.includes(yearDate) ? item.title : '';
-  return [customTitle, `${item.file_count} 个文件`].filter(Boolean).join(' · ');
+  return [
+    customTitle,
+    item.pending_count > 0 ? `${item.pending_count} 待切` : '',
+    item.done_count > 0 ? `${item.done_count} 已出` : '',
+    item.file_count > 1 ? `${item.file_count} 个文件` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function outputsOf(segment: ClipSegment): string[] {

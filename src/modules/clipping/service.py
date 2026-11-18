@@ -63,13 +63,15 @@ class PreviewSourceError(Exception):
 
 @dataclass
 class RecordedSessionInfo:
-    """切片页场次列表的一行：场次基本信息 + 匹配到的录播文件数。"""
+    """切片页场次列表的一行：场次基本信息 + 录播文件数与切片段任务态计数。"""
 
     live_session_id: int
     started_at_ms: int
     ended_at_ms: Optional[int]
     title: str
     file_count: int
+    pending_count: int = 0
+    done_count: int = 0
 
 
 class ClippingService:
@@ -371,12 +373,14 @@ class ClippingService:
                 continue  # 已在自动匹配里，不重复计
             manual_counts[override.live_session_id] = manual_counts.get(override.live_session_id, 0) + 1
         infos: List[RecordedSessionInfo] = []
+        status_counts = await self._database.clips.count_by_status_by_session()
         for window in windows:
             files = matched.get(window.live_session_id)
             count = (len(files) if files else 0) + manual_counts.get(window.live_session_id, 0)
             if count == 0:
                 continue
             session = await self._database.sessions.get_live_session(live_session_id=window.live_session_id)
+            counts = status_counts.get(window.live_session_id, {})
             infos.append(
                 RecordedSessionInfo(
                     live_session_id=window.live_session_id,
@@ -384,6 +388,8 @@ class ClippingService:
                     ended_at_ms=window.ended_at_ms,
                     title=session.title if session is not None else "",
                     file_count=count,
+                    pending_count=counts.get("suggested", 0) + counts.get("confirmed", 0),
+                    done_count=counts.get("done", 0),
                 )
             )
             if len(infos) >= limit:

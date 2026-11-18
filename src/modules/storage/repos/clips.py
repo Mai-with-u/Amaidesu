@@ -181,6 +181,23 @@ class ClipRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def count_by_status_by_session(self) -> dict[int, dict[str, int]]:
+        """全库按场次聚合各状态段数（key 为 live_session_id）；无段的场次不出现在结果里。"""
+
+        def _exec() -> dict[int, dict[str, int]]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT live_session_id, status, COUNT(*) AS cnt FROM clip_segments"
+                    " GROUP BY live_session_id, status"
+                ).fetchall()
+            result: dict[int, dict[str, int]] = {}
+            for row in rows:
+                result[int(row["live_session_id"])] = result.get(int(row["live_session_id"]), {})
+                result[int(row["live_session_id"])][str(row["status"])] = int(row["cnt"])
+            return result
+
+        return await self._run_in_executor(_exec)
+
     async def list_segments_by_ids(self, *, segment_ids: Sequence[int]) -> List[ClipSegment]:
         """按主键集合取行（按起点先后）；不存在的 id 静默跳过。"""
         ids = sorted({int(item) for item in segment_ids})

@@ -154,6 +154,8 @@ async def list_sessions(service: ClippingDep, limit: int = 100) -> ClippedSessio
                 ended_at_ms=info.ended_at_ms,
                 title=info.title or "",
                 file_count=info.file_count,
+                pending_count=info.pending_count,
+                done_count=info.done_count,
             )
             for info in infos
         ]

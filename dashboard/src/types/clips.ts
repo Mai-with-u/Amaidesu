@@ -51,6 +51,10 @@ export interface ClippedSessionItem {
   ended_at_ms: number | null;
   title: string;
   file_count: number;
+  /** 待切片段数（状态为 suggested+confirmed 的段合计） */
+  pending_count: number;
+  /** 已出片段数（状态为 done 的段） */
+  done_count: number;
 }
 
 /** [clipping] 配置段（页内配置卡读写） */
