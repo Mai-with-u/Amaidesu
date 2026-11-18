@@ -13,7 +13,7 @@ import { ElMessage } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { useLiveSessions } from '@/composables/live/useLiveSessions';
 import { SESSION_FILTER_ALL } from '@/utils/sessionManager';
-import { formatDateMD } from '@/utils/format';
+import { formatDateMD, formatTimeHM } from '@/utils/format';
 import type { LiveSessionItem } from '@/types';
 
 vi.mock('@/api/websocket', () => ({
@@ -208,16 +208,20 @@ describe('useLiveSessions', () => {
     expect(composable.sessionTitle(sessionItem({ live_session_id: 3, title: null }))).toBe(
       '场次 #3',
     );
-    // 时间标签带日期：同日终点只显时刻，跨天终点带日期
+    // 时间标签不重复开始时刻（卡片标题已含日期+开始时刻）：
+    // 进行中只标"起"；同日已结束只留结束时刻；跨天才带完整起止
     const ended = sessionItem({ started_at_ms: 9_000_000, ended_at_ms: 9_060_000 });
     const label = composable.sessionTimeLabel(ended);
-    expect(label).toContain('–');
-    expect(label).toContain(formatDateMD(9_000_000));
+    expect(label).toBe(`– ${formatTimeHM(9_060_000)}`);
+    expect(label).not.toContain(formatDateMD(9_000_000));
+    const ongoing = sessionItem({ started_at_ms: 9_000_000, ended_at_ms: null });
+    expect(composable.sessionTimeLabel(ongoing)).toBe(`${formatTimeHM(9_000_000)} 起`);
     const crossDay = sessionItem({
       started_at_ms: 9_000_000,
       ended_at_ms: 9_000_000 + 26 * 3_600_000,
     });
     const crossLabel = composable.sessionTimeLabel(crossDay);
+    expect(crossLabel).toContain(formatDateMD(9_000_000));
     expect(crossLabel).toContain(formatDateMD(9_000_000 + 26 * 3_600_000));
   });
 });

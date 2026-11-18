@@ -47,14 +47,15 @@ export function useLiveSessions() {
     return `场次 #${item.live_session_id}`;
   }
 
+  /** 场次卡时间标签：卡标题默认已含日期+开始时刻，这里不再复读开始时刻 */
   function sessionTimeLabel(item: LiveSessionItem): string {
-    const start = `${formatDateMD(item.started_at_ms)} ${clockLabel(item.started_at_ms)}`;
-    if (item.ended_at_ms == null) return `${start} 起`;
+    const startClock = clockLabel(item.started_at_ms);
+    if (item.ended_at_ms == null) return `${startClock} 起`;
     const sameDay =
       new Date(item.ended_at_ms).toDateString() === new Date(item.started_at_ms).toDateString();
-    const end = sameDay
-      ? clockLabel(item.ended_at_ms)
-      : `${formatDateMD(item.ended_at_ms)} ${clockLabel(item.ended_at_ms)}`;
+    if (sameDay) return `– ${clockLabel(item.ended_at_ms)}`;
+    const end = `${formatDateMD(item.ended_at_ms)} ${clockLabel(item.ended_at_ms)}`;
+    const start = `${formatDateMD(item.started_at_ms)} ${startClock}`;
     return `${start} – ${end}`;
   }
 
