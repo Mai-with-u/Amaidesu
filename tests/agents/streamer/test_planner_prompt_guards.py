@@ -171,16 +171,19 @@ def test_prompt_template_restates_player_request_before_state(prompts: Any) -> N
 
 
 def test_delegate_rules_asks_back_when_request_target_is_unclear() -> None:
-    """诉求对象说不清时先反问确认，不按主播自己的库存或状态替对方回答；歧义澄清落在委派规则，不重复写。"""
+    """委托需求说不清时先反问确认再定案，观众与玩家同样对待；做法与勘查不在确认范围，且与不添前置条件条款分工明确。"""
     reset_prompt_manager()
     try:
         rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
     finally:
         reset_prompt_manager()
 
-    assert "玩家托付里诉求归谁说不准时" in rules
-    assert "先在游戏聊天里反问确认" in rules
+    assert "委托或托付的需求说不清就先问清再定案" in rules
+    assert "观众和游戏里的玩家同样对待" in rules
+    assert "在游戏聊天里反问" in rules
     assert "不按主播自己的库存或状态替对方回答" in rules
+    assert "做法与场地勘查不在确认范围" in rules
+    assert "不替观众添加前置条件" in rules and "不为稳妥另添动手前的流程前置" in rules
     assert "托付有歧义时先反问" not in rules
 
 
