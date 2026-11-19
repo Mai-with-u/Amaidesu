@@ -593,7 +593,7 @@ class MinecraftAgent(BaseAgent):
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令；当前收工态，开播后接受委派）")
 
     async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
-        """live.started 回调：开播，恢复接受委派。"""
+        """live.started 回调：开播，恢复接受委派并在具备自主领航条件时通知主从协调器重评交权。"""
         del event_name, source
         self._live_active = True
         self._current_session_id = payload.live_session_id
@@ -601,6 +601,9 @@ class MinecraftAgent(BaseAgent):
         self._creatures.start_session(payload.live_session_id)
         await self._save_creatures()
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：minecraft 恢复接受委派")
+        # 消除并发开播竞态：若主播侧先于本回调评估过交权并因本侧未置位而错过，此处立即通知协调器触发幂等重评
+        if self._lead_coordinator is not None and self.can_take_lead():
+            await self._notify_lead_ready("live_started")
 
     async def _on_live_ended(self, event_name: str, payload: LiveEndedPayload, source: str) -> None:
         """live.ended 回调：收工即停，未处理消息一并丢弃，不留到下一场突然开跑。"""
@@ -729,6 +732,9 @@ class MinecraftAgent(BaseAgent):
         )
         self._task_suspended = False
         self._wake_event.set()
+        # 直播中 MCP 重连恢复且具备自主领航条件时，仅向协调器发送就绪通知，由主播侧按流程单与人工覆盖策略幂等重评（绝不自行抢权）
+        if self._live_active and self._lead_coordinator is not None and self.can_take_lead():
+            self._schedule_lead_ready("mcp_reconnected")
 
     def _prime_remote_skills(self) -> "asyncio.Task[None] | None":
         """连接建立即后台预读远端技能目录：不等第一批任务，检视页与首批都不用等。
@@ -1055,6 +1061,35 @@ class MinecraftAgent(BaseAgent):
                 self._logger.exception(f"调用 lead_coordinator.notify_agent_unavailable 异常: {exc}")
         if self._in_lead_mode:
             await self.yield_lead(reason=reason)
+
+    def _schedule_lead_ready(self, reason: str) -> None:
+        """从同步回调（如 MCP 重连恢复）异步调度候选就绪通知，不直接抢权。"""
+        if not self._live_active or self._lead_coordinator is None or not self.can_take_lead():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._logger.warning(f"无运行事件循环，无法异步上报游戏就绪通知（reason={reason}）")
+            return
+        task = loop.create_task(self._notify_lead_ready(reason))
+        self._lead_unavailable_tasks.add(task)
+
+        def _done(finished: asyncio.Task[None]) -> None:
+            self._lead_unavailable_tasks.discard(finished)
+            if not finished.cancelled() and finished.exception() is not None:
+                exc = finished.exception()
+                self._logger.warning(f"上报游戏就绪通知失败（reason={reason}）: {type(exc).__name__}: {exc}")
+
+        task.add_done_callback(_done)
+
+    async def _notify_lead_ready(self, reason: str) -> None:
+        """向主从协调器发送候选就绪通知，由监听方依据开播态、流程单与人工覆盖策略幂等重评切换。"""
+        if self._lead_coordinator is None or not self.can_take_lead():
+            return
+        try:
+            await self._lead_coordinator.notify_agent_ready(self.name, reason=reason)
+        except Exception as exc:  # noqa: BLE001 - 就绪通知异常不反噬本地运行态
+            self._logger.warning(f"调用 lead_coordinator.notify_agent_ready 异常（reason={reason}）: {exc}", exc=True)
 
     def _check_lead_idle_wakeup(self) -> None:
         """事件页巡检：主控态处于有界短休眠且到达唤醒时刻时投递自主检查提示，超空转上限不再自醒。"""

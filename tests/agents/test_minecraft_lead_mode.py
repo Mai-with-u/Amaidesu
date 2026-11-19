@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import pytest
 
 from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.lead_mode import (
     LEAD_MODE_PROMPT_SECTION,
     SpokenEchoBuffer,
@@ -45,6 +46,7 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.llm.payload import Response
+from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
@@ -56,6 +58,7 @@ from .minecraft_v1_fakes import (
     _resp,
     _texts,
     _wait_until,
+    assemble_minecraft_agent,
     make_minecraft_agent,
     offline_config,
 )
@@ -972,3 +975,72 @@ async def test_llm_failure_in_lead_mode_triggers_graceful_fallback(
         assert agent.can_take_lead() is recovers_after_cooldown
     finally:
         await _stop_lead_env(env, agent)
+
+
+async def test_mcp_reconnect_notifies_ready_listener_without_self_grabbing_lead(fake_clock: Any) -> None:
+    """直播中 MCP 重连恢复时，MinecraftAgent 仅发送 mcp_reconnected 就绪通知，不自行抢回主控权。"""
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(_StreamerStub())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=fake_clock.now_ms)
+
+    ready_events: List[tuple[str, str]] = []
+    coord.bind_ready_listener(lambda name, reason: ready_events.append((name, reason)))
+
+    class _ReconnectableMcpClient:
+        def __init__(self) -> None:
+            self.connected = False
+
+        async def close(self) -> None:
+            self.connected = False
+
+    class _ReconnectableMcpProvider(_McpDisconnectableProvider):
+        def __init__(self, client: _ReconnectableMcpClient) -> None:
+            super().__init__()
+            self._client = client
+            self.tools_exposed = False
+            self.switch_config: Dict[str, Any] = {}
+
+        async def setup(self) -> int:
+            return len(self.list_tools())
+
+        def start_recovery(self) -> None:
+            return None
+
+    fake_client = _ReconnectableMcpClient()
+    fake_provider = _ReconnectableMcpProvider(fake_client)
+
+    agent = assemble_minecraft_agent(
+        config=MinecraftConfig(mcp=McpServerConfig(enabled=True, url="http://127.0.0.1:8766/mcp"), events_wait_ms=1000),
+        llm=ScriptLlm(lambda _messages: _resp("待机")),
+        bus=bus,
+        registry=registry,
+        live=True,
+        clock=lambda: fake_clock.now_ms() / 1000.0,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        mcp_client_factory=lambda _name, _cfg: fake_client,
+        mcp_provider_factory=lambda **_kwargs: fake_provider,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        assert agent.can_take_lead() is False
+        assert fake_provider.on_connection_changed is not None
+
+        # 模拟 MCP 重连成功并触发连接恢复回调
+        fake_client.connected = True
+        fake_provider.tools_exposed = True
+        fake_provider.on_connection_changed(True)
+        await _wait_until(lambda: len(ready_events) == 1)
+
+        assert ready_events == [("minecraft", "mcp_reconnected")]
+        assert agent.can_take_lead() is True
+        # 未自行抢权：没有主播监听器裁决交权时，协调器仍维持 streamer 态
+        assert coord.mode == "streamer"
+        assert agent.in_lead_mode is False
+    finally:
+        await agent.stop()
+        await bus.cleanup()

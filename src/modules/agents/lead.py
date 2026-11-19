@@ -88,6 +88,7 @@ class LeadStateSnapshot(BaseModel):
 CommentaryHandler = Callable[[CommentaryRequest], Awaitable[CommentaryAck]]
 HandoverBuilder = Callable[[str], Union[Awaitable[LeadHandoverContext], LeadHandoverContext]]
 LeadChangedListener = Callable[[AgentLeadChangedPayload], Union[Awaitable[None], None]]
+AgentReadyListener = Callable[[str, str], Union[Awaitable[None], None]]
 
 
 class LeadCoordinator:
@@ -127,6 +128,7 @@ class LeadCoordinator:
         self._commentary_handler: Optional[CommentaryHandler] = None
         self._handover_builder: Optional[HandoverBuilder] = None
         self._lead_changed_listeners: List[LeadChangedListener] = []
+        self._ready_listeners: List[AgentReadyListener] = []
 
     # -------------------- 只读状态与候选发现 --------------------
 
@@ -226,6 +228,38 @@ class LeadCoordinator:
         """注销主控切换监听器（未注册时幂等忽略）。"""
         if listener in self._lead_changed_listeners:
             self._lead_changed_listeners.remove(listener)
+
+    def bind_ready_listener(self, listener: AgentReadyListener) -> None:
+        """注册自主游戏候选就绪通知监听器（重复注册自动去重）。"""
+        if listener not in self._ready_listeners:
+            self._ready_listeners.append(listener)
+
+    def unbind_ready_listener(self, listener: AgentReadyListener) -> None:
+        """注销自主游戏候选就绪通知监听器（未注册时幂等忽略）。"""
+        if listener in self._ready_listeners:
+            self._ready_listeners.remove(listener)
+
+    async def notify_agent_ready(self, agent_name: str, *, reason: str = "agent_ready") -> None:
+        """候选自主游戏就绪时通知监听方按现行规则幂等重评主控切换。
+
+        触发条件：游戏侧完成开播置位或连接恢复且具备自主领航条件时调用；
+        执行顺序：校验参数 -> 锁外依次回调已注册监听器并隔离单个异常，不直接抢权，
+        由主播侧监听方依据开播态、流程单环节、动态主从开关与人工覆盖策略统一决定是否交权。
+        """
+        normalized = (agent_name or "").strip()
+        if not normalized:
+            return
+        effective_reason = (reason or "").strip() or "agent_ready"
+        for listener in list(self._ready_listeners):
+            try:
+                ret = listener(normalized, effective_reason)
+                if inspect.isawaitable(ret):
+                    await ret
+            except Exception as exc:  # noqa: BLE001 - 单个就绪监听器异常隔离
+                logger.warning(
+                    f"候选游戏 '{normalized}' 就绪通知监听器执行异常（reason={effective_reason}，已隔离）: {exc}",
+                    exc=True,
+                )
 
     # -------------------- 主控权切换（锁内串行 + 幂等） --------------------
 
@@ -649,5 +683,6 @@ __all__ = [
     "CommentaryHandler",
     "HandoverBuilder",
     "LeadChangedListener",
+    "AgentReadyListener",
     "LeadCoordinator",
 ]

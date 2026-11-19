@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.delegation_board import (
@@ -53,7 +53,7 @@ from src.modules.events.payloads.agents import AgentPromptedPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.logging import get_logger
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.models import ToolCallAttachment, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.tasks import (
     IN_PROGRESS_TASK_STATES,
@@ -1463,6 +1463,17 @@ class AgentControl:
 
 
 @dataclass(slots=True)
+class SuggestAttachment(ToolCallAttachment):
+    """framework_suggest 随调用单附带的宿主材料（不暴露给 LLM 工具参数 Schema）。
+
+    主播 Planner 在调用 framework_suggest 时把本窗观众原话经本附件递给 AgentControlProvider，
+    使坐标、物品名与原始诉求逐字送达主控游戏侧，同时不污染 LLM 工具声明。
+    """
+
+    source_dialogue: List[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class AgentControlProvider(BaseToolProvider):
     """把 framework LLM 工具面（delegate / prompt / task_status / task_settle 及动态主从工具）注册到 ToolRegistry。"""
 
@@ -1761,7 +1772,10 @@ class AgentControlProvider(BaseToolProvider):
                 )
             if name == "framework_suggest":
                 return await self._invoke_suggest(
-                    args, caller=invocation.source, invoking_agent=invocation.invoking_agent
+                    args,
+                    caller=invocation.source,
+                    invoking_agent=invocation.invoking_agent,
+                    attachment=invocation.attachment,
                 )
             return ToolExecutionResult(
                 tool_name=name,
@@ -2022,10 +2036,48 @@ class AgentControlProvider(BaseToolProvider):
             duration_ms=max(0, finished_ms - started_ms),
         )
 
+    @staticmethod
+    def _extract_source_dialogue(attachment: Any, args: Dict[str, Any]) -> Optional[List[str]]:
+        """提取并规范化观众原话列表：优先读宿主 attachment，未携带时兼容读 args['source_dialogue']。
+
+        支持字符串、字符串序列或含 content 字段的对话消息映射序列，清洗空白并过滤无效项；
+        无有效原话时返回 None。
+        """
+        raw: Any = None
+        if isinstance(attachment, Mapping):
+            raw = attachment.get("source_dialogue")
+        elif attachment is not None:
+            raw = getattr(attachment, "source_dialogue", None)
+        if raw is None:
+            raw = args.get("source_dialogue")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            cleaned = raw.strip()
+            return [cleaned] if cleaned else None
+        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+            lines: List[str] = []
+            for item in raw:
+                if isinstance(item, str):
+                    text = item.strip()
+                elif isinstance(item, Mapping):
+                    text = str(item.get("content") or "").strip()
+                else:
+                    continue
+                if text:
+                    lines.append(text)
+            return lines or None
+        return None
+
     async def _invoke_suggest(
-        self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
+        self,
+        args: Dict[str, Any],
+        *,
+        caller: str,
+        invoking_agent: str = "",
+        attachment: Any = None,
     ) -> ToolExecutionResult:
-        """执行 framework_suggest：向当前主控游戏 Agent 转达非强杀观众建议。"""
+        """执行 framework_suggest：向当前主控游戏 Agent 转达非强杀观众建议并透传观众原话。"""
         tool_name = "framework_suggest"
         started_ms = self._now_ms()
         if self.lead_coordinator is None:
@@ -2039,7 +2091,13 @@ class AgentControlProvider(BaseToolProvider):
             return business_fail_result(tool_name, started_ms, "suggest 需要非空的 content（观众建议或提醒）")
         target = str(args.get("agent", "") or "").strip() or None
         source = (invoking_agent or "").strip() or (caller or "").strip() or STREAMER_AGENT_NAME
-        result = await self.lead_coordinator.send_suggestion(content, target=target, source=source)
+        source_dialogue = self._extract_source_dialogue(attachment, args)
+        result = await self.lead_coordinator.send_suggestion(
+            content,
+            target=target,
+            source=source,
+            source_dialogue=source_dialogue,
+        )
         finished_ms = self._now_ms()
         if result.get("accepted"):
             return ToolExecutionResult(
@@ -2145,6 +2203,7 @@ __all__ = [
     "PROVIDER_NAME",
     "DelegationCore",
     "AgentControl",
+    "SuggestAttachment",
     "AgentControlProvider",
     "build_agent_control_provider",
 ]

@@ -116,7 +116,7 @@ from .planner_context import age_text
 from .paid_viewers import PaidViewerLookup
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
-from .replyer import Replyer
+from .replyer import TARGET_EXTRA_CHARS, Replyer
 from .room_state import RoomState
 from .scene_card import brief_of
 from .speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT, SPEECH_PRIORITY_NORMAL, SpeechDispatcher
@@ -309,6 +309,7 @@ class StreamerAgent(BaseAgent):
         stall_auto_cancel_alerts: int = 3,
         stream_ledger: Optional[Any] = None,
         planner: Optional[Planner] = None,
+        replyer: Optional[Any] = None,
         round_executor: Optional[DecisionRoundExecutor] = None,
         reply_provider: Optional[ReplyToolProvider] = None,
         session_scope: Optional[SessionScope] = None,
@@ -421,6 +422,7 @@ class StreamerAgent(BaseAgent):
         # 动态主从协调器（可选；由组合根注入，未注入时保持传统主播常驻主控行为）
         self._lead_coordinator: Optional[LeadCoordinator] = lead_coordinator
         self._lead_hooks_bound: bool = False
+        self._live_start_in_progress: bool = False
         self._spoken_echo_registered: bool = False
         # 实况解说串行锁与被防抖压下的解说摘要缓冲（避免短时间内两笔解说同时调 Replyer 撞词）
         self._commentary_lock = asyncio.Lock()
@@ -641,31 +643,34 @@ class StreamerAgent(BaseAgent):
             enabled=wf.enabled,
         )
 
-        # Replyer（表达引擎，Agent 内部件——非工具）
+        # Replyer（表达引擎，Agent 内部件——非工具；测试可构造注入替身）
         # 人设三件套从包内配置权威 config.persona 单点构建、构造期注入
         # （behavior_style 不进表达侧——只走 Planner 决策通道）
-        self._replyer = Replyer(
-            config={
-                "bot_name": config.persona.bot_name,
-                "personality": config.persona.personality,
-                "style_constraints": config.persona.style_constraints,
-                # 人设块的口吻示例与边界栏：系统提示词以人设为主，后半场说话仍像她
-                "voice_examples": config.persona.voice_examples,
-                "boundaries": config.persona.boundaries,
-                "persona_profile": (
-                    self._persona_profile.render_for_replyer() if self._persona_profile is not None else ""
-                ),
-                # 表达出口的台词长度预算：边玩边说与杂谈两档，超出先重说仍超按完整句截短
-                "speech_max_chars": config.speech_max_chars,
-                "talk_speech_max_chars": config.talk_speech_max_chars,
-                "has_game": self._has_enabled_game,
-                # 表达侧只带最近几条原文（0 = 回退到整份历史）
-                "history_items": config.replyer_history_items,
-            },
-            llm_service=llm_manager,
-            prompt_service=prompt_manager,
-            word_filter=self._word_filter,
-        )
+        if replyer is not None:
+            self._replyer = replyer
+        else:
+            self._replyer = Replyer(
+                config={
+                    "bot_name": config.persona.bot_name,
+                    "personality": config.persona.personality,
+                    "style_constraints": config.persona.style_constraints,
+                    # 人设块的口吻示例与边界栏：系统提示词以人设为主，后半场说话仍像她
+                    "voice_examples": config.persona.voice_examples,
+                    "boundaries": config.persona.boundaries,
+                    "persona_profile": (
+                        self._persona_profile.render_for_replyer() if self._persona_profile is not None else ""
+                    ),
+                    # 表达出口的台词长度预算：边玩边说与杂谈两档，超出先重说仍超按完整句截短
+                    "speech_max_chars": config.speech_max_chars,
+                    "talk_speech_max_chars": config.talk_speech_max_chars,
+                    "has_game": self._has_enabled_game,
+                    # 表达侧只带最近几条原文（0 = 回退到整份历史）
+                    "history_items": config.replyer_history_items,
+                },
+                llm_service=llm_manager,
+                prompt_service=prompt_manager,
+                word_filter=self._word_filter,
+            )
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
         self._background = BackgroundMaintainer(
@@ -1019,13 +1024,15 @@ class StreamerAgent(BaseAgent):
         if self._mouth is not None:
             await self._mouth.start()
 
-        # 动态主从协调器接线：同步 lead_mode 开关、绑定实况解说/交权简报/切权监听与口播回声转发
+        # 动态主从协调器接线：同步 lead_mode 开关、绑定实况解说/交权简报/切权与候选就绪监听及口播回声转发
         if self._lead_coordinator is not None:
             if hasattr(self._lead_coordinator, "set_enabled"):
                 self._lead_coordinator.set_enabled(self.typed_config.lead_mode == "dynamic")
             self._lead_coordinator.bind_commentary_handler(self._handle_game_commentary)
             self._lead_coordinator.bind_handover_builder(self._build_lead_handover_context)
             self._lead_coordinator.bind_lead_changed_listener(self._on_lead_changed)
+            if hasattr(self._lead_coordinator, "bind_ready_listener"):
+                self._lead_coordinator.bind_ready_listener(self._on_lead_agent_ready)
             self._lead_hooks_bound = True
             if not self._spoken_echo_registered:
                 self._speech.add_spoken_listener(self._on_spoken_echo)
@@ -1051,6 +1058,8 @@ class StreamerAgent(BaseAgent):
             self._lead_coordinator.bind_commentary_handler(None)
             self._lead_coordinator.bind_handover_builder(None)
             self._lead_coordinator.unbind_lead_changed_listener(self._on_lead_changed)
+            if hasattr(self._lead_coordinator, "unbind_ready_listener"):
+                self._lead_coordinator.unbind_ready_listener(self._on_lead_agent_ready)
             if self._lead_coordinator.is_game_lead:
                 try:
                     await self._lead_coordinator.reclaim_streamer_lead(reason="streamer_stop")
@@ -1396,95 +1405,100 @@ class StreamerAgent(BaseAgent):
         """
         del event_name, source
         resumed = payload.resumed
-        # 开播计数先加：上一场的下播回调若还在等道别那一轮，跑完后据此知道已经换场、不再清场
-        self._session_epoch += 1
-        self._live_active = True
-        # 新开场开启【上次收尾】头两窗闸门，放在第一个 await 之前，避免开窗循环抢在初始化前读到旧状态；
-        # 断线续播是同一场接回，不作为新开场重复灌上一场收尾
-        self._opening_wrapup_active = not resumed
-        self._opening_wrapup_windows = 0
-        # 上一场的下播回调还在收尾（道别那一轮在等模型）时，内存里这份备忘录是上一场的
-        # 工作笔记（每次写入都已落进上一场的场次行），不是开播前写下的：当场清掉、不带进
-        # 新场次。放在第一个 await 之前，新场次的第一轮决策开窗时读到的已经是空备忘录
-        if self._mouth is not None:
-            self._mouth.reset()
-        # 断线续播先把流程单实例快照还原进状态机（启动时装载的是 armed 空单，
-        # 那时场次还没接回、崩溃恢复必然落空）：还原成功后计时锚点非空，下面
-        # begin 被结构化拒绝，中断的流程单接着跑；还原失败（无快照/不匹配）
-        # 保持 armed，begin 照常起算，退化为从头跑
-        if resumed:
-            await self._rundown_coord.resume_restore()
-            await self._restore_interrupted_delegations_to_ledger(int(payload.live_session_id))
-        # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
-        # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
-        # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
-        reject = self._rundown_coord.begin(by="system")
-        if reject is not None:
-            self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
-        # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史。
-        # 续播场不清场：当场对话历史在库里按场次主键接着读，内存本来就空；手头的
-        # 事、补充要求、已聊话题同样只属于"上一场"，续播场没有上一场，一并保留
-        if not resumed:
-            await self._scope.begin_session()
-            # 手头的事、补充要求、已聊话题只属于上一场：开播清空，新的一场不从"两小时前在游戏里
-            # 开始做某事"接着说（上一场下播时游戏侧已结算委派）
-            self._planner.workbench.reset()
-            # 游戏里找她的玩家条目、游戏那边的流水同样只属于上一场：留几分钟的那份不带进新场次
-            self._planner.reset_player_notes()
-            self._working_note.clear()
-            self._game_side.reset()
-            self._room_state.reset_session()
-            self._spoken_log.reset()
-            self._pending_operator_notes.clear()
-            self._talk_workbench.sync_segment(None, [])
-            self._talk_workbench.clear_viewer_tangent()
-            self._talk_workbench.consume_interrupted_tail()
-            if self._task_ledger is not None:
-                self._task_ledger.clear_provider_outcomes()
-        # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
-        # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
-        # 新简报，这期间简报退化为更早一场的档案
-        self._sync_current_saves()
-        await self._refresh_memory_brief(kind=payload.kind, announce=True)
-        self._settle_pending_before_brief()
-        # 线索推送的计数与回执追踪只在本场内有效，开播先清零
-        if self._memory_cues is not None:
-            self._memory_cues.reset()
-        # 游戏活动也随场次重置：游戏承诺卡只看这一场"正在玩"什么，上一场的事件不带过来
-        self._game_activity_ms.clear()
-        self._session_games.clear()
-        self._commentary_buffer.clear()
-        self._game_lead_entered_ms = None
-        if resumed:
-            self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
-            # 先从诊断事件流划出上一进程的时间段，递话与玩家聊天的重放共用这一段
-            previous_window = self._previous_process_window()
-            # 续播重放递话：上一进程里还没送进决策窗的运营留言随重启丢了，从诊断事件流
-            # 补进提醒队列——接回那一轮（或下一轮）以【运营提醒】送达，必达跨重启
-            self._replay_prompts_from_event_log(previous_window)
-            # 续播重放玩家聊天：上一进程最后一轮决策之后玩家在游戏里说的话她还没接，
-            # 随重启丢了；回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
-            self._load_resume_chat_replay(previous_window)
-            # 续播接回已聊话题：本场前面几个进程里说出口的那几轮按先后重新记进打算账，
-            # 早先讲过的段子（"更早聊过"）不随重启忘掉
-            self._restore_spoken_topics(payload.live_session_id, payload.started_at_ms)
-            # 续播认领委派：这一场重启前我派的、没交付完的那件记回手头的事并标成被打断，接回那一轮就看得到
-            await self._restore_interrupted_delegations(payload.live_session_id)
-        else:
-            self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
-        if resumed:
-            # 断线续播的接回发言窗：说一句"信号回来了，接着继续"（TriggerKind.RESUME
-            # 情境文案管内容），不打断流程单、不重新开场。await 形态同道别窗：本回调
-            # 由事件总线的后台任务驱动，保证这一轮赶在事件面存活的窗口内完整走完
-            try:
-                await self._execute_round(
-                    [],
-                    forced=True,
-                    trigger_cause=TriggerCause(kind=TriggerKind.RESUME, source=TriggerSource.LIVE_START),
-                    proactive=True,
-                )
-            except Exception as exc:  # noqa: BLE001 - 接回发言失败不挡续播链路
-                self._logger.exception(f"场次 {payload.live_session_id} 的续播接回那一轮出错: {exc}")
+        # 标记开播初始化进行中：避免并发到达的候选游戏就绪通知抢在流程单恢复与简报刷新前触发半成品交权
+        self._live_start_in_progress = True
+        try:
+            # 开播计数先加：上一场的下播回调若还在等道别那一轮，跑完后据此知道已经换场、不再清场
+            self._session_epoch += 1
+            self._live_active = True
+            # 新开场开启【上次收尾】头两窗闸门，放在第一个 await 之前，避免开窗循环抢在初始化前读到旧状态；
+            # 断线续播是同一场接回，不作为新开场重复灌上一场收尾
+            self._opening_wrapup_active = not resumed
+            self._opening_wrapup_windows = 0
+            # 上一场的下播回调还在收尾（道别那一轮在等模型）时，内存里这份备忘录是上一场的
+            # 工作笔记（每次写入都已落进上一场的场次行），不是开播前写下的：当场清掉、不带进
+            # 新场次。放在第一个 await 之前，新场次的第一轮决策开窗时读到的已经是空备忘录
+            if self._mouth is not None:
+                self._mouth.reset()
+            # 断线续播先把流程单实例快照还原进状态机（启动时装载的是 armed 空单，
+            # 那时场次还没接回、崩溃恢复必然落空）：还原成功后计时锚点非空，下面
+            # begin 被结构化拒绝，中断的流程单接着跑；还原失败（无快照/不匹配）
+            # 保持 armed，begin 照常起算，退化为从头跑
+            if resumed:
+                await self._rundown_coord.resume_restore()
+                await self._restore_interrupted_delegations_to_ledger(int(payload.live_session_id))
+            # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
+            # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
+            # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
+            reject = self._rundown_coord.begin(by="system")
+            if reject is not None:
+                self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
+            # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史。
+            # 续播场不清场：当场对话历史在库里按场次主键接着读，内存本来就空；手头的
+            # 事、补充要求、已聊话题同样只属于"上一场"，续播场没有上一场，一并保留
+            if not resumed:
+                await self._scope.begin_session()
+                # 手头的事、补充要求、已聊话题只属于上一场：开播清空，新的一场不从"两小时前在游戏里
+                # 开始做某事"接着说（上一场下播时游戏侧已结算委派）
+                self._planner.workbench.reset()
+                # 游戏里找她的玩家条目、游戏那边的流水同样只属于上一场：留几分钟的那份不带进新场次
+                self._planner.reset_player_notes()
+                self._working_note.clear()
+                self._game_side.reset()
+                self._room_state.reset_session()
+                self._spoken_log.reset()
+                self._pending_operator_notes.clear()
+                self._talk_workbench.sync_segment(None, [])
+                self._talk_workbench.clear_viewer_tangent()
+                self._talk_workbench.consume_interrupted_tail()
+                if self._task_ledger is not None:
+                    self._task_ledger.clear_provider_outcomes()
+            # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
+            # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
+            # 新简报，这期间简报退化为更早一场的档案
+            self._sync_current_saves()
+            await self._refresh_memory_brief(kind=payload.kind, announce=True)
+            self._settle_pending_before_brief()
+            # 线索推送的计数与回执追踪只在本场内有效，开播先清零
+            if self._memory_cues is not None:
+                self._memory_cues.reset()
+            # 游戏活动也随场次重置：游戏承诺卡只看这一场"正在玩"什么，上一场的事件不带过来
+            self._game_activity_ms.clear()
+            self._session_games.clear()
+            self._commentary_buffer.clear()
+            self._game_lead_entered_ms = None
+            if resumed:
+                self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
+                # 先从诊断事件流划出上一进程的时间段，递话与玩家聊天的重放共用这一段
+                previous_window = self._previous_process_window()
+                # 续播重放递话：上一进程里还没送进决策窗的运营留言随重启丢了，从诊断事件流
+                # 补进提醒队列——接回那一轮（或下一轮）以【运营提醒】送达，必达跨重启
+                self._replay_prompts_from_event_log(previous_window)
+                # 续播重放玩家聊天：上一进程最后一轮决策之后玩家在游戏里说的话她还没接，
+                # 随重启丢了；回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
+                self._load_resume_chat_replay(previous_window)
+                # 续播接回已聊话题：本场前面几个进程里说出口的那几轮按先后重新记进打算账，
+                # 早先讲过的段子（"更早聊过"）不随重启忘掉
+                self._restore_spoken_topics(payload.live_session_id, payload.started_at_ms)
+                # 续播认领委派：这一场重启前我派的、没交付完的那件记回手头的事并标成被打断，接回那一轮就看得到
+                await self._restore_interrupted_delegations(payload.live_session_id)
+            else:
+                self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
+            if resumed:
+                # 断线续播的接回发言窗：说一句"信号回来了，接着继续"（TriggerKind.RESUME
+                # 情境文案管内容），不打断流程单、不重新开场。await 形态同道别窗：本回调
+                # 由事件总线的后台任务驱动，保证这一轮赶在事件面存活的窗口内完整走完
+                try:
+                    await self._execute_round(
+                        [],
+                        forced=True,
+                        trigger_cause=TriggerCause(kind=TriggerKind.RESUME, source=TriggerSource.LIVE_START),
+                        proactive=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 接回发言失败不挡续播链路
+                    self._logger.exception(f"场次 {payload.live_session_id} 的续播接回那一轮出错: {exc}")
+        finally:
+            self._live_start_in_progress = False
         # 开播且流程单与常驻简报就绪后评估动态主从（如首段即为游玩环节且游戏就绪则自动交权）
         await self._sync_lead_mode(reason="live_started")
 
@@ -3568,6 +3582,18 @@ class StreamerAgent(BaseAgent):
         """公开同步入口：根据当前开播态、流程单模式、配置开关与候选就绪态幂等对齐主控权。"""
         await self._sync_lead_mode(reason=reason)
 
+    async def _on_lead_agent_ready(self, agent_name: str, reason: str) -> None:
+        """候选自主游戏就绪通知回调：按现行开播态、流程单模式与覆盖策略幂等重评主控切换。
+
+        触发条件：游戏侧在 live.started 后置位就绪或 MCP 重连恢复后经 LeadCoordinator 广播；
+        若主播自身尚在执行 _on_live_started 初始化则直接返回，由初始化末尾统一调用 _sync_lead_mode，
+        确保交权简报必定包含最新流程单与记忆简报，且全路径严守 live_active/lead_mode/override/in_talk/in_closing 门禁。
+        """
+        del agent_name
+        if not self._running or not self._lead_hooks_bound or self._live_start_in_progress:
+            return
+        await self._sync_lead_mode(reason=reason)
+
     async def _maybe_periodic_lead_sync(self) -> None:
         """周期巡检健康恢复与状态对齐：检测到应切换时按防抖节奏调用 ``_sync_lead_mode``。"""
         coord = self._lead_coordinator
@@ -3861,8 +3887,14 @@ class StreamerAgent(BaseAgent):
             if not raw_speech:
                 return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
 
-            # 经过 speech_guard 兜底把关（短句预算与敏感词净化）
-            budget = self.typed_config.speech_max_chars if not reply_to else 0
+            # 经过 speech_guard 兜底把关（短句预算与敏感词净化）：与 Replyer.budget_for 复用同一预算口径，
+            # 填了 about_player 时按 speech_max_chars + TARGET_EXTRA_CHARS 放宽（而非 0 无上限放行）
+            budget_fn = getattr(self._replyer, "budget_for", None)
+            if callable(budget_fn):
+                budget = int(budget_fn("play", has_target=bool(reply_to)))
+            else:
+                base_budget = int(self.typed_config.speech_max_chars)
+                budget = 0 if base_budget <= 0 else (base_budget + TARGET_EXTRA_CHARS if reply_to else base_budget)
             verdict = guard(raw_speech, speech_max_chars=budget, word_filter=self._word_filter)
             if verdict.text is None:
                 self._logger.info("实况解说台词命中敏感词过滤，整条丢弃")

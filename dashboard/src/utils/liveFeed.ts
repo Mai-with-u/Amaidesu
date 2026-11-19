@@ -1111,6 +1111,8 @@ const LEAD_REASON_LABELS: Record<string, string> = {
   streamer_stop: '主播 Agent 停止',
   lead_mode_streamer_only: '已设为固定主播主控',
   mcp_disconnected: '游戏连接断开，自动收回',
+  mcp_reconnected: '游戏连接恢复，重新评估主控',
+  agent_ready: '游戏 Agent 就绪，重新评估主控',
   llm_unavailable: '模型不可用，自动收回',
   llm_unsendable: '模型请求无法发送，自动收回',
   llm_exception: '模型连续异常，自动收回',

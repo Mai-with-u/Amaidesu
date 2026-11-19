@@ -54,7 +54,8 @@ _DEFAULT_SPEECH_MAX_CHARS = 30
 # 杂谈档一轮台词的长度上限（与 StreamerConfig.talk_speech_max_chars 默认值对齐）
 _DEFAULT_TALK_SPEECH_MAX_CHARS = 150
 # 接某位观众或玩家的话时篇幅多给这么多字：起手先把对方问的事顺口带出来让全场听清转场由头，再接回答，不挤掉正事
-_TARGET_EXTRA_CHARS = 40
+TARGET_EXTRA_CHARS = 40
+_TARGET_EXTRA_CHARS = TARGET_EXTRA_CHARS
 
 # 说话方式那一条规矩：边玩边说一次只说一件事、说完就停（两个保留的边界：回答问话可以把回答
 # 讲完整；形容保留指代锚，指代说清楚话才自然）；杂谈像跟朋友唠嗑，围绕一个话头说两三句
@@ -445,6 +446,10 @@ class Replyer:
         return rephrased, request_id
 
     # ==================== prompt 渲染（人设注入核心） ====================
+
+    def budget_for(self, mode: str, *, has_target: bool) -> int:
+        """只读查询本轮台词长度预算（复用内部 _budget_for 单一事实源；0 表示不限制）。"""
+        return self._budget_for(mode, has_target=has_target)
 
     def _budget_for(self, mode: str, *, has_target: bool) -> int:
         """本轮台词上限：按档位取基础上限，接某位观众或玩家的话时多给一点；0 = 不限制。"""

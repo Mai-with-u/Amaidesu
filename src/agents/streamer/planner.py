@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
@@ -91,12 +92,13 @@ from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.modules.context import TransientImages, absorb_result_images, is_visual_caller
 from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
+from src.modules.agents.control import SuggestAttachment
 from src.modules.llm.payload import response_to_assistant_message
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.llm_defs import function_definition
-from src.modules.tools.models import ToolInvocation
+from src.modules.tools.models import ToolCallAttachment, ToolInvocation
 
 from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
@@ -117,6 +119,10 @@ MEMORY_CORRECT_TOOL_NAME: str = "streamer_memory_correct"
 AVATAR_ACT_TOOL_NAME: str = "avatar_act"
 #: 主播直发游戏公屏文字的工具全名：公屏发言只有经它真实发送成功才算在游戏内已回
 GAME_CHAT_SEND_TOOL_NAME: str = "minecraft_chat_send"
+#: 游戏主控态下向主控游戏转达观众建议的工具全名（调用时随宿主 attachment 透传本窗观众原话）
+FRAMEWORK_SUGGEST_TOOL_NAME: str = "framework_suggest"
+#: canonical 观众弹幕行尾的消息 ID 标签（透传给游戏侧原话时剥离内部 ID 噪声，保留昵称、坐标与物品名）
+_ID_TAG_TAIL_RE = re.compile(r"\s*\[id:[^\]]+\]\s*$")
 #: 游戏主控态下对主播侧隐藏的委派与强干预工具（轻从轮保留 framework_suggest 与只读查询）
 _GAME_LEAD_HIDDEN_TOOLS: frozenset[str] = frozenset(
     {
@@ -2041,6 +2047,12 @@ class Planner:
                 relay_without_input=relay_without_input,
                 on_result=partial(absorb_result_images, self._transient_images, self._llm_service, PLANNER_PROFILE),
             )
+        attachment: Optional[ToolCallAttachment] = None
+        if name == FRAMEWORK_SUGGEST_TOOL_NAME and source_dialogue:
+            # 游戏主控态下转达观众建议时，经宿主 attachment 附带本窗观众原话，保证精确坐标与物品名逐字送达且不污染工具 Schema
+            suggest_lines = self._suggest_source_dialogue(source_dialogue)
+            if suggest_lines:
+                attachment = SuggestAttachment(source_dialogue=suggest_lines)
         try:
             result = await self._tool_registry.invoke(
                 ToolInvocation(
@@ -2049,6 +2061,7 @@ class Planner:
                     source="planner-react",
                     round_id=round_id,
                     caller_profile=PLANNER_PROFILE,
+                    attachment=attachment,
                     invoking_agent="streamer",
                 )
             )
@@ -2068,6 +2081,28 @@ class Planner:
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return render_observation(data)
+
+    @staticmethod
+    def _suggest_source_dialogue(source_dialogue: Optional[List[Dict[str, Any]]]) -> List[str]:
+        """从本窗来源对话提取透传给 framework_suggest 的原话行（优先保留观众弹幕，剥离尾部消息 ID 噪声）。"""
+        if not source_dialogue:
+            return []
+        viewer_lines: List[str] = []
+        fallback_lines: List[str] = []
+        for entry in source_dialogue:
+            if not isinstance(entry, Mapping):
+                continue
+            raw = str(entry.get("content") or "").strip()
+            if not raw:
+                continue
+            cleaned = _ID_TAG_TAIL_RE.sub("", raw).strip()
+            if not cleaned:
+                continue
+            if entry.get("role") == "user":
+                viewer_lines.append(cleaned)
+            else:
+                fallback_lines.append(cleaned)
+        return viewer_lines if viewer_lines else fallback_lines
 
     def _has_round_tool(self, tool_name: str, ctx: RoundContext) -> bool:
         """本轮请求的工具表里是否存在指定工具（未走 plan 入口的单测按实时工具表兜底）。"""

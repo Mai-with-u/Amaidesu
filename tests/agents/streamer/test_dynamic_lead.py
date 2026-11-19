@@ -26,6 +26,7 @@ from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.mouth import Mouth, Trigger
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv, RoundOutcome
 from src.agents.streamer.proactive_trigger import ProactiveTrigger
+from src.agents.streamer.replyer import TARGET_EXTRA_CHARS, Replyer
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
 from src.agents.streamer.session_scope import WindowMaterials
@@ -55,7 +56,7 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload
-from src.modules.llm.payload import Response
+from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.storage.models.rundown import GAME_OPENING_TALK_RUNDOWN, Rundown
 from src.modules.storage.models.social_facts import SocialFact
@@ -1336,6 +1337,250 @@ async def test_body_event_passes_kind_to_mouth_and_suppresses_planner_wake_in_ga
         mouth_stub.react.assert_called_once()
         assert mouth_stub.react.call_args.kwargs["kind"] == "died"
         assert agent._proactive_signals.game_pending is False
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+# ---------------------------------------------------------------------------
+# 10. 实况解说带 about_player 时的外层字数预算兜底（speech_max_chars + 40）
+# ---------------------------------------------------------------------------
+
+
+def test_replyer_budget_for_public_api_matches_mode_and_target(prompts: Any) -> None:
+    """Replyer.budget_for 公开只读接口与内部长度预算保持单一事实源（0 表示不限字数）。"""
+    replyer = Replyer(
+        config={"speech_max_chars": 30, "talk_speech_max_chars": 150},
+        llm_service=FakeLLMManager(),
+        prompt_service=prompts,
+    )
+    assert replyer.budget_for("play", has_target=False) == 30
+    assert replyer.budget_for("play", has_target=True) == 30 + TARGET_EXTRA_CHARS
+    assert replyer.budget_for("talk", has_target=False) == 150
+    assert replyer.budget_for("talk", has_target=True) == 150 + TARGET_EXTRA_CHARS
+
+    unlimited = Replyer(
+        config={"speech_max_chars": 0, "talk_speech_max_chars": 0},
+        llm_service=FakeLLMManager(),
+        prompt_service=prompts,
+    )
+    assert unlimited.budget_for("play", has_target=True) == 0
+    assert unlimited.budget_for("talk", has_target=True) == 0
+
+
+async def test_game_commentary_with_about_player_enforces_target_budget_guard(prompts: Any) -> None:
+    """带 about_player 的超长实况解说须由外层守卫截到 speech_max_chars + 40（70 字）以内，不再无上限放行。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_events: List[StreamerSpeechPayload] = []
+
+    async def _capture_speech(_name: str, payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_events.append(payload)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _capture_speech, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    # 简易假 Replyer（故意不实现 budget_for 也不做内层截短）：专门检验 _handle_game_commentary 的外层 guard 兜底
+    canned_speeches = iter(
+        [
+            # 1) 约 105 字的多句超长台词：带 about_player（默认 30 + 40 = 70）应截到前两句（<= 70 且 > 30）
+            "刚才小伙伴小羊把整箱铁锭顺手搬到门口啦！他还顺便帮我们把工作台和熔炉都码得整整齐齐的！后面咱们再去河边看看有没有羊群可以顺路带回营地一起养着玩呀！最后还要去山坡上把灯插满！",
+            # 2) 55 字两句台词：带 about_player 时超过 30 但未超 70，应完整保留不误截到 30
+            "刚才小伙伴小羊把铁锭搬到门口了！他还顺便帮我们把熔炉和工作台都码得整整齐齐的呢！",
+        ]
+    )
+
+    class _SimpleFakeReplyer:
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            del kwargs
+            return {"speech": next(canned_speeches), "llm_request_id": "req_fake_replyer"}
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "speech_max_chars": 30,
+            "game_lead_commentary_min_interval_ms": 0,
+        },
+        prompt=prompts,
+        replyer=_SimpleFakeReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=701, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 场景 A：超长多句解说带 about_player -> 外层守卫截到 <= 70 字（不再是 0 无上限放行）
+        ack1 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure",
+                summary="同伴小羊帮忙把铁锭和熔炉整理到营地门口了",
+                mood="happy",
+                urgency="normal",
+                about_player="小羊",
+            ),
+        )
+        await bus.wait_until_drained()
+        assert ack1.accepted is True and ack1.spoken is True
+        assert len(speech_events) == 1
+        assert 30 < len(speech_events[0].text) <= 70
+        assert "山坡上把灯插满" not in speech_events[0].text
+
+        # 场景 B：55 字带 about_player 解说 -> 落在 70 字预算内，完整保留
+        ack2 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure",
+                summary="同伴小羊刚把门口熔炉和工作台摆齐",
+                mood="happy",
+                urgency="normal",
+                about_player="小羊",
+            ),
+        )
+        await bus.wait_until_drained()
+        assert ack2.accepted is True and ack2.spoken is True
+        assert len(speech_events) == 2
+        assert len(speech_events[1].text) > 30
+        assert len(speech_events[1].text) <= 70
+        assert "码得整整齐齐的呢！" in speech_events[1].text
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_planner_framework_suggest_passes_viewer_source_dialogue_via_attachment(prompts: Any) -> None:
+    """主播 Planner 调 framework_suggest 时经 ToolInvocation.attachment 透传本窗观众原话（保留坐标/物品名）。"""
+    clock = _FakeClock()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    lead_coord = LeadCoordinator(manager, clock=clock)
+    assert (
+        await lead_coord.request_game_lead(LeadHandoverContext(segment_id="main_play"), target="adventure")
+        == "adventure"
+    )
+
+    registry = ToolRegistry()
+    registry.register_provider(build_agent_control_provider(manager, lead_coordinator=lead_coord, clock=clock))
+
+    llm = FakeLLMManager(
+        responses=[
+            Response(
+                success=True,
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc_suggest_1",
+                        name="framework_suggest",
+                        arguments={"content": "观众建议去坐标附近挖下界合金块"},
+                    )
+                ],
+            ),
+            Response(success=True, content=""),
+        ]
+    )
+    planner = Planner(
+        config=PlannerConfig(),
+        llm_service=llm,
+        prompt_service=prompts,
+        room_state=RoomState(),
+        tool_registry=registry,
+        env=PlannerEnv(game_lead_agent_provider=lambda: lead_coord.active_lead_agent),
+    )
+
+    try:
+        danmaku = RoomMessagePayload(
+            message_type="danmaku",
+            message_id="m_coord_1",
+            content="主播去 (128, 64, -240) 看看，那里有下界合金块！",
+            user=RoomMessageUser(id="u_star", name="小星"),
+            timestamp_ms=clock(),
+        )
+        await planner.plan([danmaku], trigger_cause=TriggerCause(kind=TriggerKind.WINDOW_EXPIRED))
+        assert len(game.suggestions) == 1
+        content, source, source_dialogue = game.suggestions[0]
+        assert content == "观众建议去坐标附近挖下界合金块"
+        assert source == "streamer"
+        assert source_dialogue is not None
+        assert any("(128, 64, -240)" in line and "下界合金块" in line for line in source_dialogue)
+        assert all("[id:m_coord_1]" not in line for line in source_dialogue)
+    finally:
+        await game.stop()
+
+
+async def test_lead_ready_listener_respects_all_streamer_gates(prompts: Any) -> None:
+    """候选游戏触发 notify_agent_ready 时，主播侧严守未开播/talk 环节/人工覆盖门禁，满足条件即零等待交权。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=False)
+    manager.register(game)
+    await game.start()
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "lead_mode": "dynamic"},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        round_executor=FakeRoundExecutor(),
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        # 1) 未开播时收到就绪通知：不交权
+        game.ready = True
+        await lead_coord.notify_agent_ready("adventure", reason="mcp_reconnected")
+        assert lead_coord.mode == "streamer"
+
+        # 2) 开播处于 opening_talk（talk 模式）：收到就绪通知仍不交权
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=702, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await lead_coord.notify_agent_ready("adventure", reason="live_started")
+        assert lead_coord.mode == "streamer"
+
+        # 3) 切到 main_play 但先设游戏未就绪，再设人工覆盖锁定 streamer -> 就绪通知被 override 拦下
+        game.ready = False
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.mode == "streamer"
+        await lead_coord.set_override("streamer", reason="manual_override")
+        game.ready = True
+        await lead_coord.notify_agent_ready("adventure", reason="mcp_reconnected")
+        assert lead_coord.mode == "streamer"
+
+        # 4) 解除覆盖恢复 auto 后再收到 mcp_reconnected 就绪通知 -> 立即零等待交权
+        await lead_coord.set_override("auto", reason="manual_override")
+        await lead_coord.notify_agent_ready("adventure", reason="mcp_reconnected")
+        assert lead_coord.mode == "game"
+        assert lead_coord.active_lead_agent == "adventure"
+        assert lead_coord.snapshot().reason == "mcp_reconnected"
     finally:
         await agent.stop()
         await game.stop()

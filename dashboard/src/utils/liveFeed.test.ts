@@ -1353,8 +1353,10 @@ describe('agent.lead.changed（动态主从切权事件）', () => {
     expect(formatLeadReasonLabel('streamer_stop')).toBe('主播 Agent 停止');
     expect(formatLeadReasonLabel('lead_mode_streamer_only')).toBe('已设为固定主播主控');
 
-    // 游戏侧故障与停止原因码
+    // 游戏侧故障、恢复与停止原因码
     expect(formatLeadReasonLabel('mcp_disconnected')).toBe('游戏连接断开，自动收回');
+    expect(formatLeadReasonLabel('mcp_reconnected')).toBe('游戏连接恢复，重新评估主控');
+    expect(formatLeadReasonLabel('agent_ready')).toBe('游戏 Agent 就绪，重新评估主控');
     expect(formatLeadReasonLabel('llm_unavailable')).toBe('模型不可用，自动收回');
     expect(formatLeadReasonLabel('llm_unsendable')).toBe('模型请求无法发送，自动收回');
     expect(formatLeadReasonLabel('llm_exception')).toBe('模型连续异常，自动收回');

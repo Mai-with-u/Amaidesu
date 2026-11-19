@@ -25,6 +25,7 @@ from src.modules.agents import (
     CommentaryRequest,
     LeadCoordinator,
     LeadHandoverContext,
+    SuggestAttachment,
     build_agent_control_provider,
 )
 from src.modules.agents.deps import AgentDeps
@@ -791,6 +792,121 @@ async def test_dynamic_enable_and_disable_autonomous_agent_refreshes_framework_t
     assert not registry.has("framework_commentary")
     assert not registry.has("framework_suggest")
     assert registry.list_tools(for_agent="streamer") == []
+
+    await mgr.stop_all()
+    await bus.cleanup()
+
+
+async def test_ready_listener_binding_and_exception_isolation(fake_clock: Any) -> None:
+    """ready_listener 支持同步/异步回调、重复注册去重、注销与异常隔离，且不直接修改主控态。"""
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    game = _AutonomousGameAgent("ready_game")
+    mgr.register(game)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, clock=fake_clock.now_ms)
+    seen: List[tuple[str, str]] = []
+
+    def _sync_listener(agent_name: str, reason: str) -> None:
+        seen.append((f"sync:{agent_name}", reason))
+
+    async def _async_listener(agent_name: str, reason: str) -> None:
+        seen.append((f"async:{agent_name}", reason))
+
+    async def _boom_listener(agent_name: str, reason: str) -> None:
+        del agent_name, reason
+        raise RuntimeError("ready listener boom")
+
+    coord.bind_ready_listener(_sync_listener)
+    coord.bind_ready_listener(_sync_listener)  # 去重
+    coord.bind_ready_listener(_boom_listener)
+    coord.bind_ready_listener(_async_listener)
+
+    await coord.notify_agent_ready("ready_game", reason="mcp_reconnected")
+    # 不直接抢权：主控态保持原样，交由监听方决策
+    assert coord.mode == "streamer"
+    assert seen == [("sync:ready_game", "mcp_reconnected"), ("async:ready_game", "mcp_reconnected")]
+
+    # 注销后不再触发（重复注销幂等）
+    coord.unbind_ready_listener(_sync_listener)
+    coord.unbind_ready_listener(_sync_listener)
+    seen.clear()
+    await coord.notify_agent_ready("ready_game")
+    assert seen == [("async:ready_game", "agent_ready")]
+
+    # 空白名称忽略
+    seen.clear()
+    await coord.notify_agent_ready("   ")
+    assert seen == []
+
+    await mgr.stop_all()
+
+
+async def test_framework_suggest_forwards_source_dialogue_from_attachment_and_args(fake_clock: Any) -> None:
+    """framework_suggest 优先从宿主 attachment 提取并规范化 source_dialogue，兼容 args 兜底且不污染工具 Schema。"""
+    bus = EventBus(enable_stats=False)
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    game = _AutonomousGameAgent("suggest_game")
+    mgr.register(game)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, event_bus=bus, clock=fake_clock.now_ms)
+    registry = ToolRegistry(event_bus=bus)
+    provider = build_agent_control_provider(mgr, event_bus=bus, clock=fake_clock.now_ms, lead_coordinator=coord)
+    registry.register_provider(provider)
+
+    # 1) LLM 工具 JSON Schema 不包含 source_dialogue 字段
+    suggest_spec = next(spec for spec in provider.list_tools() if spec.full_name == "framework_suggest")
+    assert "source_dialogue" not in (suggest_spec.parameters_schema or {}).get("properties", {})
+
+    assert (
+        await coord.request_game_lead(LeadHandoverContext(segment_title="探险"), target="suggest_game")
+        == "suggest_game"
+    )
+
+    # 2) SuggestAttachment 优先透传（即便 args 里也有 source_dialogue，以宿主 attachment 为准）
+    res1 = await registry.invoke(
+        ToolInvocation(
+            tool_name="framework_suggest",
+            arguments={"content": "去北边遗迹看看", "source_dialogue": ["不应被优先使用的 args"]},
+            source="planner-react",
+            invoking_agent="streamer",
+            attachment=SuggestAttachment(source_dialogue=["  小星: 去 (128, 64, -240) 挖下界合金块  ", ""]),
+        )
+    )
+    assert res1.success is True
+    assert game.suggestions[-1] == (
+        "去北边遗迹看看",
+        "streamer",
+        ["小星: 去 (128, 64, -240) 挖下界合金块"],
+    )
+
+    # 3) 兼容映射形态 attachment（如 dict 含 message 对象或纯字符串）
+    res2 = await registry.invoke(
+        ToolInvocation(
+            tool_name="framework_suggest",
+            arguments={"content": "顺路带点圆石"},
+            source="planner-react",
+            invoking_agent="streamer",
+            attachment={"source_dialogue": [{"role": "user", "content": "观众A: 带两组圆石"}]},  # type: ignore[arg-type]
+        )
+    )
+    assert res2.success is True
+    assert game.suggestions[-1] == ("顺路带点圆石", "streamer", ["观众A: 带两组圆石"])
+
+    # 4) 未带 attachment 时兼容读取 args['source_dialogue']
+    res3 = await registry.invoke(
+        ToolInvocation(
+            tool_name="framework_suggest",
+            arguments={"content": "记得插火把", "source_dialogue": ["观众B: 矿洞太黑了"]},
+            source="planner-react",
+            invoking_agent="streamer",
+        )
+    )
+    assert res3.success is True
+    assert game.suggestions[-1] == ("记得插火把", "streamer", ["观众B: 矿洞太黑了"])
 
     await mgr.stop_all()
     await bus.cleanup()
