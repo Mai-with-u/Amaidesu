@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional
 
-from src.modules.agents.game_tools import GameToolProvider, run_dict_tool
+from src.modules.agents.game_tools import GameToolProvider, business_fail_result, run_dict_tool
 from src.modules.logging import get_logger
 from src.modules.mcp.provider import McpToolProvider
 from src.modules.skills import build_skill_spec
@@ -104,6 +104,25 @@ STREAMER_GUIDE = (
     "方向键、选项这类逐步操作在这款游戏里不存在，所有游戏内行动都走委派。"
     "速览里手上的工作状态写着“游戏那边现在动不了，派活没用，等运营处理”时，说明游戏那边的模型因为外部故障停了："
     "不要再反复派活、催促或撤单，需要向观众解释时照实说游戏那边动不了了、等后台处理就好。"
+)
+
+# 游戏自主主控态工具面使用说明（给主播）：仅介绍只读观察工具与直播间叙事口径，
+# 不再教主播委派派活或代发游戏公屏；游戏内行动与公屏交流均由游戏侧自主主导。
+STREAMER_LEAD_GUIDE = (
+    "当前 Minecraft 处于游戏自主主控态：游戏内的目标规划、执行推进与游戏公屏聊天均由游戏侧直接主导。"
+    "你只需使用两件只读工具了解现场用于直播间解说与互动："
+    "想看一眼当前身体状态、背包、周围生物与设施以及手头进度用 minecraft_glance；"
+    "想查看当前存档的待办清单、工作笔记和近期记录用 minecraft_get_work_log。"
+    "观众提出游戏点菜、提醒或建议时，通过 framework_suggest 转达给游戏侧，由它结合局面自主决定，不要干预或打断游戏执行。"
+    "工作文档里笔记正文后面带着一段现查的当前状态快照（位置、装备、背包、血量）："
+    "背包存量、装备、位置以快照为准，笔记正文里的同类数字只是历史参考，别当现状念。"
+    "速览里的 creatures 记着同伴（自己的生物、起过名的生物）此刻怎样：写着已死的就是死了，"
+    "别再跟它说话或说它在身后；墓碑写着谁的就是谁的。"
+    "速览里的 self_account 是你在游戏里的账号名：聊天、死亡播报、玩家列表里出现这个名字说的就是你自己。"
+    "直播画面左上角那块一直往上刷字的面板（英文日志、绿色调试信息）是 MaiCraft 的后台调试面板，"
+    "不是角色按出来的也不是故障：不拿它当话题或吐槽挡画面，观众问起简单说明是后台运行日志即可。"
+    "速览和工作文档快照里的 mod_features、last_chain_mining 与 recent_pits 记录着已接入的模组能力与采掘事实，"
+    "有人问起相关情况时照这几项如实说明。"
 )
 
 # 上报回调形态：kind/content/scene 入参 → 拒绝原因（None=受理）。
@@ -545,10 +564,16 @@ class MinecraftToolProvider(GameToolProvider):
     drawing_starter: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
     # 待办或工作笔记写入后的持久化回调（按游戏与当前存档落库）
     on_work_docs_changed: Optional[Callable[[], Awaitable[None]]] = None
+    # 当前是否处于游戏自主主控态的只读回调（由 Agent 注入；主控态下切换主播说明并拒绝主播代发公屏）
+    is_in_lead_mode: Optional[Callable[[], bool]] = None
 
     @property
     def name(self) -> str:
         return PROVIDER_NAME
+
+    def _lead_mode_active(self) -> bool:
+        """当前游戏 Agent 是否处于自主主控态（未注入回调时恒为 False，保持委派模式兼容）。"""
+        return self.is_in_lead_mode is not None and bool(self.is_in_lead_mode())
 
     def current_save(self) -> Optional[GameSave]:
         """眼下的存档（主播按它分清记忆里哪些是这个存档的事）；旧版 Mod 报不出存档时为 None。"""
@@ -581,8 +606,12 @@ class MinecraftToolProvider(GameToolProvider):
         return specs
 
     def guide_for(self, agent_name: str) -> str:
-        """玩法说明只给别的 Agent（主播）：自己的工具协议写在自己的系统提示词里。"""
-        return "" if agent_name == PROVIDER_NAME else STREAMER_GUIDE
+        """玩法说明只给别的 Agent（主播）：主控态切为只读说明，非主控态保持原委派说明。"""
+        if agent_name == PROVIDER_NAME:
+            return ""
+        if self._lead_mode_active():
+            return STREAMER_LEAD_GUIDE
+        return STREAMER_GUIDE
 
     def unknown_tool_reason(self, tool_name: str) -> str:
         """未知工具的回执：点名本 provider 的名册，给调用方出路提示。"""
@@ -603,7 +632,7 @@ class MinecraftToolProvider(GameToolProvider):
             handlers[glance_spec.full_name] = self._dict_handler(glance_spec, self._invoke_glance)
         if self.chat_sender is not None:
             chat_send_spec = build_chat_send_spec()
-            handlers[chat_send_spec.full_name] = self._dict_handler(chat_send_spec, self._invoke_chat_send)
+            handlers[chat_send_spec.full_name] = self._handle_chat_send
         if self.skill_reader is not None:
             skill_spec = build_skill_spec(PROVIDER_NAME)
             handlers[skill_spec.full_name] = self._dict_handler(skill_spec, self._invoke_skill)
@@ -642,6 +671,24 @@ class MinecraftToolProvider(GameToolProvider):
         del args
         assert self.glance_reader is not None  # 处理器表按读取器在册建表
         return await self.glance_reader()
+
+    async def _handle_chat_send(self, args: Dict[str, Any], started_ms: int) -> ToolExecutionResult:
+        """处理主播侧 minecraft_chat_send：游戏主控态直接业务拒绝，非主控态沿用原发送管道。"""
+        tool_name = build_chat_send_spec().full_name
+        if self._lead_mode_active():
+            # 游戏自主主控期间由游戏 Agent 统一回应游戏公屏，防止双脑承诺冲突
+            return business_fail_result(
+                tool_name,
+                started_ms,
+                "当前为游戏自主主控态，游戏公屏对话由游戏侧直接回应，主播侧不再代发公屏；"
+                "如需转达观众建议或提醒，请改用 framework_suggest。",
+            )
+        return await run_dict_tool(
+            tool_name,
+            started_ms,
+            lambda: self._invoke_chat_send(args),
+            log_label=self.log_label,
+        )
 
     async def _invoke_chat_send(self, args: Dict[str, Any]) -> Dict[str, Any]:
         assert self.chat_sender is not None  # 处理器表按回调在册建表
@@ -744,4 +791,6 @@ __all__ = [
     "build_report_spec",
     "PROVIDER_NAME",
     "ReportCallback",
+    "STREAMER_GUIDE",
+    "STREAMER_LEAD_GUIDE",
 ]

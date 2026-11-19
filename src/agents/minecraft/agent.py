@@ -23,7 +23,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Deque, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, ClassVar, Deque, Dict, Iterable, List, Literal, Optional, Tuple
 
 from src.agents.minecraft.attention_material import AttentionMaterialPublisher
 from src.agents.minecraft.chosen_death import is_suicide_ability
@@ -75,6 +75,12 @@ from src.agents.minecraft.glance import (
 )
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
+from src.agents.minecraft.lead_mode import (
+    LEAD_MODE_PROMPT_SECTION,
+    SpokenEchoBuffer,
+    format_lead_handover_brief,
+    format_suggestion_message,
+)
 from src.agents.minecraft.maicraft import (
     AWAITING_ANSWER,
     EVENTS,
@@ -127,6 +133,7 @@ from src.agents.minecraft.work_log_snapshot import build_snapshot, unavailable_s
 from src.agents.minecraft.world_identity import WorldChange, WorldIdentity, world_ref_of
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.agents.delegation_text import is_chat_prompt
+from src.modules.agents.lead import LeadCoordinator, LeadHandoverContext
 from src.modules.context import (
     BackgroundCheckpoint,
     ContextFolds,
@@ -239,6 +246,13 @@ _AUTO_FINISH_DONE_STATUS = "done"
 # 超出即按"没等到结果"收场——发送与否由发起方决定，不自动重发
 _CHAT_CONFIRM_WAIT_MS = 12_000
 
+# 自主领航（游戏主控态）防空转与运行态保护默认值
+_LEAD_LLM_FAILURE_THRESHOLD = 3
+_LEAD_LLM_COOLDOWN_S = 60.0
+_LEAD_LLM_RETRY_DELAY_S = 0.5
+_LEAD_IDLE_WAKEUP_S = 30.0
+_LEAD_MAX_EMPTY_TURNS = 2
+
 
 class MinecraftAgent(BaseAgent):
     """Minecraft 游戏 Agent（AI 玩家，普通 ReAct Agent）
@@ -253,6 +267,9 @@ class MinecraftAgent(BaseAgent):
     # ----- 元数据 -----
     name = "minecraft"
     description = "Minecraft 游戏 Agent（AI 玩家，ReAct）"
+
+    # ----- 动态主从协议声明：支持游玩期接管游戏自主领航 -----
+    supports_autonomous_lead: ClassVar[bool] = True
 
     # ----- 事件族声明 -----
     emits_events = (
@@ -276,6 +293,12 @@ class MinecraftAgent(BaseAgent):
         creature_repo: Optional[Any] = None,
         work_docs_repo: Optional[Any] = None,
         social_fact_repo: Optional[Any] = None,
+        lead_coordinator: Optional[LeadCoordinator] = None,
+        lead_idle_wakeup_s: float = _LEAD_IDLE_WAKEUP_S,
+        lead_max_empty_turns: int = _LEAD_MAX_EMPTY_TURNS,
+        lead_llm_failure_threshold: int = _LEAD_LLM_FAILURE_THRESHOLD,
+        lead_llm_retry_delay_s: float = _LEAD_LLM_RETRY_DELAY_S,
+        lead_llm_cooldown_s: float = _LEAD_LLM_COOLDOWN_S,
         clock: Optional[Callable[[], float]] = None,
         live_active: Optional[bool] = None,
         mcp_client: Optional[Any] = None,
@@ -398,7 +421,26 @@ class MinecraftAgent(BaseAgent):
             context_recall=self._recall_context if config.context.active_fold else None,
             on_work_docs_changed=self._save_work_docs,
             drawing_starter=self._drawing_builder.start if config.drawing_builder.enabled else None,
+            is_in_lead_mode=lambda: self._in_lead_mode,
         )
+
+        # 动态主从（自主领航）运行态状态：交权进入后由游戏侧自主循环推进，收权或异常时干净复位
+        self._lead_coordinator: Optional[LeadCoordinator] = lead_coordinator
+        self._in_lead_mode: bool = False
+        self._lead_handover_context: Optional[LeadHandoverContext] = None
+        self._spoken_echo_buffer: SpokenEchoBuffer = SpokenEchoBuffer()
+        self._lead_empty_turns: int = 0
+        self._lead_idle_waiting: bool = False
+        self._lead_idle_wakeup_at: Optional[float] = None
+        self._lead_idle_wakeup_s: float = float(lead_idle_wakeup_s)
+        self._lead_max_empty_turns: int = max(1, int(lead_max_empty_turns))
+        self._lead_llm_consecutive_failures: int = 0
+        self._lead_llm_failure_threshold: int = max(1, int(lead_llm_failure_threshold))
+        self._lead_llm_retry_delay_s: float = max(0.0, float(lead_llm_retry_delay_s))
+        self._lead_llm_cooldown_s: float = max(0.0, float(lead_llm_cooldown_s))
+        self._lead_llm_unavailable_until: float = 0.0
+        self._lead_unavailable_notified: bool = False
+        self._lead_unavailable_tasks: set[asyncio.Task[None]] = set()
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
@@ -564,11 +606,22 @@ class MinecraftAgent(BaseAgent):
         """live.ended 回调：收工即停，未处理消息一并丢弃，不留到下一场突然开跑。"""
         del event_name, source
         self._live_active = False
+        # 若下播瞬间仍处于游戏自主主控态，先经协调器或本机收手退出主控并取消在跑目标，防止残留主控态跨场
+        if self._in_lead_mode:
+            if self._lead_coordinator is not None and self._lead_coordinator.is_agent_leading(self.name):
+                try:
+                    await self._lead_coordinator.reclaim_streamer_lead(reason="live_ended")
+                except Exception as exc:  # noqa: BLE001 - 下播收权失败仍继续本机复位
+                    self._logger.warning(f"下播回收游戏主控权异常，执行本机兜底收手: {exc}", exc=True)
+            if self._in_lead_mode:
+                await self.yield_lead(reason="live_ended")
         await self._save_work_docs()
         self._current_session_id = None
         self._creatures.end_session()
         dropped = len(self._message_queue)
         self._wake_queue.clear()
+        self._spoken_echo_buffer.clear()
+        self._reset_lead_idle_state()
         # 攒着的互动通知一并作废：下一场开播时冒出上一场的蹲起只是过时的事
         self._interaction_throttle.clear()
         self._wait_progress.reset()
@@ -650,6 +703,9 @@ class MinecraftAgent(BaseAgent):
                 self._logger.info(f"Agent 私有 MCP 工具集已刷新（摘除，当前 {count} 个）")
             except Exception as exc:  # noqa: BLE001 - 刷新失败不影响连接态本身
                 self._logger.warning(f"Agent 私有 MCP 断开刷新失败: {type(exc).__name__}: {exc}")
+            # 游戏自主主控态期间遇到 MCP 断连：主动通知协调器平滑降级回主播主控，重连恢复后不自行抢回主控
+            if self._in_lead_mode:
+                self._schedule_lead_unavailable("mcp_disconnected")
             return
         prov = self._mcp_provider
         count = len(list(prov.list_tools())) if prov is not None else 0
@@ -708,8 +764,30 @@ class MinecraftAgent(BaseAgent):
         return provider is not None and bool(list(provider.list_tools()))
 
     async def _on_stop(self) -> None:
-        """停止钩子：取消命令 worker、目标跟踪与恢复循环，摘除工具并关闭 MCP。"""
+        """停止钩子：先退出游戏主控（如有），再取消命令 worker、目标跟踪与恢复循环，摘除工具并关闭 MCP。"""
         self._running = False
+        for task in list(self._lead_unavailable_tasks):
+            task.cancel()
+        if self._lead_unavailable_tasks:
+            await asyncio.gather(*list(self._lead_unavailable_tasks), return_exceptions=True)
+            self._lead_unavailable_tasks.clear()
+        # 若停机/热重启时仍处于游戏自主主控态，必须在关闭 MCP 与清本地态之前主动向协调器上报不可用，
+        # 触发有序收权回主播主控并取消在跑目标，防止协调器永久卡在 mode="game"
+        if self._in_lead_mode:
+            if self._lead_coordinator is not None and self._lead_coordinator.is_agent_leading(self.name):
+                try:
+                    await self._lead_coordinator.notify_agent_unavailable(self.name, reason="agent_stopped")
+                except Exception as exc:  # noqa: BLE001 - 协调器通知失败仍须继续本机收手与停机
+                    self._logger.warning(f"停机通知协调器退出主控异常，执行本机兜底收手: {exc}", exc=True)
+            if self._in_lead_mode:
+                try:
+                    await self.yield_lead(reason="agent_stopped")
+                except Exception as exc:  # noqa: BLE001 - 兜底收手异常不阻断停机
+                    self._logger.warning(f"停机本机兜底收手异常（忽略继续停机）: {exc}", exc=True)
+        self._in_lead_mode = False
+        self._lead_handover_context = None
+        self._spoken_echo_buffer.clear()
+        self._reset_lead_idle_state()
         self._wake_event.set()
         if self._event_bus is not None:
             self._event_bus.off(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat)
@@ -787,18 +865,232 @@ class MinecraftAgent(BaseAgent):
         self._logger.info("MinecraftAgent 工具已注册：minecraft_todo / notebook / report / get_work_log / glance")
 
     def _tool_definitions(self) -> List[Dict[str, Any]]:
-        """本批交给模型的工具：可见名单里的全部，减去只给宿主读的事件流与截桌面的工具；按名字排序，发送顺序稳定。"""
+        """本批交给模型的工具：可见名单里的全部，减去只给宿主读的事件流与截桌面的工具；按名字排序，发送顺序稳定。
+
+        游戏主控态下隐藏 ``minecraft_report``（改由框架暴露的 ``framework_commentary`` 提交解说要点），
+        非主控态恢复原样。
+        """
         if self._tool_registry is None:
             self._logger.warning("任务执行无 tool_registry：工具列表为空")
             return []
-        specs = [
-            spec for spec in self._tool_registry.list_tools(for_agent=self.name) if spec.full_name not in _NOT_FOR_MODEL
-        ]
+        excluded = set(_NOT_FOR_MODEL)
+        if self._in_lead_mode:
+            # 主控态由游戏侧自主推进，不再走委派交付/升级审批通道
+            excluded.add("minecraft_report")
+        specs = [spec for spec in self._tool_registry.list_tools(for_agent=self.name) if spec.full_name not in excluded]
         # 定义形状由工具域的 LLM 转换层统一生成（llm_defs），附上下文计量归属
         return [
             function_definition(spec, self._tool_registry.category_of(spec.full_name))
             for spec in sorted(specs, key=lambda s: s.full_name)
         ]
+
+    # ==================================================================
+    # 动态主从协议（游戏自主领航模式）
+    # ==================================================================
+
+    @property
+    def in_lead_mode(self) -> bool:
+        """当前是否处于游戏自主主控态（只读观测面）。"""
+        return self._in_lead_mode
+
+    def _llm_available_for_lead(self) -> bool:
+        """LLM 是否可用于自主领航：已注入、未遇致命模型故障且不在连续失败冷却期内。"""
+        if self._llm is None:
+            return False
+        if self._body_fault in (_FAULT_FATAL_MODEL, _FAULT_STUCK):
+            return False
+        if self._lead_llm_unavailable_until > 0.0 and self._clock() < self._lead_llm_unavailable_until:
+            return False
+        return True
+
+    def can_take_lead(self) -> bool:
+        """当前运行态是否具备自主领航条件：已开播、MCP 已连且工具可用、LLM 可用未熔断停摆。"""
+        if not self._live_active:
+            return False
+        if not (self._maicraft_ready() and self._has_maicraft_tools()):
+            return False
+        return self._llm_available_for_lead()
+
+    def _reset_lead_idle_state(self) -> None:
+        """清零主控态防空转与有界休眠状态（收到外部事件、开局或退出主控时调用）。"""
+        self._lead_empty_turns = 0
+        self._lead_idle_waiting = False
+        self._lead_idle_wakeup_at = None
+
+    async def enter_lead(self, context: LeadHandoverContext) -> bool:
+        """接管游戏主控权：校验就绪态 -> 幂等处理 -> 置位主控并投递 [主控交接简报] 唤醒自主循环。
+
+        注意：最后置位 ``_wake_event`` 之后不做额外 ``await``，确保 ``LeadCoordinator`` 在
+        ``enter_lead`` 返回后立即同步落位 ``mode="game"`` 与 ``active_lead_agent``，避免
+        工作协程抢先构造工具列表时尚未看到 ``framework_commentary``。
+        """
+        if not self.can_take_lead():
+            self._logger.info("MinecraftAgent 当前不具备自主领航条件，拒绝 enter_lead")
+            return False
+        if self._in_lead_mode:
+            # 幂等：已在主控态只更新交接上下文，不重复重置历史或重复开批
+            self._lead_handover_context = context
+            self._logger.debug("MinecraftAgent 已处于游戏主控态，enter_lead 幂等返回 True")
+            return True
+
+        # 切入主控前推进收手纪元并清理旧队列陈旧通知，让自主循环以干净开局启动
+        self._release_epoch += 1
+        self._wake_queue.clear()
+        self._spoken_echo_buffer.clear()
+        self._in_lead_mode = True
+        self._lead_handover_context = context
+        self._lead_llm_consecutive_failures = 0
+        self._lead_unavailable_notified = False
+        self._reset_lead_idle_state()
+        self._set_open_question("")
+        self._task_finished = True
+        self._task_suspended = False
+        self._pending_handover_summary = ""
+
+        fallback_save = self._world.save_fields()[1]
+        brief = format_lead_handover_brief(context, fallback_save_name=fallback_save)
+        self._wake_queue.push_instruction("", brief)
+        self._wake_event.set()
+        self._logger.info(
+            f"MinecraftAgent 进入游戏自主主控态（segment={context.segment_title or '未命名'}, reason={context.reason or '未标注'}）"
+        )
+        return True
+
+    async def yield_lead(self, *, reason: str = "") -> str:
+        """交出游戏主控权：提取客观收尾摘要 -> 退出主控态 -> 取消在跑图纸与目标 -> 清空临时缓冲回空闲态。"""
+        if not self._in_lead_mode:
+            return ""
+        # 在取消目标前提取收尾摘要，保留当前做到哪与未完待办
+        progress = self._summarize_current_progress()
+        self._in_lead_mode = False
+        self._lead_handover_context = None
+        self._release_epoch += 1
+        self._drawing_builder.cancel()
+
+        tracked_ids = list(self._goals.tracked_ids())
+        self._released_goal_ids.update(tracked_ids)
+        await self._cancel_tracked_goals(settle_ledger=True)
+        for gid in tracked_ids:
+            self._goals.untrack(gid)
+            self._goal_ledger.forget(gid)
+
+        await self._save_work_docs()
+        self._wait_progress.resume()
+        self._furnace_waits.clear()
+        self._set_open_question("")
+        self._wake_queue.clear()
+        self._spoken_echo_buffer.clear()
+        self._reset_lead_idle_state()
+        self._pending_handover_summary = ""
+        self._task_finished = True
+        self._task_suspended = False
+        self._logger.info(
+            f"MinecraftAgent 退出游戏自主主控态（reason={reason or '未标注'}，停下 {len(tracked_ids)} 个目标，摘要={progress or '无'}）"
+        )
+        return progress
+
+    async def receive_suggestion(
+        self,
+        content: str,
+        *,
+        source: str = "streamer",
+        source_dialogue: Optional[List[str]] = None,
+    ) -> bool:
+        """接收非强杀观众建议：仅在主控态或活跃任务态受理，包装为 [直播间建议] 入队唤醒，不打断在跑目标。"""
+        text = (content or "").strip()
+        if not text:
+            return False
+        if not self._live_active:
+            self._logger.warning(f"收工态拒收直播间建议（source={source}）：{text[:60]}")
+            return False
+        if not (self._in_lead_mode or not self._task_finished):
+            self._logger.debug(f"空闲非主控态拒收直播间建议（source={source}）：{text[:60]}")
+            return False
+
+        wrapped = format_suggestion_message(text, source=source, source_dialogue=source_dialogue)
+        # 用普通通知入队：不建委派账本、不触发新任务清历史、不取消当前在跑目标
+        self._wake_queue.push_notice(wrapped)
+        self._reset_lead_idle_state()
+        if not self._task_suspended:
+            self._wake_event.set()
+        self._logger.info(f"MinecraftAgent 收到直播间建议（source={source}）：{text[:60]}")
+        return True
+
+    def receive_spoken_echo(self, text: str, *, source: str = "", timestamp_ms: int = 0) -> None:
+        """接收主播实时发声回执：纯同步写入有界缓冲，绝不置位 _wake_event（零唤醒）。"""
+        if not self._in_lead_mode:
+            return
+        self._spoken_echo_buffer.push(text, source=source, timestamp_ms=timestamp_ms)
+
+    def _schedule_lead_unavailable(self, reason: str) -> None:
+        """从同步回调（如 MCP 断连）异步调度主控不可用上报，避免阻塞回调线程。"""
+        if not self._in_lead_mode or self._lead_unavailable_notified:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._logger.warning(f"无运行事件循环，无法异步上报主控不可用（reason={reason}）")
+            return
+        task = loop.create_task(self._notify_lead_unavailable(reason))
+        self._lead_unavailable_tasks.add(task)
+
+        def _done(finished: asyncio.Task[None]) -> None:
+            self._lead_unavailable_tasks.discard(finished)
+            if not finished.cancelled() and finished.exception() is not None:
+                exc = finished.exception()
+                self._logger.warning(f"上报游戏主控不可用失败（reason={reason}）: {type(exc).__name__}: {exc}")
+
+        task.add_done_callback(_done)
+
+    async def _notify_lead_unavailable(self, reason: str) -> None:
+        """主控期运行态故障（MCP 断连 / LLM 停摆）：主动通知协调器平滑降级回主播主控并本机兜底收手。"""
+        if not self._in_lead_mode or self._lead_unavailable_notified:
+            return
+        self._lead_unavailable_notified = True
+        self._logger.warning(f"游戏主控态运行异常（reason={reason}），触发平滑降级回主播主控")
+        if self._lead_coordinator is not None:
+            try:
+                await self._lead_coordinator.notify_agent_unavailable(self.name, reason=reason)
+            except Exception as exc:  # noqa: BLE001 - 协调器回调异常仍须保证本机安全收手
+                self._logger.exception(f"调用 lead_coordinator.notify_agent_unavailable 异常: {exc}")
+        if self._in_lead_mode:
+            await self.yield_lead(reason=reason)
+
+    def _check_lead_idle_wakeup(self) -> None:
+        """事件页巡检：主控态处于有界短休眠且到达唤醒时刻时投递自主检查提示，超空转上限不再自醒。"""
+        if not (self._in_lead_mode and self._live_active):
+            return
+        if self._batch_active or not self._lead_idle_waiting or self._lead_idle_wakeup_at is None:
+            return
+        if self._clock() < self._lead_idle_wakeup_at:
+            return
+        self._lead_idle_waiting = False
+        self._lead_idle_wakeup_at = None
+        self._wake_queue.push_notice(
+            "[系统] 短暂休整结束，请结合当前现场、待办与工作笔记自主决定下一步行动；"
+            "若暂时仍无合适动作可直接结束本轮等待新事件。"
+        )
+        self._wake_event.set()
+
+    def _append_unread_spoken_echoes(self, messages: List[Dict[str, Any]], *, step_start_len: int) -> None:
+        """主控态正常推理步前拼入未读的 [直播间刚说过] 只读回执，不改动此前已发过的历史前缀。"""
+        if not self._in_lead_mode:
+            return
+        echo_notice = self._spoken_echo_buffer.drain_notice()
+        if not echo_notice:
+            return
+        # 优先并入本步刚追加的普通 user 消息，保持单步消息紧凑且不触碰既有前缀或固定层
+        if len(messages) > step_start_len:
+            last = messages[-1]
+            if (
+                last.get("role") == "user"
+                and isinstance(last.get("content"), str)
+                and not last.get(INSTRUCTION_KEY)
+                and not last.get(FACTS_KEY)
+            ):
+                last["content"] = f"{last['content']}\n\n{echo_notice}"
+                return
+        messages.append({"role": "user", "content": echo_notice})
 
     # ==================================================================
     # 命令驱动 ReAct（命令 → 消息队列 → 持续推进任务 → 回空闲）
@@ -1067,9 +1359,13 @@ class MinecraftAgent(BaseAgent):
             self._wake_event.clear()
             if not (self._running and self._message_queue) or not self._live_active:
                 continue
-            # 任务交付或挂起后等主播新指令，后台通知只补充已知状态，不独立开新任务；
-            # 闲着也叫醒的通知除外，判定收在 WakeQueue（can_wake）一处
-            if (self._task_finished or self._task_suspended) and not self._wake_queue.can_wake():
+            # 主控态下只要有队列消息即唤醒处理；非主控态沿用原委派门禁（任务交付或挂起后
+            # 等主播新指令，后台通知只补充已知状态，闲着也叫醒的通知由 WakeQueue.can_wake 放行）
+            if (
+                not self._in_lead_mode
+                and (self._task_finished or self._task_suspended)
+                and not self._wake_queue.can_wake()
+            ):
                 continue
             try:
                 await self._run_task()
@@ -1153,13 +1449,21 @@ class MinecraftAgent(BaseAgent):
             if not self._live_active:
                 self._logger.info(f"已收工，任务批停止（{steps} 步）")
                 return
+            if self._in_lead_mode and not self._maicraft_ready():
+                # 主控期检测到游戏 MCP 已断连：立即触发平滑降级回主播主控并退出本批
+                await self._notify_lead_unavailable("mcp_disconnected")
+                return
             if self._release_epoch != batch_epoch:
                 # 这一批期间手上的委派已被收手：结束本批（若队列里紧接着已排入新委派，置位唤醒让 worker 另开干净新批）
                 if self._message_queue:
                     self._wake_event.set()
                 return
+            step_start_len = len(messages)
             if self._message_queue:
                 action_reminded = False
+                if self._in_lead_mode:
+                    self._lead_idle_waiting = False
+                    self._lead_idle_wakeup_at = None
             while self._message_queue:
                 queued = self._wake_queue.pop()
                 task_id, content = queued
@@ -1221,6 +1525,8 @@ class MinecraftAgent(BaseAgent):
             if not self._interaction_only:
                 # 只回应互动的一批不碰委派账：等主播定夺的委派要一直显示在等定夺，不能被一次蹲起改回进行中
                 self._delegations.mark_running()
+            # 主控态正常推理步前拼入未读的 [直播间刚说过] 只读回执（零唤醒、不破坏既有历史前缀）
+            self._append_unread_spoken_echoes(messages, step_start_len=step_start_len)
             steps += 1
 
             # 先换上后台写好的折叠、给新消息编号，再看预算；过了折叠线就在后台请模型折叠，这一步照常行动
@@ -1266,14 +1572,46 @@ class MinecraftAgent(BaseAgent):
                 self._body_fault = _FAULT_STUCK
                 self._logger.error(f"MinecraftAgent 请求发不出去，换掉回执、重开对话都没用，任务停下: {exc}", exc=True)
                 await self.emit_error(f"请求发不出去：{exc}；换掉回执、重开对话都没用，任务停在这里，重新派活也不会好")
+                if self._in_lead_mode:
+                    await self._notify_lead_unavailable("llm_unsendable")
                 return
             except Exception as exc:  # noqa: BLE001 - 单步失败转错误事件
+                self._logger.warning(f"MinecraftAgent LLM 推理异常: {type(exc).__name__}: {exc}", exc=True)
+                if self._in_lead_mode:
+                    if await self._handle_lead_llm_failure(
+                        fatal=False,
+                        reason="llm_exception",
+                        error_text=f"游戏主控态 LLM 连续推理异常: {type(exc).__name__}: {exc}",
+                        batch_epoch=batch_epoch,
+                    ):
+                        continue
+                    return
                 self._task_suspended = True
                 self._body_fault = _FAULT_RETRY
-                self._logger.warning(f"MinecraftAgent LLM 推理异常: {type(exc).__name__}: {exc}", exc=True)
                 await self.emit_error(f"LLM 推理异常: {type(exc).__name__}: {exc}；本任务已保留，等待新指令继续")
                 return
             if not response.success:
+                if self._in_lead_mode:
+                    if response.fault_kind is not None:
+                        self._body_fault = _FAULT_FATAL_MODEL
+                        reason_word = _FATAL_FAULT_REASON_WORDS.get(response.fault_kind, response.fault_kind)
+                        await self._handle_lead_llm_failure(
+                            fatal=True,
+                            reason=f"llm_fatal:{response.fault_kind}",
+                            error_text=(
+                                f"游戏侧模型不可用（{reason_word}）：{response.error or '未知错误'}；{_FAULT_FATAL_MODEL}"
+                            ),
+                            batch_epoch=batch_epoch,
+                        )
+                        return
+                    if await self._handle_lead_llm_failure(
+                        fatal=False,
+                        reason="llm_unavailable",
+                        error_text=f"游戏主控态 LLM 连续调用失败: {response.error or '未知错误'}",
+                        batch_epoch=batch_epoch,
+                    ):
+                        continue
+                    return
                 self._task_suspended = True
                 if response.fault_kind is not None:
                     # 余额耗尽、鉴权失败或全部端点连不上：再派活也只会重复撞同一面墙，明说等运营处理
@@ -1287,6 +1625,8 @@ class MinecraftAgent(BaseAgent):
                     await self.emit_error(f"LLM 调用失败: {response.error or '未知错误'}")
                 return
             self._body_fault = ""
+            self._lead_llm_consecutive_failures = 0
+            self._lead_llm_unavailable_until = 0.0
             stripped = restarted = False
             if self._release_epoch != batch_epoch:
                 # 模型推理期间委派已被收手：整段回复属于已收手的旧任务，丢弃不落地，让新任务从干净状态开批
@@ -1327,6 +1667,9 @@ class MinecraftAgent(BaseAgent):
                 continue
 
             read_only_round = True
+            # 模型本轮实际发起了工具调用：重置主控态连续空轮防空转计数
+            if self._in_lead_mode:
+                self._lead_empty_turns = 0
             for call in tool_calls:
                 await self._paused.wait()
                 arguments = call.arguments if isinstance(call.arguments, dict) else {}
@@ -1334,6 +1677,9 @@ class MinecraftAgent(BaseAgent):
                 self._absorb_reply(call.name, arguments, observation)
                 await self._flush_place_marks()
                 await self._flush_self_chats()
+                if self._in_lead_mode and not self._maicraft_ready():
+                    await self._notify_lead_unavailable("mcp_disconnected")
+                    return
                 if self._release_epoch != batch_epoch:
                     # 工具执行期间委派被收手：这一步若刚下达了新游戏目标，一并取消并清理，停止执行余下工具调用
                     late_ids = list(self._goals.tracked_ids())
@@ -1418,7 +1764,9 @@ class MinecraftAgent(BaseAgent):
         self._fold_job.abandon()
         self._idle_prep.abandon()
         self._shown_context = {}
-        self._mc_state.clear_todos_for_new_task()
+        if not self._in_lead_mode:
+            # 委派模式开新任务清空上一单的阶段待办；自主主控开局保留当前存档已有待办，便于承接跨场进度
+            self._mc_state.clear_todos_for_new_task()
         self._goal_ledger.clear_finished()
         self._furnace_waits.clear()
         self._recent_chat_notices.clear()
@@ -1435,10 +1783,117 @@ class MinecraftAgent(BaseAgent):
         if touched:
             messages.append({"role": "user", "content": "[动过别人放的东西]\n" + json_text(touched), FACTS_KEY: True})
 
+    async def _handle_lead_llm_failure(
+        self,
+        *,
+        fatal: bool,
+        reason: str,
+        error_text: str,
+        batch_epoch: int,
+    ) -> bool:
+        """处理游戏主控态下的 LLM 失败：致命或连续失败达阈值触发降级，否则短退避后重试。
+
+        Returns:
+            True 表示应继续下一轮重试；False 表示已降级或状态失效，应结束本批。
+        """
+        if fatal:
+            self._lead_llm_unavailable_until = self._clock() + self._lead_llm_cooldown_s
+            self._task_suspended = True
+            await self.emit_error(error_text)
+            await self._notify_lead_unavailable(reason)
+            return False
+
+        self._lead_llm_consecutive_failures += 1
+        if self._lead_llm_consecutive_failures >= self._lead_llm_failure_threshold:
+            self._body_fault = _FAULT_RETRY
+            self._lead_llm_unavailable_until = self._clock() + self._lead_llm_cooldown_s
+            self._task_suspended = True
+            await self.emit_error(error_text)
+            await self._notify_lead_unavailable(reason)
+            return False
+
+        self._logger.warning(
+            f"游戏主控态 LLM 瞬时失败（{self._lead_llm_consecutive_failures}/{self._lead_llm_failure_threshold}），准备重试"
+        )
+        if self._lead_llm_retry_delay_s > 0:
+            await asyncio.sleep(self._lead_llm_retry_delay_s)
+        return self._running and self._live_active and self._in_lead_mode and self._release_epoch == batch_epoch
+
+    async def _end_lead_turn_without_tool_calls(self, messages: List[Dict[str, Any]], steps: int) -> bool:
+        """游戏主控态下模型未调用工具时的收尾逻辑：绝不发 undelivered，防空转死循环烧 LLM。
+
+        决策顺序：
+        1. 有在跑目标 / 图纸生成中 / 烧炉等待 -> 静默让出等待对应事件唤醒（空转计数清零）。
+        2. 有待回答/暂停目标或未完成待办 -> 低于防空转上限时提醒继续自主推进；达上限则挂起等外部事件。
+        3. 确实无未完成待办且无在跑目标 -> 进入有界短休眠/挂起等外部事件（公屏/身体事件/观众建议）；
+           连续空轮达上限后停止定时自醒，严格零空转。
+        """
+        pending = self._goals.tracked_ids()
+        cooking = self._furnace_waits.waiting()
+        if pending:
+            await self._stand_for_goals(pending)
+            self._lead_empty_turns = 0
+            self._logger.info(f"主控批次自然终止（{steps} 步），{len(pending)} 个后台目标在跑，静默让出")
+            return False
+        if self._drawing_builder.in_progress() or self._drawing_builder.has_unconsumed_notice():
+            self._lead_empty_turns = 0
+            self._logger.info(f"主控批次自然终止（{steps} 步），图纸生成中，静默让出等通知")
+            return False
+        if cooking:
+            self._lead_empty_turns = 0
+            self._logger.info(f"主控批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
+            return False
+
+        actionable = self._goal_ledger.actionable_goal_ids()
+        if actionable or self._unfinished_todos():
+            if self._lead_empty_turns < self._lead_max_empty_turns:
+                self._lead_empty_turns += 1
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "[自主推进] 当前仍有待处理的目标或未完成待办。请自主处理提问/暂停目标、"
+                        "推进下一项待办或更新待办清单；若确实需要等待外部条件再直接结束本轮。\n"
+                        + json_text(
+                            {
+                                "goals_needing_you": self._goal_ledger.notes_for(actionable),
+                                "open_todos": [t.content for t in self._mc_state.todos if t.status != "done"],
+                            }
+                        ),
+                    }
+                )
+                self._logger.info(
+                    f"主控态仍有待推进事项（第 {self._lead_empty_turns}/{self._lead_max_empty_turns} 次提醒），继续推进"
+                )
+                return True
+            # 连续无行动达到防空转上限：挂起等外部事件，绝不死循环烧 LLM，也不发 undelivered
+            self._lead_idle_waiting = True
+            self._lead_idle_wakeup_at = None
+            self._logger.warning(
+                f"主控态连续 {self._lead_empty_turns} 轮未调用工具，触发防空转保护，挂起等待外部事件唤醒"
+            )
+            return False
+
+        # 无在跑目标且无未完成待办：进入有界短休眠或纯事件等待（保持 _task_finished=False，不发 undelivered）
+        self._lead_empty_turns += 1
+        self._lead_idle_waiting = True
+        if self._lead_idle_wakeup_s > 0 and self._lead_empty_turns < self._lead_max_empty_turns:
+            self._lead_idle_wakeup_at = self._clock() + self._lead_idle_wakeup_s
+            self._logger.info(
+                f"主控批次暂告一段落（{steps} 步），进入有界等待（{self._lead_idle_wakeup_s:.0f}s 或外部事件唤醒）"
+            )
+        else:
+            self._lead_idle_wakeup_at = None
+            self._logger.info(
+                f"主控批次无行动自然终止（{steps} 步，连续空轮 {self._lead_empty_turns}），挂起纯等外部事件唤醒"
+            )
+        return False
+
     async def _end_without_tool_calls(
         self, messages: List[Dict[str, Any]], content: str, steps: int, reminded: bool
     ) -> bool:
         """模型这一轮没调用工具：按终止语义收尾。返回 True 表示给过提醒、继续推进。"""
+        if self._in_lead_mode:
+            return await self._end_lead_turn_without_tool_calls(messages, steps)
         # 批次收口先看账面事实：活已经全做完只是没交付的，自动收账（场 65 的委派滞留 running 兜底），
         # 收完账走既有的安静收尾；账面已终态时这里是空操作，不影响交付路径
         self._maybe_auto_finish_delegations()
@@ -1891,7 +2346,7 @@ class MinecraftAgent(BaseAgent):
         elif route.channel == "wake_for_interaction":
             self._offer_interaction(event, message)
         elif route.channel == "inject_if_busy":
-            if self._batch_active or not self._task_finished:
+            if self._batch_active or self._in_lead_mode or not self._task_finished:
                 self._inject_wakeup_message(
                     body_notice_content(route, message, history=self._messages, queue=self._message_queue)
                 )
@@ -1917,6 +2372,8 @@ class MinecraftAgent(BaseAgent):
         if not self._live_active:
             self._logger.info(f"收工态不叫醒：{content[:60]}")
             return
+        if self._in_lead_mode:
+            self._reset_lead_idle_state()
         self._wake_queue.push_wake_even_idle(content)
         self._wake_event.set()
 
@@ -1944,6 +2401,8 @@ class MinecraftAgent(BaseAgent):
 
     def _push_interaction(self, messages: List[str]) -> None:
         """把一个人的一批肢体动作（一条，或攒下的几条合成一条）排成互动通知并叫醒 worker。"""
+        if self._in_lead_mode:
+            self._reset_lead_idle_state()
         self._wake_queue.push_interaction(interaction_notice(messages))
         self._wake_event.set()
 
@@ -2010,11 +2469,15 @@ class MinecraftAgent(BaseAgent):
     async def _on_events_page(self, page: Any) -> None:
         """GoalWatch 每读到一页：页里带着角色眼下在哪个存档（换存档时 Mod 会当场叫醒这次读取）。
 
-        长轮询空闲时也按等待时长返回空页，所以这里也是攒着的互动通知到点检查的落脚处。
+        长轮询空闲时也按等待时长返回空页，所以这里也是攒着的互动通知与主控态有界休眠到点检查的落脚处。
         """
+        if self._in_lead_mode and not self._maicraft_ready():
+            await self._notify_lead_unavailable("mcp_disconnected")
+            return
         await self._apply_world_change(self._world.absorb(page.world_fields))
         self._flush_due_interactions()
         self._wake_for_overdue_furnaces()
+        self._check_lead_idle_wakeup()
         # 本页自带新事件时紧接着就会逐条消费目标与身体变化，不在消费前抢跑无进展看门狗
         if not getattr(page, "events", None):
             await self._wake_if_suspension_stalled()
@@ -2212,6 +2675,8 @@ class MinecraftAgent(BaseAgent):
             self._logger.warning(f"写存档工作文档失败（{save_id}）", exc=exc)
 
     def _inject_wakeup_message(self, content: str) -> None:
+        if self._in_lead_mode:
+            self._reset_lead_idle_state()
         self._wake_queue.push_notice(content)
         self._wake_event.set()
 
@@ -2721,6 +3186,20 @@ class MinecraftAgent(BaseAgent):
         if payload.game != "minecraft":
             return
         if payload.kind == "player":
+            # 主控态下玩家公屏由游戏 Agent 直接主导：只要开播即受理并立即唤醒循环；
+            # 非主控委派态严格保持空闲零消耗（仅活跃委派任务期间旁听）
+            if self._in_lead_mode:
+                if not self._live_active:
+                    return
+                content = (payload.content or "").strip()
+                if not content:
+                    return
+                sender = (payload.sender or "").strip() or "其他玩家"
+                prefix = "[公屏·私聊]" if payload.private else "[公屏]"
+                notice = f"{prefix} 玩家 {sender}：{content}"
+                self._reset_lead_idle_state()
+                self._enqueue_chat_notice(f"player:{sender}", notice, wake_if_waiting=True)
+                return
             # 空闲零消耗：没有活跃委派任务时不入队、不唤醒 LLM
             if not self._has_active_delegation_task():
                 return
@@ -2864,6 +3343,8 @@ class MinecraftAgent(BaseAgent):
         """身体手头的工作，写成主播自己的口吻：读这份结果的就是主播本人。"""
         if self._body_fault:
             state = self._body_fault
+        elif self._in_lead_mode:
+            state = "自主游玩中"
         elif self._task_suspended:
             state = "卡住了，正等我拿主意"
         elif not self._task_finished:
@@ -2907,6 +3388,12 @@ class MinecraftAgent(BaseAgent):
 
     async def _handle_report(self, kind: str, content: str, scene: str) -> Optional[str]:
         """minecraft_report：交付门禁通过后发射 game.report。返回拒绝原因；None = 受理。"""
+        if self._in_lead_mode:
+            # 主控态下已隐藏 minecraft_report，若模型编名直调在此兜底拒收并引导改用 framework_commentary
+            return (
+                "当前处于游戏自主主控态，无需使用 minecraft_report 交付或请示；"
+                "要把值得分享的现场进展或转折告诉观众，请调用 framework_commentary。"
+            )
         if self._interaction_only:
             return (
                 "这一轮只是回应别的玩家冲你做的动作，不是一件要交付的活：不交付也不上报，主播那边已经知道了；"
@@ -2958,24 +3445,29 @@ class MinecraftAgent(BaseAgent):
         return "\n\n" + FOLD_GUIDE_FALLBACK
 
     def _system_prompt(self) -> str:
-        """系统提示词：渲染 prompt_manager 模板（无则用内建兜底）。"""
+        """系统提示词：渲染 prompt_manager 模板（无则用内建兜底）；游戏主控态附加自主领航段。"""
+        base_prompt = ""
         if self._prompt is not None:
             try:
-                return self._prompt.render("amaidesu_minecraft_agent")
+                base_prompt = self._prompt.render("amaidesu_minecraft_agent")
             except Exception as exc:  # noqa: BLE001 - 渲染失败降级内建
                 self._logger.warning(f"MinecraftAgent 提示词渲染失败，降级内建: {type(exc).__name__}: {exc}")
-        # 模板不可用时仍要守住的底线：工具怎么用、什么才算交付、卡住怎么办、不走捷径。
-        return (
-            "你是 Minecraft 世界中的 AI 玩家，用工具玩 Minecraft。"
-            "maicraft_observe 看自己与周围，maicraft_lookup 查能力，maicraft_execute 下达目标，"
-            "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事（body_language 和公屏说话的 chat 是插一下，不替换手上的目标）；需要动手的目标在后台推进，"
-            "宿主会在它结束、提问或被暂停时通知你；没有可做的事就结束这一轮（不调工具），等通知。"
-            "复杂任务用 minecraft_todo 维护阶段。本次目标要的结果真的达成才交付，用 minecraft_report(kind=delivery)；"
-            "拿别的顶替或只做一半不算，附带原话与本次目标冲突时听本次目标。"
-            "卡住时读清失败原因、对症改一处、再换实质不同的办法；至少试过两种办法再用 "
-            "minecraft_report(kind=escalation) 上报，写清试过什么，然后停止。"
-            "像生存玩家一样玩：不用 /tp、/give 这类管理员命令，也不用创造模式专属的物品和方块走捷径。"
-        )
+        if not base_prompt:
+            # 模板不可用时仍要守住的底线：工具怎么用、什么才算交付、卡住怎么办、不走捷径。
+            base_prompt = (
+                "你是 Minecraft 世界中的 AI 玩家，用工具玩 Minecraft。"
+                "maicraft_observe 看自己与周围，maicraft_lookup 查能力，maicraft_execute 下达目标，"
+                "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事（body_language 和公屏说话的 chat 是插一下，不替换手上的目标）；需要动手的目标在后台推进，"
+                "宿主会在它结束、提问或被暂停时通知你；没有可做的事就结束这一轮（不调工具），等通知。"
+                "复杂任务用 minecraft_todo 维护阶段。本次目标要的结果真的达成才交付，用 minecraft_report(kind=delivery)；"
+                "拿别的顶替或只做一半不算，附带原话与本次目标冲突时听本次目标。"
+                "卡住时读清失败原因、对症改一处、再换实质不同的办法；至少试过两种办法再用 "
+                "minecraft_report(kind=escalation) 上报，写清试过什么，然后停止。"
+                "像生存玩家一样玩：不用 /tp、/give 这类管理员命令，也不用创造模式专属的物品和方块走捷径。"
+            )
+        if self._in_lead_mode:
+            return base_prompt + LEAD_MODE_PROMPT_SECTION
+        return base_prompt
 
     # ==================================================================
     # 事件上报（GamePayload(game="minecraft")）
@@ -3032,7 +3524,9 @@ class MinecraftAgent(BaseAgent):
         run = goal_run_of(reply.data)
         if run is None:
             return {"success": False, "error": "发送未确认：游戏没有返回目标编号"}
-        run = await self._await_goal_finished(run.goal_id)
+        if not run.finished:
+            # 逐字打字目标仍在运行：经事件流按编号长轮询等其结束再核对提交结果；当场结束则无需轮询
+            run = await self._await_goal_finished(run.goal_id)
         if run is None:
             # 确认窗内没等到结束不等于没发出去（提交可能在收场后才落地）；如实说不确定，
             # 让发起方决定要不要再发——赌"没发出去"自动重发会造出公屏重复句。
@@ -3177,6 +3671,10 @@ class MinecraftAgent(BaseAgent):
         """任务推进状态快照（只读观测面）：批状态、任务状态、站桩计时、身体故障说法、本批身体事件与攒着的互动通知数。"""
         return {
             "batch_active": self._batch_active,
+            "in_lead_mode": self._in_lead_mode,
+            "lead_empty_turns": self._lead_empty_turns,
+            "lead_idle_waiting": self._lead_idle_waiting,
+            "spoken_echo_count": len(self._spoken_echo_buffer),
             "task_finished": self._task_finished,
             "task_suspended": self._task_suspended,
             "task_instructions": list(self._task_instructions),

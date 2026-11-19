@@ -593,6 +593,12 @@ def assemble_minecraft_agent(
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
     social_fact_repo: Optional[Any] = None,
+    lead_coordinator: Optional[Any] = None,
+    lead_idle_wakeup_s: Optional[float] = None,
+    lead_max_empty_turns: Optional[int] = None,
+    lead_llm_failure_threshold: Optional[int] = None,
+    lead_llm_retry_delay_s: Optional[float] = None,
+    lead_llm_cooldown_s: Optional[float] = None,
 ) -> MinecraftAgent:
     """构造未启动的 MinecraftAgent（装配单入口）。
 
@@ -600,6 +606,19 @@ def assemble_minecraft_agent(
     测试自行传 ``llm``；``live`` 是直播闸初始态（None = 生产默认，启动落收工态）；
     ``clock`` 是注入假时钟（返回单调时刻），不传用系统单调时钟。
     """
+    lead_kwargs: Dict[str, Any] = {}
+    if lead_coordinator is not None:
+        lead_kwargs["lead_coordinator"] = lead_coordinator
+    if lead_idle_wakeup_s is not None:
+        lead_kwargs["lead_idle_wakeup_s"] = lead_idle_wakeup_s
+    if lead_max_empty_turns is not None:
+        lead_kwargs["lead_max_empty_turns"] = lead_max_empty_turns
+    if lead_llm_failure_threshold is not None:
+        lead_kwargs["lead_llm_failure_threshold"] = lead_llm_failure_threshold
+    if lead_llm_retry_delay_s is not None:
+        lead_kwargs["lead_llm_retry_delay_s"] = lead_llm_retry_delay_s
+    if lead_llm_cooldown_s is not None:
+        lead_kwargs["lead_llm_cooldown_s"] = lead_llm_cooldown_s
     return MinecraftAgent(
         config if config is not None else offline_config(),
         llm_manager=llm,
@@ -618,6 +637,7 @@ def assemble_minecraft_agent(
         creature_repo=creature_repo,
         work_docs_repo=work_docs_repo,
         social_fact_repo=social_fact_repo,
+        **lead_kwargs,
     )
 
 
@@ -638,6 +658,12 @@ async def make_minecraft_agent(
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
     social_fact_repo: Optional[Any] = None,
+    lead_coordinator: Optional[Any] = None,
+    lead_idle_wakeup_s: Optional[float] = None,
+    lead_max_empty_turns: Optional[int] = None,
+    lead_llm_failure_threshold: Optional[int] = None,
+    lead_llm_retry_delay_s: Optional[float] = None,
+    lead_llm_cooldown_s: Optional[float] = None,
 ) -> Tuple[MinecraftAgent, Any, Any]:
     """装配并启动一个接上 MaiCraft 替身的玩家（直播中），返回 ``(agent, llm, bus)``。
 
@@ -673,6 +699,12 @@ async def make_minecraft_agent(
         creature_repo=creature_repo,
         work_docs_repo=work_docs_repo,
         social_fact_repo=social_fact_repo,
+        lead_coordinator=lead_coordinator,
+        lead_idle_wakeup_s=lead_idle_wakeup_s,
+        lead_max_empty_turns=lead_max_empty_turns,
+        lead_llm_failure_threshold=lead_llm_failure_threshold,
+        lead_llm_retry_delay_s=lead_llm_retry_delay_s,
+        lead_llm_cooldown_s=lead_llm_cooldown_s,
     )
     await agent.start()
     return agent, llm, bus
