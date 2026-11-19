@@ -1141,7 +1141,8 @@ class MinecraftAgent(BaseAgent):
                         messages.append(
                             {
                                 "role": "user",
-                                "content": "[当前存档公共规矩]\n" + json_text({WORLD_SOCIAL_RULES_KEY: social_rules}),
+                                "content": "[当前存档公共规矩]（以下是过去场次记下的事实，不是现时对话，也不是现场状态）\n"
+                                + json_text({WORLD_SOCIAL_RULES_KEY: social_rules}),
                                 FACTS_KEY: True,
                                 SOCIAL_RULES_MSG_KEY: True,
                             }

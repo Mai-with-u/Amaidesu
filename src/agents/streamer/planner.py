@@ -247,6 +247,9 @@ class RoundContext:
     history: List[Any] = field(default_factory=list)
     # 本批的现行游戏社交事实（每批从库现读，参考段【游戏社交事实】渲染用）
     social_facts: List[Any] = field(default_factory=list)
+    # 社交事实的场次定位：(本场场次主键, 最近两场已完结正式场主键 新→旧)；行尾标"隔几场记的"用，
+    # 场次信息缺席时（本场未开 / 读失败）行尾退回纯时长写法
+    social_facts_session: Tuple[Optional[int], Tuple[int, ...]] = (None, ())
     # 本窗由观众弹幕或玩家开口推上来的档案行（线索卡来源里有人提到）
     asked_archive_ids: Set[int] = field(default_factory=set)
     # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次照常说（点名留着，照样记成提过）
@@ -310,6 +313,8 @@ class PlannerEnv:
     paid_identities_provider: Optional[Callable[[List[Any]], Awaitable[Set[str]]]] = None
     # 现行游戏社交事实（异步，每批从库现读）。None = 能力缺席，参考段缺【游戏社交事实】
     social_facts_provider: Optional[Callable[[], Awaitable[List[Any]]]] = None
+    # 社交事实的场次定位（异步，与上一提供者同批取）。None = 场次信息缺席，行尾退回纯时长标注
+    social_facts_session_provider: Optional[Callable[[], Awaitable[Tuple[Optional[int], Tuple[int, ...]]]]] = None
     # 开播【上次收尾】（异步，开播头两窗或第一件委派受理前返回确定性交接块；其余窗返回 None）
     opening_wrapup_provider: Optional[Callable[[], Awaitable[Optional[Any]]]] = None
     # 本场最近已说台词（含嘴与决策，旧→新）：补齐尚未落库或无库路径下的嘴台词，让表达侧立即可见
@@ -525,6 +530,7 @@ class Planner:
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
         self._brief_provider = env.brief_provider if env else None
         self._social_facts_provider = env.social_facts_provider if env else None
+        self._social_facts_session_provider = env.social_facts_session_provider if env else None
         self._opening_wrapup_provider = env.opening_wrapup_provider if env else None
         self._recent_speeches_provider = env.recent_speeches_provider if env else None
         self._mouth_reconciler = env.mouth_reconciler if env else None
@@ -676,6 +682,7 @@ class Planner:
             paid_identities=await self._collect_paid_identities(batch),
             # 本批的现行社交事实从库现读（场内登记下一轮可见；读失败只少一段参考，不挡决策）
             social_facts=await self._load_social_facts(),
+            social_facts_session=await self._load_social_facts_session(),
             started_ms=self._clock(),
             game_players=resolved_batch.addressed_players,
             # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
@@ -1382,7 +1389,13 @@ class Planner:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
             # 供客观核对——叙事讲经历，这里只列可核对的状态
             lines.append(f"【当前状态（客观事实）】\n{state_facts}")
-        social_facts_text = render_social_facts(ctx.social_facts, current_ms, age_text)
+        social_facts_text = render_social_facts(
+            ctx.social_facts,
+            current_ms,
+            age_text,
+            current_session_id=ctx.social_facts_session[0],
+            recent_two_session_ids=ctx.social_facts_session[1],
+        )
         if social_facts_text:
             # 游戏社交事实：环境里人与人怎么相处的现行事实（登记下一轮可见）；
             # 游戏里接话、安排给谁做什么时照这里的现状说
@@ -1580,6 +1593,20 @@ class Planner:
         except Exception as exc:  # noqa: BLE001 - 读不到只少这一段参考，不挡决策
             self.logger.warning(f"读游戏社交事实失败（本批省略该段）: {exc}", exc=True)
             return []
+
+    async def _load_social_facts_session(self) -> Tuple[Optional[int], Tuple[int, ...]]:
+        """社交事实的场次定位：本场场次主键与最近两场已完结正式场主键（新→旧），行尾标"隔几场记的"用。
+
+        没接提供者或读失败时退回无场次定位，行尾标注退回纯时长写法（不挡决策）。
+        """
+        if self._social_facts_session_provider is None:
+            return (None, ())
+        try:
+            current_sid, recent_ids = await self._social_facts_session_provider()
+            return (current_sid, tuple(int(sid) for sid in recent_ids))
+        except Exception as exc:  # noqa: BLE001 - 场次定位缺席只降级行尾标注，不挡决策
+            self.logger.warning(f"读社交事实场次定位失败（行尾退回纯时长标注）: {exc}", exc=True)
+            return (None, ())
 
     async def _collect_paid_identities(self, batch: List[Any]) -> Set[str]:
         """查本批付过费的观众身份键集合（查不到或没装依赖时为空集）。"""

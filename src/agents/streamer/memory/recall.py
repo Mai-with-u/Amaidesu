@@ -116,7 +116,7 @@ _SOCIAL_FACT_LABELS = {
     "setting": "环境形态",
     "members": "成员关系",
     "sharing": "共享惯例",
-    "works": "进行中的事",
+    "works": "记着的事",
     "her_role": "她的角色",
     "open_question": "待弄清",
 }

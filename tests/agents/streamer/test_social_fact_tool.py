@@ -310,6 +310,26 @@ def test_stale_works_downgrades_to_tail_after_two_unconfirmed_sessions() -> None
     assert text.index("事实2") < text.index("事实1")
     assert "（待确认的旧进展）" in text
     assert "事实1（早先记的，已隔多场未再证实）" in text
+    assert "（以下是过去场次记下的事实，不是现时对话，也不是现场状态）" in text
+
+
+def test_render_notes_session_count_before_duration() -> None:
+    """行尾标注场数为主、时长为辅：隔几场按来源场次与最近两场推，场次信息缺时退回纯时长。"""
+    here = _fact(1, "works", updated=100, session_id=5)
+    last = _fact(2, "works", updated=200, session_id=4)
+    second = _fact(3, "members", updated=300, session_id=3)
+    no_sid = _fact(4, "sharing", updated=400, session_id=None)
+    text = render_social_facts(
+        [second, last, here, no_sid],
+        400_000,
+        lambda ms: "48 小时前",
+        current_session_id=5,
+        recent_two_session_ids=(4, 3),
+    )
+    assert "事实1（本场记的）" in text
+    assert "事实2（上一场记的，48 小时前）" in text
+    assert "事实3（两场前记的，48 小时前）" in text
+    assert "事实4（48 小时前记的）" in text
 
 
 async def test_downgraded_works_yields_slot_when_kind_cap_is_full(store) -> None:
@@ -395,5 +415,5 @@ async def test_recall_finds_active_social_fact(store) -> None:
         social_fact_repo=store.social_facts,
     )
     text = await service.recall("阿杰")
-    assert "游戏里的人（进行中的事）：阿杰改去挖钻石" in text
+    assert "游戏里的人（记着的事）：阿杰改去挖钻石" in text
     assert "刷铁机" not in text

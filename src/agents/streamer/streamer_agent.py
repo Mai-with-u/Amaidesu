@@ -542,6 +542,8 @@ class StreamerAgent(BaseAgent):
                 else None,
                 # 游戏社交事实：每批从库现读，参考段常驻【游戏社交事实】
                 social_facts_provider=self._load_social_facts if social_fact_repo is not None else None,
+                # 同一批的场次定位：行尾标"隔几场记的"，压住把旧场事实当现时对话叙述的虚构
+                social_facts_session_provider=self._social_facts_session if social_fact_repo is not None else None,
                 # 开播【上次收尾】：头两窗或第一件委派受理前从确定性账面拼装上一场收工实况
                 opening_wrapup_provider=self._consume_opening_wrapup if sessions_repo is not None else None,
                 # 嘴与决策双向对账：表达侧可见实时口头流水，出声前核对本轮嘴说的话并在矛盾时补最新现场
@@ -2156,6 +2158,17 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"读游戏社交事实失败（本批省略该段）: {exc}", exc=True)
             await self._emit_social_facts_alert(exc)
             return []
+
+    async def _social_facts_session(self) -> Tuple[Optional[int], Tuple[int, ...]]:
+        """社交事实的场次定位：本场场次主键与最近两场已完结正式场主键（新→旧），行尾标"隔几场记的"用。
+
+        本场尚未开播时无定位，行尾标注退回纯时长写法。
+        """
+        sid = self._current_session_pk()
+        if sid is None:
+            return (None, ())
+        bounds = await self._recent_two_session_bounds(sid)
+        return (sid, tuple(int(item[0]) for item in bounds[:2]))
 
     async def _read_social_facts(self) -> List[Any]:
         sid = self._current_session_pk()

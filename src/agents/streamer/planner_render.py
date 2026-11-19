@@ -431,16 +431,18 @@ def render_recent_intents(
 
 # 【游戏社交事实】整段至多注入这么几行（多的按取舍规则丢弃）
 _SOCIAL_FACTS_MAX = 12
-# 六类注入顺序：先"进行中的事"与"她的角色"（对说什么最有用），再其余各类；同类内由新到旧
+# 六类注入顺序：先"记着的事"与"她的角色"（对说什么最有用），再其余各类；同类内由新到旧
 _SOCIAL_FACT_KIND_ORDER = ("works", "her_role", "members", "sharing", "setting", "open_question")
 _SOCIAL_FACT_KIND_LABELS = {
     "setting": "环境形态",
     "members": "成员关系",
     "sharing": "共享惯例",
-    "works": "进行中的事",
+    "works": "记着的事",
     "her_role": "她的角色",
     "open_question": "待弄清",
 }
+# 段首含义说明：这段全部是过去场次记下的事实，不标明这一点时，决策模型会把旧账叙述成现时玩家对话
+_SOCIAL_FACTS_SECTION_NOTE = "（以下是过去场次记下的事实，不是现时对话，也不是现场状态）"
 
 
 def render_social_facts(
@@ -479,7 +481,29 @@ def render_social_facts(
         )
     )
     shown = rows[:_SOCIAL_FACTS_MAX]
+
+    def _session_age_note(fact: SocialFact, age: str, stale: bool) -> str:
+        """行尾标注场数为主、时长为辅：场次信息够时说隔了几场，不够时退回纯时长写法。"""
+        touch_sid = fact.updated_session_id if fact.updated_session_id is not None else fact.created_session_id
+        session_part = ""
+        if touch_sid is not None:
+            if current_session_id is not None and int(touch_sid) == int(current_session_id):
+                session_part = "本场记的"
+            elif recent_two_session_ids:
+                recent = [int(sid) for sid in recent_two_session_ids[:2]]
+                if int(touch_sid) == recent[0]:
+                    session_part = "上一场记的"
+                elif len(recent) > 1 and int(touch_sid) == recent[1]:
+                    session_part = "两场前记的"
+        if not session_part:
+            return f"{age}记的，已隔多场未再证实" if stale else f"{age}记的"
+        tail = "，已隔多场未再证实" if stale else ""
+        if session_part != "本场记的" and age and age != "刚刚":
+            return f"{session_part}，{age}{tail}"
+        return f"{session_part}{tail}"
+
     lines: List[str] = []
+    lines.append(_SOCIAL_FACTS_SECTION_NOTE)
     last_group = ""
     for fact in shown:
         stale = _downgraded(fact)
@@ -489,7 +513,7 @@ def render_social_facts(
             lines.append(f"（{group_label}）")
         mark = "★" if fact.human_locked else "-"
         age = age_text_fn(current_ms - int(fact.updated_at_ms))
-        note = f"{age}记的，已隔多场未再证实" if stale else f"{age}记的"
+        note = _session_age_note(fact, age, stale)
         lines.append(f"{mark} {fact.text}（{note}）")
     return "【游戏社交事实】\n" + "\n".join(lines)
 

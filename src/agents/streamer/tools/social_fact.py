@@ -51,7 +51,7 @@ _KIND_LABELS: Dict[str, str] = {
     "setting": "环境形态",
     "members": "成员关系",
     "sharing": "共享惯例",
-    "works": "进行中的事",
+    "works": "记着的事",
     "her_role": "她的角色",
     "open_question": "待弄清",
 }
@@ -71,7 +71,7 @@ _PARAMETERS: Dict[str, Any] = {
             "enum": list(SOCIAL_FACT_KINDS),
             "description": (
                 "类别：setting 这是个什么环境；members 谁在、什么关系；sharing 什么东西公用；"
-                "works 进行中的事（每人或每件事一条）；her_role 她在这里做什么；open_question 看到了但还没定论的"
+                "works 记着的事（每人或每件事一条）；her_role 她在这里做什么；open_question 看到了但还没定论的"
             ),
         },
         "text": {"type": "string", "description": "一句事实陈述，不带评价词（60 字以内）"},
