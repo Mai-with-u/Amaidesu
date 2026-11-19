@@ -20,6 +20,7 @@ import asyncio
 import json
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional, Tuple
@@ -203,6 +204,9 @@ DELIVERY_REMINDER_WHILE_WAITING = (
     "[还没交付] 做完了就用 minecraft_report 交付（delivery）；遇到新的卡点就报卡住（escalation），换成新的问题；"
     "还卡在原来那个问题上、等主播回答，就直接停下。"
 )
+# 活跃任务旁听公屏通知的短时间去重窗（毫秒）：仅抑制几秒内的重复回声，超时或换新任务后允许玩家再喊同一指令
+_CHAT_NOTICE_DEDUP_WINDOW_MS = 5_000
+
 # 对话发不出去、按任务事实重开时给模型的说明
 _RESTART_NOTICE = (
     "[系统] 上一段对话里有内容发不出去，已经整段丢掉。上面是原指令、待办与目标记录，下面是宿主刚读的现场；"
@@ -460,6 +464,14 @@ class MinecraftAgent(BaseAgent):
         # 由收手直连取消的目标在事件流发回 finished 时直接静默清理，不再唤醒新任务。
         self._release_epoch: int = 0
         self._released_goal_ids: set[int] = set()
+        # 任务被 replace 替换收手时生成的紧凑交接摘要：供紧接其后的 _start_new_task 带入新任务开头，
+        # 避免换活清历史后忘记几秒前刚建的设施或刚丢出的物品；正常交付后为空，新任务照常干净开局。
+        self._pending_handover_summary: str = ""
+        # 游戏 Agent 自己通过 maicraft:chat 发出的公屏句缓存：收到 game.self.chatted 时据此排除己方重复注入，
+        # 只把主播替角色发出的公屏话注入活跃任务上下文。
+        self._own_emitted_chats: Deque[str] = deque(maxlen=16)
+        # 近期已注入上下文的公屏通知去重表：(来源键, 正文) → 注入时的单调时钟秒值（5 秒短窗 + 新任务清空）
+        self._recent_chat_notices: Dict[Tuple[str, str], float] = {}
 
         # Agent 私有 MCP（_on_start 装配；构造注入实例或工厂时按注入装配）
         self._mcp_client: Optional[Any] = mcp_client
@@ -533,8 +545,9 @@ class MinecraftAgent(BaseAgent):
         if self._event_bus is not None:
             self._event_bus.on(CoreEvents.LIVE_STARTED, self._on_live_started, model_class=LiveStartedPayload)
             self._event_bus.on(CoreEvents.LIVE_ENDED, self._on_live_ended, model_class=LiveEndedPayload)
-            # 聊天流里的死亡播报：认出是名册里哪一只，就把她的死当成游戏进展讲给主播
+            # 聊天流：系统死亡播报走生物名册，任务中旁听玩家公屏与主播替角色发出的公屏话（空闲零消耗）
             self._event_bus.on(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat, model_class=GameChatPayload)
+            self._event_bus.on(CoreEvents.GAME_SELF_CHATTED, self._on_self_chatted, model_class=GameSelfChattedPayload)
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令；当前收工态，开播后接受委派）")
 
     async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
@@ -560,6 +573,9 @@ class MinecraftAgent(BaseAgent):
         self._interaction_throttle.clear()
         self._wait_progress.reset()
         self._last_self_coords = None
+        self._pending_handover_summary = ""
+        self._own_emitted_chats.clear()
+        self._recent_chat_notices.clear()
         settled = self._delegations.settle_on_live_end()
         self._logger.info(
             f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
@@ -697,6 +713,7 @@ class MinecraftAgent(BaseAgent):
         self._wake_event.set()
         if self._event_bus is not None:
             self._event_bus.off(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat)
+            self._event_bus.off(CoreEvents.GAME_SELF_CHATTED, self._on_self_chatted)
         await self._idle_prep.cancel()
         await self._fold_job.cancel()
         await self._goals.stop()
@@ -943,19 +960,69 @@ class MinecraftAgent(BaseAgent):
             parts.append(f"收手时停下：{'、'.join(labels[:2])}")
         return "；".join(parts)
 
-    async def release_delegation(self, task_id: str, *, reason: str = "") -> Optional[str]:
+    def _build_handover_summary(self, *, progress: str, reason: str = "") -> str:
+        """把被替换（replace）的未完成任务压成一条紧凑的 [交接摘要]，留给紧接其后的新任务开头。
+
+        当主播用 when_busy="replace" 临时换活时，游戏 Agent 不再像正常交付后那样彻底失忆：
+        新任务开头能看到上一件做到哪、刚完成/取消了哪几个目标，以及最后几句操作说明，
+        避免忘记几秒前刚放下的漏斗、刚丢出或合成过的物品。
+        """
+        lines: List[str] = ["[交接摘要] 上一件任务未做完即被替换收手，以下是切换前的近期现场动作："]
+        if reason.strip():
+            lines.append(f"- 切换原因：{reason.strip()[:120]}")
+        if self._task_instructions:
+            prev_inst = " ".join(self._task_instructions[-1].split())
+            if prev_inst:
+                lines.append(f"- 上一件任务：{prev_inst[:160]}")
+        if progress.strip():
+            lines.append(f"- 收手时进度：{progress.strip()[:220]}")
+        # 摘取最近结束的若干目标结果（如放置设施、丢出物品、合成等）
+        recent_goals = self._goal_ledger.recent_finished()[-5:]
+        if recent_goals:
+            goal_parts: List[str] = []
+            for entry in recent_goals:
+                ability = str(entry.get("ability") or "").strip()
+                purpose = str(entry.get("purpose") or "").strip()
+                status = str(entry.get("status") or "").strip()
+                summary = str(entry.get("summary") or "").strip()
+                head = purpose or ability
+                if not head and not summary:
+                    continue
+                item = f"{head}（{status}）" if status else head
+                if summary:
+                    item += f"：{summary[:80]}"
+                goal_parts.append(item)
+            if goal_parts:
+                lines.append("- 近期关键动作：" + "；".join(goal_parts))
+        # 从被替换前的对话尾部摘取最近 2 条简短模型自述，补齐工具结果之外的意图线索
+        recent_notes: List[str] = []
+        for msg in reversed(self._messages):
+            if msg.get("role") != "assistant":
+                continue
+            text = " ".join(str(msg.get("content") or "").split())
+            if text:
+                recent_notes.append(text[:100])
+            if len(recent_notes) >= 2:
+                break
+        if recent_notes:
+            lines.append("- 切换前最后说明：" + " / ".join(reversed(recent_notes)))
+        joined = "\n".join(lines)
+        return joined[:900]
+
+    async def release_delegation(self, task_id: str, *, reason: str = "", handover: bool = False) -> Optional[str]:
         """对正在做的委派收手（换活、先搁下或发起方结单时由委派受理核心调用）。
 
         按顺序执行：
         1. 若指令还在消息队列里没被任何批次读到，直接从队列撤除并返回"尚未开跑"——不动账本，
            后续也不会跟着新任务一起被吸收成 succeeded。
         2. 若已吸收进批次：推进收手纪元（在跑的 ReAct 批在当前 await 返回后立即停步）→
-           提取当前进度摘要 → 直连取消在跑游戏目标并清理跟踪 → 从委派账摘除该单（不写账本）→
-           复位任务完成态，使随后送达的新委派按干净的新任务开局。
+           提取当前进度摘要，仅在 ``handover=True``（``when_busy="replace"`` 换活）时生成紧凑交接摘要，
+           其余结单/撤单/搁下分支一律清空旧摘要防污染下次新任务 → 直连取消在跑游戏目标并清理跟踪 →
+           从委派账摘除该单（不写账本）→ 复位任务完成态。
         """
-        del reason
         if self._wake_queue.drop_task(task_id):
             self._delegations.release(task_id)
+            self._pending_handover_summary = ""
             self._logger.info(f"MinecraftAgent 委派收手（尚未开跑，已从消息队列撤除）：task_id={task_id}")
             return "还没开跑"
         if not self._delegations.release(task_id):
@@ -963,6 +1030,10 @@ class MinecraftAgent(BaseAgent):
         self._release_epoch += 1
         self._drawing_builder.cancel()
         progress = self._summarize_current_progress()
+        # 仅 when_busy="replace" 立即换活时保留紧凑交接摘要；普通结单/撤单/搁下清空摘要，保证后续空闲开新任务干净
+        self._pending_handover_summary = (
+            self._build_handover_summary(progress=progress, reason=reason) if handover else ""
+        )
         tracked_ids = list(self._goals.tracked_ids())
         self._released_goal_ids.update(tracked_ids)
         await self._cancel_tracked_goals(settle_ledger=True)
@@ -1350,8 +1421,13 @@ class MinecraftAgent(BaseAgent):
         self._mc_state.clear_todos_for_new_task()
         self._goal_ledger.clear_finished()
         self._furnace_waits.clear()
+        self._recent_chat_notices.clear()
         self._wait_progress.reset()
-        # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的、动过别人放的东西另附事实，主人来问时一开工就认得出
+        # 新任务只带系统说明和新指令：若是 replace 替换上一件未完成任务，先附上紧凑 [交接摘要] 保留近期动作记忆；
+        # 另附这个世界里拿过别人家的吃的、动过别人放的东西，主人来问时一开工就认得出
+        if self._pending_handover_summary:
+            messages.append({"role": "user", "content": self._pending_handover_summary, FACTS_KEY: True})
+            self._pending_handover_summary = ""
         taken = self._food_taken.view(self._creatures.world_key)
         if taken:
             messages.append({"role": "user", "content": "[拿过别人家的吃的]\n" + json_text(taken), FACTS_KEY: True})
@@ -2599,18 +2675,68 @@ class MinecraftAgent(BaseAgent):
         self._logger.warning(f"读记住的地点失败，速览先用上次读到的清单：{reply.error_message or reply.error_code}")
         return MaicraftReply(ok=True, data={"places": previous, "places_age_s": self._remembered_places.read_age_s()})
 
+    def _has_active_delegation_task(self) -> bool:
+        """当前是否处于正在执行委派/游戏任务的活跃态（空闲时恒为 False，保证空闲零消耗）。"""
+        return bool(self._live_active and not self._task_finished)
+
+    @staticmethod
+    def _chat_should_wake_waiting_task(payload: GameChatPayload, content: str) -> bool:
+        """活跃任务在等待期间收到玩家公屏时，是否需要立即唤醒任务循环评估停手或转向。"""
+        if payload.private:
+            return True
+        if any(getattr(m, "type", "") == "self" for m in (payload.mentions or [])):
+            return True
+        wake_hints = ("停", "过来", "别", "不用", "算了", "跟着", "等一下", "回来", "收手", "换")
+        return any(hint in content for hint in wake_hints)
+
+    def _enqueue_chat_notice(self, source_key: str, notice: str, *, wake_if_waiting: bool) -> None:
+        """把一条 [公屏] 只读现场通知注入当前活跃任务的上下文队列，并按需唤醒等待中的任务循环。
+
+        去重仅在 5 秒短时间窗内生效（基于注入单调时钟，换新任务亦会清空）：既抑制瞬时回声重复，
+        又保证同伴几秒后再次喊"过来/停/等一下"时正常入队并唤醒。
+        """
+        now_s = float(self._clock())
+        window_s = _CHAT_NOTICE_DEDUP_WINDOW_MS / 1000.0
+        # 顺手清理过期去重条目，保持映射轻量有界
+        expired_keys = [key for key, at_s in self._recent_chat_notices.items() if (now_s - at_s) >= window_s]
+        for key in expired_keys:
+            self._recent_chat_notices.pop(key, None)
+        dedup_key = (source_key, notice)
+        last_at_s = self._recent_chat_notices.get(dedup_key)
+        if last_at_s is not None and (now_s - last_at_s) < window_s:
+            return
+        self._recent_chat_notices[dedup_key] = now_s
+        self._wake_queue.push_notice(notice)
+        # 任务活跃且未处于挂起等主播定夺状态时，按需立即唤醒正在等后台目标的循环
+        if wake_if_waiting and not self._task_suspended:
+            self._wake_event.set()
+
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
-        """``game.chat.received`` 回调：系统消息若是名册里某只的死讯，把她的死当成游戏进展发给主播。
-
-        顺序：自己的女仆被苦力怕炸死 → 游戏只给主人发一条"莫莫酒狐被苦力怕炸死了" → 名册认出是阿缕 →
-        发 game.milestone"阿缕（你的女仆，莫莫酒狐皮肤）被苦力怕炸死了"：嘴当场接住，场次回顾也看得到。
-        只记账、发事件，不开任务、不调模型，游戏 Agent 闲着时照样不花钱。
-
-        认死者：消息带模板编号时只看死亡播报（``death.`` 开头），死者是消息开头写出名字的那个点名实体，
-        按她的 UUID 对名册；旧版 Mod 不给模板编号与点名时，交给名册按文字认。
+        """``game.chat.received`` 回调：
+        1. 系统死亡播报：认出生物名册里的个体并上报主播（不唤醒模型，保持空闲零消耗）；
+        2. 玩家公屏聊天：空闲时直接忽略（严格空闲零消耗）；执行委派任务期间以 ``[公屏]`` 只读
+           现场通知注入上下文，点名她或出现喊停/喊过去信号时及时唤醒等待中的任务循环。
         """
         del event_name, source
-        if payload.game != "minecraft" or payload.kind != "system":
+        if payload.game != "minecraft":
+            return
+        if payload.kind == "player":
+            # 空闲零消耗：没有活跃委派任务时不入队、不唤醒 LLM
+            if not self._has_active_delegation_task():
+                return
+            content = (payload.content or "").strip()
+            if not content:
+                return
+            sender = (payload.sender or "").strip() or "其他玩家"
+            prefix = "[公屏·私聊]" if payload.private else "[公屏]"
+            notice = f"{prefix} 玩家 {sender}：{content}"
+            self._enqueue_chat_notice(
+                f"player:{sender}",
+                notice,
+                wake_if_waiting=self._chat_should_wake_waiting_task(payload, content),
+            )
+            return
+        if payload.kind != "system":
             return
         if payload.message_key and not payload.message_key.startswith("death."):
             return
@@ -2632,6 +2758,26 @@ class MinecraftAgent(BaseAgent):
             await self._emit_game_event("milestone", f"{creature.label()}{creature.death_note}")
         except Exception as exc:  # noqa: BLE001 - 认不出死讯不影响聊天流本身
             self._logger.warning(f"按名册认死讯失败（原话：{payload.content}）", exc=exc)
+
+    async def _on_self_chatted(self, event_name: str, payload: GameSelfChattedPayload, source: str) -> None:
+        """``game.self.chatted`` 回调：任务中旁听主播替角色发出的公屏话（排除游戏 Agent 自己发的重复）。"""
+        del event_name, source
+        if payload.game != "minecraft":
+            return
+        message = (payload.message or "").strip()
+        if not message:
+            return
+        # 排除游戏 Agent 自己经 maicraft:chat 发出的公屏句，避免把刚说过的话重复注回自己上下文
+        try:
+            self._own_emitted_chats.remove(message)
+            return
+        except ValueError:
+            pass
+        # 空闲零消耗：没有活跃委派任务时不入队、不唤醒 LLM
+        if not self._has_active_delegation_task():
+            return
+        notice = f"[公屏·主播替你说] {message}"
+        self._enqueue_chat_notice("streamer_self", notice, wake_if_waiting=True)
 
     async def _read_creatures(self, body: MaicraftReply) -> MaicraftReply:
         """读一次周围并更新名册，返回这次的场景。
@@ -2846,9 +2992,14 @@ class MinecraftAgent(BaseAgent):
         while self._pending_self_chats:
             await self._send_self_chat(self._pending_self_chats.pop(0))
 
-    async def _send_self_chat(self, message: str) -> None:
+    async def _send_self_chat(self, message: str, *, from_streamer: bool = False) -> None:
         # 纯公屏回话类的补充指令在原话发出后即已完成，从固定层摘掉免得一直占在指令清单里
         self._task_instructions[:] = prune_sent_chat_supplements(self._task_instructions, message)
+        text = message.strip()
+        # 游戏 Agent 自己经 maicraft:chat 发出时记入去重队列，供 _on_self_chatted 过滤回声；
+        # 主播经 minecraft_chat_send 直发时不记入，使其在活跃任务期可被游戏 Agent 旁听感知。
+        if text and not from_streamer:
+            self._own_emitted_chats.append(text)
         if self._event_bus is None:
             return
         save_id, save_name = self._world.save_fields()
@@ -2890,7 +3041,7 @@ class MinecraftAgent(BaseAgent):
         submitted = isinstance(details, dict) and details.get("submitted") is True and "to" not in details
         if not submitted:
             return {"success": False, "error": "发送未确认：游戏侧没有回报这句话已交出去"}
-        await self._send_self_chat(message)
+        await self._send_self_chat(message, from_streamer=True)
         return {"success": True, "message": message}
 
     async def _await_goal_finished(self, goal_id: int, wait_ms: int = _CHAT_CONFIRM_WAIT_MS) -> Optional[GoalRun]:

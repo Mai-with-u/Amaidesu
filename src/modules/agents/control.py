@@ -23,6 +23,7 @@ tool_registry.register_provider(provider)
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional
 
@@ -633,10 +634,23 @@ class DelegationCore:
             return f"目标 '{target.name}' 未实现接收入口（默认拒收）"
         return receive(instruction=instruction, task_id=task_id)
 
-    async def _release_in_hand(self, target: BaseAgent, item: BoardItem, *, reason: str) -> Optional[str]:
-        """让执行者对当前【在做】收手；异常记日志并按不支持（None）处理。"""
+    async def _release_in_hand(
+        self, target: BaseAgent, item: BoardItem, *, reason: str, handover: bool = False
+    ) -> Optional[str]:
+        """让执行者对当前【在做】收手；异常记日志并按不支持（None）处理。
+
+        ``handover=True`` 仅在 ``when_busy="replace"`` 换活时传入，让支持交接的执行者为下一任务
+        保留紧凑交接摘要；普通结单/撤单/搁下不保留交接摘要，确保空闲后开新任务保持干净。
+        """
         try:
-            return await target.release_delegation(item.task_id, reason=reason)
+            release_fn = target.release_delegation
+            # 探测是否支持 handover 关键字，兼容只实现 (task_id, *, reason=...) 的旧签名子类或测试替身
+            sig = inspect.signature(release_fn)
+            if "handover" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                return await release_fn(item.task_id, reason=reason, handover=handover)
+            return await release_fn(item.task_id, reason=reason)
         except Exception as exc:  # noqa: BLE001 - 收手异常不崩受理链路
             logger.warning(f"目标 '{target.name}' 收手异常（task_id={item.task_id}）: {exc}", exc=True)
             return None
@@ -962,7 +976,9 @@ class DelegationCore:
                     ),
                 )
 
-            released = await self._release_in_hand(target, in_hand, reason=f"换做新委派（原件 {old_outcome}）")
+            released = await self._release_in_hand(
+                target, in_hand, reason=f"换做新委派（原件 {old_outcome}）", handover=True
+            )
             if released is None:
                 # 执行者不支持收手：搁下语义降级为新件置顶排进待办最前；结单/作废试硬取消兜底
                 if old_outcome == "shelve":

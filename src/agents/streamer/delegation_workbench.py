@@ -47,6 +47,8 @@ FRAMEWORK_PROMPT_TOOL: str = "framework_prompt"
 FRAMEWORK_TASK_SETTLE_TOOL: str = "framework_task_settle"
 #: 经工作台受理的调用的来源名：受理核心把它记成委派的发起方，落库后续播据此认出"这件是我派的"
 PLANNER_CALL_SOURCE: str = "planner-react"
+#: 极短时间同文重复递话去重窗口（毫秒）：拆掉"无新输入硬拒闸"后，仅防连续几秒内给同一游戏刷完全相同的原句
+_DUPLICATE_RELAY_WINDOW_MS: int = 15_000
 
 
 def observation_data(result: ToolExecutionResult) -> Dict[str, Any]:
@@ -342,18 +344,13 @@ class DelegationWorkbench:
         """
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
-        if name == FRAMEWORK_PROMPT_TOOL and relay_without_input and not self._awaits_my_decision(args):
-            # 没有新输入的主动窗不补充要求：游戏里的进展以游戏侧回执为准，这一窗只管说话。
-            # 例外是她在游戏里卡住、停着等我拿主意：这时补充要求就是我的决定，不放行就成了死结——
-            # 派新事因"手上有一件没做完"被拒，补充又因"没有新输入"被拦，主播嘴上说了改主意，游戏那边一直停着。
-            return json.dumps(
-                {
-                    "ok": False,
-                    "error": "这一窗没有新的观众、运营或游戏聊天输入，手上的游戏活不用补充要求；"
-                    "游戏进展以游戏侧回执为准，直接说话即可。",
-                },
-                ensure_ascii=False,
-            )
+        if name == FRAMEWORK_PROMPT_TOOL:
+            # 已拆除"无新输入硬拒闸"（避免误拦合理补充与诱发 replace 清空游戏记忆），
+            # 仅保留极短窗口内对同一执行者的完全同文去重，防止连续几秒刷一字不差的重复回声。
+            dup_error = self._duplicate_relay_error(args)
+            if dup_error is not None:
+                return json.dumps({"ok": False, "error": dup_error}, ensure_ascii=False)
+        del relay_without_input
         rule = self._rules[name]
         dialogue = source_dialogue or []
         args, own_text = rule.prepare(args, dialogue)
@@ -379,6 +376,25 @@ class DelegationWorkbench:
         rule.settle(args, own_text, data)
         self._round_receipts.append((name, data))
         return render_observation(data)
+
+    def _duplicate_relay_error(self, args: Dict[str, Any]) -> Optional[str]:
+        """极短时间内的同通道同文去重：几秒内对同一执行者同通道重复发一字不差的同一句时温和拦下。"""
+        content = str(args.get("content") or "").strip()
+        if not content:
+            return None
+        agent = str(args.get("agent") or "").strip()
+        kind = str(args.get("kind") or "requirement").strip() or "requirement"
+        current_ms = now_ms()
+        for relay in reversed(self._recent_relays):
+            if (current_ms - relay.at_ms) >= _DUPLICATE_RELAY_WINDOW_MS:
+                break
+            if (
+                relay.content.strip() == content
+                and relay.kind == kind
+                and (not agent or not relay.agent or relay.agent == agent)
+            ):
+                return "刚才已经给游戏补充过完全相同的一句要求，无需短时间内重复发送同一句。"
+        return None
 
     def awaits_decision(self, agent: str) -> bool:
         """``agent`` 手上的委派此刻是否停着等我拿主意，而且这次求助之后我还没递达过答复。
@@ -496,8 +512,9 @@ class DelegationWorkbench:
         if not (data.get("delivered") and own_relay.strip()):
             return
         agent = str(data.get("executor") or args.get("agent") or "")
+        kind = str(args.get("kind") or "requirement").strip() or "requirement"
         at_ms = now_ms()
-        self._recent_relays.append(Relay(at_ms=at_ms, agent=agent, content=own_relay))
+        self._recent_relays.append(Relay(at_ms=at_ms, agent=agent, content=own_relay, kind=kind))
         self._last_relay_ms[agent] = at_ms
         delegation = self._delegations.get(agent)
         if delegation is not None and delegation.report_kind == "escalation":

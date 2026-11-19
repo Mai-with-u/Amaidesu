@@ -70,12 +70,33 @@ def _msg(text: str) -> RoomMessagePayload:
     )
 
 
-async def test_rundown_window_without_new_input_does_not_relay() -> None:
-    """流程单推进窗没有新输入：递话被拦下，模型收到"直接说话"的观察，游戏侧什么也收不到。"""
+async def test_rundown_window_without_new_input_allows_distinct_relays_and_dedups_verbatim() -> None:
+    """拆闸后：无新输入的主动窗允许给游戏补充不同要求（不再硬拒诱发 replace 强杀），
+    但极短时间内完全相同的同一句重复递话仍会被轻量去重拦下。"""
     invoked: List[ToolInvocation] = []
-    planner = _planner([_relay("拉杆那下被顶掉了，重发一次"), Response(success=True, content="不说")], invoked)
+    planner = _planner(
+        [
+            _relay("先核对一下漏斗里还有没有元件"),
+            Response(success=True, content="不说"),
+            _relay("先核对一下漏斗里还有没有元件"),
+            Response(success=True, content="不说"),
+            _relay("如果漏斗空了再去终端确认"),
+            Response(success=True, content="不说"),
+        ],
+        invoked,
+    )
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
+    assert [call.tool_name for call in invoked] == ["framework_prompt"]
+
+    # 短时间内完全相同的一句被轻量去重拦下
+    invoked.clear()
     await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
     assert invoked == []
+
+    # 换了新内容的补充要求正常放行
+    invoked.clear()
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
+    assert [call.tool_name for call in invoked] == ["framework_prompt"]
 
 
 async def test_game_request_and_reminder_windows_still_relay() -> None:
@@ -92,63 +113,52 @@ async def test_game_request_and_reminder_windows_still_relay() -> None:
 
 
 async def test_rundown_window_relays_when_game_waits_for_my_decision() -> None:
-    """她在游戏里卡住、停着等我拿主意时，流程单推进窗的补充要求就是答复，放行；答复送达后空窗照常拦。
-
-    实测：游戏侧上报卡住后，派新事被"手上有一件没做完"拒、补充被"没有新输入"拦，
-    主播嘴上说了改主意，游戏那边停了一分多钟。
-    """
+    """她在游戏里卡住、停着等我拿主意时，补充要求即答复；答复送达后 awaits_decision 清零，且拆闸后新补充仍可放行。"""
     invoked: List[ToolInvocation] = []
     planner = _planner(
         [
             _relay("墓碑那边收手，用魂符放一只新女仆"),
             Response(success=True, content="不说"),
-            _relay("再补一句"),
+            _relay("再补一句：放完顺手看下背包"),
             Response(success=True, content="不说"),
         ],
         invoked,
     )
     await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
     planner.workbench.note_game_report("minecraft", "escalation")
+    assert planner.workbench.awaits_decision("minecraft") is True
     invoked.clear()
 
     await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
+    assert planner.workbench.awaits_decision("minecraft") is False
 
     invoked.clear()
     await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
-    assert invoked == []
+    assert [call.tool_name for call in invoked] == ["framework_prompt"]
 
 
 async def test_task_ledger_decides_whether_game_waits() -> None:
-    """装了任务账本时以账面状态为准：等定夺放行；答复递达过一次就恢复拦截，回到"还在做"也照常拦。"""
+    """装了任务账本时 awaits_decision 以账面状态为准：等定夺为 True，答复一次后转为 False，回到在跑亦为 False。"""
     statuses = {"deleg_1": {"status": "waiting_for_decision"}}
     invoked: List[ToolInvocation] = []
     planner = _planner(
         [
             _relay("换个办法"),
             Response(success=True, content="不说"),
-            _relay("我再补一句"),
-            Response(success=True, content="不说"),
-            _relay("再换"),
-            Response(success=True, content="不说"),
         ],
         invoked,
         status_provider=statuses.get,
     )
     await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
+    assert planner.workbench.awaits_decision("minecraft") is True
     invoked.clear()
     await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
-
-    # 答复已经递达、游戏侧还没来得及把账面改回"还在做"：冷场窗不能借"还在等"再递一次
-    invoked.clear()
-    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
-    assert invoked == []
+    assert planner.workbench.awaits_decision("minecraft") is False
 
     statuses["deleg_1"] = {"status": "running"}
-    invoked.clear()
-    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
-    assert invoked == []
+    assert planner.workbench.awaits_decision("minecraft") is False
 
 
 async def test_answer_is_remembered_after_other_relays_push_it_out() -> None:
@@ -209,8 +219,7 @@ async def _relay_without_input(workbench: DelegationWorkbench, invoked: List[Too
 
 @pytest.mark.parametrize(("status", "opens"), _IN_FLIGHT_GATES)
 async def test_delegation_kept_at_live_start_keeps_its_decision_gate(status: str, opens: bool) -> None:
-    """开播清场留下的委派（账面还在做），等主意闸门和清场前一样：停着等定夺、还没答复过就放行补充要求，
-    受理、在跑时照常拦。"""
+    """开播清场留下的委派（账面还在做），awaits_decision 状态与清场前一致，且拆闸后补充要求照常放行。"""
     statuses = {"deleg_minecraft": {"status": status, "updated_at_ms": 1}}
     invoked: List[ToolInvocation] = []
     workbench = _ledger_workbench(statuses, invoked)
@@ -220,13 +229,12 @@ async def test_delegation_kept_at_live_start_keeps_its_decision_gate(status: str
 
     assert "minecraft" in workbench.delegations
     assert workbench.awaits_decision("minecraft") is opens
-    assert await _relay_without_input(workbench, invoked) == (["framework_prompt"] if opens else [])
+    assert await _relay_without_input(workbench, invoked) == ["framework_prompt"]
 
 
 @pytest.mark.parametrize(("status", "opens"), _IN_FLIGHT_GATES)
 async def test_delegation_kept_at_save_switch_keeps_its_decision_gate(status: str, opens: bool) -> None:
-    """换存档时留下的委派（账面还在做），等主意闸门和换存档前一样：游戏 Agent 在新世界里停着等我拿主意时，
-    补充要求就是答复，照样放行。"""
+    """换存档时留下的委派（账面还在做），awaits_decision 状态与换存档前一致，且拆闸后补充要求照常放行。"""
     statuses = {"deleg_minecraft": {"status": status, "updated_at_ms": 1}}
     invoked: List[ToolInvocation] = []
     workbench = _ledger_workbench(statuses, invoked)
@@ -236,7 +244,7 @@ async def test_delegation_kept_at_save_switch_keeps_its_decision_gate(status: st
 
     assert "minecraft" in workbench.delegations
     assert workbench.awaits_decision("minecraft") is opens
-    assert await _relay_without_input(workbench, invoked) == (["framework_prompt"] if opens else [])
+    assert await _relay_without_input(workbench, invoked) == ["framework_prompt"]
 
 
 def _speaking_planner(
@@ -374,14 +382,15 @@ async def test_stuck_game_and_refused_delegate_no_longer_deadlock() -> None:
     assert outcome.replied is True
 
 
-async def test_only_fresh_game_chat_counts_as_new_input() -> None:
-    """冷场窗里没有本窗新入账的玩家原话时递话被拦；批次里带来聊天原话才放行。"""
+async def test_cold_window_relays_with_or_without_fresh_game_chat_and_attaches_chat_source() -> None:
+    """拆闸后冷场窗允许补充要求；批次里带来本窗新入账的玩家原话时，来源对话逐字附带进递话。"""
     invoked: List[ToolInvocation] = []
-    planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
+    planner = _planner([_relay("先核对下炉子状态"), Response(success=True, content="不说")], invoked)
     await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
-    assert invoked == []
+    assert [call.tool_name for call in invoked] == ["framework_prompt"]
 
-    planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
+    invoked.clear()
+    planner = _planner([_relay("回同伴一句"), Response(success=True, content="不说")], invoked)
     await planner.plan(
         [],
         proactive=True,
@@ -392,6 +401,7 @@ async def test_only_fresh_game_chat_counts_as_new_input() -> None:
         ),
     )
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
+    assert "玩家 Steve：你在干嘛" in invoked[0].arguments["content"]
 
 
 async def test_relay_with_viewer_words_carries_them_verbatim() -> None:
@@ -455,3 +465,36 @@ def test_prompts_state_relay_and_completion_rules() -> None:
     assert "停着等我拿主意" in planner and "minecraft_chat_send" in planner
     # 游戏侧不再代打主播的公屏话：她自己直连发送，游戏 Agent 只管行动与自己想说的话
     assert "她自己直连发送" in game and "不把要问的事列成清单或编号" in game
+
+
+async def test_duplicate_relay_dedup_scopes_by_kind() -> None:
+    """15 秒同文去重纳入 kind 通道：同通道同文拦截，换通道（requirement vs chat）重发同文放行。"""
+    invoked: List[ToolInvocation] = []
+    workbench = _ledger_workbench({}, invoked)
+    await workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "看看熔炉"})
+    invoked.clear()
+
+    # 第 1 次 requirement 递话：放行
+    first = await workbench.handle(
+        "framework_prompt",
+        {"agent": "minecraft", "kind": "requirement", "content": "先停一下"},
+        relay_without_input=True,
+    )
+    assert json.loads(first)["delivered"] is True
+
+    # 15 秒内同通道同文重复：温和拦下
+    dup = await workbench.handle(
+        "framework_prompt",
+        {"agent": "minecraft", "kind": "requirement", "content": "先停一下"},
+        relay_without_input=True,
+    )
+    assert json.loads(dup)["ok"] is False
+
+    # 换用 chat 通道发相同文案：不被误拒
+    other_kind = await workbench.handle(
+        "framework_prompt",
+        {"agent": "minecraft", "kind": "chat", "content": "先停一下"},
+        relay_without_input=True,
+    )
+    assert json.loads(other_kind)["delivered"] is True
+    assert len(invoked) == 2

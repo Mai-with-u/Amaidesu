@@ -959,6 +959,7 @@ describe('game.chat.received → 游戏内聊天行', () => {
       actor: 'Steve',
       text: '麦麦你在干嘛呀',
       badge: '私聊',
+      source: '游戏公屏',
     });
     expect(entry && agentGroupOf(entry)).toBe('game');
   });

@@ -1051,7 +1051,9 @@ function fromBodyEvent(event: FeedEvent, data: Record<string, unknown>): ShowEnt
 }
 
 /** 游戏内聊天：game.chat.received（GameChatPayload）。
- *  chat 行形态（actor=游戏内说话者），徽标区分私聊/系统消息，与 B 站弹幕视觉区分 */
+ *  chat 行形态（actor=游戏内说话者），徽标区分私聊/系统消息，与 B 站弹幕视觉区分；
+ *  公屏流由采集器采集、主播与任务中的游戏 Agent 双侧共享感知，source 标中性真实来源“游戏公屏”
+ *  （双轨分栏与分组仍按 kind === 'game_chat' 归入游戏栏，不受 source 文案变更影响）。 */
 function fromGameChat(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const isPrivate = bool(data.private);
   const kind = str(data.kind) || 'player';
@@ -1064,7 +1066,7 @@ function fromGameChat(event: FeedEvent, data: Record<string, unknown>): ShowEntr
     text: str(data.content) || summarizeEvent(event.type, data),
     badge: isPrivate ? '私聊' : kind === 'system' ? '系统' : '游戏内',
     note: suppressed > 0 ? `另有 ${suppressed} 条被折叠` : '',
-    source: '游戏 Agent',
+    source: '游戏公屏',
   });
 }
 

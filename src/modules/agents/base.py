@@ -286,15 +286,17 @@ class BaseAgent(abc.ABC):
         logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收急停（未实现急停入口）")
         return False
 
-    async def release_delegation(self, task_id: str, *, reason: str = "") -> Optional[str]:
+    async def release_delegation(self, task_id: str, *, reason: str = "", handover: bool = False) -> Optional[str]:
         """对正在做的委派收手（换活、先搁下或发起方结单时调用；**默认不支持**，返回 None）。
 
         语义：停掉本任务正在跑的外部动作，把 ``task_id`` 从本 Agent 的未读队列与在办追踪清单里摘除，
         **不写任务账本终态**——账面接下来记认定完成、放回待办还是作废取消，或新件被拒收时把旧件
-        原样送回，统一由委派受理核心写。返回一句简短的"做到哪了"（空串表示还没做出可见进展）；
+        原样送回，统一由委派受理核心写。``handover=True`` 仅在 ``when_busy="replace"`` 立即换活时
+        由受理核心传入，表示允许子类为紧接着的新任务保留一份紧凑交接摘要；普通结单/撤单/搁下均为
+        ``False``，新任务应保持干净开局。返回一句简短的"做到哪了"（空串表示还没做出可见进展）；
         返回 ``None`` 表示本 Agent 不支持收手或该任务不在手上。
         """
-        del task_id, reason
+        del task_id, reason, handover
         logger.debug(f"Agent '{self.name or type(self).__name__}' 不支持委派收手（未实现 release_delegation）")
         return None
 

@@ -101,11 +101,12 @@ class Intent:
 
 @dataclass(frozen=True)
 class Relay:
-    """一次已送达的补充要求：补给哪个游戏、主播自己的原话、何时补的。"""
+    """一次已送达的补充要求：补给哪个游戏、主播自己的原话、何时补的以及递话通道（requirement/chat）。"""
 
     at_ms: int
     agent: str
     content: str
+    kind: str = "requirement"
 
 
 def render_observation(data: Any) -> str:
