@@ -99,3 +99,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-078：游戏社交事实的定位、与三类记忆的分工边界及证据隐私治理（对齐 ADR-068 / ADR-074）](078-game-social-facts-boundaries-and-governance.md)
 - [ADR-079：记忆检索抗干扰降噪、双侧记忆桥接与档案名场面分层（扩展 ADR-071 / ADR-072 / ADR-077 / ADR-078）](079-memory-anti-noise-cross-agent-bridge-and-highlights.md)
 - [ADR-080：思考节拍与发言节拍解耦（开窗连续 / 发言侧限速 / 队列上限 / 核对器三选一与独立档）](080-speech-thinking-cadence-decouple.md)
+- [ADR-081：游玩期动态主从移交与两级语音打断（新增自主领航型游戏形态 / LeadCoordinator 交权收权 / 单向实况解说与非强杀建议 / 四档两级语音打断）](081-dynamic-lead-handover.md)
