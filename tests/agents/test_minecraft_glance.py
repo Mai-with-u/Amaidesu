@@ -1068,3 +1068,179 @@ def test_glance_brief_includes_self_account_when_present() -> None:
     brief = glance_brief({**self_view, "biome": "minecraft:plains"})
     assert brief.startswith("你是TestBot。在主世界的平原。")
     assert "你是" not in glance_brief({"body": {"dimension": "minecraft:overworld"}})
+
+
+def test_glance_scene_filters_occluded_and_out_of_view_wild_mobs_and_keeps_legacy() -> None:
+    """遮挡实体（visible=False）和 4 格外视野外普通野生生物（in_view=False）不进前景速览；
+    敌对、玩家、掉落物、有归属/自定义名、4 格内贴身及无 in_view 字段的旧版实体全部保留。"""
+    scene = {
+        "entities": [
+            # 隔墙熊猫（visible=False）：必须过滤
+            {"id": "e1", "type": "minecraft:panda", "distance": 10.0, "hostile": False, "visible": False},
+            # 视野外 8 格的普通野生羊（in_view=False, distance>4）：过滤
+            {
+                "id": "e2",
+                "type": "minecraft:sheep",
+                "distance": 8.0,
+                "hostile": False,
+                "visible": True,
+                "in_view": False,
+            },
+            # 视野外但贴身 3.5 格的野生猪：保留
+            {"id": "e3", "type": "minecraft:pig", "distance": 3.5, "hostile": False, "visible": True, "in_view": False},
+            # 视野外但正在正后方的敌对僵尸：保留
+            {
+                "id": "e4",
+                "type": "minecraft:zombie",
+                "distance": 9.0,
+                "hostile": True,
+                "visible": True,
+                "in_view": False,
+            },
+            # 视野外的玩家：保留
+            {
+                "id": "e5",
+                "type": "minecraft:player",
+                "name": "同伴甲",
+                "distance": 12.0,
+                "hostile": False,
+                "visible": True,
+                "in_view": False,
+            },
+            # 视野外但有自定义名的羊：保留
+            {
+                "id": "e6",
+                "type": "minecraft:sheep",
+                "name": "雪球",
+                "distance": 11.0,
+                "hostile": False,
+                "visible": True,
+                "in_view": False,
+            },
+            # 视野外但为地面掉落物：保留
+            {
+                "id": "e7",
+                "type": "minecraft:item",
+                "distance": 7.0,
+                "hostile": False,
+                "visible": True,
+                "in_view": False,
+                "traits": {"物品": "minecraft:iron_ingot", "数量": 2},
+            },
+            # 旧版 Mod 未传 visible / in_view 的普通野生牛：兼容保留
+            {"id": "e8", "type": "minecraft:cow", "distance": 10.0, "hostile": False},
+            # 视野外但有驯服归属的狼：保留
+            {
+                "id": "e9",
+                "type": "minecraft:wolf",
+                "distance": 10.0,
+                "hostile": False,
+                "visible": True,
+                "in_view": False,
+                "traits": {"驯服": "你的"},
+            },
+        ],
+        "facilities": [
+            # 设施无 visible 字段：不误过滤
+            {"block": "minecraft:chest", "direction": "前方", "distance": 4.0},
+        ],
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    kept_types_and_names = [(e["type"], e.get("name")) for e in view["entities"]]
+    assert ("minecraft:panda", None) not in kept_types_and_names
+    assert ("minecraft:sheep", None) not in kept_types_and_names
+    assert ("minecraft:pig", None) in kept_types_and_names
+    assert ("minecraft:zombie", None) in kept_types_and_names
+    assert ("minecraft:player", "同伴甲") in kept_types_and_names
+    assert ("minecraft:sheep", "雪球") in kept_types_and_names
+    assert ("minecraft:item", None) in kept_types_and_names
+    assert ("minecraft:cow", None) in kept_types_and_names
+    assert ("minecraft:wolf", None) in kept_types_and_names
+    assert len(view["facilities"]) == 1
+
+
+def test_glance_scene_and_brief_surface_visible_signs() -> None:
+    """glance_scene 读取可见告示牌并精简排序，glance_brief 渲染进一句话现场供主播直接读牌。"""
+    scene = {
+        "signs": [
+            {
+                "id": "b1",
+                "block": "minecraft:oak_wall_sign",
+                "distance": 4.0,
+                "direction": "左前",
+                "text": "简易鼓风机熔炉",
+            },
+            {
+                "id": "b2",
+                "block": "minecraft:oak_wall_sign",
+                "distance": 2.0,
+                "direction": "前方",
+                "text": "这里取产物",
+            },
+            {"id": "b3", "block": "minecraft:oak_sign", "distance": 3.0, "text": "墙后告示牌", "visible": False},
+            {"id": "b4", "block": "minecraft:oak_sign", "distance": 1.0, "text": "   "},
+        ]
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    assert [s["text"] for s in view["signs"]] == ["这里取产物", "简易鼓风机熔炉"]
+    assert view["signs"][0]["direction"] == "前方" and view["signs"][0]["distance"] == 2.0
+    brief = glance_brief(view)
+    assert "附近告示牌写着：这里取产物、简易鼓风机熔炉" in brief
+    assert "墙后告示牌" not in brief
+
+
+def test_glance_scene_close_exempts_occluded_player_and_targeting_hostile() -> None:
+    """24 格内 visible=False 的墙后非潜行玩家与锁定我的敌对怪按 Mod 豁免保留，普通墙后怪与野生动物仍过滤。"""
+    scene = {
+        "entities": [
+            # 24 格内隔墙玩家：豁免保留
+            {
+                "id": "p1",
+                "type": "minecraft:player",
+                "name": "同伴乙",
+                "distance": 12.0,
+                "hostile": False,
+                "visible": False,
+                "in_view": False,
+            },
+            # 24 格内隔墙但已锁定我的敌对怪：豁免保留
+            {
+                "id": "h1",
+                "type": "minecraft:skeleton",
+                "distance": 10.0,
+                "hostile": True,
+                "targeting_me": True,
+                "visible": False,
+                "in_view": False,
+            },
+            # 24 格内隔墙且未锁定我的敌对怪：过滤
+            {
+                "id": "h2",
+                "type": "minecraft:creeper",
+                "distance": 10.0,
+                "hostile": True,
+                "targeting_me": False,
+                "visible": False,
+                "in_view": False,
+            },
+            # 24 格内隔墙野生动物：过滤
+            {
+                "id": "m1",
+                "type": "minecraft:panda",
+                "distance": 8.0,
+                "hostile": False,
+                "visible": False,
+                "in_view": False,
+            },
+        ],
+        "facilities": [
+            {"block": "minecraft:furnace", "direction": "右侧", "distance": 3.0},
+        ],
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    kept = [(e["type"], e.get("name")) for e in view["entities"]]
+    assert ("minecraft:player", "同伴乙") in kept
+    assert ("minecraft:skeleton", None) in kept
+    assert ("minecraft:creeper", None) not in kept
+    assert ("minecraft:panda", None) not in kept
+    assert len(view["facilities"]) == 1

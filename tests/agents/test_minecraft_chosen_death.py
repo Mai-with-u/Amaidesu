@@ -46,21 +46,39 @@ def test_suicide_goal_falls_back_to_start_and_resume_lines() -> None:
 
 
 def test_watch_tracks_running_suicide_until_it_finishes_or_goes_stale() -> None:
-    """寻死开始后死讯算自己选的；结束了不算；结束事件漏读的放十分钟作废；连接拆掉清空。"""
+    """寻死开始后死讯算自己选的；若先结目标后到死讯保留 15 秒短宽限窗（单次消费防连杀误伤）；放十分钟作废；连接拆掉清空。"""
     now: List[int] = [0]
     watch = SuicideWatch(clock=lambda: now[0])
     assert watch.chosen() is False
 
+    # 场景 1：运行期间已经收到 character_died -> 随后 finished -> 紧接着真意外死亡不误判
     watch.observe(_event("started", 9, "开始：maicraft:suicide（回家）"))
     watch.observe(_event("started", 4, "开始：maicraft:travel（去矿洞）"))
     assert watch.chosen() is True
     watch.observe(_event("finished", 4))
     assert watch.chosen() is True, "别的目标结束不影响"
     watch.observe(_event("finished", 9))
+    now[0] = 2_000
+    assert watch.chosen() is False, "运行期间已消费过一次死亡，目标结束后紧接着的二次死亡不误判成自杀"
+
+    # 场景 2：Mod 先推 finished 再推 character_died（2 秒后到达）-> 15 秒宽限窗命中一次，随后清除防连杀误伤
+    now[0] = 10_000
+    watch.observe(_event("started", 13, "开始：maicraft:suicide（回家）"))
+    watch.observe(_event("finished", 13))
+    now[0] = 12_000
+    assert watch.chosen() is True
     assert watch.chosen() is False
 
+    # 场景 3：超过 15 秒宽限窗后才死亡 -> 不再认作自杀
+    now[0] = 50_000
+    watch.observe(_event("started", 12, "开始：maicraft:suicide"))
+    watch.observe(_event("finished", 12))
+    now[0] = 65_000
+    assert watch.chosen() is False
+
+    now[0] = 100_000
     watch.observe(_event("started", 10, "开始：maicraft:suicide"))
-    now[0] = 10 * 60 * 1000
+    now[0] = 100_000 + 10 * 60 * 1000
     assert watch.chosen() is False, "结束事件漏读的放久了作废，免得以后真出事被当成回家"
 
     watch.observe(_event("started", 11, "开始：maicraft:suicide"))
@@ -69,16 +87,24 @@ def test_watch_tracks_running_suicide_until_it_finishes_or_goes_stale() -> None:
 
 
 def test_watch_drops_a_sequence_once_its_suicide_step_is_over() -> None:
-    """sequence 的事件都记在整件的编号上、ability 写那一步的能力：寻死那一步做完、或改推进别的能力就不再算在寻死。"""
-    watch = SuicideWatch(clock=lambda: 0)
+    """sequence 的事件都记在整件的编号上、ability 写那一步的能力：先结步后到死讯留一次短宽限后清除；改推进别的能力划掉。"""
+    now: List[int] = [0]
+    watch = SuicideWatch(clock=lambda: now[0])
 
-    # 寻死那一步被暂停后接着推进 -> 记下；这一步做完 -> 划掉，整件 sequence 还在跑也不算
+    # 寻死那一步先 step_finished、随后才到 character_died -> 宽限窗命中一次，二次死亡不误判
     watch.observe(_goal_event("resumed", 20, "maicraft:suicide", "接着推进：回家"))
-    assert watch.chosen() is True
     watch.observe(_goal_event("step_finished", 20, "maicraft:suicide", "第 2 步（maicraft:suicide）：死了一次"))
+    now[0] = 1_000
+    assert watch.chosen() is True
     assert watch.chosen() is False
 
-    # 记下后同一编号接着推进的是别的能力（走到了下一步）-> 划掉
+    # 寻死那一步在步内已经收到死讯 -> 步结束后不再开宽限窗
+    watch.observe(_goal_event("resumed", 24, "maicraft:suicide", "接着推进：回家"))
+    assert watch.chosen() is True
+    watch.observe(_goal_event("step_finished", 24, "maicraft:suicide", "第 2 步（maicraft:suicide）：死了一次"))
+    assert watch.chosen() is False
+
+    # 记下后同一编号接着推进的是别的能力（走到了下一步）-> 划掉，不再算在寻死
     watch.observe(_goal_event("resumed", 21, "maicraft:suicide"))
     watch.observe(_goal_event("resumed", 21, "maicraft:travel", "接着推进：去矿洞"))
     assert watch.chosen() is False

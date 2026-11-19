@@ -65,10 +65,14 @@ def fit_to_budget(speech: str, budget: int) -> str:
 # 书面标点规范化
 # ============================================================================
 
-# 台词是当场说出口的话：破折号与省略号是书面标点，念出来不成话。无论模型写成什么，
-# 出声与字幕统一在出口处把这两类（含连用）换成逗号，再清掉由此产生的重复标点与句尾悬挂逗号
+# 台词是当场说出口的话：破折号、省略号、直角引号与段落换行是书面符号，念出来或送 TTS 不自然。
+# 无论模型写成什么，出声与字幕统一在出口处清洗：去掉直角引号、把破折号/省略号/换行归一为逗号，
+# 再清掉由此产生的重复标点与句尾悬挂逗号。
 _EM_DASH_RUN = re.compile(r"—+")
 _ELLIPSIS_RUN = re.compile(r"…+")
+_CORNER_QUOTES = re.compile(r"[「」]")
+# 换行符及其两侧连续空格/制表符一并吸收为口语停顿逗号，避免“句号+空格+换行+空格”残出“。  ，  ”或孤立逗号
+_NEWLINE_RUN = re.compile(r"[ \t]*(?:\r?\n[ \t]*)+")
 _REPEATED_COMMA = re.compile(r"[，,]{2,}")
 _END_PUNCT_THEN_COMMA = re.compile(r"([。！？!?~～])[，,]")
 _COMMA_THEN_END_PUNCT = re.compile(r"[，,]([。！？!?])")
@@ -77,18 +81,21 @@ _TRAILING_COMMA = re.compile(r"[，,]\s*$")
 
 
 def normalize_spoken_punctuation(text: str) -> str:
-    """把台词里的书面标点换成口语标点，返回可直接出声与上字幕的文本。
+    """把台词里的书面标点与段落换行换成口语标点，返回可直接出声与上字幕的文本。
 
-    映射：破折号"——"（含连用与单个）→"，"；省略号"……"（含连用与单个"…"）→"，"；
-    随后清理重复标点、句末标点两侧的逗号、句首逗号与句尾悬挂逗号（句尾悬挂逗号补成句号）。
-    无书面标点的文本原样返回。
+    映射：直角引号「」→删除；连续或单个换行（含相邻空格）→"，"；破折号"——"（含连用与单个）→"，"；
+    省略号"……"（含连用与单个"…"）→"，"；随后清理重复标点、句末标点两侧的逗号、
+    首尾空白后的句首逗号与句尾悬挂逗号（句尾悬挂逗号补成句号）。无书面符号的文本原样返回。
     """
-    cleaned = _EM_DASH_RUN.sub("，", text)
+    cleaned = _CORNER_QUOTES.sub("", text)
+    cleaned = _NEWLINE_RUN.sub("，", cleaned)
+    cleaned = _EM_DASH_RUN.sub("，", cleaned)
     cleaned = _ELLIPSIS_RUN.sub("，", cleaned)
     cleaned = _REPEATED_COMMA.sub("，", cleaned)
     cleaned = _END_PUNCT_THEN_COMMA.sub(r"\1", cleaned)
     cleaned = _COMMA_THEN_END_PUNCT.sub(r"\1", cleaned)
-    cleaned = _LEADING_COMMA.sub("", cleaned)
+    # 先裁去首尾空白再去句首逗号，避免纯空白+换行（如 " \n "）经映射后残出孤立句号 "。"
+    cleaned = _LEADING_COMMA.sub("", cleaned.strip())
     return _TRAILING_COMMA.sub("。", cleaned).strip()
 
 

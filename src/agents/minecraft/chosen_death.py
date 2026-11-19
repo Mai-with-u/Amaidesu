@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Set
 
 __all__ = [
     "CHOSEN_DEATH_LINE",
@@ -49,6 +49,9 @@ _GOAL_LEADS = ("开始：", "接着推进：")
 
 #: 记下的 suicide 目标放多久作废（毫秒）：寻死自己有时限，十分钟还没结束只可能是漏读了结束事件
 _SUICIDE_STALE_MS = 10 * 60 * 1000
+#: suicide 目标刚结束后的短宽限窗（毫秒）：Mod 常先推目标 finished/step_finished 再推 character_died，
+#: 落在宽限窗内的紧随死亡事件仍认作自己选的死，消费一次后清除防止连杀误伤
+_SUICIDE_GRACE_MS = 15_000
 
 
 def is_suicide_ability(ability: str) -> bool:
@@ -96,18 +99,26 @@ def _goal_id_of(event: Dict[str, Any]) -> Optional[int]:
 
 
 class SuicideWatch:
-    """注意流采集器用：从事件流认出正在跑的 ``suicide`` 目标，死讯到时据此判断是不是自己要死的。"""
+    """注意流采集器用：从事件流认出正在跑或刚刚结束的 ``suicide`` 目标，死讯到时据此判断是不是自己要死的。"""
 
     def __init__(self, clock: Callable[[], int]) -> None:
         self._clock = clock
         # 目标编号 → 看到它开始的时刻（毫秒）
         self._running: Dict[int, int] = {}
+        # 已经在运行期间匹配消费过一次死亡事件的 suicide 目标编号：这类目标随后结束时不再开启宽限窗，
+        # 防止“死在目标内 -> 目标结束 -> 紧接着真被怪打死”被二次误判成自杀。
+        self._death_seen_goals: Set[int] = set()
+        # 最近一次尚未见过死亡的 suicide 目标/步骤结束时刻（毫秒）：给晚到几秒的 character_died 留短宽限窗，
+        # 避免先收 finished/step_finished 后收死亡事件时把主动回家误判成意外事故；消费一次即清空。
+        self._last_suicide_finished_ms: Optional[int] = None
 
     def observe(self, event: Dict[str, Any]) -> None:
-        """看一条事件：suicide 开始或接着推进就记下；目标结束、寻死那一步做完、同一编号改推进别的能力就划掉。"""
+        """看一条事件：suicide 开始或接着推进就记下；未见过死亡的目标结束时转入短宽限窗；改推进别的能力则划掉。"""
         started = suicide_goal_of(event)
         if started is not None:
             self._running[started] = self._clock()
+            self._death_seen_goals.discard(started)
+            self._last_suicide_finished_ms = None
             return
         goal_id = _goal_id_of(event)
         if goal_id is None:
@@ -115,20 +126,42 @@ class SuicideWatch:
         kind = event.get("kind")
         ability = ability_of(event)
         if kind == "finished":
-            self._running.pop(goal_id, None)
+            removed = self._running.pop(goal_id, None)
+            already_died = goal_id in self._death_seen_goals
+            self._death_seen_goals.discard(goal_id)
+            if not already_died and (removed is not None or (ability is not None and is_suicide_ability(ability))):
+                # suicide 目标刚结束且此前尚未收到死亡事件：进入短宽限窗，接住随后几秒内到达的死亡事件
+                self._last_suicide_finished_ms = self._clock()
         elif kind == "step_finished" and ability is not None and is_suicide_ability(ability):
-            # sequence 里寻死的那一步做完了：整件 sequence 还在跑，但后面的路程已经不是在寻死
+            # sequence 里寻死的那一步做完了：未见过死亡时弹出在跑记录并进入短宽限窗，接住紧随的死亡事件
             self._running.pop(goal_id, None)
+            already_died = goal_id in self._death_seen_goals
+            self._death_seen_goals.discard(goal_id)
+            if not already_died:
+                self._last_suicide_finished_ms = self._clock()
         elif kind in ("started", "resumed") and ability is not None:
             # 同一个编号接着推进的已是别的能力（sequence 走到了下一步）：先前记下的寻死不再算数
             self._running.pop(goal_id, None)
+            self._death_seen_goals.discard(goal_id)
 
     def chosen(self) -> bool:
-        """此刻是不是有 suicide 在跑（放太久的作废）。"""
+        """此刻是不是有 suicide 在跑，或死亡事件落在 suicide 刚结束后的短宽限窗内（单次消费防连杀误伤）。"""
         now = self._clock()
         self._running = {goal_id: at for goal_id, at in self._running.items() if now - at < _SUICIDE_STALE_MS}
-        return bool(self._running)
+        if self._running:
+            # 记录当前在跑的 suicide 目标已消费本次死亡，随后它结束时不再额外放行第二次死亡
+            self._death_seen_goals.update(self._running.keys())
+            return True
+        if self._last_suicide_finished_ms is not None:
+            elapsed = now - self._last_suicide_finished_ms
+            # 无论命中还是超时，宽限窗消费一次即清零，防止紧接着的二次真意外死亡被误当自杀
+            self._last_suicide_finished_ms = None
+            if 0 <= elapsed < _SUICIDE_GRACE_MS:
+                return True
+        return False
 
     def clear(self) -> None:
-        """连接拆掉、换了事件流：记下的编号都不算数了。"""
+        """连接拆掉、换了事件流：记下的编号、已消费记录与宽限窗都不算数了。"""
         self._running.clear()
+        self._death_seen_goals.clear()
+        self._last_suicide_finished_ms = None

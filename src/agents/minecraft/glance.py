@@ -478,6 +478,14 @@ def glance_brief(view: Dict[str, Any]) -> str:
     ]
     if facilities:
         sentences.append("附近有" + _list_words(facilities, 4))
+    signs = [
+        str(item.get("text") or "").strip()
+        for item in view.get("signs") or []
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ]
+    if signs:
+        # 告示牌文字进一句话现场（最多列前 3 块），让主播速览直接看到玩家标注内容
+        sentences.append("附近告示牌写着：" + "、".join(signs[:3]))
     distant_targeting: List[str] = []
     distant_passive: List[str] = []
     for entry in view.get("distant_entities") or []:
@@ -680,8 +688,71 @@ def nearby_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
     return tuple(_online_player_names(reply.data))
 
 
+#: 视野外普通野生生物保留的贴身半径（格）：超过此距离且明确不在前方视野内（in_view=False）时不进主播前景速览
+_OUT_OF_VIEW_WILD_KEEP_BLOCKS: float = 4.0
+#: 速览最多收录的附近告示牌条数与单块文字长度上限（防止长牌刷爆上下文）
+_SIGNS_MAX: int = 6
+_SIGN_TEXT_MAX_CHARS: int = 48
+
+
+def _is_out_of_view_wild_mob(entity: Dict[str, Any], described: Dict[str, Any]) -> bool:
+    """判定该实体是否为应从前景速览滤除的视野外普通野生生物。
+
+    仅当上游明确给出 ``in_view: False`` 且距离大于 4 格时触发（旧版 Mod 未传 ``in_view`` 兼容保留）；
+    敌对生物、玩家、掉落物、有自定义名/昵称或有归属/墓碑关联的生物一律保留，只过滤身后普通野生生物。
+    """
+    if entity.get("in_view") is not False:
+        return False
+    distance = entity.get("distance")
+    if (
+        not isinstance(distance, (int, float))
+        or isinstance(distance, bool)
+        or distance <= _OUT_OF_VIEW_WILD_KEEP_BLOCKS
+    ):
+        return False
+    if entity.get("hostile") is True:
+        return False
+    if entity.get("type") == "minecraft:player":
+        return False
+    if _is_dropped_item_type(entity.get("type")):
+        return False
+    if entity.get("name") or described.get("nickname") or described.get("name"):
+        return False
+    if described.get("owner") or described.get("tamer") or described.get("grave_of"):
+        return False
+    return True
+
+
+def _nearby_signs(items: Any) -> List[Dict[str, Any]]:
+    """提取附近可见且有文字内容的告示牌（近的在前，精简数量与单块字数）。"""
+    if not isinstance(items, list):
+        return []
+    candidates: List[Tuple[float, Dict[str, Any]]] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("visible") is False:
+            continue
+        raw_text = " ".join(str(item.get("text") or "").split())
+        if not raw_text:
+            continue
+        distance = item.get("distance")
+        if isinstance(distance, (int, float)) and not isinstance(distance, bool):
+            if distance > NEARBY_BLOCKS:
+                continue
+            sort_dist = float(distance)
+        else:
+            sort_dist = float(NEARBY_BLOCKS)
+        entry: Dict[str, Any] = {"text": raw_text[:_SIGN_TEXT_MAX_CHARS]}
+        if item.get("direction"):
+            entry["direction"] = item["direction"]
+        if isinstance(distance, (int, float)) and not isinstance(distance, bool):
+            entry["distance"] = distance
+        candidates.append((sort_dist, entry))
+    candidates.sort(key=lambda pair: pair[0])
+    return [entry for _, entry in candidates[:_SIGNS_MAX]]
+
+
 def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """周边：时段天气、生物群系、身边的生物与设施（各带距离和大致方位），远处的生物按种类计数，以及全服在线玩家名单。
+    """周边：时段天气、生物群系、身边的生物、告示牌与设施（各带距离和大致方位），远处的生物按种类计数，以及全服在线玩家名单。
 
     身边的生物带上认出它是谁的事实（驯服关系、坐着、名字、女仆皮肤、墓碑上的名字），见 ``described_entity``；
     ``nicknames`` 是生物名册给的"观察编号 → 主播起的名字"（墓碑对到死者），对上的条目带 ``nickname``。
@@ -704,6 +775,9 @@ def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = Non
         nickname = names.get(str(entity.get("id") or ""))
         if nickname:
             described = {**described, "nickname": nickname}
+        # 过滤身后 4 格外的普通野生生物（旧版 Mod 无 in_view 字段时兼容保留）
+        if _is_out_of_view_wild_mob(entity, described):
+            continue
         entities.append(described)
     if entities:
         result["entities"] = entities
@@ -716,6 +790,9 @@ def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = Non
     )
     if facilities:
         result["facilities"] = facilities
+    signs = _nearby_signs(data.get("signs"))
+    if signs:
+        result["signs"] = signs
     return result
 
 
@@ -1006,6 +1083,9 @@ def _distant(entities: Any, counts: Any) -> List[str]:
             # 没有距离的不知道远近，身边和远处都不算；身边范围内的已经在 entities 里逐只给了
             if not isinstance(distance, (int, float)) or distance <= NEARBY_BLOCKS:
                 continue
+            # 墙后遮挡实体（visible=False）不透视进远处清单，仅保留玩家与正在锁定我的敌对生物
+            if not _is_visible_or_exempt(item):
+                continue
             # 不相干的远处敌对生物不进远处清单（防断头提及），但已经盯上角色的远处敌对保留并标明，让挨打前有铺垫
             if item.get("hostile") is True:
                 if item.get("targeting_me") is not True:
@@ -1079,14 +1159,24 @@ def described_entity(entity: Dict[str, Any], things: Dict[str, Dict[str, Any]]) 
     return described
 
 
+def _is_visible_or_exempt(item: Dict[str, Any]) -> bool:
+    """实体可见性判定：显式 ``visible=False`` 的遮挡实体不透视，但放行玩家与锁定我的敌对生物（对齐 Mod Scene 豁免）。"""
+    if item.get("visible") is not False:
+        return True
+    if item.get("type") == "minecraft:player":
+        return True
+    return item.get("hostile") is True and item.get("targeting_me") is True
+
+
 def _close(items: Any) -> List[Dict[str, Any]]:
-    """身边范围内的条目原样取出，近的在前。"""
+    """身边范围内的可见条目原样取出，近的在前；显式标为 ``visible=False`` 的遮挡实体仅豁免玩家与锁定我的敌对生物。"""
     if not isinstance(items, list):
         return []
     close = [
         item
         for item in items
         if isinstance(item, dict)
+        and _is_visible_or_exempt(item)
         and isinstance(item.get("distance"), (int, float))
         and item["distance"] <= NEARBY_BLOCKS
     ]
