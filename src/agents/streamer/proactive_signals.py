@@ -63,6 +63,11 @@ class ProactiveSignals:
         """游戏待定夺：游戏里有事需要主播拿主意。"""
         self._game = True
 
+    def clear_superseded_by_game_lead(self) -> None:
+        """进入游戏主控态时清空已被游戏自主接管的待触发流程单与游戏信号，避免后续被动降级时误放旧信号。"""
+        self._rundown = False
+        self._game = False
+
     # ----- 观测（非消费；测试与诊断用） -----
 
     @property
@@ -118,6 +123,8 @@ class ProactiveSignals:
         reminder_pending: bool,
         talk_mode: bool = False,
         viewer_waiting_since_ms: Optional[int] = None,
+        in_game_lead: bool = False,
+        lead_since_ms: Optional[int] = None,
     ) -> Optional[TriggerKind]:
         """执行一个 tick 的完整主动发言判定序列，返回触发原因（None = 不触发）。
 
@@ -151,6 +158,8 @@ class ProactiveSignals:
             reminder_pending=reminder_pending,
             talk_mode=talk_mode,
             viewer_waiting_since_ms=viewer_waiting_since_ms if live else None,
+            in_game_lead=in_game_lead if live else False,
+            lead_since_ms=lead_since_ms if live else None,
         )
         self.confirm(kind, tick)
         return kind

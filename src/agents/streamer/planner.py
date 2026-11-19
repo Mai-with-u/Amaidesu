@@ -117,6 +117,21 @@ MEMORY_CORRECT_TOOL_NAME: str = "streamer_memory_correct"
 AVATAR_ACT_TOOL_NAME: str = "avatar_act"
 #: 主播直发游戏公屏文字的工具全名：公屏发言只有经它真实发送成功才算在游戏内已回
 GAME_CHAT_SEND_TOOL_NAME: str = "minecraft_chat_send"
+#: 游戏主控态下对主播侧隐藏的委派与强干预工具（轻从轮保留 framework_suggest 与只读查询）
+_GAME_LEAD_HIDDEN_TOOLS: frozenset[str] = frozenset(
+    {
+        "framework_delegate",
+        "framework_task_settle",
+        "framework_prompt",
+    }
+)
+#: 游戏主控冷场兜底轮额外隐藏的建议与任务查询工具（冷场暖场对游戏零控制权）
+_GAME_LEAD_IDLE_EXTRA_HIDDEN_TOOLS: frozenset[str] = frozenset(
+    {
+        "framework_suggest",
+        "framework_task_status",
+    }
+)
 
 #: 作废条款里"记一条取代旧行的社交事实"那一步（模板变量 social_fact_step；工具没注册时为空串）
 _SOCIAL_FACT_RETRACTION_STEP: str = (
@@ -272,6 +287,10 @@ class RoundContext:
     # 本窗合法的点名编号：常驻简报里标着编号的加本批卡片里的
     memory_ids: Set[int] = field(default_factory=set)
     archive_ids: Set[int] = field(default_factory=set)
+    # 动态主从运行态：当前是否处于游戏自主主控态、主控游戏注册名、以及本轮是否为低频冷场兜底轮
+    in_game_lead: bool = False
+    lead_agent: str = ""
+    game_lead_idle_fallback: bool = False
 
 
 @dataclass(frozen=True)
@@ -335,6 +354,8 @@ class PlannerEnv:
     proactive_silent_provider: Optional[Callable[[], bool]] = None
     # 单槽跨轮工作便签渲染来源（未过期且非空时渲染在参考段尾部紧邻【游戏那边此刻】）
     working_note_provider: Optional[Callable[[], str]] = None
+    # 动态主从：查询当前处于自主主控态的游戏 Agent 注册名（主播主控态返回 None）
+    game_lead_agent_provider: Optional[Callable[[], Optional[str]]] = None
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -552,6 +573,7 @@ class Planner:
         self._talk_cards_provider = env.talk_cards_provider if env else None
         self._proactive_silent_provider = env.proactive_silent_provider if env else None
         self._working_note_provider = env.working_note_provider if env else None
+        self._game_lead_agent_provider = env.game_lead_agent_provider if env else None
 
         # 本窗卡片称呼（每窗在 plan() 入口重算）
         self._memory_labels: Dict[int, str] = {}
@@ -673,6 +695,11 @@ class Planner:
         self._transient_images.drain()
         # 本窗轮次上下文装配（本轮新入账批次；回执随 ReAct 循环逐步累积，reply 交接时取全量）
         resolved_batch = game_batch or GameEventBatch()
+        lead_agent = self._active_game_lead_agent() or ""
+        in_game_lead = bool(lead_agent)
+        game_lead_idle_fallback = (
+            trigger_cause is not None and trigger_cause.kind is TriggerKind.GAME_LEAD_IDLE_FALLBACK
+        )
         ctx = RoundContext(
             facts_text=resolved_batch.facts_text,
             game_events=list(resolved_batch.events),
@@ -690,6 +717,9 @@ class Planner:
             game_players=resolved_batch.addressed_players,
             # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
             player_notes=resolved_batch.player_notes,
+            in_game_lead=in_game_lead,
+            lead_agent=lead_agent,
+            game_lead_idle_fallback=game_lead_idle_fallback,
         )
         self._recent_player_notes = keep_recent_notes(
             self._recent_player_notes, resolved_batch.player_notes, self._clock()
@@ -735,7 +765,8 @@ class Planner:
         )
         talk_workbench_text = self._read_talk_workbench(bool(batch), urgent_game=urgent_game)
         talk_cards_text = await self._read_talk_cards(bool(batch))
-        overview = await self._read_reference_tools(round_id)
+        # 游戏主控态下进入轻从模式：不再每轮前自动拉取沉重速览（仅保留只读查询工具按需查，避免上下文滚雪球）
+        overview = "" if ctx.in_game_lead else await self._read_reference_tools(round_id)
         self._last_overview_text = overview
         reference_text, reference_failure = await self._assemble_reference(
             batch,
@@ -759,7 +790,7 @@ class Planner:
         if reference_text is None:
             return replace(outcome, error=reference_failure, silent_reason="assembler_failed")
 
-        tool_list = self._build_tool_list()
+        tool_list = self._build_tool_list(ctx)
         ctx.tool_names = {
             str(item.get("name") or "") for item in tool_list if isinstance(item, Mapping) and item.get("name")
         }
@@ -1202,8 +1233,21 @@ class Planner:
             self.logger.warning(f"读取工具面使用说明失败（本轮按没有游戏处理）: {exc}", exc=True)
             return []
 
+    def _active_game_lead_agent(self) -> Optional[str]:
+        """查询当前处于游戏自主主控态的 Agent 注册名；主播主控态或未装配时返回 None。"""
+        if self._game_lead_agent_provider is None:
+            return None
+        try:
+            name = (self._game_lead_agent_provider() or "").strip()
+            return name or None
+        except Exception as exc:  # noqa: BLE001 - 查询主控态失败时按主播主控保守兜底
+            self.logger.warning(f"查询当前游戏主控状态失败（按主播主控处理）: {exc}", exc=True)
+            return None
+
     def _has_delegable_game(self) -> bool:
-        """是否存在能接收委派的游戏工具面。"""
+        """是否存在能接收委派的游戏工具面（游戏自主主控态下返回 False，不走委派路径）。"""
+        if self._active_game_lead_agent() is not None:
+            return False
         return any(provider == FRAMEWORK_PROVIDER for provider, _text in self._visible_guides())
 
     def _has_any_game(self) -> bool:
@@ -1274,7 +1318,8 @@ class Planner:
         if not has_game:
             lines.append(self._no_game_rules())
         lines.extend(f"- {text}" for _provider, text in guides)
-        if any(provider == FRAMEWORK_PROVIDER for provider, _text in guides):
+        # 游戏自主主控态下 framework guide 已切换为观众建议说明，不再追加委派强杀守则
+        if self._active_game_lead_agent() is None and any(provider == FRAMEWORK_PROVIDER for provider, _text in guides):
             lines.append(self._prompt_service.render(self.DELEGATE_RULES_TEMPLATE))
         return "\n".join(lines)
 
@@ -1309,6 +1354,7 @@ class Planner:
         ctx = ctx or RoundContext()
         signoff_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
         resume_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.RESUME
+        idle_fallback_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.GAME_LEAD_IDLE_FALLBACK
         lines: List[str] = []
         if forced and not (signoff_window or resume_window):
             # signoff / resume 是流程自身触发的收尾轮与接回轮，不是观众付费或点名的
@@ -1324,6 +1370,11 @@ class Planner:
                 "【情境】直播刚才因程序中断过，现在已恢复（断线续播）：用一句话自然接回直播"
                 "——告诉观众信号回来了、接着刚才的内容继续；不要重新自我介绍或重新开场，"
                 "也不必对中断过度道歉，按对话历史里刚才聊到的地方顺下去。"
+            )
+        elif idle_fallback_window:
+            lines.append(
+                "【情境】当前处于游戏自主推进期间，直播间已连续静默一段时间（低频冷场兜底）："
+                "顺着近况、话题卡或个人喜好和观众轻松暖一句闲话即可，不要干预或指挥游戏行动。"
             )
         elif proactive:
             # 主动窗按当前实际装配说明触发来源与可选行动：没接委派游戏时不提派单与游戏工作日志，
@@ -1359,6 +1410,10 @@ class Planner:
             # 空房间连续提问/求押注只会自问自答
             lines.append(f"【房间活跃度】{activity}")
         silence = render_silence(self._room_state.last_speech_ms, self._cold_silence_ms, current_ms)
+        if not silence and idle_fallback_window:
+            silence = (
+                "【冷场】游戏主控推进期间全场已连续静默一段时间：顺着近况、话题卡或个人喜好和观众轻松暖一句闲话即可"
+            )
         if not silence and proactive and not batch:
             # 解开 rundown_ready（15~30s）与【冷场】（45s）的死锁：
             # 杂谈档无弹幕时直接点亮找话提示；边玩边说档在游戏无新事件且上一轮主动窗已沉默过一次时同样点亮
@@ -1675,11 +1730,15 @@ class Planner:
 
     # ==================== 工具列表与执行 ====================
 
-    def _build_tool_list(self) -> List[Dict[str, Any]]:
-        """LLM 工具列表 = 注册表按可见名单计算（for_agent="streamer"）。
+    def _build_tool_list(self, ctx: Optional[RoundContext] = None) -> List[Dict[str, Any]]:
+        """LLM 工具列表 = 注册表按可见名单计算（for_agent="streamer"），并按动态主从运行态过滤。
 
-        动态工具（如 rundown_control）的可见性同样由注册表承载——随
-        Provider 注册/摘除进出名单，Planner 不做二次筛选。
+        - 主播主控态：保持注册表原样返回；
+        - 游戏主控轻从态（观众弹幕/提醒轮）：隐藏 ``framework_delegate`` / ``framework_task_settle`` /
+          ``framework_prompt`` 与当前主控游戏的公屏发送工具，保留 ``streamer_reply`` / ``framework_suggest`` /
+          记忆与流程单工具及只读查询工具；
+        - 游戏主控冷场兜底轮：零游戏控制权，再额外隐藏 ``framework_suggest`` / ``framework_task_status``
+          与全部游戏公屏发送工具。
         """
         if self._tool_registry is None:
             return []
@@ -1688,9 +1747,37 @@ class Planner:
         except Exception as e:
             self.logger.warning(f"Planner 拉取工具列表失败（本轮无工具）: {e}")
             return []
+        lead_agent = ctx.lead_agent if ctx is not None else (self._active_game_lead_agent() or "")
+        in_game_lead = ctx.in_game_lead if ctx is not None else bool(lead_agent)
+        idle_fallback = ctx.game_lead_idle_fallback if ctx is not None else False
+        if in_game_lead or idle_fallback:
+            specs = [
+                spec
+                for spec in specs
+                if not self._is_tool_hidden_in_game_lead(spec, lead_agent=lead_agent, idle_fallback=idle_fallback)
+            ]
         # 定义附上下文计量归属（MCP / 内置工具），上下文面板据此分段；
         # 定义形状由工具域的 LLM 转换层统一生成（llm_defs）
         return [function_definition(spec, self._tool_registry.category_of(spec.full_name)) for spec in specs]
+
+    @staticmethod
+    def _is_tool_hidden_in_game_lead(spec: Any, *, lead_agent: str, idle_fallback: bool) -> bool:
+        """判定游戏主控态或冷场兜底轮下是否应对主播隐藏某工具（不硬编码任何具体游戏名）。"""
+        full_name = str(getattr(spec, "full_name", "") or "")
+        tool_name = str(getattr(spec, "name", "") or "")
+        provider = str(getattr(spec, "provider", "") or "")
+        if full_name in _GAME_LEAD_HIDDEN_TOOLS:
+            return True
+        if idle_fallback:
+            if full_name in _GAME_LEAD_IDLE_EXTRA_HIDDEN_TOOLS:
+                return True
+            if tool_name == "chat_send" or full_name.endswith("_chat_send"):
+                return True
+        if lead_agent and (
+            full_name == f"{lead_agent}_chat_send" or (provider == lead_agent and tool_name == "chat_send")
+        ):
+            return True
+        return False
 
     async def _invoke_reply(
         self,

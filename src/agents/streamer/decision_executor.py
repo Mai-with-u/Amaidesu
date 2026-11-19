@@ -38,7 +38,12 @@ from .planner import Planner, RoundOutcome
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
 from .session_scope import ClosingSession, WindowMaterials
-from .speech_dispatcher import SpeechDispatcher
+from .speech_dispatcher import (
+    SPEECH_PRIORITY_AUDIENCE,
+    SPEECH_PRIORITY_HIGHLIGHT,
+    SPEECH_PRIORITY_NORMAL,
+    SpeechDispatcher,
+)
 from .stats import StreamerStats
 from .thinking_stream import ThinkingStreamContext
 from .trigger_cause import TriggerCause, TriggerKind
@@ -79,6 +84,7 @@ _TRIGGER_KIND_LABEL: Dict[TriggerKind, str] = {
     TriggerKind.REMINDER: "递话催醒",
     TriggerKind.RUNDOWN: "流程单推进",
     TriggerKind.GAME: "游戏 Agent 待定夺",
+    TriggerKind.GAME_LEAD_IDLE_FALLBACK: "游戏主控冷场暖场",
     TriggerKind.SIGNOFF: "收播道别",
     TriggerKind.RESUME: "断线续播",
     TriggerKind.DASHBOARD_DEBUG: "控制台决策测试",
@@ -119,6 +125,25 @@ def trigger_cause_text(cause: TriggerCause, *, proactive: bool) -> str:
 def _silent_reason_text(silent_reason: str) -> str:
     """静默原因码 → 面板可读文案（未知码原样返回）。"""
     return _SILENT_REASON_LABEL.get(silent_reason, silent_reason)
+
+
+def _resolve_dispatch_priority(
+    *,
+    forced: bool,
+    has_viewer_target: bool,
+    trigger_cause: TriggerCause,
+) -> int:
+    """按四档语音优先级划分本次决策发言档位。
+
+    - 观众付费（forced）或观众弹幕/点名回复 → P2（SPEECH_PRIORITY_AUDIENCE，触发一级打断清待播 P0/P1）；
+    - 游戏事件/公屏触发的决策轮（TriggerKind.GAME）→ P1（SPEECH_PRIORITY_HIGHLIGHT，触发一级打断清待播 P0）；
+    - 普通主动独白 / 流程单节奏 / 冷场暖场 → P0（SPEECH_PRIORITY_NORMAL）。
+    """
+    if forced or has_viewer_target:
+        return SPEECH_PRIORITY_AUDIENCE
+    if trigger_cause.kind is TriggerKind.GAME:
+        return SPEECH_PRIORITY_HIGHLIGHT
+    return SPEECH_PRIORITY_NORMAL
 
 
 class DecisionRoundExecutor:
@@ -478,8 +503,12 @@ class DecisionRoundExecutor:
                 return result, outcome
         target_user_id = resolve_reply_target_user(outcome, batch)
         reply_quote = resolve_reply_quote(outcome, batch)
-        # 付费触发最高优（2）、回应观众弹幕批（1）可收住正在连播的杂谈独白后半句先接话；主动独白为 0
-        dispatch_priority = 2 if forced else (1 if (batch or target_user_id or result["reply_to_message_id"]) else 0)
+        # 四档语音优先级映射：观众付费/弹幕回复 P2 > 游戏待定夺/公屏 P1 > 普通主动独白/冷场暖场 P0
+        dispatch_priority = _resolve_dispatch_priority(
+            forced=forced,
+            has_viewer_target=bool(batch or target_user_id or result["reply_to_message_id"]),
+            trigger_cause=trigger_cause,
+        )
         speech_info = await self._speech.dispatch(
             outcome.reply_payload,
             target_user_id=target_user_id,

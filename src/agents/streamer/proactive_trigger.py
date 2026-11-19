@@ -102,7 +102,9 @@ _HOURLY_WINDOW_MS: int = 3_600_000
 # 内容推进类触发源：在 should_trigger 里本来就绕过 max_per_hour，记录时不占
 # hourly 额度——自己绕过上限的来源不该占别人的额度（否则话痨期几十个流程单
 # 窗把账记满，冷场/定时触发在此后一小时内全被上限扣死）。
-_UNCAPPED_KINDS = frozenset({TriggerKind.RUNDOWN, TriggerKind.GAME, TriggerKind.REMINDER})
+_UNCAPPED_KINDS = frozenset(
+    {TriggerKind.RUNDOWN, TriggerKind.GAME, TriggerKind.REMINDER, TriggerKind.GAME_LEAD_IDLE_FALLBACK}
+)
 
 
 class ProactiveTrigger:
@@ -113,7 +115,12 @@ class ProactiveTrigger:
     均为进程内内存态，重启即重置。
     """
 
-    def __init__(self, config: StreamerProactiveConfig) -> None:
+    def __init__(
+        self,
+        config: StreamerProactiveConfig,
+        *,
+        game_lead_idle_fallback_ms: int = 50_000,
+    ) -> None:
         """注入 proactive 子配置（字段默认值即"未配置降级"，在 Schema 一处表达）。"""
         self._enabled: bool = config.enabled
         self._cold_timeout_ms: int = config.cold_timeout_ms
@@ -137,6 +144,8 @@ class ProactiveTrigger:
         self._silent_cooldown_talk_ms: int = config.rundown_silent_cooldown_talk_ms
         # 观众弹幕攒批期间 rundown_ready 最多让路多久（毫秒）
         self._ready_yield_max_ms: int = config.rundown_ready_yield_max_ms
+        # 游戏主控态下全场连续无声超过该时长才由主播轻从侧暖一句闲话（毫秒）
+        self._game_lead_idle_fallback_ms: int = max(0, int(game_lead_idle_fallback_ms))
 
         # 运行期状态
         # 上次主动触发时刻（None = 尚未触发过）。仅 schedule 判定读取；
@@ -179,6 +188,8 @@ class ProactiveTrigger:
         reminder_pending: bool = False,
         talk_mode: bool = False,
         viewer_waiting_since_ms: int | None = None,
+        in_game_lead: bool = False,
+        lead_since_ms: int | None = None,
     ) -> TriggerKind | None:
         """判定当前 tick 是否应触发主动发言。
 
@@ -297,6 +308,18 @@ class ProactiveTrigger:
                 self._last_rundown_immediate = True
                 return TriggerKind.RUNDOWN
 
+        # 游戏主控态下：停用高频 rundown_ready / schedule / 常规 cold，改为低频冷场兜底。
+        # 只有全场连续无声（解说、快嘴、观众回复均推进 last_speech_ms）达到阈值时才允许主播暖一句闲话。
+        if in_game_lead:
+            if self._game_lead_idle_fallback_allowed(
+                last_speech_ms,
+                now_ms,
+                viewer_waiting_since_ms=viewer_waiting_since_ms,
+                lead_since_ms=lead_since_ms,
+            ):
+                return TriggerKind.GAME_LEAD_IDLE_FALLBACK
+            return None
+
         # rundown_ready：环节内持续产出机会——内容推进信号，绕过公共三道前置
         # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）；开窗受前瞻窗口约束，
         # 仅在进入下次可发言前的前瞻窗口后才提前思考，避免刚说完话就高频空转连开窗。
@@ -411,6 +434,29 @@ class ProactiveTrigger:
         if viewer_waiting_since_ms is not None and (now_ms - viewer_waiting_since_ms) < self._ready_yield_max_ms:
             return False
         return True
+
+    def _game_lead_idle_fallback_allowed(
+        self,
+        last_speech_ms: Optional[int],
+        now_ms: int,
+        *,
+        viewer_waiting_since_ms: int | None,
+        lead_since_ms: int | None,
+    ) -> bool:
+        """游戏主控态低频冷场兜底判定：连续无声满阈值、不在沉默冷却内、且不与攒批观众弹幕抢窗。"""
+        if self._game_lead_idle_fallback_ms <= 0:
+            return False
+        # 观众弹幕正在攒批：先让弹幕批放行，最多让到上限
+        if viewer_waiting_since_ms is not None and (now_ms - viewer_waiting_since_ms) < self._ready_yield_max_ms:
+            return False
+        # 上一轮冷场兜底选择沉默：等待满一个冷场兜底周期再重判，防止每 tick 空跑决策
+        if self._last_silent_ms is not None and (now_ms - self._last_silent_ms) < self._game_lead_idle_fallback_ms:
+            return False
+        # 全场连续无声时长以最近一次任意出声为基线；若尚未开口则以进入游戏主控时刻为基线
+        reference_ms = last_speech_ms if last_speech_ms is not None else lead_since_ms
+        if reference_ms is None:
+            return True
+        return (now_ms - reference_ms) >= self._game_lead_idle_fallback_ms
 
     def _topic_available(self, room_state: Any, now_ms: int) -> bool:
         """判定当前话题是否满足 ``topic_required`` 约束。

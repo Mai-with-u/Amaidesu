@@ -84,7 +84,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import Field
 
@@ -590,7 +590,26 @@ class StreamerConfig(BaseConfig):
     不重复定义子段）。
     """
 
-    # 根段：流程单与决策循环控制
+    # 根段：动态主从协作与流程单、决策循环控制
+    lead_mode: Literal["dynamic", "streamer_only"] = Field(
+        title="主控协作模式",
+        default="dynamic",
+        description="主控协作模式：dynamic=游玩期动态移交主控权给自主领航型游戏代理，streamer_only=始终保持主播主控（传统委派回退开关）",
+    )
+    game_lead_idle_fallback_ms: int = Field(
+        title="游戏主控冷场兜底时长",
+        default=50_000,
+        ge=5_000,
+        description="游戏主控态下全场连续无声超过该时长才由主播轻从侧暖一句闲话（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    game_lead_commentary_min_interval_ms: int = Field(
+        title="游戏实况解说最小出声间隔",
+        default=8_000,
+        ge=0,
+        description="游戏主控态下普通实况解说的最小出声间隔防抖（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     rundown_id: str = Field(title="流程单 ID", default="", description="流程单 id（空 = 使用内置默认流程单）")
     planner_max_steps: int = Field(
         title="决策最大步数",

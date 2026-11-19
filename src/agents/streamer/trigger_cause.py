@@ -47,6 +47,7 @@ class TriggerKind(str, Enum):
     REMINDER = "reminder"  # 运营递话催醒
     RUNDOWN = "rundown"  # 流程单推进（环节切换 / 超时提醒 / 持续产出）
     GAME = "game"  # 游戏 Agent 待定夺
+    GAME_LEAD_IDLE_FALLBACK = "game_lead_idle_fallback"  # 游戏主控态长时间无声后的低频冷场兜底
     SIGNOFF = "signoff"  # 收播道别
     RESUME = "resume"  # 断线续播（中断场次接回后的接回发言窗）
     # 控制台调试类
@@ -71,18 +72,20 @@ PROACTIVE_KINDS: frozenset[TriggerKind] = frozenset(
         TriggerKind.REMINDER,
         TriggerKind.RUNDOWN,
         TriggerKind.GAME,
+        TriggerKind.GAME_LEAD_IDLE_FALLBACK,
         TriggerKind.SIGNOFF,
         TriggerKind.RESUME,
     }
 )
 
-#: 没有任何新外部输入的主动触发种类（流程单推进、定时、冷场、收播道别、
+#: 没有任何新外部输入的主动触发种类（流程单推进、定时、冷场、游戏主控冷场兜底、收播道别、
 #: 断线续播）：这些决策窗不给手上的游戏活补充要求（Planner 豁免判断用）。
 NO_INPUT_PROACTIVE_KINDS: frozenset[TriggerKind] = frozenset(
     {
         TriggerKind.RUNDOWN,
         TriggerKind.SCHEDULE,
         TriggerKind.COLD,
+        TriggerKind.GAME_LEAD_IDLE_FALLBACK,
         TriggerKind.SIGNOFF,
         TriggerKind.RESUME,
     }

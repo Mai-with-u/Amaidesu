@@ -12,6 +12,7 @@ from src.agents.streamer.config import StreamerMouthConfig, StreamerPersonaConfi
 from src.agents.streamer.mouth import Mouth, Trigger
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
+from src.agents.streamer.speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -118,7 +119,13 @@ async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts:
     assert await mouth.react_once([_trigger()]) == "哇！谁炸我？！"
 
     call = speech.calls[0]
-    assert (call["emotion"], call["priority"], call["wait_ms"], call["gap_ms"]) == ("scared", 5, 6000, 1500)
+    assert (call["emotion"], call["priority"], call["allow_hard_interrupt"], call["wait_ms"], call["gap_ms"]) == (
+        "scared",
+        SPEECH_PRIORITY_HIGHLIGHT,
+        False,
+        6000,
+        1500,
+    )
     system = llm.calls[0]["system"]
     assert "你叫 麦麦" in system and "你嘴硬但心软" in system and "不超过 40 字" in system
     last = llm.calls[0]["messages"][-1]["content"]
@@ -367,7 +374,7 @@ async def test_accidental_death_triggers_both_mouth_and_planner_while_chosen_sui
     await agent._on_body_event("game.body.died", accident, "maicraft_attention")
     assert agent._proactive_signals.game_pending is True
     assert agent._flush_kick.is_set() is True
-    assert reactions == [("body:died", "死了：被蜘蛛杀死了", {"refresh_scene": True})]
+    assert reactions == [("body:died", "死了：被蜘蛛杀死了", {"refresh_scene": True, "kind": "died"})]
 
     plain = make_streamer_agent()
     await plain._on_body_event("game.body.died", accident, "maicraft_attention")
@@ -406,7 +413,13 @@ async def test_routine_hurt_and_sky_stay_silent_while_rare_sighting_reacts_and_w
         sighting_kind="rare_ore",
     )
     await agent._on_body_event("game.body.rare_sighted", ore, "maicraft_attention")
-    assert reactions == [("sighting:rare_ore", "眼前露出了深层钻石矿石好几块（在前方）", {"refresh_scene": False})]
+    assert reactions == [
+        (
+            "sighting:rare_ore",
+            "眼前露出了深层钻石矿石好几块（在前方）",
+            {"refresh_scene": False, "kind": "rare_sighted"},
+        )
+    ]
     assert agent._proactive_signals.game_pending is True
     assert agent._flush_kick.is_set() is True
     assert agent._game_ledger.has_pending_urgent() is True

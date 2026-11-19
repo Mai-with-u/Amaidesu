@@ -35,6 +35,7 @@ from .config import StreamerMouthConfig
 from .mouth_reconcile import strip_duplicate_greetings
 from .persona_rules import boundaries_line
 from .scene_card import GoalLine, SceneInputs, build_scene_card
+from .speech_dispatcher import SPEECH_PRIORITY_EMERGENCY, SPEECH_PRIORITY_HIGHLIGHT
 from .speech_guard import VerbatimRepeat, WordFilter, find_verbatim_repeat, fit_to_budget, guard
 from .tools.reply_tool import coerce_emotion
 
@@ -51,8 +52,6 @@ SCENE_CHANGING_BODY_KINDS = frozenset({"died"})
 _DEBOUNCE_S = 0.3
 #: 从事件发生到出声超过这么久就不说了：再晚就成了事后讲故事，那是 Planner 的活
 _MAX_REACTION_AGE_MS = 20_000
-#: 反应插到其他待播台词前面的优先级
-_PRIORITY = 5
 _SILENCE = "[沉默]"
 # 行首中英文情绪标签候选（兼容可选外层括号 []【】()（） 与中英文冒号）：
 # 英文仅剥除合法枚举、已知近义词、带空格/连字符的多词标签或括号小写标签，不误剥 PlayerA 等玩家名；
@@ -180,6 +179,20 @@ class Trigger:
     text: str
     urgent: bool = True
     refresh_scene: bool = False
+    kind: str = ""
+
+
+def _reaction_dispatch_level(triggers: Sequence[Trigger]) -> Tuple[int, bool]:
+    """按触发由头判定快嘴语音优先级与是否开启二级硬打断。
+
+    - 含非自选意外阵亡（``kind == "died"`` 或 ``key == "body:died"``）→ P3 紧急且允许二级硬打断
+      （只掐断正在念的 P0 普通独白/解说，绝不掐断 P1 高光或 P2 观众回复）；
+    - 其余高光目击 / 稀罕发现（``rare_sighted`` / ``milestone`` 等）→ P1 高光，仅走一级清待播不硬打断。
+    """
+    is_emergency = any(trigger.kind == "died" or trigger.key == "body:died" for trigger in triggers)
+    if is_emergency:
+        return SPEECH_PRIORITY_EMERGENCY, True
+    return SPEECH_PRIORITY_HIGHLIGHT, False
 
 
 class Mouth:
@@ -259,9 +272,10 @@ class Mouth:
         urgent: bool = True,
         refresh_scene: bool = False,
         at_ms: Optional[int] = None,
+        kind: str = "",
     ) -> None:
         """记一个高光或突发由头并唤醒生成循环；不阻塞调用方（事件回调里直接调）。"""
-        self._pending.append(Trigger(at_ms or self._clock(), key, text, urgent, refresh_scene))
+        self._pending.append(Trigger(at_ms or self._clock(), key, text, urgent, refresh_scene, kind))
         self._wake.set()
 
     def reset(self) -> None:
@@ -364,13 +378,15 @@ class Mouth:
         on_started = partial(
             self._log_started, text, self._trigger_text(fresh), generated - started, event_at, self._clock()
         )
+        priority, allow_hard_interrupt = _reaction_dispatch_level(fresh)
         utterance_id = await self._speech.dispatch_reaction(
             first_text,
             emotion=first_emotion.value,
             emotion_intensity=0.7,
             wait_ms=self._config.reaction_ttl_ms,
             gap_ms=self._config.min_gap_ms,
-            priority=_PRIORITY,
+            priority=priority,
+            allow_hard_interrupt=allow_hard_interrupt,
             round_id=f"mouth_{started}",
             llm_request_id=response.request_id or None,
             on_started=on_started,

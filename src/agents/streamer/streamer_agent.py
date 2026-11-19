@@ -55,10 +55,12 @@ from src.modules.agents.delegation_board import (
 )
 from src.modules.agents.delegation_text import own_words_of
 from src.modules.agents.factory import AGENT_BINDINGS
+from src.modules.agents.lead import CommentaryAck, CommentaryRequest, LeadCoordinator, LeadHandoverContext
 from src.modules.background import get_registry as get_task_registry
 from src.modules.background import setup_registry as setup_task_registry
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.agents import AgentLeadChangedPayload
 from src.modules.events.payloads.core import CoreErrorPayload, CoreStartupPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.game import GamePayload
@@ -108,18 +110,20 @@ from .delegation_workbench import PLANNER_CALL_SOURCE
 from .delegation_stall_watch import DelegationStallWatch
 from .mouth import MOUTH_BODY_KINDS, SCENE_CHANGING_BODY_KINDS, Mouth
 from .mouth_reconcile import ReconcileVerdict, SpokenLog, extract_player_join_name, reconcile_with_mouth
+from .plan import DecisionPlan
 from .planner import Planner, PlannerConfig, PlannerEnv
+from .planner_context import age_text
 from .paid_viewers import PaidViewerLookup
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
 from .replyer import Replyer
 from .room_state import RoomState
 from .scene_card import brief_of
-from .speech_dispatcher import SpeechDispatcher
-from .speech_guard import WordFilter
+from .speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT, SPEECH_PRIORITY_NORMAL, SpeechDispatcher
+from .speech_guard import WordFilter, guard
 from .game_ledger import GameLedger
 from .game_now import AgentNow, GameNow, GameSideLog, goal_results_from_ledger
-from .planner_render import Intent
+from .planner_render import Intent, render_social_facts
 from .stats import StreamerStats
 from .talk.deck import TopicDeck
 from .talk.profile import PersonaProfile, load_persona_profile
@@ -128,7 +132,7 @@ from .talk.workbench import TalkWorkbench
 from .timeline import StreamerTimeline
 from .trigger_cause import TriggerCause, TriggerKind, TriggerSource, cause_for_batch_flush
 from .tools.memory_correct import MemoryCorrectionToolProvider, build_memory_correct_tool_spec
-from .tools.reply_tool import ReplyToolProvider
+from .tools.reply_tool import ReplyToolProvider, coerce_emotion
 from .tools.social_fact import SocialFactToolProvider, build_social_fact_tool_spec
 from .tools.talk_cards_tool import build_talk_cards_tool_provider
 from .tools.working_note import WorkingNoteStore, WorkingNoteToolProvider, build_working_note_tool_spec
@@ -177,6 +181,20 @@ _STREAM_END_WRITE_WAIT_MS = 15_000
 
 # "正在玩这个游戏"的判定窗（毫秒）：这么久没有这个游戏的事件就不算在玩
 _GAME_ACTIVE_WINDOW_MS = 5 * 60 * 1000
+
+# 周期巡检触发自动切权的最小重试间隔（毫秒）：游戏拒收或未就绪时不按 300ms tick 高频刷交权
+_LEAD_SYNC_RETRY_INTERVAL_MS = 5_000
+
+# 主播主动收回或人工显式覆盖的切权原因：与游戏断连/故障引起的被动降级区分（被动降级需唤醒主播圆场）
+_INTENTIONAL_RECLAIM_REASONS = frozenset(
+    {
+        "live_ended",
+        "rundown_changed",
+        "streamer_stop",
+        "lead_mode_streamer_only",
+        "manual_override",
+    }
+)
 
 # 收播道别那一轮正在结束的那一场（其余时候为 None）。只在道别那一轮自己的调用链里看得见：
 # _execute_round 开头设上、跑完（含出错）复位。表达侧读历史（reply 工具 → _read_history）与
@@ -296,6 +314,7 @@ class StreamerAgent(BaseAgent):
         session_scope: Optional[SessionScope] = None,
         mouth: Optional[Mouth] = None,
         memory_cues: Optional[MemoryCueProvider] = None,
+        lead_coordinator: Optional[LeadCoordinator] = None,
         events_dir: Optional[Path] = None,
         settle_wait_ms: int = _STREAM_END_SETTLE_WAIT_MS,
         clock: Callable[[], int] = now_ms,
@@ -399,6 +418,17 @@ class StreamerAgent(BaseAgent):
         self._prompt = prompt_manager
         self._event_bus = event_bus
         self._tool_registry = tool_registry
+        # 动态主从协调器（可选；由组合根注入，未注入时保持传统主播常驻主控行为）
+        self._lead_coordinator: Optional[LeadCoordinator] = lead_coordinator
+        self._lead_hooks_bound: bool = False
+        self._spoken_echo_registered: bool = False
+        # 实况解说串行锁与被防抖压下的解说摘要缓冲（避免短时间内两笔解说同时调 Replyer 撞词）
+        self._commentary_lock = asyncio.Lock()
+        self._commentary_buffer: deque[str] = deque(maxlen=12)
+        # 进入游戏主控态的时刻（未开口前的冷场兜底基线）与周期切权防抖时刻、最近一次已入账收尾摘要
+        self._game_lead_entered_ms: Optional[int] = None
+        self._last_lead_sync_attempt_ms: int = 0
+        self._last_recorded_handover_summary: str = ""
         # 任务记录表引用：委派渲染的机器状态从这里查询（None 时 planner 降级只看交付语）
         self._task_ledger = task_ledger
         # 记账器（可选）：注入时接管下播清理时序（见 _finish_stream_end）
@@ -512,7 +542,10 @@ class StreamerAgent(BaseAgent):
         )
 
         # 主动发言触发器（纯规则组件，Agent 内部件；先于 Planner 构造供冷场死锁判定查询）
-        self._proactive_trigger = ProactiveTrigger(config.proactive)
+        self._proactive_trigger = ProactiveTrigger(
+            config.proactive,
+            game_lead_idle_fallback_ms=config.game_lead_idle_fallback_ms,
+        )
         # 单槽跨轮工作便签（进程内内存态，带自然过期与场次清空；只记等待意图与下一步打算）
         self._working_note = WorkingNoteStore(clock=self._clock)
 
@@ -560,6 +593,7 @@ class StreamerAgent(BaseAgent):
                 talk_cards_provider=self._refresh_talk_cards_for_window if self._topic_deck is not None else None,
                 proactive_silent_provider=lambda: self._proactive_trigger.has_silent_cooldown,
                 working_note_provider=self._working_note.render,
+                game_lead_agent_provider=self._active_game_lead_agent,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(
@@ -985,6 +1019,18 @@ class StreamerAgent(BaseAgent):
         if self._mouth is not None:
             await self._mouth.start()
 
+        # 动态主从协调器接线：同步 lead_mode 开关、绑定实况解说/交权简报/切权监听与口播回声转发
+        if self._lead_coordinator is not None:
+            if hasattr(self._lead_coordinator, "set_enabled"):
+                self._lead_coordinator.set_enabled(self.typed_config.lead_mode == "dynamic")
+            self._lead_coordinator.bind_commentary_handler(self._handle_game_commentary)
+            self._lead_coordinator.bind_handover_builder(self._build_lead_handover_context)
+            self._lead_coordinator.bind_lead_changed_listener(self._on_lead_changed)
+            self._lead_hooks_bound = True
+            if not self._spoken_echo_registered:
+                self._speech.add_spoken_listener(self._on_spoken_echo)
+                self._spoken_echo_registered = True
+
         # 记账器把下播清理交给本 Agent 托管：那一刻不能清遮名、也不能删观众——
         # 道别句与下播整理都排在 live.ended 之后（收尾见 _finish_stream_end）
         if self._stream_ledger is not None:
@@ -998,6 +1044,18 @@ class StreamerAgent(BaseAgent):
     async def _on_stop(self) -> None:
         """Agent 停止钩子。"""
         self._running = False
+
+        # 动态主从解绑并在停机前安全收回游戏主控权，避免停止后仍收到解说或回声转发
+        if self._lead_coordinator is not None:
+            self._lead_hooks_bound = False
+            self._lead_coordinator.bind_commentary_handler(None)
+            self._lead_coordinator.bind_handover_builder(None)
+            self._lead_coordinator.unbind_lead_changed_listener(self._on_lead_changed)
+            if self._lead_coordinator.is_game_lead:
+                try:
+                    await self._lead_coordinator.reclaim_streamer_lead(reason="streamer_stop")
+                except Exception as exc:  # noqa: BLE001 - 停机收权失败不阻断后续清理
+                    self._logger.warning(f"停机收回游戏主控权失败（已忽略）: {exc}", exc=True)
 
         # 嘴先停：它会往发声管线里塞台词
         if self._mouth is not None:
@@ -1395,6 +1453,8 @@ class StreamerAgent(BaseAgent):
         # 游戏活动也随场次重置：游戏承诺卡只看这一场"正在玩"什么，上一场的事件不带过来
         self._game_activity_ms.clear()
         self._session_games.clear()
+        self._commentary_buffer.clear()
+        self._game_lead_entered_ms = None
         if resumed:
             self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
             # 先从诊断事件流划出上一进程的时间段，递话与玩家聊天的重放共用这一段
@@ -1425,6 +1485,8 @@ class StreamerAgent(BaseAgent):
                 )
             except Exception as exc:  # noqa: BLE001 - 接回发言失败不挡续播链路
                 self._logger.exception(f"场次 {payload.live_session_id} 的续播接回那一轮出错: {exc}")
+        # 开播且流程单与常驻简报就绪后评估动态主从（如首段即为游玩环节且游戏就绪则自动交权）
+        await self._sync_lead_mode(reason="live_started")
 
     async def _restore_interrupted_delegations(self, live_session_id: int) -> None:
         """续播认领：这一场每个游戏里我最后派的那件，若是重启前受理、没交付完，就记回手头的事并标成被打断。
@@ -1690,9 +1752,12 @@ class StreamerAgent(BaseAgent):
         del event_name, source
         self._live_active = False
         self._opening_wrapup_active = False
+        self._commentary_buffer.clear()
         self._pace_wakeup.set()
         if self._mouth is not None:
             self._mouth.reset()
+        # 下播道别前先收回游戏主控权，把游戏收尾摘要写进近况供道别轮无缝承接
+        await self._sync_lead_mode(reason="live_ended")
         self._logger.info("场次已结束：主动发言收闸")
         # 收播道别窗：手动结束场次会绕过流程单收尾环节（只有自然走完才道别），
         # 没有这一窗 Agent 会一路静默到停机。触发判据是"场次结束但 Agent 仍在
@@ -2610,18 +2675,21 @@ class StreamerAgent(BaseAgent):
             )
             if self._mouth is not None and payload.event_type != "error" and message:
                 # 非报错的游戏进展与交付留进嘴的近期背景，使现场卡知道刚做成什么；
-                # 只有高光里程碑（如开箱发现稀罕宝物）才让嘴当场惊呼一句
+                # 只有高光里程碑（如开箱发现稀罕宝物）才让嘴当场惊呼一句（P1 高光优先级）
                 self._mouth.note_game(message)
                 if payload.event_type == "milestone" and payload.notable:
-                    self._mouth.react("game:notable_milestone", message)
+                    self._mouth.react("game:notable_milestone", message, kind="milestone")
             if payload.event_type == "report":
-                self._proactive_signals.set_game()
+                if not self._is_game_lead_active():
+                    self._proactive_signals.set_game()
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
                 self._planner.workbench.note_game_report(
                     payload.game, payload.report_kind or "", payload.delegation_ids
                 )
-            # 交付上报、需要主播定夺、异常或高光事件到达时，打断正在等待放行的旧自主独白
-            if payload.event_type in ("report", "attention_required", "error") or payload.notable:
+            # 主播主控态下交付上报、需要主播定夺、异常或高光事件到达时，打断正在等待放行的旧自主独白
+            if not self._is_game_lead_active() and (
+                payload.event_type in ("report", "attention_required", "error") or payload.notable
+            ):
                 self._notify_fresh_input()
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
@@ -2786,11 +2854,13 @@ class StreamerAgent(BaseAgent):
                         cooldown_key,
                         summary,
                         refresh_scene=payload.kind in SCENE_CHANGING_BODY_KINDS,
+                        kind=payload.kind,
                     )
-                # 视野撞见强敌/稀有矿藏或意外真死亡时，无论快嘴开没开都立即唤醒决策层，
-                # 让 Planner 紧接着给游戏 Agent 下发采掘、迎战或善后任务（寻死回家不按事故唤醒）
-                self._proactive_signals.set_game()
-                self._notify_fresh_input()
+                # 主播主控态下：视野撞见强敌/稀有矿藏或意外真死亡时立即唤醒决策层下发任务；
+                # 游戏自主主控态下：由游戏侧直接应急处置，主播侧只经嘴即时出声而不拉起重型 Planner
+                if not self._is_game_lead_active():
+                    self._proactive_signals.set_game()
+                    self._notify_fresh_input()
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体侧事件失败: {exc}", exc=True)
 
@@ -2800,12 +2870,11 @@ class StreamerAgent(BaseAgent):
         payload: GameChatPayload,
         source: str,
     ) -> None:
-        """``game.chat.*`` 回调：游戏里别人说的话入待入账队列；玩家搭话促发一轮决策。
+        """``game.chat.*`` 回调：游戏里别人说的话入待入账队列；主播主控态下玩家搭话促发一轮决策。
 
-        玩家聊天是有人在跟游戏里的我说话，像弹幕一样值得及时接住，所以置位待决策信号
-        （下次空缓冲 tick 触发；弹幕在排队时随那一轮一起看到）。系统消息（公告、死亡
-        提示、传送请求等）是信息，只作参考，不单独唤醒主播。私聊行不进时间线：
-        只交本窗决策参考段，私下的话不能被当众说出来。
+        玩家聊天是有人在跟游戏里的我说话：主播主控态下置位待决策信号及时接住；
+        游戏自主主控态下由游戏侧直接主导游戏公屏交流，主播侧仅记录近况供回答观众知情，
+        不触发主播主动决策，避免与游戏侧抢回公屏。系统消息只作参考。私聊行不进时间线。
         """
         del event_name, source
         try:
@@ -2834,8 +2903,10 @@ class StreamerAgent(BaseAgent):
                     if joined_player:
                         self._room_state.record_player_join(joined_player)
             if payload.kind == "player":
-                self._proactive_signals.set_game()
-                self._notify_fresh_input()
+                # 游戏自主主控态下仅记近况供回答观众知情，不唤醒主播 Planner 抢回游戏公屏
+                if not self._is_game_lead_active():
+                    self._proactive_signals.set_game()
+                    self._notify_fresh_input()
                 # 游戏里说过话的人记成已知玩家名：游戏情境查询发给嵌入服务前把它换掉
                 if self._memory_cues is not None and payload.sender:
                     self._memory_cues.note_name(payload.sender)
@@ -3064,9 +3135,20 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     def _on_rundown_changed_proactive(self) -> None:
-        """流程单环节变更通知（协调器回调）：置位主动发言信号；若说话模式发生切换则异步刷新常驻简报。"""
+        """流程单环节变更通知（协调器回调）：置位主动发言信号，按环节模式异步同步动态主从与常驻简报。"""
         self._proactive_signals.set_rundown()
         self._notify_fresh_input()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._lead_coordinator is not None:
+            spawn_background_task(
+                self._sync_lead_mode(reason="rundown_changed"),
+                logger=self._logger,
+                tasks=self._memory_tasks,
+                label="StreamerAgent.sync_lead_on_rundown",
+            )
         next_mode = self._current_speaking_mode()
         if (
             self._memory_brief_speaking_mode
@@ -3074,10 +3156,6 @@ class StreamerAgent(BaseAgent):
             and self._commitments_repo is not None
             and self._archive_repo is not None
         ):
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return
             self._sync_current_saves()
             spawn_background_task(
                 self._refresh_memory_brief(),
@@ -3247,6 +3325,10 @@ class StreamerAgent(BaseAgent):
             return
 
         async with self._flush_lock:
+            # 动态主从周期评估：若游戏从断连/不健康恢复就绪或状态需要对齐，先完成切权再跑本 tick 判定
+            if self._live_active and self._lead_coordinator is not None:
+                await self._maybe_periodic_lead_sync()
+
             # 递话评估移出判空闸：提醒队列非空时每个 tick 先走主动判定序——
             # 弹幕批次滞留期间递话到达也照常成轮，批次原地不动继续等自己的
             # 放行条件。只有这一轮真的执行了才结束本 tick：递话被防接龙挡住时
@@ -3308,6 +3390,8 @@ class StreamerAgent(BaseAgent):
             reminder_pending=bool(self._reminder_queue),
             talk_mode=self._current_speech_mode() == "talk",
             viewer_waiting_since_ms=None if self._buffer.is_empty else self._buffer.first_arrival_ms,
+            in_game_lead=self._is_game_lead_active(),
+            lead_since_ms=self._game_lead_entered_ms,
         )
         if reason is None:
             return False
@@ -3428,23 +3512,386 @@ class StreamerAgent(BaseAgent):
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包；insert 的 payload 为 ``{title, content?}``）。"""
-        return await self._rundown_coord.control(
+        ok, message, view = await self._rundown_coord.control(
             action,
             segment_id=segment_id,
             payload=payload,
             now_ms=now_ms,
         )
+        if ok:
+            await self._sync_lead_mode(reason="rundown_changed")
+        return ok, message, view
 
     async def switch_rundown(self, rundown_id: str) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """直播中热切换流程单（Dashboard activate 的运行态写穿）。"""
-        return await self._rundown_coord.switch(rundown_id)
+        ok, message, view = await self._rundown_coord.switch(rundown_id)
+        if ok:
+            await self._sync_lead_mode(reason="rundown_changed")
+        return ok, message, view
 
     async def apply_rundown_definition(
         self,
         definition: Dict[str, Any],
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """应用编辑后的流程单定义（Dashboard 保存时的运行态写穿）。"""
-        return await self._rundown_coord.apply_definition(definition)
+        ok, message, view = await self._rundown_coord.apply_definition(definition)
+        if ok:
+            await self._sync_lead_mode(reason="rundown_changed")
+        return ok, message, view
+
+    # ==================================================================
+    # 动态主从：自动切权、交权简报、回声转发与实况解说直通 Replyer
+    # ==================================================================
+
+    @property
+    def is_game_lead_active(self) -> bool:
+        """当前是否处于游戏自主主控态（只读观测面）。"""
+        return self._is_game_lead_active()
+
+    def _is_game_lead_active(self) -> bool:
+        """当前是否由自主游戏 Agent 持有主控权（未注入协调器时恒 False）。"""
+        return self._lead_coordinator is not None and self._lead_coordinator.is_game_lead
+
+    def _active_game_lead_agent(self) -> Optional[str]:
+        """返回当前主控游戏 Agent 注册名；主播主控态返回 None。"""
+        if not self._is_game_lead_active() or self._lead_coordinator is None:
+            return None
+        return self._lead_coordinator.active_lead_agent
+
+    def _on_spoken_echo(self, text: str, ts_ms: int, source: str) -> None:
+        """发声出口每播出一句台词后，经协调器零唤醒同步给当前主控游戏侧防复读。"""
+        if not self._lead_hooks_bound or self._lead_coordinator is None:
+            return
+        self._lead_coordinator.publish_spoken_echo(text, source=source, timestamp_ms=ts_ms)
+
+    async def sync_lead_mode(self, *, reason: str = "manual_sync") -> None:
+        """公开同步入口：根据当前开播态、流程单模式、配置开关与候选就绪态幂等对齐主控权。"""
+        await self._sync_lead_mode(reason=reason)
+
+    async def _maybe_periodic_lead_sync(self) -> None:
+        """周期巡检健康恢复与状态对齐：检测到应切换时按防抖节奏调用 ``_sync_lead_mode``。"""
+        coord = self._lead_coordinator
+        if coord is None:
+            return
+        dynamic_enabled = self.typed_config.lead_mode == "dynamic"
+        in_talk = self._rundown_coord.current_segment_mode() == "talk"
+        in_closing = self._closings_in_flight > 0
+        override = coord.override
+
+        should_reclaim = (
+            not self._live_active
+            or in_closing
+            or not dynamic_enabled
+            or override == "streamer"
+            or (override == "auto" and in_talk)
+        )
+        if should_reclaim:
+            if coord.is_game_lead:
+                await self._sync_lead_mode(reason="periodic_sync")
+            return
+
+        ready = coord.ready_lead_agents()
+        # 兜底检测：当前主控游戏已静默不再就绪（含 ready 为空）时立即触发不可用降级收权并唤醒圆场
+        if coord.is_game_lead and coord.active_lead_agent not in ready:
+            active_lead = coord.active_lead_agent
+            if active_lead:
+                summary = await coord.notify_agent_unavailable(active_lead, reason="game_unavailable")
+                self._record_handover_summary_fallback(active_lead, summary)
+            return
+        if not ready:
+            return
+        if override not in ("auto", "streamer"):
+            needs_enter = override in ready and not coord.is_agent_leading(override)
+        else:
+            needs_enter = not (coord.is_game_lead and coord.active_lead_agent in ready)
+        if not needs_enter:
+            return
+        now = self._clock()
+        if self._last_lead_sync_attempt_ms and (now - self._last_lead_sync_attempt_ms) < _LEAD_SYNC_RETRY_INTERVAL_MS:
+            return
+        self._last_lead_sync_attempt_ms = now
+        await self._sync_lead_mode(reason="periodic_sync")
+
+    async def _sync_lead_mode(self, *, reason: str) -> None:
+        """评估并幂等同步当前动态主从态（进入游戏主控或收回主播主控）。
+
+        触发条件与执行顺序：
+        1. 同步 ``lead_mode`` 配置开关到协调器；
+        2. 若未开播、正处收尾道别、配置为 ``streamer_only``、人工覆盖锁定 ``streamer``，
+           或自动模式下流程单处于 ``talk`` 环节 → 当前在游戏主控则立即收权并记下收尾摘要；
+        3. 若当前主控游戏已静默不再就绪（含候选为空）→ 兜底上报不可用降级回主播并唤醒圆场；
+        4. 若全部条件满足且存在就绪的自主领航游戏候选 → 组装只读交权简报并交权给目标游戏。
+        """
+        coord = self._lead_coordinator
+        if coord is None:
+            return
+        dynamic_enabled = self.typed_config.lead_mode == "dynamic"
+        if hasattr(coord, "set_enabled"):
+            coord.set_enabled(dynamic_enabled)
+
+        in_talk = self._rundown_coord.current_segment_mode() == "talk"
+        in_closing = self._closings_in_flight > 0
+        override = coord.override
+
+        # 任一前提不满足时收回主播主控（人工锁定具体游戏时允许跨越 talk 环节，但下播/道别/禁用仍必收权）
+        must_reclaim = (
+            not self._live_active
+            or in_closing
+            or not dynamic_enabled
+            or override == "streamer"
+            or (override == "auto" and in_talk)
+        )
+        if must_reclaim:
+            if coord.is_game_lead:
+                prev_lead = coord.active_lead_agent or ""
+                reclaim_reason = reason if dynamic_enabled else "lead_mode_streamer_only"
+                summary = await coord.reclaim_streamer_lead(reason=reclaim_reason)
+                self._record_handover_summary_fallback(prev_lead, summary)
+            return
+
+        ready = coord.ready_lead_agents()
+        # 兜底检测：当前主控游戏已静默不再就绪（含 ready 为空）时立即上报不可用并降级回主播圆场
+        if coord.is_game_lead and coord.active_lead_agent not in ready:
+            active_lead = coord.active_lead_agent
+            if active_lead:
+                summary = await coord.notify_agent_unavailable(active_lead, reason="game_unavailable")
+                self._record_handover_summary_fallback(active_lead, summary)
+            return
+        if not ready:
+            return
+
+        target_agent: Optional[str]
+        if override not in ("auto", "streamer"):
+            if override not in ready or coord.is_agent_leading(override):
+                return
+            target_agent = override
+        else:
+            if coord.is_game_lead and coord.active_lead_agent in ready:
+                return
+            if len(ready) != 1:
+                self._logger.warning(f"存在多个就绪自主领航游戏候选 {ready}，自动模式不盲选，维持主播主控")
+                return
+            target_agent = ready[0]
+
+        handover_ctx = await self._build_lead_handover_context(target_agent)
+        if not handover_ctx.reason:
+            handover_ctx = handover_ctx.model_copy(update={"reason": reason})
+        entered = await coord.request_game_lead(handover_ctx, target=target_agent, reason=reason)
+        if entered:
+            self._last_lead_sync_attempt_ms = 0
+
+    def _record_handover_summary_fallback(self, prev_lead: str, summary: str) -> None:
+        """若协调器替身未回调 ``_on_lead_changed``，兜底把收权摘要记进游戏近况（同文幂等去重）。"""
+        cleaned = (summary or "").strip()
+        if not cleaned or not prev_lead or cleaned == self._last_recorded_handover_summary:
+            return
+        self._last_recorded_handover_summary = cleaned
+        ts = self._clock()
+        self._game_ledger.record_event(prev_lead, "lead_handover", f"游戏交回主控收尾摘要：{cleaned}", ts)
+        if self._mouth is not None:
+            self._mouth.note_game(f"游戏收尾：{cleaned}")
+
+    def _on_lead_changed(self, payload: AgentLeadChangedPayload) -> None:
+        """动态主从状态变更监听：记录进入时刻、落账收权摘要，并在游戏故障被动降级时唤醒主播圆场。"""
+        ts = payload.timestamp_ms or self._clock()
+        if payload.mode == "game":
+            self._game_lead_entered_ms = ts
+            self._last_recorded_handover_summary = ""
+            # 游戏自主接管本环节后，清掉切环节瞬间挂起的旧 rundown/game 主动信号，避免未来被动降级时误触发旧开场白
+            self._proactive_signals.clear_superseded_by_game_lead()
+            self._logger.info(f"主播切换为轻从模式：当前由 '{payload.lead_agent}' 自主主控（reason={payload.reason}）")
+            return
+
+        # 游戏主控 → 主播主控：清进入锚点、记收尾摘要；若属开播期异常被动降级则唤醒主播圆场
+        if payload.previous_lead and payload.previous_lead != self.name:
+            self._game_lead_entered_ms = None
+            summary = (payload.handover_summary or "").strip()
+            if summary:
+                self._last_recorded_handover_summary = summary
+                self._game_ledger.record_event(
+                    payload.previous_lead,
+                    "lead_handover",
+                    f"游戏交回主控收尾摘要：{summary}",
+                    ts,
+                )
+                if self._mouth is not None:
+                    self._mouth.note_game(f"游戏收尾：{summary}")
+            reason = (payload.reason or "").strip()
+            is_intentional = reason in _INTENTIONAL_RECLAIM_REASONS or reason.startswith("manual")
+            if self._live_active and not is_intentional:
+                self._game_ledger.record_event(
+                    payload.previous_lead,
+                    "lead_fallback",
+                    f"游戏 {payload.previous_lead} 暂时不可用（{reason or 'game_unavailable'}），"
+                    "主控权已自动交回主播，可自然圆场陪观众聊天",
+                    ts,
+                )
+                self._proactive_signals.set_game()
+                self._notify_fresh_input()
+                self._logger.warning(
+                    f"游戏 '{payload.previous_lead}' 异常退出主控（reason={reason}），已降级回主播主控并唤醒圆场"
+                )
+
+    async def _build_lead_handover_context(self, target_agent: str) -> LeadHandoverContext:
+        """构建交给自主领航游戏 Agent 的只读现场简报（复用现有记忆简报与社交事实视图，零游戏名硬编码）。"""
+        segment = self._rundown_coord.current_segment()
+        segment_id = segment.id if segment is not None else ""
+        segment_title = segment.title if segment is not None else ""
+        segment_goal = segment.task_description if segment is not None else ""
+        expected_ms = int(segment.expected_ms) if segment is not None else 0
+
+        # 只读刷新存档信息，取目标游戏当前存档名
+        self._sync_current_saves()
+        save = self._current_saves.get(target_agent)
+        save_name = save.name if save is not None and save.name else ""
+
+        # 复用现有常驻记忆简报（未了结承诺、上一场档案、运营备注）+ 该游戏当前存档的社交事实
+        if not self._memory_brief_text and self._commitments_repo is not None and self._archive_repo is not None:
+            await self._refresh_memory_brief()
+        brief_parts: List[str] = []
+        if self._memory_brief_text.strip():
+            brief_parts.append(self._memory_brief_text.strip())
+
+        social_block = await self._read_handover_social_facts(target_agent, save)
+        if social_block:
+            brief_parts.append(social_block)
+
+        return LeadHandoverContext(
+            segment_id=segment_id,
+            segment_title=segment_title,
+            segment_goal=segment_goal,
+            expected_ms=expected_ms,
+            save_name=save_name,
+            memory_brief="\n\n".join(brief_parts),
+            operator_notes=list(self._pending_operator_notes),
+            recent_speech=self._spoken_log.recent_texts(limit=3),
+        )
+
+    async def _read_handover_social_facts(self, target_agent: str, save: Optional[GameSave]) -> str:
+        """按目标游戏与当前存档只读拉取社交事实并复用既有渲染函数拼成紧凑段；读不到返回空串。"""
+        if self._social_fact_repo is None or not target_agent:
+            return ""
+        try:
+            save_id = save.id if save is not None and save.known else None
+            raw_facts = await self._social_fact_repo.list_active_facts(game=target_agent, save_id=save_id)
+            resident = [fact for fact in raw_facts if is_social_fact_resident(fact)]
+            if not resident:
+                return ""
+            return render_social_facts(resident, self._clock(), age_text)
+        except Exception as exc:  # noqa: BLE001 - 社交事实读取失败不阻断交权简报组装
+            self._logger.warning(f"构建交权简报读取 '{target_agent}' 社交事实失败（已省略）: {exc}", exc=True)
+            return ""
+
+    async def _handle_game_commentary(self, req: CommentaryRequest) -> CommentaryAck:
+        """受理主控游戏侧发来的实况解说素材，直通轻量 Replyer 润色并送入统一发言管线（严禁走重型 Planner）。
+
+        执行顺序：校验摘要 -> 串行锁保护 -> 记入游戏近况 -> normal 档按最小出声间隔防抖入缓冲
+        -> high 档或间隔满足时合并近期缓冲构造轻量 DecisionPlan -> Replyer.generate -> speech_guard
+        -> SpeechDispatcher.dispatch（同步发射 streamer.speech 落库、字幕、面捕与 spoken echo）
+        -> 刷新 RoomState.last_speech_ms 复位冷场兜底计时器。
+        """
+        summary = (req.summary or "").strip()
+        if not summary:
+            return CommentaryAck(accepted=False, spoken=False, reason="empty_summary")
+
+        async with self._commentary_lock:
+            now = self._clock()
+            game_name = (req.game or "").strip() or "game"
+            self._note_game_activity(game_name)
+            self._game_ledger.record_event(game_name, "commentary", summary, req.timestamp_ms or now)
+            if self._mouth is not None:
+                self._mouth.note_game(summary)
+
+            # 普通实况解说防抖：距上次任意出声不足最小间隔时记入缓冲合并，避免刷屏抢戏
+            min_interval_ms = self.typed_config.game_lead_commentary_min_interval_ms
+            last_speech_ms = self._room_state.last_speech_ms
+            if (
+                req.urgency == "normal"
+                and min_interval_ms > 0
+                and last_speech_ms is not None
+                and (now - last_speech_ms) < min_interval_ms
+            ):
+                self._commentary_buffer.append(summary)
+                self._logger.debug(
+                    f"实况解说命中最小出声间隔防抖（{now - last_speech_ms}ms < {min_interval_ms}ms），已记入缓冲"
+                )
+                return CommentaryAck(accepted=True, spoken=False, reason="throttled_recorded")
+
+            # 合并之前被防抖压下的解说要点进 state_facts，当前 summary 作为表达核心指引
+            buffered = list(self._commentary_buffer)
+            self._commentary_buffer.clear()
+            merged_facts = list(dict.fromkeys([*buffered, summary]))
+            state_facts = "\n".join(f"- {item}" for item in merged_facts)
+
+            emotion, emotion_note = coerce_emotion(req.mood)
+            if emotion_note:
+                self._logger.debug(f"实况解说情绪归一化: {emotion_note}")
+            intensity = 0.7 if req.urgency == "high" else 0.5
+            plan = DecisionPlan(
+                should_reply=True,
+                target=None,
+                topic_summary=summary,
+                reply_guidance=summary,
+                emotion=emotion,
+                intensity=intensity,
+            )
+            reply_to = (req.about_player or "").strip()
+            recent_speeches = self._spoken_log.recent_texts(limit=8)
+            rundown_text = self._rundown_coord.build_text_sync()
+
+            try:
+                generated = await self._replyer.generate(
+                    plan=plan,
+                    batch=[],
+                    history=[],
+                    rundown=rundown_text,
+                    state_facts=state_facts,
+                    recent_speeches=recent_speeches,
+                    reply_to=reply_to,
+                    speech_mode="play",
+                )
+            except Exception as exc:  # noqa: BLE001 - 解说润色异常隔离，不反噬主控游戏循环
+                self._logger.exception(f"实况解说调用 Replyer 异常: {exc}")
+                return CommentaryAck(accepted=True, spoken=False, reason=f"replyer_error: {type(exc).__name__}")
+
+            if not generated or not isinstance(generated, dict):
+                return CommentaryAck(accepted=True, spoken=False, reason="replyer_empty_or_filtered")
+
+            raw_speech = str(generated.get("speech") or "").strip()
+            if not raw_speech:
+                return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
+
+            # 经过 speech_guard 兜底把关（短句预算与敏感词净化）
+            budget = self.typed_config.speech_max_chars if not reply_to else 0
+            verdict = guard(raw_speech, speech_max_chars=budget, word_filter=self._word_filter)
+            if verdict.text is None:
+                self._logger.info("实况解说台词命中敏感词过滤，整条丢弃")
+                return CommentaryAck(accepted=True, spoken=False, reason="word_filtered")
+            final_speech = verdict.text.strip()
+            if not final_speech:
+                return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
+
+            priority = SPEECH_PRIORITY_HIGHLIGHT if req.urgency == "high" else SPEECH_PRIORITY_NORMAL
+            reply_payload: Dict[str, Any] = {
+                "speech": final_speech,
+                "emotion": {"name": emotion.value, "intensity": intensity},
+                "llm_request_id": generated.get("llm_request_id"),
+            }
+            dispatched = await self._speech.dispatch(
+                reply_payload,
+                round_id=f"commentary_{now}",
+                priority=priority,
+                allow_hard_interrupt=False,
+                source="game_commentary",
+            )
+            if dispatched is None:
+                return CommentaryAck(accepted=True, spoken=False, reason="dispatch_empty")
+
+            spoken_at = self._clock()
+            # 推进全局最近发声时刻：同步复位冷场兜底计时器并更新下一条普通解说的防抖基准
+            self._room_state.record_speech(spoken_at)
+            await self._scope.remember_round([], speech=dispatched[0], batch_persisted=True)
+            return CommentaryAck(accepted=True, spoken=True, reason="dispatched")
 
     # ==================================================================
     # 历史读取（duck-typed 鸭子接口）
