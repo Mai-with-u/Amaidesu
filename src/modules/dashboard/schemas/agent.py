@@ -140,3 +140,23 @@ class AgentMemoResponse(BaseModel):
     notebook: str = ""
     todos: Optional[List[MemoTodoItem]] = None
     reports: Optional[List[Dict[str, Any]]] = None
+
+
+class LeadStateResponse(BaseModel):
+    """动态主从状态响应（GET / POST /api/v1/agents/lead）。"""
+
+    mode: str
+    lead_agent: str
+    override: str
+    enabled: bool
+    candidates: List[str] = []
+    ready_candidates: List[str] = []
+    since_ms: int
+    reason: str = ""
+
+
+class LeadSwitchRequest(BaseModel):
+    """动态主从人工切换请求体（target: 'auto' / 'streamer' / 具体候选 Agent 名）。"""
+
+    target: str
+    reason: str = ""

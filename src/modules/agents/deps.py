@@ -73,3 +73,5 @@ class AgentDeps:
     context_assembler_config: Optional[Any] = None
     task_tracker: Optional[Any] = None
     task_ledger: Optional[Any] = None
+    # 动态主从协调器（组合根单例；主播与支持自主领航的游戏 Agent 按需接收并绑定回调）
+    lead_coordinator: Optional[Any] = None

@@ -44,7 +44,7 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 
 from src.modules.logging import get_logger
 
-from .agents import AgentPromptedPayload, AgentRepliedPayload
+from .agents import AgentLeadChangedPayload, AgentPromptedPayload, AgentRepliedPayload
 from .background import BackgroundTaskChangedPayload
 from .body import BodyEventPayload
 from .core import (
@@ -90,6 +90,7 @@ logger = get_logger("Payloads")
 
 __all__ = [
     # agents 控制面事实
+    "AgentLeadChangedPayload",
     "AgentPromptedPayload",
     "AgentRepliedPayload",
     # Core 系统事件

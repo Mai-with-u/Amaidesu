@@ -15,6 +15,7 @@ Agent 间无分类层；每个 Agent 是一等公民。
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Optional
 
 from src.modules.agents.base import BaseAgent
@@ -83,6 +84,12 @@ def _parse_game_config(model_cls: type, config: Optional[dict[str, Any]], label:
         return model_cls()
 
 
+def _accepts_init_kwarg(agent_cls: type, param_name: str) -> bool:
+    """探测 Agent 构造器是否声明了指定关键字形参（或接收 **kwargs），实现可选基建的平滑注入。"""
+    params = inspect.signature(agent_cls.__init__).parameters
+    return param_name in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def instantiate_agent(
     name: str,
     config: Optional[dict[str, Any]],
@@ -141,6 +148,8 @@ def instantiate_agent(
         streamer_kwargs: dict[str, Any] = {field: getattr(deps, field) for field in _STREAMER_DEPS_FIELDS}
         streamer_kwargs["stream_ledger"] = deps.storage_ledger
         streamer_kwargs["config"] = cfg_obj
+        if _accepts_init_kwarg(StreamerAgent, "lead_coordinator"):
+            streamer_kwargs["lead_coordinator"] = deps.lead_coordinator
         return StreamerAgent(**streamer_kwargs)
 
     if name == "minecraft":
@@ -153,19 +162,22 @@ def instantiate_agent(
         except Exception as exc:
             _logger.warning(f"解析 MinecraftConfig 失败: {exc}; 使用默认配置")
             minecraft_cfg = MinecraftConfig()
-        return MinecraftAgent(
-            config=minecraft_cfg,
-            llm_manager=deps.llm_manager,
-            prompt_manager=deps.prompt_manager,
-            event_bus=deps.event_bus,
-            tool_registry=deps.tool_registry,
-            thinking_sink=deps.thinking_sink,
-            task_tracker=deps.task_tracker,
-            skill_library=get_skill_library(),
-            creature_repo=deps.creature_repo,
-            work_docs_repo=deps.work_docs_repo,
-            social_fact_repo=deps.social_fact_repo,
-        )
+        minecraft_kwargs: dict[str, Any] = {
+            "config": minecraft_cfg,
+            "llm_manager": deps.llm_manager,
+            "prompt_manager": deps.prompt_manager,
+            "event_bus": deps.event_bus,
+            "tool_registry": deps.tool_registry,
+            "thinking_sink": deps.thinking_sink,
+            "task_tracker": deps.task_tracker,
+            "skill_library": get_skill_library(),
+            "creature_repo": deps.creature_repo,
+            "work_docs_repo": deps.work_docs_repo,
+            "social_fact_repo": deps.social_fact_repo,
+        }
+        if _accepts_init_kwarg(MinecraftAgent, "lead_coordinator"):
+            minecraft_kwargs["lead_coordinator"] = deps.lead_coordinator
+        return MinecraftAgent(**minecraft_kwargs)
 
     if name == "text_adv":
         # 函数内 import：text_adv 包（感知/动作后端依赖链）仅在实例化时加载；

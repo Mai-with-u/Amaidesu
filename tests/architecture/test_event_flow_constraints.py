@@ -48,6 +48,7 @@ DECISION_EVENTS = {
     "task.changed",
     "agent.prompted",
     "agent.replied",
+    "agent.lead.changed",
 }
 
 

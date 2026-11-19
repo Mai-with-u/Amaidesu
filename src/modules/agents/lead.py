@@ -1,0 +1,653 @@
+"""动态主从协调器（LeadCoordinator）——主播与自主游戏 Agent 的主控权交接中枢。
+
+核心职责：
+- 维护当前主控态（主播主控 / 游戏自主主控）、人工覆盖策略（auto / streamer / 指定游戏）
+  与切换时间戳，全部切换在异步互斥锁内串行执行并保证幂等。
+- 动态发现具备自主领航能力的候选 Agent（按 ``BaseAgent.supports_autonomous_lead`` 与
+  ``can_take_lead()`` 运行态判定，框架层零游戏名硬编码）。
+- 在主控权真实发生变化时发布 ``agent.lead.changed`` 事件并通知已注册监听器。
+- 提供跨 Agent 零耦合桥接：
+  - 游戏主控 → 主播解说：``bind_commentary_handler`` + ``submit_commentary``
+  - 主播发声 → 游戏回声：``publish_spoken_echo``（同步直转，零唤醒）
+  - 主播/观众 → 游戏非强杀建议：``send_suggestion``
+  - 交权简报按需构建：``bind_handover_builder``
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
+
+from pydantic import BaseModel, Field
+
+from src.modules.agents.base import AgentState, BaseAgent
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.agents import AgentLeadChangedPayload
+from src.modules.logging import get_logger
+from src.modules.utils.time_utils import now_ms
+
+if TYPE_CHECKING:
+    from src.modules.agents.manager import AgentManager
+
+logger = get_logger("LeadCoordinator")
+
+# 主播 Agent 的框架级默认主控名（无游戏主控时的唯一回落身份）
+STREAMER_AGENT_NAME = "streamer"
+
+LeadMode = Literal["streamer", "game"]
+LeadOverride = Union[Literal["auto", "streamer"], str]
+
+
+class LeadHandoverContext(BaseModel):
+    """交权给自主游戏 Agent 时随带的一份结构化现场简报。"""
+
+    segment_id: str = ""
+    segment_title: str = ""
+    segment_goal: str = ""
+    expected_ms: int = 0
+    save_name: str = ""
+    memory_brief: str = ""
+    operator_notes: List[str] = Field(default_factory=list)
+    recent_speech: List[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+class CommentaryRequest(BaseModel):
+    """游戏主控 Agent 提交给主播的现场解说素材（由主播按自身人设润色发声）。"""
+
+    game: str
+    summary: str
+    mood: str = "neutral"
+    urgency: Literal["normal", "high"] = "normal"
+    about_player: str = ""
+    timestamp_ms: int = 0
+
+
+class CommentaryAck(BaseModel):
+    """解说请求受理回执。"""
+
+    accepted: bool
+    spoken: bool = False
+    reason: str = ""
+
+
+class LeadStateSnapshot(BaseModel):
+    """动态主从运行态只读快照（供观测面与 REST API 序列化）。"""
+
+    mode: LeadMode
+    lead_agent: str
+    override: str
+    enabled: bool
+    candidates: List[str] = Field(default_factory=list)
+    ready_candidates: List[str] = Field(default_factory=list)
+    since_ms: int
+    reason: str = ""
+
+
+CommentaryHandler = Callable[[CommentaryRequest], Awaitable[CommentaryAck]]
+HandoverBuilder = Callable[[str], Union[Awaitable[LeadHandoverContext], LeadHandoverContext]]
+LeadChangedListener = Callable[[AgentLeadChangedPayload], Union[Awaitable[None], None]]
+
+
+class LeadCoordinator:
+    """动态主从协调器（组合根单例）。
+
+    不变量：
+    1. 任一时刻至多一个主控者：要么 ``mode == "streamer"`` 且 ``active_lead_agent is None``，
+       要么 ``mode == "game"`` 且 ``active_lead_agent`` 为某已注册自主游戏 Agent 的注册名。
+    2. 全部主控切换动作经 ``_lock`` 串行化，同状态重复请求幂等不重发事件。
+    3. 所有跨 Agent 协作均走回调注册与基类协议，协调器本身不反向依赖任何具体 Agent 包。
+    """
+
+    def __init__(
+        self,
+        agent_manager: "AgentManager",
+        event_bus: Optional[Any] = None,
+        clock: Optional[Callable[[], int]] = None,
+        *,
+        enabled: bool = True,
+    ) -> None:
+        self._agent_manager = agent_manager
+        self._event_bus = event_bus
+        self._clock: Callable[[], int] = clock or now_ms
+        self._enabled: bool = bool(enabled)
+
+        # 初始恒为主播主控，自动策略等待流程单或运行态触发切换
+        self._mode: LeadMode = "streamer"
+        self._active_lead_agent: Optional[str] = None
+        self._override: str = "auto"
+        self._since_ms: int = self._clock()
+        self._reason: str = "initial"
+
+        # 串行保护主从切换，防止流程单切换、游戏断连与人工覆盖并发交错
+        self._lock = asyncio.Lock()
+
+        # 跨 Agent 零耦合回调槽（由主播等参与方在启动期绑定）
+        self._commentary_handler: Optional[CommentaryHandler] = None
+        self._handover_builder: Optional[HandoverBuilder] = None
+        self._lead_changed_listeners: List[LeadChangedListener] = []
+
+    # -------------------- 只读状态与候选发现 --------------------
+
+    @property
+    def mode(self) -> LeadMode:
+        """当前主控模式：``"streamer"`` 或 ``"game"``。"""
+        return self._mode
+
+    @property
+    def active_lead_agent(self) -> Optional[str]:
+        """当前主控游戏 Agent 注册名；主播主控态返回 None。"""
+        return self._active_lead_agent
+
+    @property
+    def lead_agent(self) -> str:
+        """当前主控者注册名（``"streamer"`` 或具体游戏 Agent 注册名）。"""
+        return self._active_lead_agent or STREAMER_AGENT_NAME
+
+    @property
+    def is_game_lead(self) -> bool:
+        """当前是否处于游戏自主主控态。"""
+        return self._mode == "game" and self._active_lead_agent is not None
+
+    def is_agent_leading(self, name: str) -> bool:
+        """指定注册名的游戏 Agent 此刻是否正处于自主主控态。"""
+        return self.is_game_lead and self._active_lead_agent == name
+
+    @property
+    def override(self) -> str:
+        """当前人工覆盖策略（``"auto"`` / ``"streamer"`` / 具体游戏注册名）。"""
+        return self._override
+
+    @property
+    def enabled(self) -> bool:
+        """动态主从开关（False 时始终保持主播主控，拒绝向游戏交权）。"""
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """同步动态主从运行期开关（供主播启动期按 ``lead_mode`` 配置对齐）。"""
+        self._enabled = bool(enabled)
+        logger.info(f"动态主从开关已更新: enabled={self._enabled}")
+
+    def lead_capable_agents(self) -> List[str]:
+        """动态发现已注册且声明支持自主领航的 Agent 注册名列表。"""
+        result: List[str] = []
+        for name in self._agent_manager.list_agents():
+            if name == STREAMER_AGENT_NAME:
+                continue
+            agent = self._agent_manager.get_agent_by_name(name)
+            if agent is not None and bool(getattr(agent, "supports_autonomous_lead", False)):
+                result.append(name)
+        return result
+
+    def ready_lead_agents(self) -> List[str]:
+        """动态筛选当前处于 RUNNING 且 ``can_take_lead()`` 为真的自主领航候选列表。"""
+        ready: List[str] = []
+        for name in self.lead_capable_agents():
+            agent = self._agent_manager.get_agent_by_name(name)
+            if agent is None or agent.state != AgentState.RUNNING:
+                continue
+            try:
+                if bool(agent.can_take_lead()):
+                    ready.append(name)
+            except Exception as exc:  # noqa: BLE001 - 单个候选探测异常视为未就绪
+                logger.warning(f"探测 Agent '{name}' 自主领航就绪态异常（视为未就绪）: {exc}", exc=True)
+        return ready
+
+    def snapshot(self) -> LeadStateSnapshot:
+        """返回当前动态主从状态的只读快照。"""
+        return LeadStateSnapshot(
+            mode=self._mode,
+            lead_agent=self.lead_agent,
+            override=self._override,
+            enabled=self._enabled,
+            candidates=self.lead_capable_agents(),
+            ready_candidates=self.ready_lead_agents(),
+            since_ms=self._since_ms,
+            reason=self._reason,
+        )
+
+    # -------------------- 回调绑定（跨 Agent 零耦合桥接） --------------------
+
+    def bind_commentary_handler(self, handler: Optional[CommentaryHandler]) -> None:
+        """绑定主播侧解说处理器（传 None 解绑）。"""
+        self._commentary_handler = handler
+
+    def bind_handover_builder(self, builder: Optional[HandoverBuilder]) -> None:
+        """绑定交权简报构建器（手动切到游戏主控且未显式传入构建器时调用；传 None 解绑）。"""
+        self._handover_builder = builder
+
+    def bind_lead_changed_listener(self, listener: LeadChangedListener) -> None:
+        """注册主控切换监听器（重复注册自动去重）。"""
+        if listener not in self._lead_changed_listeners:
+            self._lead_changed_listeners.append(listener)
+
+    def unbind_lead_changed_listener(self, listener: LeadChangedListener) -> None:
+        """注销主控切换监听器（未注册时幂等忽略）。"""
+        if listener in self._lead_changed_listeners:
+            self._lead_changed_listeners.remove(listener)
+
+    # -------------------- 主控权切换（锁内串行 + 幂等） --------------------
+
+    async def request_game_lead(
+        self,
+        context: LeadHandoverContext,
+        *,
+        target: Optional[str] = None,
+        reason: str = "",
+    ) -> Optional[str]:
+        """请求把主控权交给自主游戏 Agent；成功返回接管者注册名，未交权返回 None。
+
+        执行顺序：校验开关与人工覆盖 -> 解析唯一或指定就绪候选 -> 若已有其他游戏主控则先收权
+        -> 调目标 ``enter_lead`` -> 更新状态 -> 锁外广播事件并通知监听器。
+        """
+        emitted: List[AgentLeadChangedPayload] = []
+        async with self._lock:
+            if not self._enabled:
+                logger.info("动态主从已禁用，拒绝向游戏交权")
+                return None
+            if self._override == STREAMER_AGENT_NAME:
+                logger.info("当前人工覆盖强制为主播主控（override='streamer'），拒绝向游戏交权")
+                return None
+
+            requested = (target or "").strip()
+            ready = self.ready_lead_agents()
+
+            # 解析目标候选：显式指定优先，其次人工锁定目标，再次唯一就绪候选
+            if requested:
+                if self._override not in ("auto", requested):
+                    logger.info(f"请求向 '{requested}' 交权被人工覆盖策略拦下（当前 override='{self._override}'）")
+                    return None
+                if self.is_agent_leading(requested):
+                    return requested
+                if requested not in ready:
+                    logger.info(f"目标游戏 '{requested}' 未就绪或不支持自主领航（ready={ready}），暂不交权")
+                    return None
+                chosen = requested
+            else:
+                if self._override not in ("auto", STREAMER_AGENT_NAME):
+                    if self.is_agent_leading(self._override):
+                        return self._override
+                    if self._override not in ready:
+                        logger.info(f"人工覆盖目标 '{self._override}' 当前未就绪，暂不交权")
+                        return None
+                    chosen = self._override
+                elif self.is_game_lead and self._active_lead_agent in ready:
+                    return self._active_lead_agent
+                elif len(ready) == 1:
+                    chosen = ready[0]
+                elif not ready:
+                    logger.debug("当前无就绪的自主领航游戏候选，维持主播主控")
+                    return None
+                else:
+                    logger.warning(f"存在多个就绪自主领航候选 {ready} 且未指定 target，拒绝盲选")
+                    return None
+
+            effective_reason = (reason or context.reason or "").strip() or "request_game_lead"
+            ok = await self._enter_game_lead_unlocked(chosen, context, reason=effective_reason, emitted=emitted)
+            result = chosen if ok else None
+
+        await self._dispatch_emitted(emitted)
+        return result
+
+    async def reclaim_streamer_lead(self, *, reason: str = "") -> str:
+        """从当前游戏主控收回主控权回主播，并返回游戏侧收尾摘要（已在主播态幂等返回空串）。"""
+        emitted: List[AgentLeadChangedPayload] = []
+        async with self._lock:
+            effective_reason = (reason or "").strip() or "reclaim_streamer_lead"
+            summary = await self._reclaim_streamer_unlocked(reason=effective_reason, emitted=emitted)
+
+        await self._dispatch_emitted(emitted)
+        return summary
+
+    async def notify_agent_unavailable(
+        self,
+        agent_name: str,
+        *,
+        reason: str = "game_unavailable",
+    ) -> str:
+        """游戏断连/故障时自动交回主播主控（非当前主控者时幂等返回空串）。
+
+        注意：断连只做运行态安全收权，不篡改人工 override 标记（由人工决定是否改回 auto/streamer）。
+        """
+        emitted: List[AgentLeadChangedPayload] = []
+        async with self._lock:
+            if not self.is_agent_leading(agent_name):
+                return ""
+            effective_reason = (reason or "").strip() or "game_unavailable"
+            logger.warning(f"主控游戏 '{agent_name}' 不可用（reason={effective_reason}），自动交回主播主控")
+            summary = await self._reclaim_streamer_unlocked(reason=effective_reason, emitted=emitted)
+
+        await self._dispatch_emitted(emitted)
+        return summary
+
+    async def set_override(
+        self,
+        target: str,
+        *,
+        reason: str = "manual_override",
+        handover_builder: Optional[HandoverBuilder] = None,
+    ) -> LeadStateSnapshot:
+        """设置人工覆盖策略并立即落位目标主控态。
+
+        - ``"auto"``：解除人工覆盖，恢复跟随流程单/健康态自动判定（不强制打断当前主控态）。
+        - ``"streamer"``：锁定主播主控，若当前在游戏主控则立即收权。
+        - 具体候选游戏名：校验支持自主领航且就绪后构建交接简报，立即交权并锁定覆盖策略。
+
+        Raises:
+            ValueError: ``target`` 为空、不是 ``"auto"`` / ``"streamer"`` 且不在自主领航候选名单中。
+            RuntimeError: 动态主从已禁用、目标游戏当前未就绪或目标拒绝接管主控。
+        """
+        normalized = (target or "").strip()
+        effective_reason = (reason or "").strip() or "manual_override"
+        emitted: List[AgentLeadChangedPayload] = []
+
+        async with self._lock:
+            candidates = self.lead_capable_agents()
+            valid_targets = ("auto", STREAMER_AGENT_NAME, *candidates)
+            if not normalized or normalized not in valid_targets:
+                raise ValueError(f"无效的主控切换目标: '{target}'（可选: {', '.join(valid_targets)}）")
+
+            if normalized == "auto":
+                self._override = "auto"
+                self._reason = effective_reason
+                snap = self.snapshot()
+            elif normalized == STREAMER_AGENT_NAME:
+                self._override = STREAMER_AGENT_NAME
+                if self.is_game_lead:
+                    await self._reclaim_streamer_unlocked(reason=effective_reason, emitted=emitted)
+                else:
+                    self._reason = effective_reason
+                snap = self.snapshot()
+            else:
+                if not self._enabled:
+                    raise RuntimeError("动态主从已禁用，无法手动切换至游戏主控")
+                ready = self.ready_lead_agents()
+                if normalized not in ready:
+                    raise RuntimeError(
+                        f"目标游戏 '{normalized}' 当前未就绪（未运行或 can_take_lead 为 False），无法接管主控"
+                    )
+
+                prev_override = self._override
+                self._override = normalized
+                if not self.is_agent_leading(normalized):
+                    context = await self._build_handover_context(
+                        normalized,
+                        reason=effective_reason,
+                        builder=handover_builder or self._handover_builder,
+                    )
+                    ok = await self._enter_game_lead_unlocked(
+                        normalized, context, reason=effective_reason, emitted=emitted
+                    )
+                    if not ok:
+                        # 交权失败时回滚人工覆盖，避免 override 悬空指向未接管的目标
+                        self._override = prev_override
+                        raise RuntimeError(f"目标游戏 '{normalized}' 拒绝接管主控（enter_lead 返回 False）")
+                else:
+                    self._reason = effective_reason
+                snap = self.snapshot()
+
+        await self._dispatch_emitted(emitted)
+        return snap
+
+    # -------------------- 内部无锁切换与事件派发 --------------------
+
+    async def _enter_game_lead_unlocked(
+        self,
+        target_name: str,
+        context: LeadHandoverContext,
+        *,
+        reason: str,
+        emitted: List[AgentLeadChangedPayload],
+    ) -> bool:
+        """在持锁状态下切入指定游戏主控；若先前有另一游戏在主控则先收权。"""
+        agent = self._agent_manager.get_agent_by_name(target_name)
+        if agent is None:
+            logger.warning(f"尝试交权给 '{target_name}' 失败：Agent 不在名册")
+            return False
+
+        # 若此前有另一款游戏在主控，先让旧主控有序收尾再交给新目标
+        previous_lead = self.lead_agent
+        if self._active_lead_agent is not None and self._active_lead_agent != target_name:
+            old_name = self._active_lead_agent
+            old_summary = await self._safe_yield_lead(old_name, reason=f"switch_to:{target_name}")
+            # 先将内存状态退回主播，若后续新目标接管失败可直接落盘回退事件保证一致
+            self._mode = "streamer"
+            self._active_lead_agent = None
+            previous_lead = old_name
+            rollback_summary = old_summary
+        else:
+            rollback_summary = ""
+
+        handover_ctx = context if context.reason else context.model_copy(update={"reason": reason})
+        try:
+            accepted = bool(await agent.enter_lead(handover_ctx))
+        except Exception as exc:  # noqa: BLE001 - 隔离目标 Agent 的接管异常
+            logger.exception(f"Agent '{target_name}' enter_lead 执行异常: {exc}")
+            accepted = False
+
+        if not accepted:
+            logger.info(f"Agent '{target_name}' 未接受主控权（reason={reason}）")
+            if previous_lead != STREAMER_AGENT_NAME:
+                ts = self._clock()
+                self._since_ms = ts
+                self._reason = f"fallback_after_refuse:{target_name}"
+                emitted.append(
+                    AgentLeadChangedPayload(
+                        lead_agent=STREAMER_AGENT_NAME,
+                        previous_lead=previous_lead,
+                        mode="streamer",
+                        reason=self._reason,
+                        manual_override=self._override,
+                        handover_summary=rollback_summary,
+                        timestamp_ms=ts,
+                    )
+                )
+            return False
+
+        ts = self._clock()
+        self._mode = "game"
+        self._active_lead_agent = target_name
+        self._since_ms = ts
+        self._reason = reason
+        handover_summary = handover_ctx.segment_goal or handover_ctx.segment_title or ""
+        emitted.append(
+            AgentLeadChangedPayload(
+                lead_agent=target_name,
+                previous_lead=previous_lead,
+                mode="game",
+                reason=reason,
+                manual_override=self._override,
+                handover_summary=handover_summary,
+                timestamp_ms=ts,
+            )
+        )
+        logger.info(f"主控权已交接: {previous_lead} -> {target_name}（mode=game, reason={reason}）")
+        return True
+
+    async def _reclaim_streamer_unlocked(
+        self,
+        *,
+        reason: str,
+        emitted: List[AgentLeadChangedPayload],
+    ) -> str:
+        """在持锁状态下收回主控权至主播；已在主播主控态幂等返回空串。"""
+        if not self.is_game_lead or self._active_lead_agent is None:
+            return ""
+        previous_lead = self._active_lead_agent
+        summary = await self._safe_yield_lead(previous_lead, reason=reason)
+        ts = self._clock()
+        self._mode = "streamer"
+        self._active_lead_agent = None
+        self._since_ms = ts
+        self._reason = reason
+        emitted.append(
+            AgentLeadChangedPayload(
+                lead_agent=STREAMER_AGENT_NAME,
+                previous_lead=previous_lead,
+                mode="streamer",
+                reason=reason,
+                manual_override=self._override,
+                handover_summary=summary,
+                timestamp_ms=ts,
+            )
+        )
+        logger.info(f"主控权已收回主播: {previous_lead} -> {STREAMER_AGENT_NAME}（reason={reason}）")
+        return summary
+
+    async def _safe_yield_lead(self, agent_name: str, *, reason: str) -> str:
+        """安全调用目标 Agent 的 ``yield_lead``，异常只记日志不阻断收权。"""
+        agent = self._agent_manager.get_agent_by_name(agent_name)
+        if agent is None:
+            return ""
+        try:
+            summary = await agent.yield_lead(reason=reason)
+            return str(summary or "")
+        except Exception as exc:  # noqa: BLE001 - 收权路径异常隔离，确保必回主播态
+            logger.exception(f"Agent '{agent_name}' yield_lead 执行异常（忽略摘要继续收权）: {exc}")
+            return ""
+
+    async def _build_handover_context(
+        self,
+        target_name: str,
+        *,
+        reason: str,
+        builder: Optional[HandoverBuilder],
+    ) -> LeadHandoverContext:
+        """调用交接简报构建器；无构建器或构建异常时回落默认简报。"""
+        if builder is None:
+            return LeadHandoverContext(reason=reason)
+        try:
+            built = builder(target_name)
+            if inspect.isawaitable(built):
+                built = await built
+            if isinstance(built, LeadHandoverContext):
+                return built if built.reason else built.model_copy(update={"reason": reason})
+            logger.warning(f"handover_builder 返回非 LeadHandoverContext（{type(built).__name__}），使用默认简报")
+        except Exception as exc:  # noqa: BLE001 - 简报构建失败不阻断人工切换
+            logger.warning(f"构建交接简报失败（target={target_name}，使用默认简报）: {exc}", exc=True)
+        return LeadHandoverContext(reason=reason)
+
+    async def _dispatch_emitted(self, payloads: List[AgentLeadChangedPayload]) -> None:
+        """锁外按序广播 ``agent.lead.changed`` 并通知所有已注册监听器。"""
+        for payload in payloads:
+            if self._event_bus is not None:
+                try:
+                    await self._event_bus.emit(CoreEvents.AGENT_LEAD_CHANGED, payload, source="LeadCoordinator")
+                except Exception as exc:  # noqa: BLE001 - 事件广播失败不影响内存主控态与监听器
+                    logger.warning(f"广播 {CoreEvents.AGENT_LEAD_CHANGED} 失败: {exc}", exc=True)
+            for listener in list(self._lead_changed_listeners):
+                try:
+                    ret = listener(payload)
+                    if inspect.isawaitable(ret):
+                        await ret
+                except Exception as exc:  # noqa: BLE001 - 单个监听器异常隔离
+                    logger.warning(f"主控切换监听器执行异常（已隔离）: {exc}", exc=True)
+
+    # -------------------- 跨 Agent 业务桥接 --------------------
+
+    async def submit_commentary(self, caller: str, request: CommentaryRequest) -> CommentaryAck:
+        """受理主控游戏 Agent 的解说素材并转发给主播侧处理器。
+
+        门禁：只有此刻处于主控态的 ``caller`` 才允许提交；非主控调用或未绑定处理器时
+        返回清晰拒绝回执，不抛异常。
+        """
+        caller_name = (caller or "").strip()
+        if not caller_name or not self.is_agent_leading(caller_name):
+            logger.debug(f"拒绝非主控方 '{caller_name}' 提交解说（当前 lead={self.lead_agent}）")
+            return CommentaryAck(accepted=False, spoken=False, reason="not_in_lead")
+
+        handler = self._commentary_handler
+        if handler is None:
+            logger.warning(f"游戏 '{caller_name}' 提交解说但未绑定主播解说处理器")
+            return CommentaryAck(accepted=False, spoken=False, reason="no_commentary_handler")
+
+        req = request if request.timestamp_ms > 0 else request.model_copy(update={"timestamp_ms": self._clock()})
+        try:
+            ack = await handler(req)
+            if isinstance(ack, CommentaryAck):
+                return ack
+            return CommentaryAck(accepted=bool(ack), spoken=False)
+        except Exception as exc:  # noqa: BLE001 - 解说处理器异常隔离
+            logger.exception(f"解说处理器执行异常（game={caller_name}）: {exc}")
+            return CommentaryAck(accepted=False, spoken=False, reason=f"handler_error: {type(exc).__name__}")
+
+    def publish_spoken_echo(self, text: str, *, source: str = "", timestamp_ms: int = 0) -> None:
+        """把主播刚说出口的话同步转发给当前主控游戏 Agent（零唤醒、异常隔离）。"""
+        if not self.is_game_lead or self._active_lead_agent is None:
+            return
+        spoken_text = (text or "").strip()
+        if not spoken_text:
+            return
+        agent: Optional[BaseAgent] = self._agent_manager.get_agent_by_name(self._active_lead_agent)
+        if agent is None:
+            return
+        ts = timestamp_ms if timestamp_ms > 0 else self._clock()
+        try:
+            agent.receive_spoken_echo(spoken_text, source=source, timestamp_ms=ts)
+        except Exception as exc:  # noqa: BLE001 - 回声是纯旁路，绝不反噬发声主链
+            logger.warning(
+                f"向主控游戏 '{self._active_lead_agent}' 转发发言回声失败（已忽略）: {exc}",
+                exc=True,
+            )
+
+    async def send_suggestion(
+        self,
+        content: str,
+        *,
+        target: Optional[str] = None,
+        source: str = STREAMER_AGENT_NAME,
+        source_dialogue: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """向当前主控游戏 Agent 转达观众建议或提醒（非强杀、不建委派账本）。"""
+        text = (content or "").strip()
+        if not text:
+            return {"accepted": False, "target": (target or "").strip(), "reason": "empty_content"}
+
+        if not self.is_game_lead or self._active_lead_agent is None:
+            return {
+                "accepted": False,
+                "target": (target or "").strip(),
+                "reason": "not_in_game_lead",
+            }
+
+        lead_name = self._active_lead_agent
+        requested = (target or "").strip()
+        if requested and requested != lead_name:
+            return {
+                "accepted": False,
+                "target": requested,
+                "lead_agent": lead_name,
+                "reason": "target_not_leading",
+            }
+
+        agent = self._agent_manager.get_agent_by_name(lead_name)
+        if agent is None:
+            return {"accepted": False, "target": lead_name, "reason": "agent_not_found"}
+
+        try:
+            accepted = bool(await agent.receive_suggestion(text, source=source, source_dialogue=source_dialogue))
+        except Exception as exc:  # noqa: BLE001 - 建议投递异常转结构化失败
+            logger.exception(f"向主控游戏 '{lead_name}' 投递建议异常: {exc}")
+            return {"accepted": False, "target": lead_name, "reason": f"error: {type(exc).__name__}"}
+
+        return {
+            "accepted": accepted,
+            "target": lead_name,
+            "reason": "" if accepted else "refused",
+        }
+
+
+__all__ = [
+    "STREAMER_AGENT_NAME",
+    "LeadMode",
+    "LeadOverride",
+    "LeadHandoverContext",
+    "CommentaryRequest",
+    "CommentaryAck",
+    "LeadStateSnapshot",
+    "CommentaryHandler",
+    "HandoverBuilder",
+    "LeadChangedListener",
+    "LeadCoordinator",
+]

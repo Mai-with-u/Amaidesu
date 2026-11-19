@@ -33,7 +33,7 @@ import abc
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
@@ -43,6 +43,9 @@ from src.modules.config.core_schemas import AgentSupervisorConfig
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolSpec
+
+if TYPE_CHECKING:
+    from src.modules.agents.lead import LeadHandoverContext
 
 logger = get_logger("BaseAgent")
 
@@ -97,6 +100,9 @@ class BaseAgent(abc.ABC):
 
     # ----- 事件族声明（可选）-----
     emits_events: Iterable[str] = ()  # 子类可声明自己发哪些事件族
+
+    # ----- 动态主从协议（可选能力：默认不支持自主领航）-----
+    supports_autonomous_lead: ClassVar[bool] = False
 
     # ----- 内部状态 -----
     def __init__(
@@ -299,6 +305,58 @@ class BaseAgent(abc.ABC):
         del task_id, reason, handover
         logger.debug(f"Agent '{self.name or type(self).__name__}' 不支持委派收手（未实现 release_delegation）")
         return None
+
+    # ----- 动态主从协议钩子（子类按需覆写；默认不支持自主领航）-----
+
+    def can_take_lead(self) -> bool:
+        """当前运行态是否具备自主领航条件（如外部连接就绪、游戏已进入可玩世界）。
+
+        默认返回 False；声明 ``supports_autonomous_lead = True`` 的游戏 Agent
+        应结合实时健康态覆写本方法。
+        """
+        return False
+
+    async def enter_lead(self, context: LeadHandoverContext) -> bool:
+        """接管游戏主控权并接收交接简报（返回 True 表示成功进入自主主控态）。
+
+        触发条件：流程单进入游戏环节或运营手动切换至该游戏主控时由协调器调用。
+        默认拒收返回 False，对既有非自主 Agent 保持完全兼容。
+        """
+        del context
+        logger.debug(f"Agent '{self.name or type(self).__name__}' 不支持接管自主主控（默认拒收 enter_lead）")
+        return False
+
+    async def yield_lead(self, *, reason: str = "") -> str:
+        """交出游戏主控权并返回紧凑收尾摘要（供主播无缝接回话题）。
+
+        触发条件：游戏环节结束、人工切回主播主控或游戏断连回收时由协调器调用。
+        """
+        del reason
+        return ""
+
+    def receive_spoken_echo(self, text: str, *, source: str = "", timestamp_ms: int = 0) -> None:
+        """接收主播实时发声回声（纯同步旁路写入，不主动唤醒游戏决策循环）。
+
+        触发条件：游戏主控期间主播完成一次发声后，协调器同步转发文本，让游戏侧
+        知道刚才观众听到了什么，避免重复表述或冲突操作。
+        """
+        del text, source, timestamp_ms
+        return None
+
+    async def receive_suggestion(
+        self,
+        content: str,
+        *,
+        source: str = "streamer",
+        source_dialogue: Optional[List[str]] = None,
+    ) -> bool:
+        """接收非强杀建议（观众点菜/善意提醒，不建委派账本、不打断当前行动）。
+
+        支持自主主控的子类应覆写本方法以按自身节奏吸收建议；未覆写时回退到
+        ``receive_prompt``（未覆写 ``receive_prompt`` 的基类默认拒收返回 False）。
+        """
+        del source_dialogue
+        return self.receive_prompt(content=content, source=source)
 
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。

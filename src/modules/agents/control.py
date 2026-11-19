@@ -46,6 +46,7 @@ from src.modules.agents.delegation_board import (
 )
 from src.modules.agents.delegation_text import compose_redelivery, mark_prompt, own_words_of
 from src.modules.agents.game_tools import business_fail_result
+from src.modules.agents.lead import STREAMER_AGENT_NAME, CommentaryRequest, LeadCoordinator
 from src.modules.agents.manager import AgentManager
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentPromptedPayload
@@ -102,6 +103,19 @@ _NOT_PROGRESS_KEYS = frozenset(
 
 _VALID_WHEN_BUSY = frozenset({"queue", "replace"})
 _VALID_OUTCOMES = frozenset({"done", "shelve", "drop"})
+_VALID_COMMENTARY_URGENCY = frozenset({"normal", "high"})
+
+#: 解说素材工具说明（仅游戏主控 Agent 可见）
+_COMMENTARY_DESCRIPTION = (
+    "把当前游戏现场值得向观众聊的 1-2 句客观动态与想说的点提交给主播，由主播按人设润色发声。"
+    "只在自己正处于游戏自主主控态时可用；不直接对观众喊话。"
+)
+
+#: 游戏主控态建议工具说明（仅主播可见）
+_SUGGEST_DESCRIPTION = (
+    "在游戏自主主控期间，向当前主控游戏 Agent 转达观众建议、点菜或善意提醒。"
+    "不建委派账本、不强杀或打断游戏正在执行的行动，由游戏方结合当前局面自行决定是否采纳。"
+)
 
 
 def _emit_prompted(event_bus: Any, *, target: str, content: str, source: str) -> None:
@@ -1292,6 +1306,7 @@ class AgentControl:
         clock: Optional[Callable[[], int]] = None,
         *,
         delegation_core: Optional[DelegationCore] = None,
+        lead_coordinator: Optional[LeadCoordinator] = None,
     ) -> None:
         self._manager = manager
         self._task_ledger = (
@@ -1301,10 +1316,16 @@ class AgentControl:
         )
         self._event_bus = event_bus
         self._delegation = delegation_core or DelegationCore(manager, self._task_ledger, event_bus, clock)
+        self._lead_coordinator = lead_coordinator
 
     @property
     def delegation_core(self) -> DelegationCore:
         return self._delegation
+
+    @property
+    def lead_coordinator(self) -> Optional[LeadCoordinator]:
+        """动态主从协调器（未注入时返回 None）。"""
+        return self._lead_coordinator
 
     async def pause(self, name: str) -> bool:
         agent = self._manager.get_agent_by_name(name)
@@ -1443,16 +1464,19 @@ class AgentControl:
 
 @dataclass(slots=True)
 class AgentControlProvider(BaseToolProvider):
-    """把 framework LLM 工具面（delegate / prompt / task_status / task_settle）注册到 ToolRegistry。"""
+    """把 framework LLM 工具面（delegate / prompt / task_status / task_settle 及动态主从工具）注册到 ToolRegistry。"""
 
     manager: AgentManager
     task_ledger: Optional[TaskLedger] = None
     event_bus: Optional[Any] = None
     clock: Optional[Callable[[], int]] = None
     delegation_core: Optional[DelegationCore] = None
+    lead_coordinator: Optional[LeadCoordinator] = None
     _delegation: DelegationCore = field(init=False, repr=False)
 
     category: ClassVar[str] = "framework"
+    # 名册增删时由 AgentManager 触发 ToolRegistry.refresh_provider_tools，动态刷新候选列表与主从工具
+    syncs_with_agent_roster: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         if self.delegation_core is not None:
@@ -1461,6 +1485,10 @@ class AgentControlProvider(BaseToolProvider):
                 self.task_ledger = self.delegation_core._task_ledger
         else:
             self._delegation = DelegationCore(self.manager, self.task_ledger, self.event_bus, self.clock)
+
+    def _now_ms(self) -> int:
+        """统一取当前毫秒时间戳（优先走注入的假时钟，便于确定性测试）。"""
+        return self.clock() if self.clock is not None else now_ms()
 
     @property
     def name(self) -> str:
@@ -1475,8 +1503,14 @@ class AgentControlProvider(BaseToolProvider):
         await self._delegation.stop()
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """委派 + 递话 + 任务状态 + 任务结单工具（恒四件）。"""
-        return [self._delegate_spec(), self._prompt_spec(), _TASK_STATUS_SPEC, _TASK_SETTLE_SPEC]
+        """基础四件（委派/递话/状态/结单）；启用动态主从且存在自主候选时追加解说与建议工具。"""
+        specs: List[ToolSpec] = [self._delegate_spec(), self._prompt_spec(), _TASK_STATUS_SPEC, _TASK_SETTLE_SPEC]
+        if self.lead_coordinator is not None:
+            candidates = [name for name in self.lead_coordinator.lead_capable_agents() if name != STREAMER_AGENT_NAME]
+            if candidates:
+                specs.append(self._commentary_spec(candidates))
+                specs.append(self._suggest_spec(candidates))
+        return specs
 
     def _roster(self, hook: str) -> Dict[str, str]:
         """当前名册 {注册名: 描述}，仅含覆写了 ``hook`` 接收入口的 Agent。"""
@@ -1508,18 +1542,22 @@ class AgentControlProvider(BaseToolProvider):
         return "目标 Agent 注册名（当前没有能接收的 Agent：启用的游戏若不走委派，直接用它自己的操作工具）"
 
     def has_tools_for(self, agent_name: str) -> bool:
-        """存在除调用方以外能接收委派的 Agent 时，才把委派四件暴露进该 Agent 的 LLM 工具表。
+        """按运行态决定是否向 ``agent_name`` 的 LLM 工具表暴露 framework 工具。
 
-        纯杂谈场（仅启用主播）或仅启用遥控型游戏时没有委派接收方，隐藏工具定义避免误调；
-        注册表直连 invoke 与运营全集（for_agent=None）仍保留全部四件。
+        - 正在自主主控的游戏 Agent：返回 True，使其在主控期内可见 ``framework_commentary``（非主控期隐藏）。
+        - 游戏主控态下的主播：返回 True，使其可见 ``framework_suggest`` 与主控态说明（即使该游戏不走委派）。
+        - 其余情形沿用原委派名册判定：纯杂谈场或仅遥控型游戏时隐藏委派四件。
         """
+        if self.lead_coordinator is not None:
+            if self.lead_coordinator.is_agent_leading(agent_name):
+                return True
+            if agent_name == STREAMER_AGENT_NAME and self.lead_coordinator.is_game_lead:
+                return True
         return any(name != agent_name for name in self._roster("receive_delegation"))
 
-    def guide_for(self, agent_name: str) -> str:
-        """framework 工具面的使用说明：有能接收委派的 Agent 才给，否则空串。"""
-        roster = {name: desc for name, desc in self._roster("receive_delegation").items() if name != agent_name}
-        if not roster:
-            return ""
+    @staticmethod
+    def _format_delegation_guide(roster: Dict[str, str]) -> str:
+        """拼装标准委派型游戏使用说明（主播主控态或存在非主控委派目标时使用）。"""
         listed = "；".join(f"{name}={desc or '（无描述）'}" for name, desc in sorted(roster.items()))
         return (
             f"委派型游戏（可以把一件事交给它在后台做）：{listed}。"
@@ -1530,6 +1568,34 @@ class AgentControlProvider(BaseToolProvider):
             "用 framework_prompt 只给当前【在做】的同一件事补充要求（kind='requirement'）或在聊天里回话（kind='chat'），不拿它换活；"
             "进度以它的上报与 framework_task_status 的查询结果为准，不要自己推测。"
         )
+
+    def guide_for(self, agent_name: str) -> str:
+        """framework 工具面的使用说明：随动态主从状态自动切换，主播主控态保持原样。"""
+        if self.lead_coordinator is not None and self.lead_coordinator.is_game_lead:
+            lead_name = self.lead_coordinator.active_lead_agent or ""
+            if agent_name == lead_name:
+                return (
+                    "当前由你自主主控游戏节奏：遇到值得和观众分享的现场进展、突发状况或趣事时，"
+                    "调用 framework_commentary 提交 1-2 句客观要点交给主播润色解说，无需自己对观众喊话。"
+                )
+            if agent_name == STREAMER_AGENT_NAME:
+                lead_guide = (
+                    f"当前由游戏 Agent（{lead_name}）自主主控游戏，你无需给它下达委派指令，也不要强杀或替代它的执行。"
+                    "观众提出点菜、建议或善意提醒时，用 framework_suggest 转达给它，由它结合当前局面自行决定是否采纳。"
+                )
+                non_leading = {
+                    name: desc
+                    for name, desc in self._roster("receive_delegation").items()
+                    if name not in (agent_name, lead_name)
+                }
+                if not non_leading:
+                    return lead_guide
+                return f"{lead_guide}\n{self._format_delegation_guide(non_leading)}"
+
+        roster = {name: desc for name, desc in self._roster("receive_delegation").items() if name != agent_name}
+        if not roster:
+            return ""
+        return self._format_delegation_guide(roster)
 
     def _delegate_spec(self) -> ToolSpec:
         roster = self._roster("receive_delegation")
@@ -1612,6 +1678,67 @@ class AgentControlProvider(BaseToolProvider):
             provider=PROVIDER_NAME,
         )
 
+    def _commentary_spec(self, candidates: List[str]) -> ToolSpec:
+        """构造 framework_commentary 规格：仅对支持自主领航的游戏 Agent 可见，绝不对主播暴露。"""
+        visible = sorted(name for name in candidates if name != STREAMER_AGENT_NAME)
+        schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "必填：1-2 句客观现场进展与值得向观众聊的点（不替主播写完整台词）",
+                },
+                "mood": {
+                    "type": "string",
+                    "description": "可选：此刻画面或处境的情绪倾向（默认 'neutral'）",
+                },
+                "urgency": {
+                    "type": "string",
+                    "enum": ["normal", "high"],
+                    "description": "可选：紧迫度，默认 'normal'；突发危险/重要转折填 'high'",
+                },
+                "about_player": {
+                    "type": "string",
+                    "description": "可选：涉及的游戏内其他玩家名（无则留空）",
+                },
+            },
+            "required": ["summary"],
+        }
+        return ToolSpec(
+            name="commentary",
+            description=_COMMENTARY_DESCRIPTION,
+            parameters_schema=schema,
+            kind="sync",
+            provider=PROVIDER_NAME,
+            visible_to=visible,
+        )
+
+    def _suggest_spec(self, candidates: List[str]) -> ToolSpec:
+        """构造 framework_suggest 规格：仅对主播可见，用于游戏主控态下转达观众建议。"""
+        schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "必填：要转达给当前主控游戏 Agent 的观众建议、点菜或提醒",
+                },
+                "agent": {
+                    "type": "string",
+                    "enum": sorted(candidates),
+                    "description": "可选：目标主控游戏 Agent 注册名（留空自动解析当前主控游戏）",
+                },
+            },
+            "required": ["content"],
+        }
+        return ToolSpec(
+            name="suggest",
+            description=_SUGGEST_DESCRIPTION,
+            parameters_schema=schema,
+            kind="sync",
+            provider=PROVIDER_NAME,
+            visible_to=[STREAMER_AGENT_NAME],
+        )
+
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         args = invocation.arguments or {}
         name = invocation.tool_name
@@ -1628,6 +1755,14 @@ class AgentControlProvider(BaseToolProvider):
                 return await self._invoke_task_settle(
                     args, caller=invocation.source, invoking_agent=invocation.invoking_agent
                 )
+            if name == "framework_commentary":
+                return await self._invoke_commentary(
+                    args, caller=invocation.source, invoking_agent=invocation.invoking_agent
+                )
+            if name == "framework_suggest":
+                return await self._invoke_suggest(
+                    args, caller=invocation.source, invoking_agent=invocation.invoking_agent
+                )
             return ToolExecutionResult(
                 tool_name=name,
                 success=False,
@@ -1641,12 +1776,72 @@ class AgentControlProvider(BaseToolProvider):
                 error_message=f"{type(exc).__name__}: {exc}",
             )
 
+    def _guard_target_in_game_lead(
+        self,
+        tool_name: str,
+        target_name: str,
+        *,
+        caller: str,
+        invoking_agent: str,
+        started_ms: int,
+        item_ref: str = "",
+    ) -> Optional[ToolExecutionResult]:
+        """游戏主控态门禁：若委派或结单指向正在自主主控的游戏，返回结构化业务拒绝。"""
+        if self.lead_coordinator is None or not self.lead_coordinator.is_game_lead:
+            return None
+
+        resolved = target_name.strip()
+        if not resolved and item_ref.startswith("deleg_") and self.task_ledger is not None:
+            rec = self.task_ledger.get(item_ref)
+            if rec is not None and rec.source == "agent":
+                resolved = rec.executor
+        if not resolved:
+            exclusion = (invoking_agent or "").strip() or caller
+            candidates = [name for name in self._roster("receive_delegation") if name != exclusion]
+            if len(candidates) == 1:
+                resolved = candidates[0]
+
+        if not resolved or not self.lead_coordinator.is_agent_leading(resolved):
+            return None
+
+        msg = (
+            f"当前由游戏 Agent '{resolved}' 自主主控游戏节奏，暂不接受 {tool_name} 委派或强杀操作；"
+            "请改用 framework_suggest 转达观众建议，不要干预或强杀它的执行。"
+        )
+        finished_ms = self._now_ms()
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=False,
+            failure_kind="business",
+            error_message=msg,
+            structured_content={
+                "error": "game_in_lead",
+                "lead_agent": resolved,
+                "suggested_tool": "framework_suggest",
+                "message": msg,
+            },
+            timestamp_ms=finished_ms,
+            duration_ms=max(0, finished_ms - started_ms),
+        )
+
     async def _invoke_delegate(
         self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
     ) -> ToolExecutionResult:
-        started_ms = now_ms()
-        instruction = str(args.get("instruction", "") or "").strip()
+        started_ms = self._now_ms()
+        target_name = str(args.get("agent", "") or "")
         item_ref = str(args.get("item", "") or "").strip()
+        blocked = self._guard_target_in_game_lead(
+            "framework_delegate",
+            target_name,
+            caller=caller,
+            invoking_agent=invoking_agent,
+            started_ms=started_ms,
+            item_ref=item_ref,
+        )
+        if blocked is not None:
+            return blocked
+
+        instruction = str(args.get("instruction", "") or "").strip()
         if not instruction and not item_ref:
             return business_fail_result(
                 "framework_delegate",
@@ -1655,7 +1850,7 @@ class AgentControlProvider(BaseToolProvider):
             )
         raw_instruction = str(args.get("instruction", "") or "")
         outcome = await self._delegation.delegate(
-            target_name=str(args.get("agent", "") or ""),
+            target_name=target_name,
             instruction=raw_instruction,
             caller=caller,
             roster=self._roster("receive_delegation"),
@@ -1729,11 +1924,24 @@ class AgentControlProvider(BaseToolProvider):
     async def _invoke_task_settle(
         self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
     ) -> ToolExecutionResult:
-        started_ms = now_ms()
+        started_ms = self._now_ms()
         tool_name = "framework_task_settle"
+        target_name = str(args.get("agent", "") or "")
+        item_ref = str(args.get("item", "") or "")
+        blocked = self._guard_target_in_game_lead(
+            tool_name,
+            target_name,
+            caller=caller,
+            invoking_agent=invoking_agent,
+            started_ms=started_ms,
+            item_ref=item_ref.strip(),
+        )
+        if blocked is not None:
+            return blocked
+
         settled = await self._delegation.settle(
-            target_name=str(args.get("agent", "") or ""),
-            item_ref=str(args.get("item", "") or ""),
+            target_name=target_name,
+            item_ref=item_ref,
             outcome=str(args.get("outcome", "") or ""),
             caller=caller,
             progress=str(args.get("progress", "") or ""),
@@ -1756,6 +1964,107 @@ class AgentControlProvider(BaseToolProvider):
         if settled.error == "no_ledger":
             return ToolExecutionResult(tool_name=tool_name, success=False, error_message=settled.message)
         return business_fail_result(tool_name, started_ms, settled.message)
+
+    async def _invoke_commentary(
+        self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
+    ) -> ToolExecutionResult:
+        """执行 framework_commentary：校验调用方正处于主控态后转发解说素材给主播。"""
+        tool_name = "framework_commentary"
+        started_ms = self._now_ms()
+        if self.lead_coordinator is None:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message="动态主从协调器未装配，解说通道不可用",
+            )
+        summary = str(args.get("summary", "") or "").strip()
+        if not summary:
+            return business_fail_result(tool_name, started_ms, "commentary 需要非空的 summary（1-2 句现场要点）")
+        urgency = str(args.get("urgency", "normal") or "normal").strip()
+        if urgency not in _VALID_COMMENTARY_URGENCY:
+            return business_fail_result(
+                tool_name, started_ms, f"commentary 的 urgency 只能是 'normal' 或 'high'（收到 '{urgency}'）"
+            )
+        mood = str(args.get("mood", "neutral") or "neutral").strip() or "neutral"
+        about_player = str(args.get("about_player", "") or "").strip()
+        caller_agent = (invoking_agent or "").strip() or (caller or "").strip().removesuffix("-react")
+
+        req = CommentaryRequest(
+            game=caller_agent,
+            summary=summary,
+            mood=mood,
+            urgency=urgency,  # type: ignore[arg-type]
+            about_player=about_player,
+            timestamp_ms=started_ms,
+        )
+        ack = await self.lead_coordinator.submit_commentary(caller_agent, req)
+        finished_ms = self._now_ms()
+        if ack.accepted:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=True,
+                structured_content=ack.model_dump(),
+                timestamp_ms=finished_ms,
+                duration_ms=max(0, finished_ms - started_ms),
+            )
+        reason_text = (
+            f"当前调用方 '{caller_agent}' 未处于游戏主控态，不能使用 framework_commentary"
+            if ack.reason == "not_in_lead"
+            else f"解说素材未受理（{ack.reason or 'unknown'}）"
+        )
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=False,
+            failure_kind="business",
+            error_message=reason_text,
+            structured_content=ack.model_dump(),
+            timestamp_ms=finished_ms,
+            duration_ms=max(0, finished_ms - started_ms),
+        )
+
+    async def _invoke_suggest(
+        self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
+    ) -> ToolExecutionResult:
+        """执行 framework_suggest：向当前主控游戏 Agent 转达非强杀观众建议。"""
+        tool_name = "framework_suggest"
+        started_ms = self._now_ms()
+        if self.lead_coordinator is None:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message="动态主从协调器未装配，观众建议通道不可用",
+            )
+        content = str(args.get("content", "") or "").strip()
+        if not content:
+            return business_fail_result(tool_name, started_ms, "suggest 需要非空的 content（观众建议或提醒）")
+        target = str(args.get("agent", "") or "").strip() or None
+        source = (invoking_agent or "").strip() or (caller or "").strip() or STREAMER_AGENT_NAME
+        result = await self.lead_coordinator.send_suggestion(content, target=target, source=source)
+        finished_ms = self._now_ms()
+        if result.get("accepted"):
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=True,
+                structured_content=result,
+                timestamp_ms=finished_ms,
+                duration_ms=max(0, finished_ms - started_ms),
+            )
+        reason = str(result.get("reason") or "refused")
+        if reason == "not_in_game_lead":
+            msg = "当前为主播主控态，没有正在自主主控的游戏 Agent，请使用常规委派或递话工具"
+        elif reason == "target_not_leading":
+            msg = f"目标 '{result.get('target', '')}' 当前并非主控游戏（当前主控为 '{result.get('lead_agent', '')}'）"
+        else:
+            msg = f"主控游戏未能受理建议（{reason}）"
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=False,
+            failure_kind="business",
+            error_message=msg,
+            structured_content=result,
+            timestamp_ms=finished_ms,
+            duration_ms=max(0, finished_ms - started_ms),
+        )
 
     def _invoke_task_status(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
         started_ms = now_ms()
@@ -1819,14 +2128,16 @@ def build_agent_control_provider(
     clock: Optional[Callable[[], int]] = None,
     *,
     delegation_core: Optional[DelegationCore] = None,
+    lead_coordinator: Optional[LeadCoordinator] = None,
 ) -> AgentControlProvider:
-    """工厂：构造 AgentControlProvider；传入 ``delegation_core`` 时与控制面共享同一个受理核心。"""
+    """工厂：构造 AgentControlProvider；传入 ``delegation_core`` 与 ``lead_coordinator`` 时与控制面共享单例。"""
     return AgentControlProvider(
         manager=manager,
         task_ledger=task_ledger,
         event_bus=event_bus,
         clock=clock,
         delegation_core=delegation_core,
+        lead_coordinator=lead_coordinator,
     )
 
 

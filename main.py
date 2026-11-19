@@ -31,6 +31,7 @@ from loguru import logger as loguru_logger
 from src.modules.agents.companions import companion_names, register_companions
 from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import AGENT_BINDINGS, instantiate_agent
+from src.modules.agents.lead import LeadCoordinator
 from src.modules.agents.manager import AgentManager
 from src.modules.audio.sink import FanOutAudioSink
 from src.modules.avatar.act_tool import AvatarActProvider
@@ -344,6 +345,7 @@ class AppComponents:
     avatar_tracking: Optional[TrackingRuntime] = None
     privacy_service: Optional[PrivacyService] = None
     retention_service: Optional[RetentionService] = None
+    lead_coordinator: Optional[LeadCoordinator] = None
 
 
 async def create_app_components(
@@ -572,9 +574,10 @@ async def create_app_components(
     tool_registry: Optional[ToolRegistry] = None
     tool_operations: Optional[ToolOperations] = None
     thinking_hub: Optional[StreamPreviewHub] = None
-    # Dashboard 装配段同样引用任务跟踪器与委派受理核心：无 [agents] 段时都不构造，以 None 交给 Dashboard
+    # Dashboard 装配段同样引用任务跟踪器、委派受理核心与动态主从协调器：无 [agents] 段时都不构造，以 None 交给 Dashboard
     task_tracker: Optional[TaskTracker] = None
     delegation_core: Optional[Any] = None
+    lead_coordinator: Optional[LeadCoordinator] = None
     tts_engine: Optional[TTSProvider] = None
     avatar_tracking: Optional[TrackingRuntime] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
@@ -740,6 +743,11 @@ async def create_app_components(
             "wait_playback_timeout_ms": int(_tts.get("wait_playback_timeout_ms", 60000) or 0),
             "max_pending": int(_tts.get("max_pending", 1)),
         }
+        # 动态主从协调器（组合根唯一单例）：先于 Agent 注册构造并回填到 AgentManager，
+        # 确保启动装配与后续动态启用/热重启均注入同一协调器实例
+        lead_coordinator = LeadCoordinator(agent_manager, event_bus=event_bus)
+        agent_manager.set_lead_coordinator(lead_coordinator)
+
         await _register_agents_from_config(
             agent_manager,
             agents_config,
@@ -787,6 +795,7 @@ async def create_app_components(
                 context_assembler_config=None,
                 task_tracker=task_tracker,
                 task_ledger=task_ledger,
+                lead_coordinator=lead_coordinator,
             ),
         )
 
@@ -926,7 +935,11 @@ async def create_app_components(
         delegation_core = DelegationCore(agent_manager, task_ledger, event_bus=event_bus)
         if tool_registry is not None:
             framework_provider = build_agent_control_provider(
-                agent_manager, task_ledger, event_bus=event_bus, delegation_core=delegation_core
+                agent_manager,
+                task_ledger,
+                event_bus=event_bus,
+                delegation_core=delegation_core,
+                lead_coordinator=lead_coordinator,
             )
             framework_count = tool_registry.register_provider(framework_provider)
             logger.info(f"framework 工具已注册（控制+委派，新增 {framework_count} 个）")
@@ -1026,9 +1039,10 @@ async def create_app_components(
             # 观众身份人工处理：待确认页、合并与取消关联
             viewer_identity_repo=database.viewer_identity,
             privacy_service=privacy_service,
-            # 任务卡快照与运营委派的数据源（通用任务基建 + 组合根单例委派受理核心）
+            # 任务卡快照与运营委派的数据源（通用任务基建 + 组合根单例委派受理核心 + 动态主从协调器）
             task_tracker=task_tracker,
             delegation_core=delegation_core,
+            lead_coordinator=lead_coordinator,
             # 请求历史管理器：与引擎写入侧同源的共享实例
             request_history_manager=request_history_manager,
             # 基础设施直测面：/api/v1/debug/subtitle|tts 端点的数据源
@@ -1077,6 +1091,7 @@ async def create_app_components(
         avatar_tracking=avatar_tracking,
         privacy_service=privacy_service,
         retention_service=retention_service,
+        lead_coordinator=lead_coordinator,
     )
 
 
@@ -1395,6 +1410,7 @@ async def _start_dashboard(
     storage_db_path=None,
     task_tracker=None,
     delegation_core=None,
+    lead_coordinator=None,
     subtitle_service=None,
     tts_engine=None,
     request_history_manager=None,
@@ -1484,9 +1500,10 @@ async def _start_dashboard(
             rundown_instance_repo=rundown_instance_repo,
             talk_card_repo=talk_card_repo,
             storage_db_path=storage_db_path,
-            # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源（共享同一个 DelegationCore）
+            # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源（共享同一个 DelegationCore 与 LeadCoordinator）
             task_tracker=task_tracker,
             delegation_core=delegation_core,
+            lead_coordinator=lead_coordinator,
             # 字幕服务与 TTS 引擎：/api/v1/debug 直测端点经此驱动真实基础设施
             subtitle_service=subtitle_service,
             tts_engine=tts_engine,

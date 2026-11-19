@@ -18,6 +18,19 @@ Amaidesu Agent 模块
 
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.agents.control import AgentControl, AgentControlProvider, DelegationCore, build_agent_control_provider
+from src.modules.agents.lead import (
+    STREAMER_AGENT_NAME,
+    CommentaryAck,
+    CommentaryHandler,
+    CommentaryRequest,
+    HandoverBuilder,
+    LeadChangedListener,
+    LeadCoordinator,
+    LeadHandoverContext,
+    LeadMode,
+    LeadOverride,
+    LeadStateSnapshot,
+)
 from src.modules.agents.manager import AgentManager
 
 __all__ = [
@@ -28,4 +41,15 @@ __all__ = [
     "AgentControlProvider",
     "build_agent_control_provider",
     "AgentManager",
+    "STREAMER_AGENT_NAME",
+    "LeadMode",
+    "LeadOverride",
+    "LeadHandoverContext",
+    "CommentaryRequest",
+    "CommentaryAck",
+    "LeadStateSnapshot",
+    "CommentaryHandler",
+    "HandoverBuilder",
+    "LeadChangedListener",
+    "LeadCoordinator",
 ]

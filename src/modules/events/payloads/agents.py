@@ -7,7 +7,11 @@
 - ``agent.replied``：命令驱动型 Agent 的每步响应事实（中间工具调用步骤发一条，
   自然终止轮的正文走 game.report 交付卡）——前端时间线响应卡的数据源，
   llm_request_id 供懒取缓存/Token/上下文统计。
+- ``agent.lead.changed``：动态主从切换事实（主播与自主游戏 Agent 之间交权/收权时发一条）
+  ——观察面与复盘记录的数据源。
 """
+
+from typing import Literal, Optional
 
 from pydantic import Field
 
@@ -75,4 +79,36 @@ class AgentRepliedPayload(BasePayload):
     )
 
 
-__all__ = ["AgentPromptedPayload", "AgentRepliedPayload"]
+@register_event(CoreEvents.AGENT_LEAD_CHANGED)
+class AgentLeadChangedPayload(BasePayload):
+    """
+    动态主从切换事实 Payload（由 LeadCoordinator 在主控权变化时发布）。
+
+    Attributes:
+        lead_agent: 切换后的主控 Agent 注册名（"streamer" 或具体游戏 Agent 注册名）
+        previous_lead: 切换前的主控 Agent 注册名
+        mode: 切换后的主控模式（"streamer"=主播主控 / "game"=游戏自主主控）
+        reason: 本次主从切换原因说明
+        manual_override: 当前人工覆盖策略（None / "auto" / "streamer" / 具体游戏名）
+        handover_summary: 交权简报或收权收尾摘要
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
+        timestamp_ms: 事件发布时间戳（Unix 毫秒）
+    """
+
+    lead_agent: str = Field(..., description="切换后的主控 Agent 注册名（'streamer' 或具体游戏 Agent 名）")
+    previous_lead: str = Field(..., description="切换前的主控 Agent 注册名")
+    mode: Literal["streamer", "game"] = Field(..., description="切换后的主控模式（streamer / game）")
+    reason: str = Field(default="", description="本次主从切换原因")
+    manual_override: Optional[str] = Field(default=None, description="当前人工覆盖策略（auto / streamer / 游戏名）")
+    handover_summary: str = Field(default="", description="交接或收尾摘要")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件发布时间戳（Unix 毫秒）",
+    )
+
+
+__all__ = ["AgentLeadChangedPayload", "AgentPromptedPayload", "AgentRepliedPayload"]

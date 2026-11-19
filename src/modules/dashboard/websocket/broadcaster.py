@@ -35,6 +35,7 @@ from src.modules.dashboard.schemas.event import WebSocketMessage
 from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE, ROOM_STATE_TYPE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
+    AgentLeadChangedPayload,
     AgentPromptedPayload,
     BackgroundTaskChangedPayload,
     AgentRepliedPayload,
@@ -168,6 +169,8 @@ class EventBroadcaster:
         CoreEvents.AGENT_PROMPTED: (None, AgentPromptedPayload),
         # Agent 每步响应事实（时间线响应卡数据源）
         CoreEvents.AGENT_REPLIED: (None, AgentRepliedPayload),
+        # 动态主从切换事实（主播与自主游戏 Agent 主控权交接/收回实时推送）
+        CoreEvents.AGENT_LEAD_CHANGED: (None, AgentLeadChangedPayload),
         # TTS 发声失败（冷启动服务不可用等）：运营者要在时间线看到"静默跳句"的原因
         CoreEvents.TTS_UTTERANCE_FAILED: (None, UtteranceFailedPayload),
         # TTS 播报态两端点：前端按 utterance_id 关联到既有发言行打"播报中/已播完"标记

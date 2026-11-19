@@ -80,6 +80,8 @@ class ComponentRuntimeContext:
     # 配置服务：动态启用带附属采集器的 Agent 时，读别的 Agent 配置段里的跨 Agent 参考事实
     # （如判"游戏聊天提到她"要的主播人设名）用；缺了它，相关透传按空串降级
     config_service: Optional[Any] = None
+    # 动态主从协调器（组合根单例）：动态启用或配置热重启主播/自主游戏 Agent 时原样透传，避免丢失主从联动
+    lead_coordinator: Optional[Any] = None
 
     @classmethod
     def from_server(cls, server: Any) -> "ComponentRuntimeContext":
@@ -92,6 +94,7 @@ class ComponentRuntimeContext:
             prompt_manager=getattr(server, "prompt_manager", None),
             task_tracker=getattr(server, "task_tracker", None),
             config_service=getattr(server, "config_service", None),
+            lead_coordinator=getattr(server, "lead_coordinator", None),
         )
 
 
@@ -178,6 +181,7 @@ async def start_instance(
                 # 与启动装配一致：跟踪器和它的记录表一起给，记录表就是跟踪器那一份
                 task_tracker=ctx.task_tracker,
                 task_ledger=ctx.task_tracker.ledger if ctx.task_tracker is not None else None,
+                lead_coordinator=ctx.lead_coordinator,
             ),
         )
         if ok:

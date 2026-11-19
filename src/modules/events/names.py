@@ -231,6 +231,10 @@ class CoreEvents:
     # 通道（思考流只转发 reasoning），本事件是"游戏 Agent 每步说了什么"
     # 的唯一观测面；llm_request_id 供观察面懒取缓存/Token/上下文统计。
     AGENT_REPLIED = "agent.replied"
+    # 动态主从切换事实：主控权在主播（"streamer"）与自主游戏 Agent 之间发生交接或
+    # 收回时发一条。由 LeadCoordinator 唯一发布，供观察面（Dashboard 时间线 / 状态栏）
+    # 与复盘记录消费；不作为跨 Agent 决策唤醒总线（跨 Agent 联动走 LeadCoordinator 回调）。
+    AGENT_LEAD_CHANGED = "agent.lead.changed"
 
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:

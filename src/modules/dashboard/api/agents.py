@@ -2,6 +2,8 @@
 Agent 控制面 API（运行态观测 + 框架级控制端点）
 
 - GET  /api/v1/agents                  -> 已注册 Agent 列表（运行态 + enabled 配置态）
+- GET  /api/v1/agents/lead             -> 动态主从当前状态快照
+- POST /api/v1/agents/lead             -> 动态主从人工切换（auto / streamer / 候选游戏名）
 - GET  /api/v1/agents/{name}/state     -> 单个 Agent 运行状态
 - GET  /api/v1/agents/{name}/memo      -> Agent 备忘录/待办快照（纯只读观测）
 - POST /api/v1/agents/{name}/control   -> 框架级控制（pause/resume/shutdown/restart）
@@ -42,6 +44,8 @@ from src.modules.dashboard.schemas.agent import (
     AgentStopRequest,
     AgentStopResponse,
     AgentSummary,
+    LeadStateResponse,
+    LeadSwitchRequest,
     MemoTodoItem,
 )
 from src.modules.dashboard.utils.component_helper import config_dir, read_toml_dict
@@ -49,8 +53,9 @@ from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
     from src.modules.agents.control import AgentControl
-    from src.modules.dashboard.server import DashboardServer
+    from src.modules.agents.lead import LeadCoordinator
     from src.modules.agents.manager import AgentManager
+    from src.modules.dashboard.server import DashboardServer
 
 logger = get_logger("DashboardAgentsAPI")
 
@@ -68,6 +73,10 @@ AgentControlDep = Annotated[
     "AgentControl", Depends(server_component("agent_control", missing_detail="AgentManager 未注入，Agent 控制面不可用"))
 ]
 AgentManagerDep = Annotated[Optional["AgentManager"], Depends(server_component("agent_manager", required=False))]
+LeadCoordinatorDep = Annotated[
+    "LeadCoordinator",
+    Depends(server_component("lead_coordinator", missing_detail="LeadCoordinator 未注入，动态主从控制面不可用")),
+]
 
 
 def _read_enabled_names(server: "DashboardServer") -> List[str]:
@@ -105,6 +114,31 @@ async def list_agents(server: ServerDep, control: AgentControlDep, manager: Agen
             )
         )
     return AgentListResponse(agents=items)
+
+
+@router.get("/lead", response_model=LeadStateResponse, summary="查询动态主从当前状态")
+async def get_lead_state(coordinator: LeadCoordinatorDep) -> LeadStateResponse:
+    """返回当前主控模式、主控者、人工覆盖策略与自主领航候选列表。"""
+    snap = coordinator.snapshot()
+    return LeadStateResponse(**snap.model_dump())
+
+
+@router.post("/lead", response_model=LeadStateResponse, summary="切换动态主从模式（auto / streamer / 候选游戏名）")
+async def switch_lead_state(request: LeadSwitchRequest, coordinator: LeadCoordinatorDep) -> LeadStateResponse:
+    """设置人工覆盖目标并立即执行对应交权或收权，返回最新主从状态快照。
+
+    - 无效目标（不在 auto / streamer / 自主候选名单）返回 400；
+    - 目标暂未就绪、拒收或动态主从未启用返回 409；
+    - LeadCoordinator 未注入返回 503。
+    """
+    reason = (request.reason or "").strip() or "manual_override"
+    try:
+        snap = await coordinator.set_override(request.target, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return LeadStateResponse(**snap.model_dump())
 
 
 @router.get("/{name}/state", response_model=AgentStateResponse, summary="查询单个 Agent 运行状态")

@@ -108,6 +108,7 @@ class DashboardServer:
         storage_db_path: Optional[Path] = None,
         task_tracker: Optional[Any] = None,
         delegation_core: Optional[Any] = None,
+        lead_coordinator: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
         tts_engine: Optional[Any] = None,
         diagnostics_writer: Optional["DiagnosticsWriter"] = None,
@@ -125,6 +126,8 @@ class DashboardServer:
         # 任务跟踪器：任务卡快照（GET /api/v1/tasks）读 ledger，运营委派经
         # AgentControl 登记任务；未注入（极简启动/测试）时相关端点返回 503。
         self.task_tracker = task_tracker
+        # 动态主从协调器：/api/v1/agents/lead 读写端点的数据源；未注入时返回 503。
+        self.lead_coordinator = lead_coordinator
         # AgentControl 是 /api/v1/agents 控制面（pause/resume/shutdown/state）的
         # 直接调用接口；agent_manager 未注入（极简启动/测试）时保持 None，
         # 相关端点返回 503。
@@ -134,6 +137,7 @@ class DashboardServer:
                 task_tracker.ledger if task_tracker is not None else None,
                 event_bus=event_bus,
                 delegation_core=delegation_core,
+                lead_coordinator=lead_coordinator,
             )
             if agent_manager is not None
             else None

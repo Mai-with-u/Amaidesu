@@ -86,6 +86,7 @@ class AgentManager:
         work_docs_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
         storage_ledger: Optional[Any] = None,
+        lead_coordinator: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
@@ -113,6 +114,7 @@ class AgentManager:
         self._work_docs_repo = work_docs_repo
         self._privacy_service = privacy_service
         self._storage_ledger = storage_ledger
+        self._lead_coordinator = lead_coordinator
         self._lock = asyncio.Lock()
         # ----- 守护（心跳巡检 + 自动重建 + 风暴保护）-----
         self._supervisor_config = supervisor_config if supervisor_config is not None else AgentSupervisorConfig()
@@ -156,6 +158,8 @@ class AgentManager:
             spec_provider=spec_provider,
         )
         logger.info(f"Agent '{agent.name}' 已注册 (spec_provider={spec_provider})")
+        # 名册新增成员后刷新依赖名册的工具提供者（如 framework 工具的可见名单与候选枚举）
+        self._refresh_roster_dependent_providers()
         return True
 
     def unregister(self, name: str) -> bool:
@@ -168,7 +172,29 @@ class AgentManager:
             return False
         self._agents.pop(name, None)
         logger.info(f"Agent '{name}' 已从管理器移除")
+        # 名册移除成员后同步刷新依赖名册的工具提供者，摘除失效动态工具
+        self._refresh_roster_dependent_providers()
         return True
+
+    def _refresh_roster_dependent_providers(self) -> None:
+        """名册变化后刷新声明 ``syncs_with_agent_roster=True`` 的已注册 Provider 工具集。"""
+        registry = self._tool_registry
+        if registry is None:
+            return
+        providers_fn = getattr(registry, "providers", None)
+        refresh_fn = getattr(registry, "refresh_provider_tools", None)
+        if not (callable(providers_fn) and callable(refresh_fn)):
+            return
+        for provider in providers_fn():
+            if not getattr(provider, "syncs_with_agent_roster", False):
+                continue
+            try:
+                refresh_fn(provider)
+            except Exception as exc:  # noqa: BLE001 - 单提供者刷新失败不阻断名册变更
+                logger.warning(
+                    f"Agent 名册变更后刷新 Provider '{getattr(provider, 'name', '?')}' 工具集失败: {exc}",
+                    exc=True,
+                )
 
     # -------------------- 查询 --------------------
 
@@ -197,6 +223,15 @@ class AgentManager:
     def tool_registry(self) -> Optional[ToolRegistry]:
         """默认工具注册中心（构造时注入；可能为 None）。"""
         return self._tool_registry
+
+    @property
+    def lead_coordinator(self) -> Optional[Any]:
+        """默认动态主从协调器（组合根单例；动态启用/重建时回退补齐）。"""
+        return self._lead_coordinator
+
+    def set_lead_coordinator(self, lead_coordinator: Optional[Any]) -> None:
+        """绑定默认动态主从协调器（供组合根在构造协调器后回填，确保动态启停/重建拿到同一单例）。"""
+        self._lead_coordinator = lead_coordinator
 
     async def start_agent(self, name: str) -> bool:
         """启动（或重启）单个已注册 Agent。"""
@@ -262,6 +297,7 @@ class AgentManager:
             work_docs_repo=d.work_docs_repo if d.work_docs_repo is not None else self._work_docs_repo,
             privacy_service=d.privacy_service if d.privacy_service is not None else self._privacy_service,
             storage_ledger=d.storage_ledger if d.storage_ledger is not None else self._storage_ledger,
+            lead_coordinator=d.lead_coordinator if d.lead_coordinator is not None else self._lead_coordinator,
         )
 
     async def enable_agent(
