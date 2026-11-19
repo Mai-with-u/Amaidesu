@@ -12,6 +12,10 @@ from src.agents.streamer.utterance_queue import (
     DEFAULT_MAX_QUEUE,
     DEFAULT_RENDER_TIMEOUT_MS,
     QUEUE_ENGINE_ID,
+    SPEECH_PRIORITY_AUDIENCE,
+    SPEECH_PRIORITY_EMERGENCY,
+    SPEECH_PRIORITY_HIGHLIGHT,
+    SPEECH_PRIORITY_NORMAL,
     SpeakCallable,
     UtteranceQueue,
 )
@@ -795,5 +799,349 @@ async def test_fuse_open_emits_core_error_alert_with_throttle() -> None:
         await _wait_for(lambda: len(failed) == 9)
         await bus.wait_until_drained()
         assert len(alerts) == 2
+    finally:
+        await queue.stop()
+
+
+# ---------------- 四档优先级与两级打断 ----------------
+
+
+async def test_speech_priority_constants_order_and_legacy_high_value() -> None:
+    """四档优先级常量严格递增，并兼容外部传入更高整数（如旧调用 5）。"""
+    assert SPEECH_PRIORITY_NORMAL < SPEECH_PRIORITY_HIGHLIGHT < SPEECH_PRIORITY_AUDIENCE < SPEECH_PRIORITY_EMERGENCY
+    assert (
+        SPEECH_PRIORITY_NORMAL,
+        SPEECH_PRIORITY_HIGHLIGHT,
+        SPEECH_PRIORITY_AUDIENCE,
+        SPEECH_PRIORITY_EMERGENCY,
+    ) == (0, 1, 2, 3)
+
+    recorder = _Recorder()
+    queue = _queue_with(recorder, max_queue=8)
+    for uid, prio in (
+        ("p0", SPEECH_PRIORITY_NORMAL),
+        ("p1", SPEECH_PRIORITY_HIGHLIGHT),
+        ("p2", SPEECH_PRIORITY_AUDIENCE),
+        ("p3", SPEECH_PRIORITY_EMERGENCY),
+        ("legacy5", 5),
+    ):
+        await queue.enqueue(uid, uid, priority=prio)
+    await queue.start()
+    try:
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        assert [uid for _, uid in recorder.calls] == ["legacy5", "p3", "p2", "p1", "p0"]
+    finally:
+        await queue.stop()
+
+
+async def test_interrupt_lower_priority_clears_same_segment_and_other_low_pending_with_tail_callback() -> None:
+    """一级打断：清同段余句（segment_interrupted + 尾句回调）与跨段低优待播（priority_preempted），保在播句与同级/高优待播。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    playing_started = asyncio.Event()
+    release_playing = asyncio.Event()
+    played: List[str] = []
+
+    async def _gated_speak(text: str, utterance_id: Optional[str]) -> None:
+        played.append(utterance_id or "")
+        if utterance_id == "seg_0":
+            playing_started.set()
+            await release_playing.wait()
+
+    queue = UtteranceQueue(speak=_gated_speak, event_bus=bus, max_queue=8, render_timeout_ms=2000, clock=_Clock())
+    tails: List[str] = []
+    await queue.start()
+    try:
+        # 正在播的多句段落（P1）+ 同段待播两句；再塞入 P0 常规独白与同级 P1 独立句（不会在入队期误切当前段落）
+        await queue.enqueue(
+            "seg_0", "段一。", priority=SPEECH_PRIORITY_HIGHLIGHT, segment="talk_1", on_interrupted=tails.append
+        )
+        await queue.enqueue(
+            "seg_1", "段二。", priority=SPEECH_PRIORITY_HIGHLIGHT, segment="talk_1", on_interrupted=tails.append
+        )
+        await queue.enqueue(
+            "seg_2", "段三。", priority=SPEECH_PRIORITY_HIGHLIGHT, segment="talk_1", on_interrupted=tails.append
+        )
+        await asyncio.wait_for(playing_started.wait(), timeout=2.0)
+
+        await queue.enqueue("mono_p0", "常规解说", priority=SPEECH_PRIORITY_NORMAL)
+        await queue.enqueue("hi_p1", "高光反应", priority=SPEECH_PRIORITY_HIGHLIGHT)
+
+        # min_priority <= 0 不做清理
+        assert await queue.interrupt_lower_priority(SPEECH_PRIORITY_NORMAL) == []
+
+        # P2 一级打断：同段余句 seg_1/seg_2 走 segment_interrupted + 尾句回调，跨段低优 mono_p0/hi_p1 走 priority_preempted
+        removed = await queue.interrupt_lower_priority(SPEECH_PRIORITY_AUDIENCE)
+        assert set(removed) == {"段二。", "段三。", "常规解说", "高光反应"}
+        assert tails == ["段二。段三。"]
+        assert queue.size == 0
+
+        # 再验证同级/高优待播不会被清：同时入队 P2 观众回复与 P0 独白，再次 P2 一级打断只清 P0、保留 P2
+        await queue.enqueue("aud_p2", "观众回复", priority=SPEECH_PRIORITY_AUDIENCE)
+        await queue.enqueue("mono_p0_2", "补充解说", priority=SPEECH_PRIORITY_NORMAL)
+        removed_second = await queue.interrupt_lower_priority(SPEECH_PRIORITY_AUDIENCE)
+        assert removed_second == ["补充解说"]
+        assert queue.size == 1
+
+        # 放行正在播的 seg_0，随后只剩同级 aud_p2 播出
+        release_playing.set()
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        await bus.wait_until_drained()
+
+        assert played == ["seg_0", "aud_p2"]
+        by_id = {d.utterance_id: d.reason for d in dropped}
+        assert by_id == {
+            "seg_1": "segment_interrupted",
+            "seg_2": "segment_interrupted",
+            "mono_p0": "priority_preempted",
+            "hi_p1": "priority_preempted",
+            "mono_p0_2": "priority_preempted",
+        }
+        assert queue.get_stats()["interrupted"] == 5
+    finally:
+        release_playing.set()
+        await queue.stop()
+
+
+async def test_interrupt_segment_remains_backward_compatible_for_current_segment_only() -> None:
+    """interrupt_segment 保持向下兼容：只收当前在播段落余句，不清理其它独立待播句子。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    playing_started = asyncio.Event()
+    release_playing = asyncio.Event()
+    played: List[str] = []
+
+    async def _gated_speak(text: str, utterance_id: Optional[str]) -> None:
+        played.append(utterance_id or "")
+        if utterance_id == "seg_0":
+            playing_started.set()
+            await release_playing.wait()
+
+    queue = UtteranceQueue(speak=_gated_speak, event_bus=bus, max_queue=6, render_timeout_ms=2000, clock=_Clock())
+    await queue.start()
+    try:
+        await queue.enqueue("seg_0", "段一。", priority=SPEECH_PRIORITY_NORMAL, segment="talk_1")
+        await queue.enqueue("seg_1", "段二。", priority=SPEECH_PRIORITY_NORMAL, segment="talk_1")
+        await asyncio.wait_for(playing_started.wait(), timeout=2.0)
+        await queue.enqueue("solo_p0", "独立句", priority=SPEECH_PRIORITY_NORMAL)
+
+        cut = await queue.interrupt_segment(SPEECH_PRIORITY_AUDIENCE)
+        assert cut == ["段二。"]
+        release_playing.set()
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        await bus.wait_until_drained()
+
+        assert played == ["seg_0", "solo_p0"]
+        assert [(d.utterance_id, d.reason) for d in dropped] == [("seg_1", "segment_interrupted")]
+    finally:
+        release_playing.set()
+        await queue.stop()
+
+
+async def test_hard_interrupt_playing_cancels_p0_emits_hard_interrupted_and_keeps_worker_alive() -> None:
+    """二级硬打断：掐断在播 P0 并发 hard_interrupted、顺带清低优待播，不发 failed/不计超时，worker 存活并立刻播紧急发言。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    failed = _capture_failed(bus)
+    playing_started = asyncio.Event()
+    playing_cancelled = asyncio.Event()
+    emergency_done = asyncio.Event()
+    played: List[str] = []
+
+    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+        played.append(utterance_id or "")
+        if utterance_id == "p0_playing":
+            playing_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                playing_cancelled.set()
+                raise
+        if utterance_id == "emergency_1":
+            emergency_done.set()
+
+    queue = UtteranceQueue(speak=_speak, event_bus=bus, max_queue=6, render_timeout_ms=2000, clock=_Clock())
+    tails: List[str] = []
+    await queue.start()
+    try:
+        await queue.enqueue(
+            "p0_playing",
+            "漫长独白第一句。",
+            priority=SPEECH_PRIORITY_NORMAL,
+            segment="talk_seg",
+            on_interrupted=tails.append,
+        )
+        await queue.enqueue(
+            "p0_tail",
+            "漫长独白第二句。",
+            priority=SPEECH_PRIORITY_NORMAL,
+            segment="talk_seg",
+            on_interrupted=tails.append,
+        )
+        await asyncio.wait_for(playing_started.wait(), timeout=2.0)
+        await queue.enqueue("p0_other", "排队中的普通解说", priority=SPEECH_PRIORITY_NORMAL)
+
+        # 触发二级硬打断并紧接着入队极急发言
+        assert await queue.hard_interrupt_playing(SPEECH_PRIORITY_EMERGENCY) is True
+        await asyncio.wait_for(playing_cancelled.wait(), timeout=2.0)
+        assert await queue.enqueue("emergency_1", "救命掉岩浆了！", priority=SPEECH_PRIORITY_EMERGENCY) is True
+        await asyncio.wait_for(emergency_done.wait(), timeout=2.0)
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        await bus.wait_until_drained()
+
+        assert queue.is_running is True
+        assert played == ["p0_playing", "emergency_1"]
+        assert tails == ["漫长独白第二句。"]
+        assert failed == []
+        by_id = {d.utterance_id: d.reason for d in dropped}
+        assert by_id == {
+            "p0_tail": "segment_interrupted",
+            "p0_other": "priority_preempted",
+            "p0_playing": "hard_interrupted",
+        }
+        stats = queue.get_stats()
+        assert stats["timeouts"] == 0
+        assert stats["errors"] == 0
+        assert stats["interrupted"] == 3
+        assert stats["processed"] == 1
+    finally:
+        await queue.stop()
+
+
+@pytest.mark.parametrize(
+    "victim_priority",
+    [SPEECH_PRIORITY_HIGHLIGHT, SPEECH_PRIORITY_AUDIENCE, SPEECH_PRIORITY_EMERGENCY],
+    ids=["p1_highlight", "p2_audience", "p3_emergency"],
+)
+async def test_hard_interrupt_refuses_to_cut_p1_and_higher_playing(victim_priority: int) -> None:
+    """二级硬打断默认只掐 P0，绝对不硬打断正在播放的 P1 高光、P2 观众回复或 P3 极急发言。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    playing_started = asyncio.Event()
+    release_playing = asyncio.Event()
+    was_cancelled = False
+
+    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+        nonlocal was_cancelled
+        playing_started.set()
+        try:
+            await release_playing.wait()
+        except asyncio.CancelledError:
+            was_cancelled = True
+            raise
+
+    queue = UtteranceQueue(speak=_speak, event_bus=bus, max_queue=4, render_timeout_ms=2000, clock=_Clock())
+    await queue.start()
+    try:
+        # 空闲无在播条目时返回 False
+        assert await queue.hard_interrupt_playing(SPEECH_PRIORITY_EMERGENCY) is False
+
+        await queue.enqueue("protected", "重要发言", priority=victim_priority)
+        await asyncio.wait_for(playing_started.wait(), timeout=2.0)
+
+        assert await queue.hard_interrupt_playing(SPEECH_PRIORITY_EMERGENCY) is False
+        release_playing.set()
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        await bus.wait_until_drained()
+
+        assert was_cancelled is False
+        assert dropped == []
+        assert queue.get_stats()["processed"] == 1
+        assert queue.get_stats()["interrupted"] == 0
+    finally:
+        release_playing.set()
+        await queue.stop()
+
+
+async def test_hard_interrupt_requires_emergency_min_priority() -> None:
+    """低于 SPEECH_PRIORITY_EMERGENCY 的调用即使面对在播 P0 也不得触发二级硬打断。"""
+    playing_started = asyncio.Event()
+    release_playing = asyncio.Event()
+    was_cancelled = False
+
+    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+        nonlocal was_cancelled
+        playing_started.set()
+        try:
+            await release_playing.wait()
+        except asyncio.CancelledError:
+            was_cancelled = True
+            raise
+
+    queue = UtteranceQueue(speak=_speak, max_queue=4, render_timeout_ms=2000, clock=_Clock())
+    await queue.start()
+    try:
+        await queue.enqueue("p0_item", "常规解说", priority=SPEECH_PRIORITY_NORMAL)
+        await asyncio.wait_for(playing_started.wait(), timeout=2.0)
+        assert await queue.hard_interrupt_playing(SPEECH_PRIORITY_AUDIENCE) is False
+        release_playing.set()
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        assert was_cancelled is False
+        assert queue.get_stats()["processed"] == 1
+    finally:
+        release_playing.set()
+        await queue.stop()
+
+
+async def test_hard_interrupt_render_timeout_and_stop_are_strictly_isolated() -> None:
+    """硬打断、渲染超时、队列关停三路 CancelledError/Timeout 互不串扰。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    failed = _capture_failed(bus)
+
+    p0_started = asyncio.Event()
+    stop_target_started = asyncio.Event()
+    stop_target_cancelled = asyncio.Event()
+    after_timeout_done = asyncio.Event()
+
+    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+        if utterance_id == "p0_cut":
+            p0_started.set()
+            await asyncio.Event().wait()
+        elif utterance_id == "hang_timeout":
+            await asyncio.Event().wait()
+        elif utterance_id == "after_timeout":
+            after_timeout_done.set()
+        elif utterance_id == "stop_victim":
+            stop_target_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                stop_target_cancelled.set()
+                raise
+
+    queue = UtteranceQueue(speak=_speak, event_bus=bus, max_queue=6, render_timeout_ms=120, clock=_Clock())
+    await queue.start()
+    try:
+        # 1) 硬打断：走 hard_interrupted，不计 timeouts、不发 failed
+        await queue.enqueue("p0_cut", "要被掐断的独白", priority=SPEECH_PRIORITY_NORMAL)
+        await asyncio.wait_for(p0_started.wait(), timeout=2.0)
+        assert await queue.hard_interrupt_playing(SPEECH_PRIORITY_EMERGENCY) is True
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        assert queue.get_stats()["timeouts"] == 0
+
+        # 2) 渲染超时：仍按原逻辑计 timeouts + 发 failed，随后 worker 照常播下一句
+        await queue.enqueue("hang_timeout", "卡死的句子", priority=SPEECH_PRIORITY_NORMAL)
+        await queue.enqueue("after_timeout", "超时后的正常句", priority=SPEECH_PRIORITY_NORMAL)
+        await asyncio.wait_for(after_timeout_done.wait(), timeout=2.0)
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        assert queue.get_stats()["timeouts"] == 1
+
+        # 3) 队列关停：取消在播条目并干净退出 worker，不发 hard_interrupted 也不发 failed；排队条目发 queue_stopped
+        await queue.enqueue("stop_victim", "关停时在播", priority=SPEECH_PRIORITY_NORMAL)
+        await asyncio.wait_for(stop_target_started.wait(), timeout=2.0)
+        await queue.enqueue("queued_at_stop", "关停时在排", priority=SPEECH_PRIORITY_NORMAL)
+        await queue.stop()
+        await asyncio.wait_for(stop_target_cancelled.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        assert queue.is_running is False
+        dropped_map = {d.utterance_id: d.reason for d in dropped}
+        assert dropped_map == {
+            "p0_cut": "hard_interrupted",
+            "queued_at_stop": "queue_stopped",
+        }
+        assert [f.utterance_id for f in failed] == ["hang_timeout"]
+        assert "render_timeout" in failed[0].error_message
     finally:
         await queue.stop()

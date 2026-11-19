@@ -16,7 +16,19 @@ import pytest
 from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.session_scope import WindowMaterials
-from src.agents.streamer.speech_dispatcher import SpeechDispatcher
+from src.agents.streamer.speech_dispatcher import (
+    SPEECH_PRIORITY_AUDIENCE,
+    SPEECH_PRIORITY_EMERGENCY,
+    SPEECH_PRIORITY_HIGHLIGHT,
+    SPEECH_PRIORITY_NORMAL,
+    SpeechDispatcher,
+)
+from src.agents.streamer.utterance_queue import (
+    SPEECH_PRIORITY_AUDIENCE as QUEUE_PRIORITY_AUDIENCE,
+    SPEECH_PRIORITY_EMERGENCY as QUEUE_PRIORITY_EMERGENCY,
+    SPEECH_PRIORITY_HIGHLIGHT as QUEUE_PRIORITY_HIGHLIGHT,
+    SPEECH_PRIORITY_NORMAL as QUEUE_PRIORITY_NORMAL,
+)
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
@@ -25,7 +37,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
-from src.modules.events.payloads.utterance import UtteranceStartedPayload
+from src.modules.events.payloads.utterance import UtteranceDroppedPayload, UtteranceStartedPayload
 from src.modules.subtitle.protocol import ReplyQuote
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.streamer.helpers import make_streamer_agent
@@ -553,6 +565,7 @@ async def test_reaction_speaks_once_the_mouth_is_free(started) -> None:
     captured = _capture_speech(bus)
     dispatcher = await started(bus=bus, engine=engine, config=_TTS_ON)
     await dispatcher.dispatch({"speech": "前一句", "emotion": {"name": "happy", "intensity": 0.5}})
+    await _until(lambda: len(engine.calls) == 1)
 
     utterance_id = await dispatcher.dispatch_reaction(
         "疼疼疼！", emotion="scared", emotion_intensity=0.7, wait_ms=2000, gap_ms=10, round_id="mouth_1"
@@ -583,6 +596,7 @@ async def test_reaction_gives_up_when_a_planner_line_takes_the_gap(started) -> N
     engine = _Engine(delay_s=0.3)
     dispatcher = await started(engine=engine, config={**_TTS_ON, "max_pending": 0})
     await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    await _until(lambda: len(engine.calls) == 1)
     planner = asyncio.create_task(dispatcher.dispatch({"speech": "第二句", "emotion": {}}))
 
     result = await dispatcher.dispatch_reaction(
@@ -602,6 +616,7 @@ async def test_reaction_that_lost_the_gap_waits_for_a_free_mouth_instead_of_queu
     dispatcher = await started(engine=engine, config={**_TTS_ON, "max_pending": 0})
     busy_at_emit = _spy_emit_busy(dispatcher)
     await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    await _until(lambda: len(engine.calls) == 1)
     planner = asyncio.create_task(dispatcher.dispatch({"speech": "第二句", "emotion": {}}))
 
     result = await dispatcher.dispatch_reaction(
@@ -645,6 +660,8 @@ async def test_reaction_reports_the_moment_it_starts_playing(started, tts_on: bo
     engine = _Engine(delay_s=0.2)
     dispatcher = await started(engine=engine, config=_TTS_ON if tts_on else {"enabled": False})
     await dispatcher.dispatch({"speech": "前一句", "emotion": {}})
+    if tts_on:
+        await _until(lambda: len(engine.calls) == 1)
     marks: list[int] = []
 
     await dispatcher.dispatch_reaction(
@@ -837,3 +854,250 @@ async def test_play_mode_splits_multi_sentence_viewer_reply_and_keeps_quote(star
     await asyncio.wait_for(sc_task, timeout=2.0)
     assert await dispatcher.wait_idle(timeout_ms=2000) is True
     assert tails == ["以前看别人投币通关过一次。配乐特别洗脑！"]
+
+
+# ---------------- 四档优先级、两级打断与游戏实况来源 ----------------
+
+
+def _capture_dropped(bus: EventBus) -> list[UtteranceDroppedPayload]:
+    captured: list[UtteranceDroppedPayload] = []
+
+    async def _capture(event_name: str, payload: UtteranceDroppedPayload, source: str) -> None:
+        captured.append(payload)
+
+    bus.on(CoreEvents.TTS_UTTERANCE_DROPPED, _capture, model_class=UtteranceDroppedPayload)
+    return captured
+
+
+def test_speech_dispatcher_reexports_four_priority_constants() -> None:
+    """speech_dispatcher 再导出的四档优先级常量与 utterance_queue 完全一致。"""
+    assert (
+        SPEECH_PRIORITY_NORMAL,
+        SPEECH_PRIORITY_HIGHLIGHT,
+        SPEECH_PRIORITY_AUDIENCE,
+        SPEECH_PRIORITY_EMERGENCY,
+    ) == (
+        QUEUE_PRIORITY_NORMAL,
+        QUEUE_PRIORITY_HIGHLIGHT,
+        QUEUE_PRIORITY_AUDIENCE,
+        QUEUE_PRIORITY_EMERGENCY,
+    )
+
+
+async def test_dispatch_level1_preempts_queued_low_priority_independent_lines(started) -> None:
+    """dispatch 传入高优先级（>0）触发一级打断：清掉排队中的低优独立句子，不掐断正在播放的那一句。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    spoken: list[str] = []
+
+    class _GateEngine:
+        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+            spoken.append(text)
+            if text == "正在念的解说":
+                first_started.set()
+                await release_first.wait()
+
+    dispatcher = await started(
+        bus=bus,
+        engine=_GateEngine(),
+        config={**_TTS_ON, "max_queue": 5, "max_pending": 2},
+    )
+    await dispatcher.dispatch({"speech": "正在念的解说", "emotion": {}}, priority=SPEECH_PRIORITY_NORMAL)
+    await asyncio.wait_for(first_started.wait(), timeout=2.0)
+    queued_mono = await dispatcher.dispatch(
+        {"speech": "排队中的冷场独白", "emotion": {}}, priority=SPEECH_PRIORITY_NORMAL
+    )
+    assert queued_mono is not None
+
+    # 观众回复（P2）到来：清掉排队中的 P0 独白，正在念的解说播完后立即接观众回复
+    await dispatcher.dispatch(
+        {"speech": "谢谢大家的弹幕！", "emotion": {}},
+        target_user_id="viewer_1",
+        priority=SPEECH_PRIORITY_AUDIENCE,
+    )
+    release_first.set()
+    assert await dispatcher.wait_idle(timeout_ms=2000) is True
+    await bus.wait_until_drained()
+
+    assert spoken == ["正在念的解说", "谢谢大家的弹幕！"]
+    assert [(d.utterance_id, d.reason) for d in dropped] == [(queued_mono[2], "priority_preempted")]
+
+
+async def test_dispatch_reaction_hard_interrupt_cuts_p0_only_when_allowed(started) -> None:
+    """dispatch_reaction 开启 allow_hard_interrupt=True 且达到极急优先级时掐断在播 P0；默认 False 不硬掐。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    p0_started = asyncio.Event()
+    p0_cancelled = asyncio.Event()
+    emergency_played = asyncio.Event()
+    spoken: list[str] = []
+
+    class _CancelAwareEngine:
+        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+            spoken.append(text)
+            if text == "常规慢悠悠解说":
+                p0_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    p0_cancelled.set()
+                    raise
+            if text == "哇掉进岩浆了！":
+                emergency_played.set()
+
+    dispatcher = await started(bus=bus, engine=_CancelAwareEngine(), config={**_TTS_ON, "max_pending": 0})
+    p0_res = await dispatcher.dispatch({"speech": "常规慢悠悠解说", "emotion": {}}, priority=SPEECH_PRIORITY_NORMAL)
+    assert p0_res is not None
+    await asyncio.wait_for(p0_started.wait(), timeout=2.0)
+
+    # 默认 allow_hard_interrupt=False：即使传了极急优先级也不硬打断在播 P0，等满 wait_ms 作废
+    blocked = await dispatcher.dispatch_reaction(
+        "普通快嘴",
+        emotion="surprised",
+        emotion_intensity=0.7,
+        wait_ms=40,
+        priority=SPEECH_PRIORITY_EMERGENCY,
+    )
+    assert blocked is None
+    assert not p0_cancelled.is_set()
+
+    # 显式开启 allow_hard_interrupt=True：立刻掐断在播 P0，紧急台词立即出声
+    em_uid = await dispatcher.dispatch_reaction(
+        "哇掉进岩浆了！",
+        emotion="scared",
+        emotion_intensity=0.9,
+        wait_ms=1000,
+        priority=SPEECH_PRIORITY_EMERGENCY,
+        allow_hard_interrupt=True,
+    )
+    assert em_uid is not None
+    await asyncio.wait_for(p0_cancelled.wait(), timeout=2.0)
+    await asyncio.wait_for(emergency_played.wait(), timeout=2.0)
+    assert await dispatcher.wait_idle(timeout_ms=2000) is True
+    await bus.wait_until_drained()
+
+    assert spoken == ["常规慢悠悠解说", "哇掉进岩浆了！"]
+    assert [(d.utterance_id, d.reason) for d in dropped] == [(p0_res[2], "hard_interrupted")]
+
+
+async def test_dispatch_reaction_hard_interrupt_skips_gap_ms_and_plays_immediately(started) -> None:
+    """带非零 gap_ms（如生产默认 1500ms）触发 P3 二级硬打断时跳过句间留白，立即接播不空等。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    p0_started = asyncio.Event()
+    p0_cancelled = asyncio.Event()
+    emergency_played = asyncio.Event()
+    spoken: list[str] = []
+
+    class _CancelAwareEngine:
+        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+            spoken.append(text)
+            if text == "常规漫长独白":
+                p0_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    p0_cancelled.set()
+                    raise
+            if text == "惨了掉岩浆了！":
+                emergency_played.set()
+
+    dispatcher = await started(bus=bus, engine=_CancelAwareEngine(), config={**_TTS_ON, "max_pending": 0})
+    p0_res = await dispatcher.dispatch({"speech": "常规漫长独白", "emotion": {}}, priority=SPEECH_PRIORITY_NORMAL)
+    assert p0_res is not None
+    await asyncio.wait_for(p0_started.wait(), timeout=2.0)
+
+    # gap_ms 远大于 wait_ms 与外层 timeout：若未跳过 gap_ms，会直接白睡 1500ms 导致超时失败
+    em_uid = await asyncio.wait_for(
+        dispatcher.dispatch_reaction(
+            "惨了掉岩浆了！",
+            emotion="scared",
+            emotion_intensity=0.95,
+            wait_ms=500,
+            gap_ms=1500,
+            priority=SPEECH_PRIORITY_EMERGENCY,
+            allow_hard_interrupt=True,
+        ),
+        timeout=0.5,
+    )
+    assert em_uid is not None
+    await asyncio.wait_for(p0_cancelled.wait(), timeout=1.0)
+    await asyncio.wait_for(emergency_played.wait(), timeout=1.0)
+    assert await dispatcher.wait_idle(timeout_ms=1000) is True
+    await bus.wait_until_drained()
+
+    assert spoken == ["常规漫长独白", "惨了掉岩浆了！"]
+    assert [(d.utterance_id, d.reason) for d in dropped] == [(p0_res[2], "hard_interrupted")]
+
+
+async def test_dispatch_hard_interrupt_respects_p2_and_preempts_lower_pending(started) -> None:
+    """dispatch 开启 allow_hard_interrupt=True 面对在播 P2 观众回复时绝不硬掐，只做一级打断清低优待播。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    p2_started = asyncio.Event()
+    release_p2 = asyncio.Event()
+    p2_cancelled = False
+    spoken: list[str] = []
+
+    class _GateEngine:
+        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+            nonlocal p2_cancelled
+            spoken.append(text)
+            if text == "感谢老哥上舰！":
+                p2_started.set()
+                try:
+                    await release_p2.wait()
+                except asyncio.CancelledError:
+                    p2_cancelled = True
+                    raise
+
+    dispatcher = await started(
+        bus=bus,
+        engine=_GateEngine(),
+        config={**_TTS_ON, "max_queue": 5, "max_pending": 2},
+    )
+    await dispatcher.dispatch(
+        {"speech": "感谢老哥上舰！", "emotion": {}},
+        target_user_id="captain_1",
+        priority=SPEECH_PRIORITY_AUDIENCE,
+    )
+    await asyncio.wait_for(p2_started.wait(), timeout=2.0)
+    queued_p0 = await dispatcher.dispatch({"speech": "排队解说", "emotion": {}}, priority=SPEECH_PRIORITY_NORMAL)
+    assert queued_p0 is not None
+
+    # 极急发言带 allow_hard_interrupt=True：在播是 P2 拒绝硬掐，但仍通过一级打断清掉排队中的 P0 解说
+    await dispatcher.dispatch(
+        {"speech": "紧急停一下！", "emotion": {}},
+        priority=SPEECH_PRIORITY_EMERGENCY,
+        allow_hard_interrupt=True,
+    )
+    assert p2_cancelled is False
+    release_p2.set()
+    assert await dispatcher.wait_idle(timeout_ms=2000) is True
+    await bus.wait_until_drained()
+
+    assert spoken == ["感谢老哥上舰！", "紧急停一下！"]
+    assert [(d.utterance_id, d.reason) for d in dropped] == [(queued_p0[2], "priority_preempted")]
+
+
+async def test_dispatch_supports_game_commentary_source_and_explicit_priority(started) -> None:
+    """dispatch 支持显式传入 source='game_commentary' 与 priority，准确通知带来源回调并正常入队播报。"""
+    bus = EventBus()
+    engine = _Engine()
+    dispatcher = await started(bus=bus, engine=engine, config=_TTS_ON)
+    spoken_sources: list[tuple[str, str]] = []
+    dispatcher.add_spoken_listener(lambda text, _ts, source: spoken_sources.append((text, source)))
+
+    result = await dispatcher.dispatch(
+        {"speech": "前面好像有钻石矿！", "emotion": {"name": "happy", "intensity": 0.8}},
+        priority=SPEECH_PRIORITY_HIGHLIGHT,
+        source="game_commentary",
+    )
+    assert result is not None
+    assert await dispatcher.wait_idle(timeout_ms=2000) is True
+    await bus.wait_until_drained()
+
+    assert spoken_sources == [("前面好像有钻石矿！", "game_commentary")]
+    assert engine.calls == [("前面好像有钻石矿！", result[2])]

@@ -37,10 +37,20 @@ from .utterance_queue import (
     DEFAULT_MAX_QUEUE,
     DEFAULT_RENDER_TIMEOUT_MS,
     DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS,
+    SPEECH_PRIORITY_AUDIENCE,
+    SPEECH_PRIORITY_EMERGENCY,
+    SPEECH_PRIORITY_HIGHLIGHT,
+    SPEECH_PRIORITY_NORMAL,
     UtteranceQueue,
 )
 
-__all__ = ["SpeechDispatcher"]
+__all__ = [
+    "SpeechDispatcher",
+    "SPEECH_PRIORITY_NORMAL",
+    "SPEECH_PRIORITY_HIGHLIGHT",
+    "SPEECH_PRIORITY_AUDIENCE",
+    "SPEECH_PRIORITY_EMERGENCY",
+]
 
 
 class SpeechDispatcher:
@@ -149,7 +159,7 @@ class SpeechDispatcher:
         self._spoken_listener = listener
 
     def add_spoken_listener(self, listener: Callable[[str, int, str], None]) -> None:
-        """追加带出口来源（``"planner"`` / ``"mouth"``）的已发声回调，供对账流水与已欢迎表同步记账。"""
+        """追加带出口来源（``"planner"`` / ``"mouth"`` / ``"game_commentary"``）的已发声回调，供对账流水与已欢迎表同步记账。"""
         self._source_spoken_listeners.append(listener)
 
     def _notify_spoken(self, text: str, *, source: str = "planner") -> None:
@@ -315,6 +325,35 @@ class SpeechDispatcher:
                 on_interrupted=self._interrupted_tail_listener,
             )
 
+    async def _preempt_queue(
+        self,
+        queue: UtteranceQueue,
+        *,
+        priority: int,
+        allow_hard_interrupt: bool,
+    ) -> bool:
+        """高优发言入队前按两级打断规则清理低优语音。
+
+        - 二级硬打断：仅当显式开启 ``allow_hard_interrupt=True`` 且 ``priority >= SPEECH_PRIORITY_EMERGENCY``
+          时触发，掐断当前正在播放的 P0 低优条目（绝不硬打断 P1 高光或 P2 观众回复）；触发成功后
+          内部已顺带清理待播低优队列，未触发则继续走一级打断；
+        - 一级打断：只要 ``priority > SPEECH_PRIORITY_NORMAL``，清理所有尚未开播且优先级低于本次
+          发言的待播条目（在播段落余句走 ``segment_interrupted`` + 尾句回调，其余走 ``priority_preempted``）。
+
+        Returns:
+            是否实际执行了二级硬打断（调用方据此跳过句间留白 ``gap_ms``，立刻接播极急台词）。
+        """
+        if allow_hard_interrupt and priority >= SPEECH_PRIORITY_EMERGENCY:
+            hard_cut = await queue.hard_interrupt_playing(
+                priority,
+                max_victim_priority=SPEECH_PRIORITY_NORMAL,
+            )
+            if hard_cut:
+                return True
+        if priority > SPEECH_PRIORITY_NORMAL:
+            await queue.interrupt_lower_priority(priority)
+        return False
+
     async def dispatch(
         self,
         reply_payload: Any,
@@ -327,8 +366,10 @@ class SpeechDispatcher:
         memory_refs: Optional[Sequence[str]] = None,
         reply_player: Tuple[str, str] = ("", ""),
         before_emit: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
-        priority: int = 0,
-    ) -> Optional[tuple]:
+        priority: int = SPEECH_PRIORITY_NORMAL,
+        allow_hard_interrupt: bool = False,
+        source: str = "planner",
+    ) -> Optional[Tuple[str, str, str]]:
         """消费 reply 结构化结果并触发下游管线（决策循环安全：永不抛异常）。
 
         Args:
@@ -392,14 +433,16 @@ class SpeechDispatcher:
         except (TypeError, ValueError):
             cleaned_emotion_intensity = 0.5
 
-        # speech 非空：先等播放队列排空（背压闸，见 _wait_for_playback_slot），
+        # speech 非空：先按优先级执行一级/二级打断与背压等待，
         # 再发布业务事件 + 写历史（与 TTS 启用与否正交），TTS 启用时复用
         # 同一 utterance_id 入 TTS 队列。
         if cleaned_speech:
-            if priority > 0 and self._tts_enabled and self._utterance_queue is not None:
-                # 回应观众弹幕或付费留言（priority > 0）先收住正在播的杂谈独白里还没念出的后半句，
-                # 只等嘴里正在念的那一小句自然落音就接话，被收住的尾句经回调记进话头工作台
-                await self._utterance_queue.interrupt_segment(priority)
+            if self._tts_enabled and self._utterance_queue is not None:
+                await self._preempt_queue(
+                    self._utterance_queue,
+                    priority=priority,
+                    allow_hard_interrupt=allow_hard_interrupt,
+                )
             claimed = await self._wait_for_playback_slot()
             try:
                 # 占住播放空档后、真正发出业务事件前做最后一道核对：拦截等前一句播放期间被嘴抢先说完或推翻的旧话
@@ -424,7 +467,7 @@ class SpeechDispatcher:
                     reply_player=reply_player,
                 )
                 self._schedule_subtitle_show(cleaned_speech, utterance_id, reply_quote=reply_quote)
-                self._notify_spoken(cleaned_speech, source="planner")
+                self._notify_spoken(cleaned_speech, source=source)
                 if self._tts_enabled and self._utterance_queue is not None:
                     # 处于杂谈档或本句有观众回复目标时传 talk=True：单句仍单句入队，2～3 句的回应按句拆段连播且保留引用气泡
                     has_viewer_target = bool(target_user_id or reply_to_message_id)
@@ -446,6 +489,7 @@ class SpeechDispatcher:
         wait_ms: int,
         gap_ms: int = 0,
         priority: int = 5,
+        allow_hard_interrupt: bool = False,
         round_id: str = "",
         llm_request_id: Optional[str] = None,
         on_started: Optional[Callable[[], None]] = None,
@@ -484,9 +528,14 @@ class SpeechDispatcher:
             follow = []
         claimed = False
         if self._tts_enabled and queue is not None:
-            if priority > 0:
-                await queue.interrupt_segment(priority)
-            claimed = await self._claim_slot(timeout_ms=max(1, wait_ms), gap_ms=gap_ms)
+            hard_cut = await self._preempt_queue(
+                queue,
+                priority=priority,
+                allow_hard_interrupt=allow_hard_interrupt,
+            )
+            # 刚掐断在播 P0 的极急反应必须立刻接播，跳过句间留白 gap_ms，避免空等并防止被普通发言插队
+            effective_gap_ms = 0 if hard_cut else gap_ms
+            claimed = await self._claim_slot(timeout_ms=max(1, wait_ms), gap_ms=effective_gap_ms)
             if not claimed:
                 self._logger.info(f"反应等不到前一句播完（>{wait_ms}ms），整句作废: {text[:30]}")
                 return None

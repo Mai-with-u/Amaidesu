@@ -49,6 +49,17 @@ from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
 
+# 四档语音优先级：数值越大越先播；兼容外部调用方传入更大整数（如旧调用传 5），
+# 所有优先级比较均基于 `<` / `<=` 而非等值匹配。
+# - NORMAL (0)：常规实况解说 / 冷场暖场独白
+# - HIGHLIGHT (1)：高光快嘴 / 高优实况解说 / 游戏公屏即时反应
+# - AUDIENCE (2)：观众弹幕 / 礼物 / SC / 上舰回复
+# - EMERGENCY (3)：极急硬打断（非自选意外阵亡 / 紧急急停）
+SPEECH_PRIORITY_NORMAL = 0
+SPEECH_PRIORITY_HIGHLIGHT = 1
+SPEECH_PRIORITY_AUDIENCE = 2
+SPEECH_PRIORITY_EMERGENCY = 3
+
 # 默认队列容量
 DEFAULT_MAX_QUEUE = 3
 
@@ -107,7 +118,7 @@ class _UtteranceItem:
 
     utterance_id: str
     text: str
-    priority: int = 0
+    priority: int = SPEECH_PRIORITY_NORMAL
     expires_at_ms: int = 0
     segment: str = ""
     on_start: Optional[Callable[[], None]] = None
@@ -186,6 +197,15 @@ class UtteranceQueue:
         self._clock = clock
         # 最近开播的那一句所属的段落：更高优先级的台词插进来时，这个段落剩下的句子作废
         self._current_segment = ""
+        # 当前正在被 worker 播放的条目：取件临界区内与 _processing 同步置位，
+        # 供二级硬打断核对在播条目优先级；播完或硬打断结束在 finally 内清零
+        self._current_item: Optional[_UtteranceItem] = None
+        # 单次 speak 执行封装成的独立可取消子任务：二级硬打断只取消该子任务，
+        # 不取消 worker 自身，确保 worker 立刻继续播放紧随其后的紧急发言
+        self._current_speak_task: Optional[asyncio.Task[None]] = None
+        # 被定向二级硬打断的在播条目引用：用于把定向硬打断引起的 CancelledError
+        # 与队列关停 / 渲染超时严格区分，三路互不串扰
+        self._hard_interrupted_item: Optional[_UtteranceItem] = None
 
         self._queue: Deque[_UtteranceItem] = deque()
         # 有可用项目时唤醒 worker（队列入队 + worker 等待）
@@ -224,7 +244,7 @@ class UtteranceQueue:
         utterance_id: str,
         text: str,
         *,
-        priority: int = 0,
+        priority: int = SPEECH_PRIORITY_NORMAL,
         ttl_ms: int = 0,
         segment: str = "",
         on_start: Optional[Callable[[], None]] = None,
@@ -360,42 +380,186 @@ class UtteranceQueue:
                 return
         self._queue.append(item)
 
+    def _remove_lower_priority_locked(
+        self,
+        min_priority: int,
+        *,
+        segment_only: bool,
+        exclude_segment: str = "",
+        trigger_id: str = "interrupt",
+    ) -> tuple[list[_UtteranceItem], list[_UtteranceItem], list[_UtteranceItem]]:
+        """在持有 ``self._lock`` 的前提下移除队列中尚未开播的低优条目。
+
+        移除规则：
+        - ``segment_only=True``（段落插断 / ``enqueue`` 同段收尾）：只移除属于当前在播段落
+          （``self._current_segment`` 非空且与 ``exclude_segment`` 不同）且优先级低于
+          ``min_priority`` 的余句；
+        - ``segment_only=False``（一级打断 ``interrupt_lower_priority``）：移除所有优先级低于
+          ``min_priority`` 的待播条目，并按是否属于当前在播段落拆成两类分别上报原因。
+
+        Returns:
+            三元组 ``(all_removed, segment_dropped, priority_preempted)``，其中
+            ``all_removed`` 保持原队列先后顺序。
+        """
+        has_active_segment = bool(self._current_segment) and (
+            not exclude_segment or exclude_segment != self._current_segment
+        )
+        if segment_only and not has_active_segment:
+            return [], [], []
+
+        all_removed: list[_UtteranceItem] = []
+        segment_dropped: list[_UtteranceItem] = []
+        priority_preempted: list[_UtteranceItem] = []
+        kept: Deque[_UtteranceItem] = deque()
+
+        for queued in self._queue:
+            is_current_seg = has_active_segment and queued.segment == self._current_segment
+            should_drop = queued.priority < min_priority and (is_current_seg if segment_only else True)
+            if not should_drop:
+                kept.append(queued)
+                continue
+            all_removed.append(queued)
+            if is_current_seg:
+                segment_dropped.append(queued)
+            else:
+                priority_preempted.append(queued)
+
+        if not all_removed:
+            return [], [], []
+
+        self._queue = kept
+        self._total_interrupted += len(all_removed)
+        if segment_dropped:
+            self._logger.info(
+                f"段落被插断，丢弃剩余 {len(segment_dropped)} 句: segment={self._current_segment}, 触发={trigger_id}"
+            )
+        if priority_preempted:
+            self._logger.info(
+                f"低优待播被高优抢占，清理 {len(priority_preempted)} 句: min_priority={min_priority}, 触发={trigger_id}"
+            )
+        return all_removed, segment_dropped, priority_preempted
+
     def _drop_interrupted_segment(self, item: _UtteranceItem) -> list[_UtteranceItem]:
         """正在播的段落被更高优先级的台词插进来：段落里还没播的句子作废，不在反应之后接着讲。
 
         段落还没开播时不算打断——急的先播，段落随后整段照常播。
         """
-        if not self._current_segment or item.segment == self._current_segment:
+        _, segment_dropped, _ = self._remove_lower_priority_locked(
+            item.priority,
+            segment_only=True,
+            exclude_segment=item.segment,
+            trigger_id=item.utterance_id,
+        )
+        return segment_dropped
+
+    async def _emit_interrupt_drops(
+        self,
+        segment_dropped: list[_UtteranceItem],
+        priority_preempted: list[_UtteranceItem],
+    ) -> None:
+        """为被一级打断移除的条目分类发布 dropped 事件，并触发在播段落尾句回调。"""
+        for dropped_item in segment_dropped:
+            await self._emit_dropped(dropped_item.utterance_id, "segment_interrupted")
+        for dropped_item in priority_preempted:
+            await self._emit_dropped(dropped_item.utterance_id, "priority_preempted")
+        if segment_dropped:
+            self._notify_interrupted(segment_dropped)
+
+    async def _interrupt_pending(self, min_priority: int, *, segment_only: bool) -> list[str]:
+        """一级打断共用入口：清待播低优条目 -> 分类发布 dropped -> 唤醒背压等待方。"""
+        if min_priority <= SPEECH_PRIORITY_NORMAL:
             return []
-        rest = [
-            queued
-            for queued in self._queue
-            if queued.segment == self._current_segment and queued.priority < item.priority
-        ]
-        for queued in rest:
-            self._queue.remove(queued)
-        if rest:
-            self._total_interrupted += len(rest)
-            self._logger.info(
-                f"段落被插断，丢弃剩余 {len(rest)} 句: segment={self._current_segment}, 插队={item.utterance_id}"
+        async with self._lock:
+            all_removed, segment_dropped, priority_preempted = self._remove_lower_priority_locked(
+                min_priority,
+                segment_only=segment_only,
             )
-        return rest
+        if not all_removed:
+            return []
+        await self._emit_interrupt_drops(segment_dropped, priority_preempted)
+        # 队列深度下降后立即唤醒等待方，让背压等待（wait_pending_capacity / wait_idle）立刻重判
+        async with self._idle_cond:
+            self._idle_cond.notify_all()
+        return [item.text for item in all_removed]
+
+    async def interrupt_lower_priority(self, min_priority: int) -> list[str]:
+        """一级打断：高优发言到来时清理队列中尚未开始播放的低优条目，不掐断当前正在念的短句。
+
+        在背压等待之前调用：
+        - 属于当前正在播段落的余句沿用 ``"segment_interrupted"`` 发 ``tts.utterance.dropped``，
+          并经 ``on_interrupted`` 合并记下尾句原文；
+        - 其它排队中的低优独立句子（如排队中的常规解说 / 冷场独白）以 ``"priority_preempted"``
+          发 ``tts.utterance.dropped`` 并计入 ``interrupted`` 统计。
+
+        Returns:
+            被清理条目的台词原文列表（保持原队列顺序）。
+        """
+        return await self._interrupt_pending(min_priority, segment_only=False)
 
     async def interrupt_segment(self, min_priority: int) -> list[str]:
-        """更高优先级的发言（如回应观众弹幕、付费留言）到来时，先收住正在播的段落里还没念的后半句。
+        """更高优先级的发言到来时，先收住正在播的段落里还没念的后半句（向下兼容入口）。
 
-        在背压等待之前调用，免得把整段独白全等播完才接观众的话；正在嘴里念的那一小句照常播完，
-        还没轮到的后半句发 ``tts.utterance.dropped`` 并经 ``on_interrupted`` 记下尾句大意。
+        只移除属于当前正在播段落且优先级低于 ``min_priority`` 的余句，不碰其它排队中的独立句子；
+        需要全队列清理低优待播请使用 :meth:`interrupt_lower_priority`。
         """
-        if min_priority <= 0:
-            return []
-        probe = _UtteranceItem(utterance_id="interrupt", text="", priority=min_priority)
+        return await self._interrupt_pending(min_priority, segment_only=True)
+
+    async def hard_interrupt_playing(
+        self,
+        min_priority: int,
+        *,
+        max_victim_priority: int = SPEECH_PRIORITY_NORMAL,
+    ) -> bool:
+        """二级硬打断：极急事件到来时掐断当前正在播放的低优条目（默认仅限 P0 普通独白/解说）。
+
+        触发条件（全部满足才执行）：
+        1. ``min_priority >= SPEECH_PRIORITY_EMERGENCY``；
+        2. worker 当前确有在播条目 ``_current_item``，且未处于关停或已发起硬打断状态；
+        3. ``_current_item.priority <= max_victim_priority``（默认仅允许掐断 P0，
+           绝不硬打断 P1 高光或 P2 观众回复）。
+
+        触发后先顺带清理队列中 ``< min_priority`` 的低优待播条目，再取消单次 ``speak`` 子任务
+        （不取消 worker 自身）；worker 捕获定向硬打断后发 ``hard_interrupted`` 并立刻续播下一条。
+
+        Returns:
+            是否成功发起二级硬打断。
+        """
+        if min_priority < SPEECH_PRIORITY_EMERGENCY:
+            return False
+
+        segment_dropped: list[_UtteranceItem] = []
+        priority_preempted: list[_UtteranceItem] = []
         async with self._lock:
-            interrupted = self._drop_interrupted_segment(probe)
-            for dropped_item in interrupted:
-                await self._emit_dropped(dropped_item.utterance_id, "segment_interrupted")
-            self._notify_interrupted(interrupted)
-        return [item.text for item in interrupted]
+            if self._stopping.is_set():
+                return False
+            current = self._current_item
+            if current is None or current.priority > max_victim_priority:
+                return False
+            if self._hard_interrupted_item is current:
+                return False
+            speak_task = self._current_speak_task
+            if speak_task is not None and (speak_task.done() or not speak_task.cancel()):
+                # 在播子任务已结束或刚好完成，不再发起硬打断
+                return False
+
+            # 标记该条目为定向硬打断，并顺带清理队内低优待播条目（此时 _current_segment 仍指向在播段落）
+            self._hard_interrupted_item = current
+            _, segment_dropped, priority_preempted = self._remove_lower_priority_locked(
+                min_priority,
+                segment_only=False,
+                trigger_id="hard_interrupt",
+            )
+
+        if segment_dropped or priority_preempted:
+            await self._emit_interrupt_drops(segment_dropped, priority_preempted)
+            async with self._idle_cond:
+                self._idle_cond.notify_all()
+
+        self._logger.info(
+            f"触发二级硬打断，掐断在播低优条目: utterance_id={current.utterance_id}, "
+            f"victim_priority={current.priority}, min_priority={min_priority}"
+        )
+        return True
 
     def _notify_interrupted(self, dropped: list[_UtteranceItem]) -> None:
         """段落被插断后把作废的那几句原文交给段首带的回调（同段只通知一次）；回调出错只记日志。"""
@@ -496,6 +660,8 @@ class UtteranceQueue:
                         self._wakeup.clear()
                     else:
                         self._current_segment = item.segment
+                        self._current_item = item
+                        self._hard_interrupted_item = None
                         if not self._queue:
                             # 取完后队列为空，清除 wakeup 让下一次 enqueue 再唤醒
                             self._wakeup.clear()
@@ -508,11 +674,19 @@ class UtteranceQueue:
                 if item is None:
                     continue
 
-                # 在锁外执行 speak（避免阻塞其他 enqueue）；交给 TTS 之前先告诉上游"轮到这句了"
-                self._notify_start(item)
+                # 在锁外执行 speak（避免阻塞其他 enqueue）；若取件后、开播前已被定向硬打断，
+                # 跳过 on_start 回调，避免未出声就误报开播
+                if self._hard_interrupted_item is not item:
+                    self._notify_start(item)
                 try:
                     await self._dispatch(item)
                 finally:
+                    # 同步复位当前播放状态（无 await，事件循环内原子完成，避免关停时被二次取消打断）
+                    if self._current_item is item:
+                        self._current_item = None
+                    if self._hard_interrupted_item is item:
+                        self._hard_interrupted_item = None
+                        self._current_segment = ""
                     self._processing = False
                     async with self._idle_cond:
                         self._idle_cond.notify_all()
@@ -614,13 +788,41 @@ class UtteranceQueue:
             return item, expired
         return None, expired
 
+    async def _handle_hard_interrupted(self, item: _UtteranceItem) -> None:
+        """定向二级硬打断收尾：计入 interrupted 并发布 ``hard_interrupted``，不触碰超时与熔断计数。"""
+        self._total_interrupted += 1
+        self._logger.info(f"utterance 播放中被硬打断: utterance_id={item.utterance_id}")
+        await self._emit_dropped(item.utterance_id, "hard_interrupted")
+
+    async def _handle_render_timeout(self, item: _UtteranceItem) -> None:
+        """单条渲染超时收尾：更新超时与熔断状态并代发 ``tts.utterance.failed``。"""
+        self._total_timeouts += 1
+        self._consecutive_render_timeouts += 1
+        self._last_render_failure_ms = self._clock()
+        if not self._render_fused and self._consecutive_render_timeouts >= RENDER_FUSE_THRESHOLD:
+            self._render_fused = True
+            self._logger.error(
+                f"连续 {self._consecutive_render_timeouts} 句渲染超时，触发熔断："
+                f"后续 utterance 不再渲染、直接代发 failed，每 {RENDER_FUSE_HALF_OPEN_MS}ms 放行一句探路"
+            )
+            await self._emit_fuse_alert()
+        elif self._render_fused:
+            self._logger.error(f"熔断半开探路句仍渲染超时，保持熔断并刷新计时: utterance_id={item.utterance_id}")
+        self._logger.error(
+            f"utterance 等待超时（>{self._render_timeout_ms}ms），放弃等待并继续下一条"
+            f"（引擎取消清理后不会发声）: utterance_id={item.utterance_id}"
+        )
+        await self._emit_failed(item.utterance_id, item.text, f"render_timeout: 超过 {self._render_timeout_ms}ms")
+
     async def _dispatch(self, item: _UtteranceItem) -> None:
-        """单条 utterance 的处理入口（speak + 超时保护 + 错误兜底）。
+        """单条 utterance 的处理入口（speak + 超时保护 + 二级硬打断区分 + 错误兜底）。
 
         speak 可调用对象可能抛出异常（引擎 fail / 网络断等），本方法在外层
         捕获 asyncio.TimeoutError / 任何意外异常，保证 worker 永远能继续下一条；
-        超时与异常都会让字幕照常出字：超时一律代发 ``tts.utterance.failed``，
-        异常只在引擎没报告过失败时代发（带"已报告"标记的不重复发）。
+        三路取消与超时严格区分：
+        - 队列关停或 worker 自身被取消 → 取消 speak 子任务并上抛 ``CancelledError`` 退出 worker；
+        - 定向二级硬打断 → 不计超时、不发 ``failed``，发布 ``hard_interrupted`` 后立刻续播下一条；
+        - 渲染超时 → 计入 ``timeouts``、触发熔断判定并代发 ``tts.utterance.failed``。
         """
         timeout_s = self._render_timeout_ms / 1000.0
         # 熔断中：距最近一次渲染失败不满半开间隔，本句不启动渲染等待、立即代发
@@ -634,37 +836,56 @@ class UtteranceQueue:
                 )
                 return
             self._logger.info(f"熔断半开探路，放行一句尝试渲染: utterance_id={item.utterance_id}")
+
+        # 窄窗口兜底：取件后、建立 speak 子任务前就被二级硬打断，直接按硬打断结算，不启动合成
+        if self._hard_interrupted_item is item:
+            if self._stopping.is_set():
+                raise asyncio.CancelledError
+            await self._handle_hard_interrupted(item)
+            return
+
+        # 把单次 speak 封装成独立子任务：二级硬打断只 cancel 该子任务，绝不杀死 worker 循环
+        speak_task: asyncio.Task[None] = asyncio.create_task(
+            self._speak(item.text, item.utterance_id),
+            name=f"{self.__class__.__name__}.speak.{item.utterance_id}",
+        )
+        self._current_speak_task = speak_task
+
         try:
-            await asyncio.wait_for(
-                self._speak(item.text, item.utterance_id),
-                timeout=timeout_s,
-            )
+            await asyncio.wait_for(speak_task, timeout=timeout_s)
             self._total_processed += 1
             # 任何一句渲染成功都复位：连续计数清零，熔断关闭
             self._consecutive_render_timeouts = 0
             self._render_fused = False
         except asyncio.TimeoutError:
-            self._total_timeouts += 1
-            self._consecutive_render_timeouts += 1
-            self._last_render_failure_ms = self._clock()
-            if not self._render_fused and self._consecutive_render_timeouts >= RENDER_FUSE_THRESHOLD:
-                self._render_fused = True
-                self._logger.error(
-                    f"连续 {self._consecutive_render_timeouts} 句渲染超时，触发熔断："
-                    f"后续 utterance 不再渲染、直接代发 failed，每 {RENDER_FUSE_HALF_OPEN_MS}ms 放行一句探路"
-                )
-                await self._emit_fuse_alert()
-            elif self._render_fused:
-                self._logger.error(f"熔断半开探路句仍渲染超时，保持熔断并刷新计时: utterance_id={item.utterance_id}")
-            self._logger.error(
-                f"utterance 等待超时（>{self._render_timeout_ms}ms），放弃等待并继续下一条"
-                f"（引擎取消清理后不会发声）: utterance_id={item.utterance_id}"
-            )
-            await self._emit_failed(item.utterance_id, item.text, f"render_timeout: 超过 {self._render_timeout_ms}ms")
+            # 硬打断收尾清理期间恰好撞上超时看门狗：仍按硬打断结算，不误记超时或熔断
+            if self._hard_interrupted_item is item and not self._stopping.is_set():
+                await self._handle_hard_interrupted(item)
+                return
+            await self._handle_render_timeout(item)
         except asyncio.CancelledError:
-            # worker 被取消时向上抛，让 worker_loop 退出
-            raise
+            current_task = asyncio.current_task()
+            worker_cancelling = current_task is not None and current_task.cancelling() > 0
+            if self._stopping.is_set() or worker_cancelling or self._hard_interrupted_item is not item:
+                # 队列正在关停或 worker 自身被取消：确保在途 speak 子任务停播清理后上抛退出 worker
+                if not speak_task.done():
+                    speak_task.cancel()
+                    try:
+                        await speak_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:  # noqa: BLE001 - 关停清理阶段异常只记日志
+                        self._logger.debug(f"关停取消 speak 子任务时出现异常（已忽略）: {exc}")
+                raise
+            # 定向二级硬打断：仅取消了 speak 子任务，worker 继续存活并马上消费下一条紧急发言
+            await self._handle_hard_interrupted(item)
         except Exception as exc:  # noqa: BLE001 - 防御性兜底
+            if self._hard_interrupted_item is item and not self._stopping.is_set():
+                self._logger.debug(
+                    f"硬打断收尾期间 speak 抛出异常（按硬打断结算）: utterance_id={item.utterance_id}, err={exc}"
+                )
+                await self._handle_hard_interrupted(item)
+                return
             # 轮到这句、speak 却抛了异常：先计数、打一条不带 traceback 的 ERROR
             # （引擎内部已打过带上下文的完整日志，连接类环境故障再打 traceback 会刷屏），
             # 再决定要不要替引擎补发 failed，最后 worker 继续下一条。
@@ -679,12 +900,19 @@ class UtteranceQueue:
             # 队列补发一条 failed，字幕照常出字，她的话不会因为声音出不来而连字都看不到。
             # 没有标记的未知异常一律走这里——宁可多出一次字幕，也不能没有字幕
             await self._emit_failed(item.utterance_id, item.text, f"speak_error: {type(exc).__name__}: {exc}")
+        finally:
+            if self._current_speak_task is speak_task:
+                self._current_speak_task = None
 
 
 __all__ = [
     "UtteranceQueue",
     "SpeakCallable",
     "QUEUE_ENGINE_ID",
+    "SPEECH_PRIORITY_NORMAL",
+    "SPEECH_PRIORITY_HIGHLIGHT",
+    "SPEECH_PRIORITY_AUDIENCE",
+    "SPEECH_PRIORITY_EMERGENCY",
     "DEFAULT_MAX_QUEUE",
     "DEFAULT_RENDER_TIMEOUT_MS",
     "DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS",
