@@ -118,7 +118,7 @@ async def test_danmaku_flows_through_planner_reply_and_replyer(rig_factory) -> N
     spec_names = {spec.name for spec in rig.agent.list_tools()}
     registered = {spec.full_name for spec in rig.registry.list_tools()}
     # 只有真工具进声明；proactive/command 是代码直连的内部件，不注册
-    assert spec_names == {"reply"} and "streamer_reply" in registered
+    assert spec_names == {"note", "reply"} and {"streamer_reply", "streamer_note"} <= registered
     assert not {"should_speak_proactively", "parse_command"} & registered
 
     await rig.emit("主播好可爱！")

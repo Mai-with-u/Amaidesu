@@ -344,7 +344,17 @@ class StreamerProactiveConfig(BaseConfig):
         default=30_000,
         ge=5_000,
         description="发言放行侧的节奏间隔：距上次开口不足该间隔时，台词等满再放行；"
-        "决策开窗不受它限制（想与说的节拍解耦），调大则发言更稀疏",
+        "开窗仅在进入前瞻思考窗口后提前启动，调大则发言更稀疏",
+    )
+    rundown_think_lead_ms: int = Field(
+        title="主动思考前瞻窗口",
+        default=10_000,
+        ge=0,
+        description=(
+            "环节内持续产出类主动窗最多提前多久开始思考（毫秒）：距离下次可放行发言的剩余时间"
+            "大于该窗口时暂不开窗，保留播放期间提前思考能力的同时避免刚说完就空转连开窗"
+        ),
+        json_schema_extra={"x-ui-advanced": True},
     )
     rundown_silent_cooldown_ms: int = Field(
         title="主动沉默后冷却",

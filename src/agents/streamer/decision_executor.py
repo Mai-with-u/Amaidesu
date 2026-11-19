@@ -97,7 +97,11 @@ _SILENT_REASON_LABEL: Dict[str, str] = {
     "memory_repeat_held": "点名本场提过的旧事被退回后没再开口",
     "mouth_covered": "想说的内容刚才嘴已经替她说过，本轮不再重复",
     "mouth_superseded": "构思期间现场已变且嘴已先回应，旧台词作废",
+    "pace_superseded": "放行等待期间收到新输入，旧自主独白作废重想",
 }
+
+#: 发言放行等待的短容忍阈值（毫秒）：剩余等待不大于该值时不再因新输入撤回，直接收尾放行
+_DEFAULT_PACE_INTERRUPT_TOLERANCE_MS: int = 1_000
 
 
 def trigger_cause_text(cause: TriggerCause, *, proactive: bool) -> str:
@@ -140,6 +144,10 @@ class DecisionRoundExecutor:
         on_mouth_superseded: Optional[Callable[[], None]] = None,
         on_round_spoken: Optional[Callable[[RoundOutcome, bool], Awaitable[None]]] = None,
         on_round_silent: Optional[Callable[[bool, bool, TriggerCause], None]] = None,
+        input_version_provider: Optional[Callable[[], int]] = None,
+        pace_wakeup: Optional[asyncio.Event] = None,
+        on_pace_superseded: Optional[Callable[[], None]] = None,
+        pace_interrupt_tolerance_ms: int = _DEFAULT_PACE_INTERRUPT_TOLERANCE_MS,
         clock: Callable[[], int] = now_ms,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         logger: Optional[ModuleLogger] = None,
@@ -179,6 +187,12 @@ class DecisionRoundExecutor:
         self._on_mouth_superseded = on_mouth_superseded
         self._on_round_spoken = on_round_spoken
         self._on_round_silent = on_round_silent
+        # 新输入版本号与可中断等待事件：自主独白在放行等待期间若来了新弹幕、新游戏聊天或游戏急事，
+        # 立即中断等待并撤回尚未播出的旧独白，避免持锁死睡后吐出过时台词。
+        self._input_version_provider = input_version_provider
+        self._pace_wakeup = pace_wakeup
+        self._on_pace_superseded = on_pace_superseded
+        self._pace_interrupt_tolerance_ms = max(0, int(pace_interrupt_tolerance_ms))
         self._clock: Callable[[], int] = clock
         # 发言放行限速的等待原语（可注入：测试用假时钟+假等待验证节拍，不依赖真实时间流逝）
         self._sleep: Callable[[float], Awaitable[None]] = sleep
@@ -319,6 +333,7 @@ class DecisionRoundExecutor:
         # 开决策窗：出账 + 读历史 + 本窗批次 + 时间线 notes 一次取齐（顺序不变量
         # 在 SessionScope.open_window 内化——出账的时间线行必先进本轮投影）
         window_opened_ms = self._clock()
+        open_input_version = self._current_input_version()
         materials = await self._window_opener(scope_pk=scope_pk)
         history = materials.history
 
@@ -435,7 +450,32 @@ class DecisionRoundExecutor:
         # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
         # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
         if proactive and self._proactive_trigger.should_pace_speech(trigger_cause.kind):
-            await self._pace_speech_release()
+            superseded = await self._pace_speech_release(open_input_version)
+            if superseded:
+                self._logger.info(
+                    f"发言放行等待期间收到新输入，撤回过时自主独白（pace_superseded）: round_id={round_id}"
+                )
+                self._stats.total_no_action += 1
+                result["silent_reason"] = "pace_superseded"
+                result["plan"]["should_reply"] = False
+                result["plan"]["silent_reason"] = "pace_superseded"
+                outcome = replace(outcome, replied=False, silent_reason="pace_superseded", speech=None)
+                if self._on_pace_superseded is not None:
+                    self._on_pace_superseded()
+                if self._on_round_silent is not None:
+                    self._on_round_silent(bool(batch), proactive, trigger_cause)
+                result["total_duration_ms"] = self._clock() - started_ms
+                return result, outcome
+            # 等待放行期间若场次恰好下播，同样作废不出声，避免排在道别句后面
+            if self._speech_allowed is not None and not self._speech_allowed():
+                self._logger.info(f"发言放行等待期间场次已下播，本轮台词作废不出声: round_id={round_id}")
+                self._stats.total_no_action += 1
+                result["silent_reason"] = "session_ended"
+                result["plan"]["should_reply"] = False
+                result["plan"]["silent_reason"] = "session_ended"
+                outcome = replace(outcome, replied=False, silent_reason="session_ended", speech=None)
+                result["total_duration_ms"] = self._clock() - started_ms
+                return result, outcome
         target_user_id = resolve_reply_target_user(outcome, batch)
         reply_quote = resolve_reply_quote(outcome, batch)
         # 付费触发最高优（2）、回应观众弹幕批（1）可收住正在连播的杂谈独白后半句先接话；主动独白为 0
@@ -479,21 +519,85 @@ class DecisionRoundExecutor:
         result["total_duration_ms"] = self._clock() - started_ms
         return result, outcome
 
-    async def _pace_speech_release(self) -> None:
-        """发言放行限速（ADR-080）：距上次开口不足 ``rundown_ready_interval_ms`` 时等满再放行。
+    def _current_input_version(self) -> int:
+        """读取当前新输入版本号（未注入版本提供者时恒返回 0）。"""
+        if self._input_version_provider is None:
+            return 0
+        try:
+            return int(self._input_version_provider())
+        except Exception as exc:  # noqa: BLE001 - 版本读取异常按无变更处理，不阻断放行
+            self._logger.warning(f"读取输入版本号失败（忽略中断检查）: {exc}", exc=True)
+            return 0
 
-        防抖从开窗侧移除后，``rundown_ready_interval_ms`` 的"两次发言最小间隔"
-        职责保留原值移到发言放行时刻执行——只管"这句几时能说"，不再管"几时
-        开始想"。适用范围由 ``ProactiveTrigger.should_pace_speech`` 判定；等待
-        发生在台词已生成之后（决策窗已完整跑完），最坏等满一个间隔；开口时刻
-        由 ``room_state.record_speech`` 在放行后刷新，逐句按序间隔开。
+    def _has_newer_input(self, open_input_version: int) -> bool:
+        """自开窗以来是否到达了新的观众弹幕、玩家游戏聊天或需即时响应的游戏事件。"""
+        if self._input_version_provider is None:
+            return False
+        return self._current_input_version() > open_input_version
+
+    async def _wait_release_or_wakeup(self, wait_ms: int, open_input_version: int, *, interruptible: bool) -> None:
+        """等待放行时长，并在配置了 ``pace_wakeup`` 时按可中断语义响应唤醒。
+
+        - ``interruptible=True``（长等待段）：清除事件后复查新输入版本号，若有新输入立即早退，
+          等待期间新输入或下播置位事件均可提前唤醒；
+        - ``interruptible=False``（短容忍不可中断段）：不得因新输入 0-await 早退（避免上层循环
+          进入忙等死循环）；按真实墙钟截止时刻等满 ``wait_ms``，仅在停播/禁言时提前结束。
         """
+        if self._pace_wakeup is not None and self._sleep is asyncio.sleep:
+            if interruptible:
+                self._pace_wakeup.clear()
+                # 清除事件后再复查一次版本号，避免 clear 前一瞬新输入刚好到达造成漏唤醒
+                if self._has_newer_input(open_input_version):
+                    return
+                try:
+                    await asyncio.wait_for(self._pace_wakeup.wait(), timeout=wait_ms / 1000.0)
+                except asyncio.TimeoutError:
+                    pass
+                return
+            # 不可中断短等待段：新输入唤醒事件不中止等待，按剩余墙钟继续等满；仅停播/禁言立即退出
+            deadline = asyncio.get_running_loop().time() + wait_ms / 1000.0
+            while True:
+                if self._speech_allowed is not None and not self._speech_allowed():
+                    return
+                remaining_s = deadline - asyncio.get_running_loop().time()
+                if remaining_s <= 0:
+                    return
+                self._pace_wakeup.clear()
+                if self._speech_allowed is not None and not self._speech_allowed():
+                    return
+                try:
+                    await asyncio.wait_for(self._pace_wakeup.wait(), timeout=remaining_s)
+                except asyncio.TimeoutError:
+                    return
+        await self._sleep(wait_ms / 1000.0)
+
+    async def _pace_speech_release(self, open_input_version: int = 0) -> bool:
+        """发言放行限速（可中断）：距上次开口不足 ``rundown_ready_interval_ms`` 时等满再放行。
+
+        若需等待的时长超过短容忍阈值（默认 1 秒），等待前或等待期间一旦来了新的观众弹幕、
+        游戏公屏聊天或需即时响应的游戏事件，立即中止等待并返回 ``True``（由调用方撤回
+        尚未播出的旧自主独白，释放锁让下一 tick 用最新现场重想）。返回 ``False`` 表示
+        正常等满可放行。
+        """
+        initial_wait_ms = self._proactive_trigger.speech_release_wait_ms(self._room_state.last_speech_ms, self._clock())
+        if initial_wait_ms <= 0:
+            return False
+        interruptible = initial_wait_ms > self._pace_interrupt_tolerance_ms
         while True:
             wait_ms = self._proactive_trigger.speech_release_wait_ms(self._room_state.last_speech_ms, self._clock())
             if wait_ms <= 0:
-                return
+                # 睡满后同样复核：超出短容忍的等待期间若收到了新输入，不再播出过时独白
+                return interruptible and self._has_newer_input(open_input_version)
+            if interruptible and self._has_newer_input(open_input_version):
+                return True
+            if self._speech_allowed is not None and not self._speech_allowed():
+                return False
             self._logger.debug(f"发言放行限速：距上次开口还差 {wait_ms}ms，等满再出声")
-            await self._sleep(wait_ms / 1000.0)
+            await self._wait_release_or_wakeup(wait_ms, open_input_version, interruptible=interruptible)
+            if interruptible and self._has_newer_input(open_input_version):
+                return True
+            if self._speech_allowed is not None and not self._speech_allowed():
+                return False
 
     def _next_round_id(self) -> str:
         """生成下一个决策轮次 ID（格式 ``rnd_{epoch_ms}_{seq}``）。

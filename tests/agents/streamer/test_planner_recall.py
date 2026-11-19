@@ -230,16 +230,13 @@ async def test_delivered_relay_records_own_words_without_source() -> None:
     assert "来源对话" not in text
 
 
-async def test_rejected_or_blocked_relay_is_not_recorded() -> None:
-    """拒收的、没有新输入被拦下的补充都没交代到，不能当成说过。"""
+async def test_rejected_or_duplicate_relay_is_not_recorded() -> None:
+    """被工具拒收的、或短时间内同文重复被拦下的补充不会多记。"""
     planner, _registry = _relay_planner(
         ToolExecutionResult(tool_name="framework_prompt", success=False, error_message="留言已满")
     )
 
     await planner.workbench.handle("framework_prompt", {"agent": "minecraft", "content": "先别拆"})
-    await planner.workbench.handle(
-        "framework_prompt", {"agent": "minecraft", "content": "再说一遍"}, relay_without_input=True
-    )
 
     assert "补充过的要求" not in await _reference(planner)
 

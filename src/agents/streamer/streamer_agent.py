@@ -131,6 +131,7 @@ from .tools.memory_correct import MemoryCorrectionToolProvider, build_memory_cor
 from .tools.reply_tool import ReplyToolProvider
 from .tools.social_fact import SocialFactToolProvider, build_social_fact_tool_spec
 from .tools.talk_cards_tool import build_talk_cards_tool_provider
+from .tools.working_note import WorkingNoteStore, WorkingNoteToolProvider, build_working_note_tool_spec
 from .command.router import CommandRouter
 from .config import StreamerConfig
 from .event_log_reader import EventLogFileReader
@@ -512,6 +513,8 @@ class StreamerAgent(BaseAgent):
 
         # 主动发言触发器（纯规则组件，Agent 内部件；先于 Planner 构造供冷场死锁判定查询）
         self._proactive_trigger = ProactiveTrigger(config.proactive)
+        # 单槽跨轮工作便签（进程内内存态，带自然过期与场次清空；只记等待意图与下一步打算）
+        self._working_note = WorkingNoteStore(clock=self._clock)
 
         # Planner（决策核心，Agent 内部件——非工具）；测试可注入替身
         if planner is not None:
@@ -556,6 +559,7 @@ class StreamerAgent(BaseAgent):
                 talk_workbench_provider=self._render_talk_workbench_for_window,
                 talk_cards_provider=self._refresh_talk_cards_for_window if self._topic_deck is not None else None,
                 proactive_silent_provider=lambda: self._proactive_trigger.has_silent_cooldown,
+                working_note_provider=self._working_note.render,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(
@@ -771,6 +775,10 @@ class StreamerAgent(BaseAgent):
         # 递话/外部触发到达即唤醒位：receive_prompt 与 trigger_external_proactive
         # 置位，flush 循环的等待立即醒来评估递话——递话不必陪弹幕批次等完整个 tick
         self._flush_kick = asyncio.Event()
+        # 放行限速等待期间的新输入中断版本号与唤醒事件：弹幕、玩家公屏或游戏急事到达即递增并置位，
+        # 让正在等待放行的自主独白立刻中止等待、撤回过时台词并释放锁。
+        self._fresh_input_version: int = 0
+        self._pace_wakeup = asyncio.Event()
 
         # 场次进行位：live.started 置位 / live.ended 复位。主动发言的业务边界
         # = 场次——没开播只回弹幕不主动开题，开场白（rundown opening）等开播
@@ -884,6 +892,9 @@ class StreamerAgent(BaseAgent):
             on_mouth_superseded=self._on_mouth_superseded,
             on_round_spoken=self._on_round_spoken,
             on_round_silent=self._on_round_silent,
+            input_version_provider=lambda: self._fresh_input_version,
+            pace_wakeup=self._pace_wakeup,
+            on_pace_superseded=self._flush_kick.set,
             clock=self._clock,
             logger=self._logger,
         )
@@ -1094,8 +1105,8 @@ class StreamerAgent(BaseAgent):
         ``_on_start → _register_tools`` 才实例化；此时回退到工厂函数构造
         spec（同一套定义，无事实源漂移）。
         """
-        # 社交事实工具与场内记忆更正工具只在对应仓储可用时注册，声明口径同注册口径
-        extra: List[ToolSpec] = []
+        # 工作便签工具始终注册；社交事实与场内记忆更正工具只在对应仓储可用时注册，声明口径同注册口径
+        extra: List[ToolSpec] = [build_working_note_tool_spec()]
         if self._social_fact_repo is not None:
             extra.append(build_social_fact_tool_spec())
         if self._memory_correction_repo is not None:
@@ -1143,10 +1154,14 @@ class StreamerAgent(BaseAgent):
         if self._tool_registry is not None:
             self.register_tool_provider(self._reply_provider, registry=self._tool_registry)
             self.register_tool_provider(
+                WorkingNoteToolProvider(self._working_note),
+                registry=self._tool_registry,
+            )
+            self.register_tool_provider(
                 build_rundown_tool_provider(self._rundown_coord.tool_provider),
                 registry=self._tool_registry,
             )
-            registered = "streamer_reply / rundown_control"
+            registered = "streamer_reply / streamer_note / rundown_control"
             # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕（唯一的记忆工具）
             if self._memory_recall is not None:
                 self.register_tool_provider(
@@ -1358,6 +1373,7 @@ class StreamerAgent(BaseAgent):
             self._planner.workbench.reset()
             # 游戏里找她的玩家条目、游戏那边的流水同样只属于上一场：留几分钟的那份不带进新场次
             self._planner.reset_player_notes()
+            self._working_note.clear()
             self._game_side.reset()
             self._room_state.reset_session()
             self._spoken_log.reset()
@@ -1674,6 +1690,7 @@ class StreamerAgent(BaseAgent):
         del event_name, source
         self._live_active = False
         self._opening_wrapup_active = False
+        self._pace_wakeup.set()
         if self._mouth is not None:
             self._mouth.reset()
         self._logger.info("场次已结束：主动发言收闸")
@@ -1733,6 +1750,7 @@ class StreamerAgent(BaseAgent):
             await self._scope.end_session()
             # 道别说完再清玩家条目与游戏那边的流水：下播后的调试对话不接着这一场的玩家和游戏说
             self._planner.reset_player_notes()
+            self._working_note.clear()
             self._game_side.reset()
             self._room_state.reset_session()
             self._spoken_log.reset()
@@ -2602,8 +2620,17 @@ class StreamerAgent(BaseAgent):
                 self._planner.workbench.note_game_report(
                     payload.game, payload.report_kind or "", payload.delegation_ids
                 )
+            # 交付上报、需要主播定夺、异常或高光事件到达时，打断正在等待放行的旧自主独白
+            if payload.event_type in ("report", "attention_required", "error") or payload.notable:
+                self._notify_fresh_input()
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
+
+    def _notify_fresh_input(self) -> None:
+        """记录到达了新的即时输入（观众弹幕、玩家游戏公屏、游戏急事/上报、运营递话等），并唤醒放行等待与 flush 循环。"""
+        self._fresh_input_version += 1
+        self._pace_wakeup.set()
+        self._flush_kick.set()
 
     @property
     def _game_ledger(self) -> GameLedger:
@@ -2673,6 +2700,7 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 入账失败不阻断撤单兜底
             self._logger.warning(f"停滞告警材料入账失败（task_id={payload.task_id}）: {exc}", exc=exc)
         self._proactive_signals.set_game()
+        self._notify_fresh_input()
         if outcome.auto_cancel:
             spawn_background_task(
                 self._cancel_stalled_delegation(str(payload.task_id)),
@@ -2762,7 +2790,7 @@ class StreamerAgent(BaseAgent):
                 # 视野撞见强敌/稀有矿藏或意外真死亡时，无论快嘴开没开都立即唤醒决策层，
                 # 让 Planner 紧接着给游戏 Agent 下发采掘、迎战或善后任务（寻死回家不按事故唤醒）
                 self._proactive_signals.set_game()
-                self._flush_kick.set()
+                self._notify_fresh_input()
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体侧事件失败: {exc}", exc=True)
 
@@ -2807,6 +2835,7 @@ class StreamerAgent(BaseAgent):
                         self._room_state.record_player_join(joined_player)
             if payload.kind == "player":
                 self._proactive_signals.set_game()
+                self._notify_fresh_input()
                 # 游戏里说过话的人记成已知玩家名：游戏情境查询发给嵌入服务前把它换掉
                 if self._memory_cues is not None and payload.sender:
                     self._memory_cues.note_name(payload.sender)
@@ -3018,6 +3047,8 @@ class StreamerAgent(BaseAgent):
         forced = msg.message_type in self._force_message_types
         # 入缓冲
         self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
+        # 收到观众弹幕或付费消息时，立即打断正在等放行的旧自主独白，避免继续占用决策锁
+        self._notify_fresh_input()
         # 弹幕一到就在后台算它的查询向量：攒批窗口几秒，组装线索时多半已算好，决策不等它
         if self._memory_cues is not None:
             await self._memory_cues.prefetch(msg)
@@ -3028,13 +3059,14 @@ class StreamerAgent(BaseAgent):
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
         """外部 API 触发主动发言（Dashboard / API 调用）。"""
         self._proactive_signals.set_external()
-        self._flush_kick.set()
+        self._notify_fresh_input()
         if topic_hint:
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     def _on_rundown_changed_proactive(self) -> None:
         """流程单环节变更通知（协调器回调）：置位主动发言信号；若说话模式发生切换则异步刷新常驻简报。"""
         self._proactive_signals.set_rundown()
+        self._notify_fresh_input()
         next_mode = self._current_speaking_mode()
         if (
             self._memory_brief_speaking_mode
@@ -3072,8 +3104,8 @@ class StreamerAgent(BaseAgent):
         # 运营从控制台发来的提醒除了进当窗【运营提醒】，还落成本场常驻更正提醒（本场未完不消失，下播整理按事实参考处理）
         if source in ("operator", "dashboard") and self._current_session_pk() is not None:
             self._pending_operator_notes.append(text)
-        # 到达即唤醒 flush 循环：递话不必陪弹幕批次等完当前 tick
-        self._flush_kick.set()
+        # 到达即唤醒放行等待与 flush 循环：递话不必陪弹幕批次或旧独白等完当前 tick
+        self._notify_fresh_input()
         self._emit_prompt_received(text=text, source=source)
         self._logger.info(
             f"收到递话提醒（source={source or '未知'}，队列 "

@@ -333,6 +333,8 @@ class PlannerEnv:
     talk_cards_provider: Optional[Callable[[bool], Awaitable[str]]] = None
     # 上一轮主动决策窗是否以沉默收场（play 档游戏平静时解开 45 秒冷场死锁）
     proactive_silent_provider: Optional[Callable[[], bool]] = None
+    # 单槽跨轮工作便签渲染来源（未过期且非空时渲染在参考段尾部紧邻【游戏那边此刻】）
+    working_note_provider: Optional[Callable[[], str]] = None
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -549,6 +551,7 @@ class Planner:
         self._talk_workbench_provider = env.talk_workbench_provider if env else None
         self._talk_cards_provider = env.talk_cards_provider if env else None
         self._proactive_silent_provider = env.proactive_silent_provider if env else None
+        self._working_note_provider = env.working_note_provider if env else None
 
         # 本窗卡片称呼（每窗在 plan() 入口重算）
         self._memory_labels: Dict[int, str] = {}
@@ -1472,7 +1475,8 @@ class Planner:
             lines.append(f"【运营提醒】{reminders}")
         situation_text = "\n".join(lines)
         # 游戏那边此刻（含本轮决策前自动读取的现场速览）整块放在参考段最后：新读数离决策最近，
-        # 不被前面已聊话题里的旧说法盖住；每窗重建，不进对话历史
+        # 不被前面已聊话题里的旧说法盖住；单槽工作便签紧邻其上（同处尾部动态区，不破坏前缀缓存）
+        working_note_text = self._read_working_note()
         game_now_text = render_game_now(
             self.workbench.delegations,
             self.workbench.delegation_status_provider,
@@ -1482,8 +1486,8 @@ class Planner:
         )
 
         if not self._context_enabled:
-            # 裸消息路径：跳过环境快照与记忆召回，仅保留情境标注、私密聊天与游戏那边此刻等本窗素材
-            return "\n\n".join(block for block in (situation_text, game_now_text) if block), None
+            # 裸消息路径：跳过环境快照与记忆召回，仅保留情境标注、私密聊天、工作便签与游戏那边此刻等本窗素材
+            return "\n\n".join(block for block in (situation_text, working_note_text, game_now_text) if block), None
 
         duration_so_far_ms = 0
         if self._elapsed_live_provider is not None:
@@ -1513,8 +1517,20 @@ class Planner:
             return None, f"assembler_failed: {e}"
 
         cue_text = (getattr(memory_cues, "text", "") or "").strip() if memory_cues is not None else ""
-        parts = [block for block in (situation_text, assembled_text, cue_text, game_now_text) if block]
+        parts = [
+            block for block in (situation_text, assembled_text, cue_text, working_note_text, game_now_text) if block
+        ]
         return "\n\n".join(parts), None
+
+    def _read_working_note(self) -> str:
+        """读取未过期的单槽工作便签渲染文本；未注入、为空或读取失败时返回空串。"""
+        if self._working_note_provider is None:
+            return ""
+        try:
+            return (self._working_note_provider() or "").strip()
+        except Exception as exc:  # noqa: BLE001 - 便签读不到只省略该段，不挡决策
+            self.logger.warning(f"读取工作便签失败（本窗省略该段）: {exc}", exc=True)
+            return ""
 
     def _read_game_now(self) -> GameNow:
         """读取游戏那边此刻的结构化快照；没接环境或读取出错时退回空快照，不挡决策。"""

@@ -101,11 +101,18 @@ def test_overdue_alarm_has_double_cooldown_and_speech_debounce() -> None:
     assert debounced.should_trigger(recent, now_ms=10_004_000, rundown_overdue=True) is TriggerKind.RUNDOWN
 
 
-def test_ready_opens_regardless_of_last_speech_time() -> None:
-    """开窗不防抖（ADR-080）：上一轮刚出口也立即具备开下一窗资格，播放期间思考不断线。"""
-    trigger = _trigger()
+def test_ready_uses_think_lead_window_instead_of_refiring_immediately() -> None:
+    """前瞻开窗（修复刚出口 0.3s 空转）：距下次放行大于前瞻窗口时不开窗，进入前瞻窗口后提前思考；从未开口立即开窗。"""
+    trigger = _trigger(rundown_ready_interval_ms=30_000, rundown_think_lead_ms=10_000)
     just_spoke = _Room(last_speech_ms=10_000_000)
-    assert trigger.should_trigger(just_spoke, now_ms=10_000_001, rundown_ready=True) is TriggerKind.RUNDOWN
+    # 刚说完 1ms / 19.999s（剩余 > 10s）：仍在冷却外，不空转开窗
+    assert trigger.should_trigger(just_spoke, now_ms=10_000_001, rundown_ready=True) is None
+    assert trigger.should_trigger(just_spoke, now_ms=10_019_999, rundown_ready=True) is None
+    # 距下次可发言还剩 10s（进入前瞻窗口，此时上一句 TTS 可能仍在播）：允许提前开窗思考
+    assert trigger.should_trigger(just_spoke, now_ms=10_020_000, rundown_ready=True) is TriggerKind.RUNDOWN
+    # 即时信号（环节切换 / 游戏待定夺）不受前瞻窗口限制，刚说完也立刻触发
+    assert trigger.should_trigger(just_spoke, now_ms=10_000_001, rundown_pending=True) is TriggerKind.RUNDOWN
+    assert trigger.should_trigger(just_spoke, now_ms=10_000_001, game_pending=True) is TriggerKind.GAME
 
     silent = _Room(last_speech_ms=None)
     assert trigger.should_trigger(silent, now_ms=10_000_000, rundown_ready=True) is TriggerKind.RUNDOWN

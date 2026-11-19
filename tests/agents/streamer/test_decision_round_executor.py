@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dataclasses import replace
-
+from src.agents.streamer.config import StreamerProactiveConfig
 from src.agents.streamer.decision_executor import (
     DecisionRoundExecutor,
     _silent_reason_text,
     trigger_cause_text,
 )
 from src.agents.streamer.planner import RoundOutcome
+from src.agents.streamer.proactive_trigger import ProactiveTrigger
 from src.agents.streamer.session_scope import ClosingSession, WindowMaterials
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.events.names import CoreEvents
+from src.modules.utils.time_utils import now_ms
 
 _OKAY_OUTCOME = RoundOutcome(
     replied=True,
@@ -391,3 +394,246 @@ async def test_pacing_skipped_when_release_gate_disallows():
 
     assert clock.sleeps == []  # 即时信号不等
     assert result["speech"] == "新环节开场"
+
+
+async def test_paced_proactive_round_aborts_and_supersedes_on_fresh_input() -> None:
+    """等待放行超出短容忍（>1s）且期间到达新输入：立即中止并撤回旧自主独白（pace_superseded），不计沉默冷却。"""
+    clock = _FakeClock()
+    trigger = ProactiveTrigger(
+        StreamerProactiveConfig(enabled=True, rundown_ready_interval_ms=15_000, rundown_think_lead_ms=10_000)
+    )
+    trigger.should_trigger(MagicMock(last_speech_ms=9_995_000), now_ms=clock.now_ms, rundown_ready=True)
+
+    version = 1
+    kicked = 0
+
+    async def _sleep_with_incoming(seconds: float) -> None:
+        nonlocal version
+        clock.sleeps.append(seconds)
+        # 模拟等待期间来了新弹幕或玩家游戏聊天，版本号递增
+        version += 1
+
+    outcome = replace(_OKAY_OUTCOME, reply_payload={"speech": "旧自主独白", "emotion": "", "actions": []})
+    planner = MagicMock()
+    planner.plan = AsyncMock(return_value=replace(outcome, raw_content="RAW", llm_request_id="req_1"))
+    speech = MagicMock()
+    speech.dispatch = AsyncMock(return_value=("旧自主独白", "happy", "utt_1_1"))
+    room_state = MagicMock()
+    room_state.last_speech_ms = 9_995_000
+    stats = StreamerStats()
+
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=speech,
+        event_bus=None,
+        room_state=room_state,
+        proactive_trigger=trigger,
+        stats=stats,
+        thinking_sink=None,
+        thinking_enabled=False,
+        window_opener=AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch())),
+        rundown_text_provider=MagicMock(return_value=None),
+        input_version_provider=lambda: version,
+        on_pace_superseded=lambda: _inc_kick(),
+        clock=clock,
+        sleep=_sleep_with_incoming,
+    )
+
+    def _inc_kick() -> None:
+        nonlocal kicked
+        kicked += 1
+
+    result = await executor.execute(
+        [], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True
+    )
+
+    assert result["speech"] is None
+    assert result["silent_reason"] == "pace_superseded"
+    assert result["plan"]["should_reply"] is False
+    speech.dispatch.assert_not_awaited()
+    room_state.record_speech.assert_not_called()
+    assert trigger.has_silent_cooldown is False  # 被新输入打断不是主动沉默，下一 tick 立即响应新输入
+    assert kicked == 1
+    assert stats.total_no_action == 1
+
+
+async def test_paced_proactive_round_finishes_within_short_tolerance_despite_fresh_input() -> None:
+    """剩余等待在短容忍（≤1s）内时，即使收到新输入也不撤回刚生成好的台词，平滑放行收尾。"""
+    clock = _FakeClock()
+    trigger = ProactiveTrigger(
+        StreamerProactiveConfig(enabled=True, rundown_ready_interval_ms=15_000, rundown_think_lead_ms=10_000)
+    )
+    # 距离满 15s 只差 800ms（<= 1000ms 短容忍）
+    trigger.should_trigger(MagicMock(last_speech_ms=9_985_800), now_ms=clock.now_ms, rundown_ready=True)
+
+    version = 1
+
+    async def _sleep_with_incoming(seconds: float) -> None:
+        nonlocal version
+        await clock.sleep(seconds)
+        version += 1
+
+    outcome = replace(_OKAY_OUTCOME, reply_payload={"speech": "马上就播的一句", "emotion": "", "actions": []})
+    planner = MagicMock()
+    planner.plan = AsyncMock(return_value=replace(outcome, raw_content="RAW", llm_request_id="req_1"))
+    speech = MagicMock()
+    speech.dispatch = AsyncMock(return_value=("马上就播的一句", "happy", "utt_1_1"))
+    room_state = MagicMock()
+    room_state.last_speech_ms = 9_985_800
+
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=speech,
+        event_bus=None,
+        room_state=room_state,
+        proactive_trigger=trigger,
+        stats=StreamerStats(),
+        thinking_sink=None,
+        thinking_enabled=False,
+        window_opener=AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch())),
+        rundown_text_provider=MagicMock(return_value=None),
+        input_version_provider=lambda: version,
+        clock=clock,
+        sleep=_sleep_with_incoming,
+    )
+
+    result = await executor.execute(
+        [], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True
+    )
+
+    assert clock.sleeps == [0.8]
+    assert result["speech"] == "马上就播的一句"
+    speech.dispatch.assert_awaited_once()
+
+
+async def test_paced_proactive_round_wakes_immediately_on_event() -> None:
+    """使用默认可中断等待时，pace_wakeup 一置位立即醒来撤回旧独白，不空睡完整间隔。"""
+    clock = _FakeClock()
+    trigger = ProactiveTrigger(
+        StreamerProactiveConfig(enabled=True, rundown_ready_interval_ms=15_000, rundown_think_lead_ms=10_000)
+    )
+    trigger.should_trigger(MagicMock(last_speech_ms=9_995_000), now_ms=clock.now_ms, rundown_ready=True)
+
+    wakeup = asyncio.Event()
+    version = 1
+
+    async def _plan_and_schedule_wakeup(*_args, **_kwargs) -> RoundOutcome:
+        loop = asyncio.get_running_loop()
+
+        def _trigger_input() -> None:
+            nonlocal version
+            version += 1
+            wakeup.set()
+
+        loop.call_soon(_trigger_input)
+        return replace(
+            _OKAY_OUTCOME,
+            reply_payload={"speech": "要被中断的旧台词", "emotion": "", "actions": []},
+            raw_content="RAW",
+            llm_request_id="req_1",
+        )
+
+    planner = MagicMock()
+    planner.plan = AsyncMock(side_effect=_plan_and_schedule_wakeup)
+    speech = MagicMock()
+    speech.dispatch = AsyncMock(return_value=("要被中断的旧台词", "happy", "utt_1_1"))
+    room_state = MagicMock()
+    room_state.last_speech_ms = 9_995_000
+
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=speech,
+        event_bus=None,
+        room_state=room_state,
+        proactive_trigger=trigger,
+        stats=StreamerStats(),
+        thinking_sink=None,
+        thinking_enabled=False,
+        window_opener=AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch())),
+        rundown_text_provider=MagicMock(return_value=None),
+        input_version_provider=lambda: version,
+        pace_wakeup=wakeup,
+        clock=clock,
+    )
+
+    result = await asyncio.wait_for(
+        executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True),
+        timeout=1.0,
+    )
+
+    assert result["silent_reason"] == "pace_superseded"
+    assert result["speech"] is None
+    speech.dispatch.assert_not_awaited()
+
+
+async def test_paced_short_non_interruptible_wait_does_not_spin_on_new_input() -> None:
+    """不可中断短等待窗（0 < wait_ms <= tolerance）使用真实 asyncio.sleep + pace_wakeup 遇新输入时不忙等、正常放行。"""
+    trigger = ProactiveTrigger(
+        StreamerProactiveConfig(enabled=True, rundown_ready_interval_ms=5_000, rundown_think_lead_ms=5_000)
+    )
+    # 设上次开口在 4950ms 前，剩余等待约 50ms（落在 1000ms 不可中断短容忍内）
+    last_spoken = now_ms() - 4_950
+    trigger.should_trigger(MagicMock(last_speech_ms=last_spoken), now_ms=now_ms(), rundown_ready=True)
+
+    wakeup = asyncio.Event()
+    version = 1
+
+    async def _plan_with_incoming_input(*_args, **_kwargs) -> RoundOutcome:
+        # 思考阶段即到达新输入并置位 pace_wakeup：旧缺陷会在此触发 0-await 死循环
+        nonlocal version
+        version += 1
+        wakeup.set()
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.015, wakeup.set)
+        return replace(
+            _OKAY_OUTCOME,
+            reply_payload={"speech": "短窗顺滑放行的一句", "emotion": "", "actions": []},
+            raw_content="RAW",
+            llm_request_id="req_short",
+        )
+
+    planner = MagicMock()
+    planner.plan = AsyncMock(side_effect=_plan_with_incoming_input)
+    speech = MagicMock()
+    speech.dispatch = AsyncMock(return_value=("短窗顺滑放行的一句", "happy", "utt_short"))
+    room_state = MagicMock()
+    room_state.last_speech_ms = last_spoken
+
+    # 统计 _pace_speech_release 里查剩余时间的次数：正常应远小于忙等死循环的数百/数千次
+    wait_calls = 0
+    orig_wait = trigger.speech_release_wait_ms
+
+    def _counting_wait(last_ms: int | None, cur_ms: int) -> int:
+        nonlocal wait_calls
+        wait_calls += 1
+        return orig_wait(last_ms, cur_ms)
+
+    trigger.speech_release_wait_ms = _counting_wait  # type: ignore[method-assign]
+
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=speech,
+        event_bus=None,
+        room_state=room_state,
+        proactive_trigger=trigger,
+        stats=StreamerStats(),
+        thinking_sink=None,
+        thinking_enabled=False,
+        window_opener=AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch())),
+        rundown_text_provider=MagicMock(return_value=None),
+        input_version_provider=lambda: version,
+        pace_wakeup=wakeup,
+        clock=now_ms,
+        pace_interrupt_tolerance_ms=1_000,
+    )
+
+    result = await asyncio.wait_for(
+        executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True),
+        timeout=1.0,
+    )
+
+    assert result["speech"] == "短窗顺滑放行的一句"
+    assert result["silent_reason"] is None
+    speech.dispatch.assert_awaited_once()
+    # 不可中断短等待不进入 0-await 忙等：查剩余时间次数应在个位数以内
+    assert wait_calls <= 6, f"疑似陷入忙等循环，speech_release_wait_ms 被调用 {wait_calls} 次"

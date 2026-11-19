@@ -126,9 +126,12 @@ class ProactiveTrigger:
         self._rundown_speech_interval_ms: int = config.rundown_speech_interval_ms
         # 环节超时提醒冷却（毫秒）。仅 rundown_overdue 触发源使用。
         self._rundown_overdue_interval_ms: int = config.rundown_overdue_interval_ms
-        # 发言放行节奏间隔（毫秒）。开窗侧已不对照 last_speech_ms 防抖（ADR-080）；
-        # 决策执行器在发言放行时刻经 speech_release_wait_ms 用它限速。
+        # 发言放行节奏间隔（毫秒）：决策执行器在发言放行时刻经 speech_release_wait_ms 用它限速，
+        # 开窗侧配合前瞻思考窗口决定何时提前开窗，既保留播音期间提前思考又避免刚出口就空转。
         self._rundown_ready_interval_ms: int = config.rundown_ready_interval_ms
+        # 环节内持续产出类主动窗的前瞻开窗窗口（毫秒）：距离下次允许发言的剩余等待时间
+        # 超过该窗口时不提前开窗，进入窗口后再提前思考以衔接播放与生成耗时。
+        self._rundown_think_lead_ms: int = config.rundown_think_lead_ms
         # 主动沉默冷却（毫秒）：play 档与 talk 档各一档。仅 rundown_ready 触发源使用。
         self._silent_cooldown_ms: int = config.rundown_silent_cooldown_ms
         self._silent_cooldown_talk_ms: int = config.rundown_silent_cooldown_talk_ms
@@ -295,10 +298,9 @@ class ProactiveTrigger:
                 return TriggerKind.RUNDOWN
 
         # rundown_ready：环节内持续产出机会——内容推进信号，绕过公共三道前置
-        # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要），也不对照
-        # last_speech_ms 防抖：这只是给主播开口的机会，说不说、说什么由模型
-        # 按本窗新输入自定，is_novel 自检与台词重合度闸把关质量。
-        if rundown_ready and self._ready_allowed(now_ms, talk_mode, viewer_waiting_since_ms):
+        # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）；开窗受前瞻窗口约束，
+        # 仅在进入下次可发言前的前瞻窗口后才提前思考，避免刚说完话就高频空转连开窗。
+        if rundown_ready and self._ready_allowed(last_speech_ms, now_ms, talk_mode, viewer_waiting_since_ms):
             self._last_rundown_immediate = False
             return TriggerKind.RUNDOWN
 
@@ -386,15 +388,21 @@ class ProactiveTrigger:
 
     def _ready_allowed(
         self,
+        last_speech_ms: Optional[int],
         now_ms: int,
         talk_mode: bool,
         viewer_waiting_since_ms: int | None,
     ) -> bool:
-        """``rundown_ready`` 的两道节奏闸：主动沉默冷却、给攒批弹幕让路。
+        """``rundown_ready`` 的三道节奏闸：前瞻思考开窗、主动沉默冷却、给攒批弹幕让路。
 
-        不对照 ``last_speech_ms`` 防抖（ADR-080：防抖从开窗侧移除，发言节奏
-        由发言放行侧的 ``rundown_ready_interval_ms`` 独立控制）。
+        前瞻开窗：当上次开口时刻存在且距离 ``last_speech_ms + rundown_ready_interval_ms``
+        的剩余等待时长仍大于 ``rundown_think_lead_ms`` 时暂不开窗；进入前瞻窗口后再提前
+        触发思考，保留播放期间思考不断线的能力，同时消灭刚说完话即零间隔空转的问题。
         """
+        # 距离下次允许放行发言还超过前瞻思考窗口：暂不开窗，等进入前瞻窗或被即时事件唤醒
+        remaining_ms = self.speech_release_wait_ms(last_speech_ms, now_ms)
+        if remaining_ms > self._rundown_think_lead_ms:
+            return False
         # 上一轮主动决策刚选择了沉默：冷却期内不再催（杂谈档冷却更短，要靠她自己撑场）
         cooldown = self._silent_cooldown_talk_ms if talk_mode else self._silent_cooldown_ms
         if self._last_silent_ms is not None and (now_ms - self._last_silent_ms) < cooldown:
