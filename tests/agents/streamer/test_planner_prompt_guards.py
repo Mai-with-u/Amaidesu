@@ -187,6 +187,19 @@ def test_delegate_rules_asks_back_when_request_target_is_unclear() -> None:
     assert "托付有歧义时先反问" not in rules
 
 
+def test_delegate_rules_updates_state_assumptions_to_latest_game_now() -> None:
+    """委派指令里当作前提的状态说法以【游戏那边此刻】的最新结果为准：对不上先改对再派，不照旧状态写。"""
+    reset_prompt_manager()
+    try:
+        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
+    finally:
+        reset_prompt_manager()
+
+    assert "写进指令的状态前提，以【游戏那边此刻】的最新结果为准" in rules
+    assert "先把说法改对再派" in rules
+    assert "不照早先的旧状态写" in rules
+
+
 def test_prompt_template_treats_retraction_as_cancellation(prompts: Any) -> None:
     """有人更正或宣布不用做了：撤对应的单或补进在途单、记一条取代旧行的事实、口头认账——不当闲聊带过。"""
     prompt = _render_bare(prompts)
