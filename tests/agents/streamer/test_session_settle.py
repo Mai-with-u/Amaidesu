@@ -993,7 +993,9 @@ async def test_settle_pending_orders_by_start_time_and_continues_after_failure(
     await _speech(store, later, "第三场的话", timestamp_ms=3_100)
     llm = FakeLLMManager(
         responses=[
+            # 第一场并发发起 archive + commitment 两笔：其中一笔失败即整场失败，另一笔仍会正常落断点
             Response(success=False, content=None, error="模型挂了"),
+            Response(success=True, content='{"commitments": []}'),
             Response(success=True, content='{"archive": []}'),
             Response(success=True, content='{"commitments": []}'),
             Response(success=True, content='{"archive": []}'),
@@ -1005,8 +1007,8 @@ async def test_settle_pending_orders_by_start_time_and_continues_after_failure(
     assert await settler.settle_pending() == 2, "一场失败不挡后面的场"
     prompts = [call["input"] for call in llm.calls]
     assert "第一场的话" in prompts[0]
-    assert "第二场的话" in prompts[1]
-    assert "第三场的话" in prompts[3], "按开播时间从早到晚逐场整理"
+    assert "第二场的话" in prompts[2]
+    assert "第三场的话" in prompts[4], "按开播时间从早到晚逐场整理"
     failed = await store.sessions.get_live_session(live_session_id=earlier)
     assert failed is not None and failed.settled_at_ms is None and failed.settle_attempts == 1
     for settled_id in (middle, later):
@@ -1551,7 +1553,7 @@ def _registry_with_recorder() -> tuple[BackgroundTaskRegistry, EventBus, List[Ba
 
 
 async def test_settle_reports_background_task_progress(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
-    """整理一场：登记 → 第 N 笔/共 M 笔进度 → 完成注销；载荷始终带该任务完整现状。"""
+    """整理一场：登记 → 并发整体进度（含已完成 k/N） → 完成注销；载荷始终带该任务完整现状。"""
     registry, bus, payloads = _registry_with_recorder()
     session_id = await _ended_session(store)
     old = await store.commitments.insert_commitment(what="画生日贺图", quote="下播给你画张生日贺图", now_ms_value=100)
@@ -1571,8 +1573,10 @@ async def test_settle_reports_background_task_progress(store: SQLiteDatabase, pr
     assert payloads[0].task_id == f"settle-{session_id}"
     assert payloads[0].title.startswith("整理场次：")
     texts = [payload.progress_text for payload in payloads]
-    assert any(text.startswith("第 2 笔/共 3 笔") for text in texts), texts
-    assert any(text.startswith("第 3 笔/共 3 笔") for text in texts), texts
+    assert any("3 笔并行中（已完成 0/3）" in text for text in texts), texts
+    assert any("已完成 1/3" in text for text in texts), texts
+    assert any("已完成 2/3" in text for text in texts), texts
+    assert "模型整理已完成（3/3）" in texts, texts
     assert payloads[-1].state == "finished" and payloads[-1].failure_reason is None
     assert registry.snapshot() == []  # 终态任务不留行
 
@@ -1682,7 +1686,7 @@ async def test_settle_warns_when_material_step_is_slow(
 
 
 async def test_settle_reports_model_stage_elapsed(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
-    """模型整理期间面板报步骤标签加已过秒数（不给百分比）：模型不提供进度，报百分比是编的。"""
+    """并发模型整理期间面板报并行进度摘要加已过秒数（不给百分比）：模型不提供进度，报百分比是编的。"""
     registry, bus, payloads = _registry_with_recorder()
     session_id = await _ended_session(store)
     await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
@@ -1693,11 +1697,11 @@ async def test_settle_reports_model_stage_elapsed(store: SQLiteDatabase, prompt_
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    assert "第 1 笔/共 2 笔：整理本场档案 · 模型整理中（已 0 秒）" in texts, texts
+    assert "整理本场档案等 2 笔并行中（已完成 0/2） · 模型整理中（已 0 秒）" in texts, texts
 
 
 async def test_settle_reports_model_output_activity(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
-    """模型出过字后面板改报输出字数与最近活动时间：说明这一场还在吐字，不是在原地卡住。"""
+    """模型出过字后面板改报汇总输出字数与最近活动时间：说明并发整理仍在吐字，不是卡住。"""
     registry, bus, payloads = _registry_with_recorder()
     session_id = await _ended_session(store)
     await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
@@ -1708,15 +1712,15 @@ async def test_settle_reports_model_output_activity(store: SQLiteDatabase, promp
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    assert "第 1 笔/共 2 笔：整理本场档案 · 模型输出中（已 3 字，最后活动 0s 前）" in texts, texts
-    # 输出信号随载荷一起走：面板浮层拿字数与文字尾巴画实时预览
+    assert any("2 笔并行中（已完成 0/2） · 模型输出中（已 6 字，最后活动 0s 前）" in text for text in texts), texts
+    # 输出信号随载荷一起走：面板浮层拿汇总字数与文字尾巴画实时预览
     carried = [payload for payload in payloads if payload.output_tail]
     assert carried, texts
-    assert all(payload.output_chars == 3 and payload.output_tail == "整理中" for payload in carried)
+    assert all(payload.output_chars == 6 and payload.output_tail == "整理中整理中" for payload in carried)
 
 
 async def test_settle_reports_reasoning_phase(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
-    """只出思考没出正文时面板报思考字数：思考也在推进，不算卡住；尾巴仍为空（正文才有预览）。"""
+    """只出思考没出正文时面板报汇总思考字数：思考也在推进，不算卡住；尾巴仍为空（正文才有预览）。"""
     registry, bus, payloads = _registry_with_recorder()
     session_id = await _ended_session(store)
     await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
@@ -1727,14 +1731,14 @@ async def test_settle_reports_reasoning_phase(store: SQLiteDatabase, prompt_mana
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    assert "第 1 笔/共 2 笔：整理本场档案 · 模型思考中（已 3 字，最后活动 0s 前）" in texts, texts
+    assert any("2 笔并行中（已完成 0/2） · 模型思考中（已 6 字，最后活动 0s 前）" in text for text in texts), texts
     assert all(payload.output_chars == 0 and payload.output_tail == "" for payload in payloads)
 
 
 async def test_settle_resets_panel_to_step_label_after_each_call(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """每笔调用结束后文案还原成纯步骤标签：过期的活性时间戳与输出尾巴不冒充还在跑。"""
+    """并发模型调用全部结束后文案还原为纯完成标签并清零输出预览：过期的活性时间戳不冒充还在跑。"""
     registry, bus, payloads = _registry_with_recorder()
     session_id = await _ended_session(store)
     await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
@@ -1745,11 +1749,11 @@ async def test_settle_resets_panel_to_step_label_after_each_call(
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    # 调用前与调用后各报一次纯步骤标签（活性文案都带" · 模型…"后缀，不会撞这两个精确值）
-    assert texts.count("第 1 笔/共 2 笔：整理本场档案") >= 2, texts
-    assert texts.count("第 2 笔/共 2 笔：找新承诺") >= 2, texts
-    # 还原载荷不带上一笔调用留下的输出信号
-    reset_payloads = [payload for payload in payloads if payload.progress_text == "第 2 笔/共 2 笔：找新承诺"]
+    assert "整理本场档案等 2 笔并行中（已完成 0/2）" in texts, texts
+    assert "模型整理已完成（2/2）" in texts, texts
+    # 完成态还原载荷不带调用期留下的输出信号
+    reset_payloads = [payload for payload in payloads if payload.progress_text == "模型整理已完成（2/2）"]
+    assert reset_payloads
     assert all(payload.output_chars == 0 and payload.output_tail == "" for payload in reset_payloads)
 
 
@@ -2033,3 +2037,165 @@ async def test_settle_timeout_wakes_memory_indexer_when_shielded_task_commits(
     finally:
         await agent.stop()
         await bus.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# 并发执行与思考强度控制
+# ---------------------------------------------------------------------------
+
+
+class _BarrierParallelLLM:
+    """用异步栅栏验证多笔提取真正并发进入 generate：只有全部到达栅栏才一起放行。"""
+
+    def __init__(self, expected_parallel: int, replies: List[str]) -> None:
+        self._expected = expected_parallel
+        self._replies = list(replies)
+        self._arrived = 0
+        self._all_entered = asyncio.Event()
+        self.calls: List[dict[str, Any]] = []
+
+    async def generate(
+        self,
+        input: Any,
+        *,
+        profile: Optional[str] = None,
+        system: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+        on_delta: Any = None,
+    ) -> Response:
+        index = self._arrived
+        self._arrived += 1
+        self.calls.append(
+            {
+                "input": input,
+                "profile": profile,
+                "system": system,
+                "reasoning_effort": reasoning_effort,
+                "on_delta": on_delta,
+            }
+        )
+        if self._arrived >= self._expected:
+            self._all_entered.set()
+        # 若为串行执行，这里会在第 1 笔永久卡死并触发 timeout；只有真并发才能三笔同时过栅栏
+        await asyncio.wait_for(self._all_entered.wait(), timeout=3.0)
+        return Response(success=True, content=self._replies[index])
+
+
+class _NarrowSignatureLLM:
+    """不接收 reasoning_effort 也不接收 **kwargs 的窄签名模型替身：验证能力探测不触发 TypeError。"""
+
+    def __init__(self, replies: List[str]) -> None:
+        self._replies = list(replies)
+        self.call_count = 0
+
+    async def generate(self, prompt: str, *, profile: Optional[str] = None, system: Optional[str] = None) -> Response:
+        self.call_count += 1
+        return Response(success=True, content=self._replies.pop(0))
+
+
+async def test_settle_runs_extract_steps_in_parallel_and_preserves_downstream_order(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """archive / commitment / closure 三笔经 asyncio.gather 真正并发调用，返回后仍严格先了结旧承诺再建新承诺。"""
+    session_id = await _ended_session(store)
+    old = await store.commitments.insert_commitment(what="修铁轨", quote="下次修铁轨", now_ms_value=100)
+    assert old is not None
+    await _speech(
+        store,
+        session_id,
+        "铁轨修完啦，改天去挖黑曜石",
+        timestamp_ms=1_100,
+        memory_refs=json.dumps([f"C#{old}"]),
+    )
+
+    llm = _BarrierParallelLLM(
+        expected_parallel=3,
+        replies=[
+            '{"archive": [{"line": 1, "title": "把铁轨修完了", "quote": "铁轨修完啦"}]}',
+            '{"commitments": [{"line": 1, "quote": "改天去挖黑曜石", "what": "去挖黑曜石", "to": "everyone",'
+            ' "game": "Minecraft", "same_as": null}]}',
+            '{"closed": [{"id": %d, "line": 1, "quote": "铁轨修完啦"}]}' % old,
+        ],
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    assert len(llm.calls) == 3
+    # 默认压低思考强度，避免整理阶段单笔狂想数万字超时
+    assert [call["reasoning_effort"] for call in llm.calls] == ["low", "low", "low"]
+    # 下游确定性顺序：旧承诺先被认出了结，因此同一句点了旧承诺编号的新答应仍能正常登记
+    closed = await store.commitments.get_commitment(commitment_id=old)
+    assert closed is not None and closed.status == "closed"
+    open_list = await store.commitments.list_commitments(statuses=["open"])
+    assert [item.what for item in open_list] == ["去挖黑曜石"]
+
+
+async def test_settle_reasoning_effort_override_and_narrow_stub_compatibility(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """reasoning_effort=None 时不覆盖档位默认值；遇到不接收该参数的窄签名替身时优雅跳过不下发。"""
+    session_a = await _ended_session(store, started_at_ms=1_000)
+    await _speech(store, session_a, "今天聊得很开心", timestamp_ms=1_100)
+    llm_default = _reply('{"archive": []}', '{"commitments": []}')
+    settler_no_override = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm_default,
+        prompt_manager=prompt_manager,
+        clock=lambda: 7_777,
+        reasoning_effort=None,
+    )
+    assert await settler_no_override.settle_session(session_a) is True
+    assert all("reasoning_effort" not in call for call in llm_default.calls)
+
+    session_b = await _ended_session(store, started_at_ms=5_000)
+    await _speech(store, session_b, "明天继续挖矿", timestamp_ms=5_100)
+    narrow_llm = _NarrowSignatureLLM(['{"archive": []}', '{"commitments": []}'])
+    settler_narrow = _settler(store, narrow_llm, prompt_manager)
+    assert await settler_narrow.settle_session(session_b) is True
+    assert narrow_llm.call_count == 2
+
+
+async def test_settle_cancel_reaps_parallel_step_tasks_cleanly(tmp_path: Path, prompt_manager: PromptManager) -> None:
+    """外层取消 _extract 并发阶段时，所有在途子任务被显式取消并回收，关闭 SQLite 不会触发残留写库异常。"""
+    db = SQLiteDatabase(tmp_path / "cancel_reap.db")
+    await db.initialize()
+    entered = 0
+    all_entered = asyncio.Event()
+    cancelled_count = 0
+    block_forever = asyncio.Event()
+
+    class _HangingParallelLLM:
+        async def generate(self, input: Any, **kwargs: Any) -> Response:
+            nonlocal entered, cancelled_count
+            del input, kwargs
+            entered += 1
+            if entered >= 2:
+                all_entered.set()
+            try:
+                await block_forever.wait()
+            except asyncio.CancelledError:
+                cancelled_count += 1
+                raise
+            return Response(success=True, content="{}")
+
+    try:
+        session_id = await _ended_session(db)
+        await _speech(db, session_id, "今天来测试取消回收", timestamp_ms=1_100)
+        settler = _settler(db, _HangingParallelLLM(), prompt_manager)
+        material = await settler._collect_material(
+            (await db.sessions.get_live_session(live_session_id=session_id)),
+            await db.chat.list_session_speech_for_settle(live_session_id=session_id),
+        )
+        task = asyncio.create_task(settler._extract(material))
+        await asyncio.wait_for(all_entered.wait(), timeout=2.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # 两个并发子任务必须在外层退出前全部收到取消并完成回收
+        assert cancelled_count == 2
+    finally:
+        await db.close()

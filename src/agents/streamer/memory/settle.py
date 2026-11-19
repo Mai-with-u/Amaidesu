@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -140,12 +141,21 @@ if TYPE_CHECKING:
     from src.modules.storage.repos.sessions import SessionRepo
     from src.modules.storage.repos.social_facts import SocialFactRepo
 
-__all__ = ["MAX_ATTEMPTS", "SessionSettler", "SettleError", "parse_commitment_output", "parse_json_object"]
+__all__ = [
+    "DEFAULT_SETTLE_REASONING_EFFORT",
+    "MAX_ATTEMPTS",
+    "SessionSettler",
+    "SettleError",
+    "parse_commitment_output",
+    "parse_json_object",
+]
 
 logger = get_logger("SessionSettler")
 
 # 下播整理单独的模型档位：一场只调几次，可以单独换更强的模型而不影响直播里的话题总结
 SETTLE_PROFILE = "settle"
+# 下播整理默认思考强度：整理任务是按规则抽取与核对，默认压到 low 避免推理模型单笔狂想数万字超时
+DEFAULT_SETTLE_REASONING_EFFORT = "low"
 
 # 三份系统提示词（正文见 src/agents/streamer/prompts/）
 _ARCHIVE_TEMPLATE = "memory_archive_system"
@@ -326,6 +336,41 @@ class _LivenessState:
     reasoning_chars: int = 0
     content_chars: int = 0
     content_tail: str = ""
+
+
+@dataclass
+class _ParallelLivenessState:
+    """并发模型调用期间的聚合活性状态：记录整体完成数、仍在跑的步骤名与汇总吐字活性。"""
+
+    total_calls: int
+    done_calls: int = 0
+    active_labels: List[str] = field(default_factory=list)
+    liveness: _LivenessState = field(default_factory=_LivenessState)
+
+
+def _format_parallel_headline(active_labels: Sequence[str], done_calls: int, total_calls: int) -> str:
+    """生成并发整理阶段的顶部进度文案：反映当前仍在跑的步骤与整体已完成笔数。"""
+    if not active_labels:
+        return f"模型整理已完成（{done_calls}/{total_calls}）"
+    lead = active_labels[0]
+    if total_calls > 1:
+        return f"{lead}等 {total_calls} 笔并行中（已完成 {done_calls}/{total_calls}）"
+    return f"{lead}（已完成 {done_calls}/{total_calls}）"
+
+
+def _supports_kwarg(fn: Any, kwarg_name: str) -> bool:
+    """探测目标可调用对象是否接受指定关键字参数（含 ``**kwargs``），避免给窄签名测试替身传参报错。"""
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    for param in signature.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD or (
+            param.name == kwarg_name
+            and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        ):
+            return True
+    return False
 
 
 def parse_json_object(text: str) -> Dict[str, Any]:
@@ -772,6 +817,7 @@ class SessionSettler:
         social_fact_repo: Optional["SocialFactRepo"] = None,
         correction_repo: Optional[MemoryCorrectionRepo] = None,
         viewer_repo: Optional[ViewerRepo] = None,
+        reasoning_effort: Optional[str] = DEFAULT_SETTLE_REASONING_EFFORT,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
@@ -781,7 +827,8 @@ class SessionSettler:
         的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与公屏，
         对玩家的承诺一条也认不出（模型写了也进未登记）。cue_log_repo 缺失时唠叨指标只按台词
         点名算，线索卡那几项为空；social_fact_repo 缺失时不跑第四次调用（不更新游戏社交事实）；task_registry 是后台任务登记处（缺省 None
-        时整理不登记，前端面板看不到这次整理，其余行为一致）。
+        时整理不登记，前端面板看不到这次整理，其余行为一致）；reasoning_effort 缺省为 low，
+        控制整理调用的推理思考强度，传 None 或空串时回退到 settle 档位默认值。
         """
         self._sessions = sessions_repo
         self._chat = chat_repo
@@ -802,6 +849,11 @@ class SessionSettler:
         self._min_session_ms = max(0, int(min_session_ms))
         self._task_registry = task_registry
         self._clock = clock
+        self._reasoning_effort: Optional[str] = (
+            reasoning_effort.strip() if isinstance(reasoning_effort, str) and reasoning_effort.strip() else None
+        )
+        # 并发模型步骤返回后经此锁串行写断点，避免 SQLite 并发写库锁冲突
+        self._checkpoint_lock: asyncio.Lock = asyncio.Lock()
         # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
         self._inflight: Dict[int, asyncio.Task[bool]] = {}
 
@@ -1656,12 +1708,12 @@ class SessionSettler:
     # ------------------------------------------------------------------
 
     async def _extract(self, material: SettleMaterial, *, progress: Optional[ProgressReporter] = None) -> SettleOutcome:
-        """跑三到四次调用并逐条校验；调用失败抛 SettleError（整场不提交）。
+        """并发跑二到四次只读原料的模型调用并逐条校验；任一调用失败抛 SettleError（整场不提交）。
 
-        ``progress`` 把"第 N 笔/共 M 笔"的进度报给后台任务面板（缺省 None 时不报，
-        离线评测脚本直接调本方法不带面板）。共几笔按有没有未了结的旧承诺定：
-        有两笔（档案、找新承诺）或三笔（加了结旧承诺）。模型调用期间刷新协程把
-        步骤标签与"模型整理中/思考中/输出中"的活性文案合成后上报。
+        ``progress`` 把并发整体进度报给后台任务面板（缺省 None 时不报，离线评测脚本
+        直接调本方法不带面板）。先顺序核对本地断点，再通过 ``asyncio.gather`` 并发发起
+        全部未命中缓存的模型调用；全部返回后严格按固定顺序执行下游校验（先了结旧承诺，
+        再建新承诺，再算快照与候选）。
         """
         live = progress is not None
         if progress is None:
@@ -1669,35 +1721,111 @@ class SessionSettler:
             async def progress(text: str, *, output_chars: int = 0, output_tail: str = "") -> None:
                 return None
 
-        total_calls = (3 if material.open_commitments else 2) + (0 if material.social.empty else 1)
         steps = [step for step in _EXTRACT_STEPS if step.runs(material)]
+        total_calls = len(steps)
         step_data: Dict[str, Any] = {}
         step_extras: Dict[str, Any] = {}
+
+        # 先顺序计算提示词指纹并读取本地断点：确保并发调 LLM 前已命中缓存的步骤先落地，
+        # 且未命中缓存的步骤按固定顺序进入并发调度，结果归并完全确定。
+        pending: List[Tuple[_ExtractStep, str, str]] = []
+        done_calls = 0
         for step in steps:
             prompt = step.build_prompt(material)
             fingerprint = self._checkpoint_fingerprint(step.template, prompt)
             cached = await self._load_checkpoint_json(material.live_session_id, step.key, fingerprint)
-            ordinal = step.ordinal if step.ordinal is not None else total_calls
-            label = f"第 {ordinal} 笔/共 {total_calls} 笔：{step.label}"
             if isinstance(cached, step.container):
-                await progress(f"{label}（断点恢复）")
-                data = cached
+                if step.after is not None:
+                    step_extras[step.key] = await step.after(self, material, cached, fingerprint, False)
+                step_data[step.key] = cached
+                done_calls += 1
+                await progress(f"{step.label}（断点恢复，已完成 {done_calls}/{total_calls}）")
             else:
-                await progress(label)
-                raw = await self._call_with_liveness(
-                    label=label,
-                    progress=progress,
-                    live=live,
-                    call=lambda on_delta, step=step, prompt=prompt: step.call(self, prompt, on_delta),
+                pending.append((step, prompt, fingerprint))
+
+        if pending:
+            parallel_state = _ParallelLivenessState(
+                total_calls=total_calls,
+                done_calls=done_calls,
+                active_labels=[step.label for step, _, _ in pending],
+            )
+            await progress(
+                _format_parallel_headline(
+                    parallel_state.active_labels, parallel_state.done_calls, parallel_state.total_calls
                 )
-                data = step.parse(raw, material) if step.parse is not None else raw
-                # 断点缺失或该笔必存时落断点；档案与社交那两笔的断点由 after
-                # 在输出校验通过后再存
-                if not step.defer_save and (step.save_always or cached is None):
-                    await self._save_checkpoint_json(material.live_session_id, step.key, fingerprint, data)
-            if step.after is not None:
-                step_extras[step.key] = await step.after(self, material, data, fingerprint, cached is None)
-            step_data[step.key] = data
+            )
+
+            async def _run_pending_step(step: _ExtractStep, prompt: str, fingerprint: str) -> Tuple[Any, Optional[Any]]:
+                # 单步模型调用 → 解析 → 带锁落断点 → 步骤收尾校验；各步只读 material，互不干扰
+                try:
+                    on_delta = self._delta_recorder(parallel_state.liveness) if live else None
+                    raw = await step.call(self, prompt, on_delta)
+                    data = step.parse(raw, material) if step.parse is not None else raw
+                    if not step.defer_save:
+                        await self._save_checkpoint_json(material.live_session_id, step.key, fingerprint, data)
+                    extra = (
+                        await step.after(self, material, data, fingerprint, True) if step.after is not None else None
+                    )
+                    parallel_state.done_calls += 1
+                    return data, extra
+                finally:
+                    # 无论正常完成、失败抛错还是外层取消，都移除在跑标签，防止失败/取消步滞留文案
+                    if step.label in parallel_state.active_labels:
+                        parallel_state.active_labels.remove(step.label)
+                    current_task = asyncio.current_task()
+                    if live and (current_task is None or not current_task.cancelled()):
+                        await progress(
+                            _format_parallel_headline(
+                                parallel_state.active_labels, parallel_state.done_calls, parallel_state.total_calls
+                            )
+                        )
+
+            step_tasks: List[asyncio.Task[Tuple[Any, Optional[Any]]]] = [
+                asyncio.create_task(_run_pending_step(step, prompt, fingerprint))
+                for step, prompt, fingerprint in pending
+            ]
+            # 业务步骤任务先入事件循环就绪队列，再建刷新协程：确保模型请求第一时间发出并接住首批流式增量
+            ticker: Optional[asyncio.Task[None]] = (
+                asyncio.create_task(self._tick_parallel_liveness(parallel_state, progress)) if live else None
+            )
+
+            cancelled = False
+            try:
+                results = await asyncio.gather(*step_tasks, return_exceptions=True)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+            finally:
+                if ticker is not None:
+                    ticker.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await ticker
+                # 若外层取消打断了 gather，显式取消并回收所有尚未结束的并发子任务，
+                # 防止停机关闭 SQLite 后孤儿协程继续写库抛 RuntimeError
+                unfinished = [task for task in step_tasks if not task.done()]
+                for task in unfinished:
+                    task.cancel()
+                if unfinished:
+                    await asyncio.gather(*unfinished, return_exceptions=True)
+                if live and not cancelled:
+                    # 并发阶段正常结束立即清空活性时间戳与输出尾巴，防止过期预览滞留面板
+                    await progress(
+                        _format_parallel_headline(
+                            parallel_state.active_labels, parallel_state.done_calls, parallel_state.total_calls
+                        )
+                    )
+
+            # 按步骤固定顺序检查异常：允许其它并发步骤先把已完成的断点安全落库，再整体报失败不提交
+            for res in results:
+                if isinstance(res, BaseException):
+                    raise res
+
+            for (step, _prompt, _fingerprint), res in zip(pending, results, strict=True):
+                assert not isinstance(res, BaseException)
+                data, extra = res
+                step_data[step.key] = data
+                if step.after is not None:
+                    step_extras[step.key] = extra
 
         plan, new_lines, archive_misses = step_extras["archive"]
         archive_data = step_data["archive"]
@@ -1910,8 +2038,29 @@ class SessionSettler:
 
         return _on_delta
 
+    async def _tick_parallel_liveness(self, parallel_state: _ParallelLivenessState, progress: ProgressReporter) -> None:
+        """周期刷新并发模型整理阶段的整体进度文案：并发摘要打头，汇总活性信号跟后。"""
+        started_ms = int(self._clock())
+        state = parallel_state.liveness
+        while True:
+            now_ms = int(self._clock())
+            idle_s = max(0, (now_ms - state.last_activity_ms) // 1000) if state.last_activity_ms else 0
+            if state.content_chars:
+                phase = f"模型输出中（已 {state.content_chars} 字，最后活动 {idle_s}s 前）"
+            elif state.reasoning_chars:
+                phase = f"模型思考中（已 {state.reasoning_chars} 字，最后活动 {idle_s}s 前）"
+            else:
+                elapsed_s = max(0, (now_ms - started_ms) // 1000)
+                phase = f"模型整理中（已 {elapsed_s} 秒）"
+            tail = " ".join(state.content_tail.split())
+            headline = _format_parallel_headline(
+                parallel_state.active_labels, parallel_state.done_calls, parallel_state.total_calls
+            )
+            await progress(f"{headline} · {phase}", output_chars=state.content_chars, output_tail=tail)
+            await asyncio.sleep(_LIVENESS_REFRESH_INTERVAL_S)
+
     async def _tick_liveness(self, state: _LivenessState, progress: ProgressReporter, label: str) -> None:
-        """周期刷新模型整理阶段的进度文案：步骤标签打头，模型阶段与真实信号跟后。
+        """周期刷新单步模型整理阶段的进度文案：步骤标签打头，模型阶段与真实信号跟后。
 
         阶段文案按收到的增量分流：出过正文报"模型输出中（已 N 字）"，只出过思考报
         "模型思考中（已 N 字）"，什么都没出报"模型整理中（已 N 秒）"。刷新节奏按真实
@@ -1952,14 +2101,17 @@ class SessionSettler:
 
         ``on_delta`` 非 None 时模型走流式传输，边生成边回调输出增量；整理阶段据此
         判断模型还在动（客户端不支持流式时自动降级为一次性调用，回调不触发）。
-        没有回调时不下发这个参数，调用方不必支持流式。
+        没有回调时不下发这个参数，调用方不必支持流式。支持 ``reasoning_effort`` 的
+        模型入口同时透传受控思考强度（默认 ``low``），避免整理调用单笔思考失控超时。
         """
         system = self._prompt_manager.render(template)
+        call_kwargs: Dict[str, Any] = {"profile": SETTLE_PROFILE, "system": system}
+        if on_delta is not None and _supports_kwarg(self._llm.generate, "on_delta"):
+            call_kwargs["on_delta"] = on_delta
+        if self._reasoning_effort is not None and _supports_kwarg(self._llm.generate, "reasoning_effort"):
+            call_kwargs["reasoning_effort"] = self._reasoning_effort
         try:
-            if on_delta is None:
-                response = await self._llm.generate(prompt, profile=SETTLE_PROFILE, system=system)
-            else:
-                response = await self._llm.generate(prompt, profile=SETTLE_PROFILE, system=system, on_delta=on_delta)
+            response = await self._llm.generate(prompt, **call_kwargs)
         except Exception as exc:  # noqa: BLE001 - 调用异常统一转成整理失败原因
             raise SettleError(f"模型调用失败：{exc}") from exc
         content = getattr(response, "content", None)
@@ -2025,17 +2177,19 @@ class SessionSettler:
         fingerprint: str,
         payload: Any,
     ) -> None:
-        """完成单步模型调用与结构校验后立即落库断点，异常只记日志不中断后续步骤。"""
+        """完成单步模型调用与结构校验后立即带锁落库断点，避免并发写库冲突，异常只记日志不中断后续步骤。"""
         if not isinstance(self._sessions, BaseRepo):
             return
         try:
-            await self._sessions.save_settle_checkpoint(
-                live_session_id=int(live_session_id),
-                step=step,
-                fingerprint=fingerprint,
-                output_json=json.dumps(payload, ensure_ascii=False),
-                saved_at_ms=int(self._clock()),
-            )
+            # 4 笔提取并发返回时经实例锁串行落断点，防止 SQLite 写事务互锁
+            async with self._checkpoint_lock:
+                await self._sessions.save_settle_checkpoint(
+                    live_session_id=int(live_session_id),
+                    step=step,
+                    fingerprint=fingerprint,
+                    output_json=json.dumps(payload, ensure_ascii=False),
+                    saved_at_ms=int(self._clock()),
+                )
         except Exception as exc:  # noqa: BLE001 - 断点保存失败不影响当次继续跑完
             logger.warning(f"场次 {live_session_id} 保存断点 {step} 失败: {exc}", exc=exc)
 
