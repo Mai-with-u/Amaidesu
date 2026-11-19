@@ -19,6 +19,8 @@ import type {
   AgentState,
   AgentCancelTaskResponse,
   AgentStopResponse,
+  LeadStateResponse,
+  LeadSwitchRequest,
   ArchiveLineCreatePayload,
   ArchiveListResponse,
   CandidateApprovePayload,
@@ -315,6 +317,11 @@ export const agentsApi = {
     }),
   /** 备忘录/待办快照（只读观测：minecraft = notebook/todos/reports 三元组） */
   getAgentMemo: (name: string) => api.get<AgentMemoResponse>(`/agents/${name}/memo`),
+  /** 查询动态主从当前状态快照（LeadCoordinator 未注入时 503） */
+  getAgentLeadState: () => api.get<LeadStateResponse>('/agents/lead'),
+  /** 切换动态主从模式（target: 'auto' / 'streamer' / 候选游戏名；无效目标 400，未就绪或禁用 409） */
+  switchAgentLead: (payload: LeadSwitchRequest) =>
+    api.post<LeadStateResponse>('/agents/lead', payload),
 };
 
 // 任务卡快照（进行中任务列表 + 已完结事件聚合）

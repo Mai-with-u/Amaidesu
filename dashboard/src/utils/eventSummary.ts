@@ -70,6 +70,16 @@ import { truncateText } from '@/utils/format';
     return seg ? `切换到 ${seg}` : '切换到（未命名环节）';
   }
 
+  if (type === EVENT.agentLeadChanged) {
+    const prev = pickString(d.previous_lead, 16);
+    const next = pickString(d.lead_agent, 16) || (d.mode === 'game' ? 'game' : 'streamer');
+    const roleLabel = (name: string): string =>
+      !name || name === 'streamer' ? '主播主控' : `游戏主控（${name}）`;
+    const direction = prev ? `${roleLabel(prev)} → ${roleLabel(next)}` : roleLabel(next);
+    const reason = pickString(d.reason, 20);
+    return reason ? `主控权切换：${direction} · ${reason}` : `主控权切换：${direction}`;
+  }
+
   if (
     type === EVENT.gameReport ||
     type === EVENT.gameAttentionRequired ||

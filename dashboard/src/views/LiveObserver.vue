@@ -26,6 +26,8 @@
         累计观看 {{ watchedLabel }}
       </span>
       <span class="grow" />
+      <!-- 动态主从状态与导演切权入口：常态紧凑胶囊，点击弹浮层一键切换 -->
+      <AgentLeadControl />
     </header>
 
     <!-- 状态条：实时计分板 + TTS 台前水位 -->
@@ -533,6 +535,7 @@ import { isAudienceEntry } from '@/utils/liveFeed';
 import type { SearchHit } from '@/utils/liveSearch';
 import type { RequestMessage, RequestRecord } from '@/utils/requestRecords';
 import type { TaskFact, TaskWindow } from '@/utils/liveLanes';
+import AgentLeadControl from '@/components/agents/AgentLeadControl.vue';
 import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
 import RundownSlate from '@/components/live/RundownSlate.vue';
 import ScoreboardStrip from '@/components/live/ScoreboardStrip.vue';

@@ -116,6 +116,28 @@ describe('rundown.changed', () => {
   });
 });
 
+describe('agent.lead.changed', () => {
+  it('展示主控切换方向与原因', () => {
+    expect(
+      summarizeEvent('agent.lead.changed', {
+        previous_lead: 'streamer',
+        lead_agent: 'minecraft',
+        mode: 'game',
+        reason: 'manual_override',
+      }),
+    ).toBe('主控权切换：主播主控 → 游戏主控（minecraft） · manual_override');
+  });
+
+  it('缺省 previous_lead 与 reason 时仅展示目标主控', () => {
+    expect(
+      summarizeEvent('agent.lead.changed', {
+        lead_agent: 'streamer',
+        mode: 'streamer',
+      }),
+    ).toBe('主控权切换：主播主控');
+  });
+});
+
 describe('game.*', () => {
   it('message + scene 拼接', () => {
     expect(summarizeEvent('game.report', { message: '已下井', scene: '矿井' })).toBe(

@@ -44,6 +44,7 @@ const EVENT = {
   taskChanged: 'task.changed',
   agentPrompted: 'agent.prompted',
   agentReplied: 'agent.replied',
+  agentLeadChanged: 'agent.lead.changed',
   ttsUtteranceStarted: 'tts.utterance.started',
   ttsUtteranceFinished: 'tts.utterance.finished',
   ttsUtteranceFailed: 'tts.utterance.failed',

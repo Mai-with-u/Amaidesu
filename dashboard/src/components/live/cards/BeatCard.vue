@@ -1,16 +1,24 @@
-<!-- 环节推进 / 场次边界：横贯分隔行（rundown / boundary 两类共用） -->
+<!-- 环节推进 / 主控权切换 / 场次边界：横贯分隔行（rundown / lead_change / boundary 共用） -->
 <script setup lang="ts">
+import { computed } from 'vue';
 import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
-defineProps<CardProps>();
+const props = defineProps<CardProps>();
+
+/** 横贯行眉标：按条目类型区分场次、主控与环节 */
+const eyebrow = computed<string>(() => {
+  if (props.entry.kind === 'boundary') return '场次';
+  if (props.entry.kind === 'lead_change') return '主控';
+  return '环节';
+});
 </script>
 
 <template>
-  <div class="beat">
+  <div class="beat" :class="{ 'is-lead': entry.kind === 'lead_change' }">
     <span class="beat-rule" aria-hidden="true" />
     <span class="beat-body">
-      <span class="beat-eyebrow">{{ entry.kind === 'boundary' ? '场次' : '环节' }}</span>
+      <span class="beat-eyebrow">{{ eyebrow }}</span>
       <span class="beat-label">{{ entry.text }}</span>
       <span v-if="entry.badge" class="beat-action">{{ entry.badge }}</span>
       <span v-if="entry.note" class="beat-note">{{ entry.note }}</span>
@@ -75,5 +83,16 @@ defineProps<CardProps>();
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 主控权切换：用 Agent 语义色（紫）与流程单环节（琥珀）视觉区分 */
+.beat.is-lead .beat-rule {
+  background: var(--color-agent);
+}
+.beat.is-lead .beat-eyebrow {
+  color: var(--color-agent);
+}
+.beat.is-lead .beat-action {
+  background: var(--color-agent-bg);
+  color: var(--color-agent);
 }
 </style>

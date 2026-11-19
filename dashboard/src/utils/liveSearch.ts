@@ -76,6 +76,7 @@ const KIND_SHORT_LABEL: Record<string, string> = {
   others_things: '叙事',
   milestone: '里程碑',
   rundown: '环节',
+  lead_change: '主控',
   boundary: '边界',
   stage: '阶段',
   tts: '播报',
@@ -113,6 +114,7 @@ export function entryCategoryOf(entry: ShowEntry): LiveHitCategory {
     case 'delegate_receipt':
       return 'game';
     case 'rundown':
+    case 'lead_change':
     case 'boundary':
     case 'stage':
     case 'tts':
@@ -157,6 +159,7 @@ export function eventTagLabel(eventType: string, category: LiveHitCategory): str
   if (eventType.startsWith('tool.health.')) return '工具健康';
   if (eventType === 'agent.prompted') return '递话';
   if (eventType === 'agent.replied') return 'Agent 步骤';
+  if (eventType === 'agent.lead.changed') return '主控';
   if (eventType === 'task.changed') return '任务';
   if (eventType.startsWith('game.')) return '游戏';
   if (eventType.startsWith('tts.utterance.')) return '播报';

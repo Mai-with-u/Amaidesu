@@ -41,6 +41,11 @@
           </div>
         </header>
 
+        <!-- 动态主从状态与导演一键切权入口（后端未注入时自动隐藏，不占空间） -->
+        <div class="md-lead-slot">
+          <AgentLeadControl block />
+        </div>
+
         <div v-if="totalCount === 0 && !loading" class="md-list-empty">
           <el-empty :image-size="64" description="暂无 Agent" />
         </div>
@@ -427,6 +432,7 @@ import { EVENT, isPlannerEvent } from '@/types/events';
 import { agentsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
+import AgentLeadControl from '@/components/agents/AgentLeadControl.vue';
 import DecisionRoundCard from '@/components/agents/DecisionRoundCard.vue';
 import {
   MINECRAFT_AGENT_NAME,
@@ -816,6 +822,11 @@ onMounted(() => {
 
 .more-actions {
   flex-shrink: 0;
+}
+
+/* 左栏动态主从状态条容器：后端未注入时子组件不渲染，借助 :has() 保持零占位 */
+.md-lead-slot:has(.lead-control) {
+  padding: var(--spacing-sm) var(--spacing-sm) 0;
 }
 
 /* 决定卡列表面板（主播视图）：容器与任务区同风格 */

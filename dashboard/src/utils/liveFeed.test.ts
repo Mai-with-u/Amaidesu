@@ -18,10 +18,13 @@ import {
   callerSourceLabel,
   decisionDetail,
   formatAmount,
+  formatLeadReasonLabel,
+  formatLeadRoleLabel,
   frameworkDelegateInstruction,
   frameworkDelegateSummary,
   fromDecision,
   guidanceOf,
+  isAudienceEntry,
   isConversationEntry,
   isFrameworkDelegateCard,
   isFrameworkDelegateEntry,
@@ -1107,7 +1110,13 @@ describe('maicraft_execute 专用卡面解析', () => {
 
   it('ability 已无前缀时原样保留；target 非坐标时取 kind/name', () => {
     const s = maicraftExecuteSummary(
-      { goal: { ability: 'travel', purpose: '回出生点', target: { kind: 'block', name: 'oak_door' } } },
+      {
+        goal: {
+          ability: 'travel',
+          purpose: '回出生点',
+          target: { kind: 'block', name: 'oak_door' },
+        },
+      },
       null,
     );
     expect(s.ability).toBe('travel');
@@ -1120,22 +1129,23 @@ describe('maicraft_execute 专用卡面解析', () => {
   });
 
   it('state=running：state 取 running，summary 为空', () => {
-    const s = maicraftExecuteSummary(
-      executeArgs(),
-      { ok: true, data: { goal_id: 'g1', state: 'running' } },
-    );
+    const s = maicraftExecuteSummary(executeArgs(), {
+      ok: true,
+      data: { goal_id: 'g1', state: 'running' },
+    });
     expect(s.state).toBe('running');
     expect(s.summary).toBe('');
   });
 
   it('state=finished：取 result.data.result.summary', () => {
-    const s = maicraftExecuteSummary(
-      executeArgs(),
-      {
-        ok: true,
-        data: { goal_id: 'g1', state: 'finished', result: { status: 'success', summary: '读完 12 层存成图纸' } },
+    const s = maicraftExecuteSummary(executeArgs(), {
+      ok: true,
+      data: {
+        goal_id: 'g1',
+        state: 'finished',
+        result: { status: 'success', summary: '读完 12 层存成图纸' },
       },
-    );
+    });
     expect(s.state).toBe('finished');
     expect(s.summary).toBe('读完 12 层存成图纸');
   });
@@ -1161,10 +1171,28 @@ describe('maicraft_execute 专用卡面解析', () => {
   });
 
   it('isMinecraftExecuteEntry：maicraft/minecraft 两种拼写都命中，非 tool 卡不命中', () => {
-    const tool = makeEntry({ id: '1', kind: 'tool', tsMs: 1000, actor: 'maicraft_execute', text: '' });
-    const alt = makeEntry({ id: '2', kind: 'tool', tsMs: 1000, actor: 'minecraft_execute', text: '' });
+    const tool = makeEntry({
+      id: '1',
+      kind: 'tool',
+      tsMs: 1000,
+      actor: 'maicraft_execute',
+      text: '',
+    });
+    const alt = makeEntry({
+      id: '2',
+      kind: 'tool',
+      tsMs: 1000,
+      actor: 'minecraft_execute',
+      text: '',
+    });
     const other = makeEntry({ id: '3', kind: 'tool', tsMs: 1000, actor: 'glance', text: '' });
-    const speech = makeEntry({ id: '4', kind: 'speech', tsMs: 1000, actor: 'maicraft_execute', text: '' });
+    const speech = makeEntry({
+      id: '4',
+      kind: 'speech',
+      tsMs: 1000,
+      actor: 'maicraft_execute',
+      text: '',
+    });
     expect(isMinecraftExecuteEntry(tool)).toBe(true);
     expect(isMinecraftExecuteEntry(alt)).toBe(true);
     expect(isMinecraftExecuteEntry(other)).toBe(false);
@@ -1221,7 +1249,11 @@ describe('framework_delegate 专用卡面解析', () => {
   it('queued：位次与排队说明都取到', () => {
     const s = frameworkDelegateSummary(
       delegateArgs(),
-      delegateResult({ queued: true, queue_position: 1, note: '目标手上有事，这件已排进待办（待办2，第 1 位）' }),
+      delegateResult({
+        queued: true,
+        queue_position: 1,
+        note: '目标手上有事，这件已排进待办（待办2，第 1 位）',
+      }),
     );
     expect(s.queued).toBe(true);
     expect(s.queuePosition).toBe(1);
@@ -1238,10 +1270,10 @@ describe('framework_delegate 专用卡面解析', () => {
   });
 
   it('结果包一层 data 时穿透读取；字段缺失时各留空', () => {
-    const wrapped = frameworkDelegateSummary(
-      delegateArgs(),
-      { ok: true, data: delegateResult({ accepted: true, own_words: '' }) },
-    );
+    const wrapped = frameworkDelegateSummary(delegateArgs(), {
+      ok: true,
+      data: delegateResult({ accepted: true, own_words: '' }),
+    });
     expect(wrapped.accepted).toBe(true);
     const empty = frameworkDelegateSummary(null, null);
     expect(empty).toEqual({
@@ -1264,9 +1296,27 @@ describe('framework_delegate 专用卡面解析', () => {
   });
 
   it('isFrameworkDelegateEntry：仅 tool + framework_delegate 命中', () => {
-    const tool = makeEntry({ id: '1', kind: 'tool', tsMs: 1000, actor: 'framework_delegate', text: '' });
-    const other = makeEntry({ id: '2', kind: 'tool', tsMs: 1000, actor: 'maicraft_execute', text: '' });
-    const speech = makeEntry({ id: '3', kind: 'speech', tsMs: 1000, actor: 'framework_delegate', text: '' });
+    const tool = makeEntry({
+      id: '1',
+      kind: 'tool',
+      tsMs: 1000,
+      actor: 'framework_delegate',
+      text: '',
+    });
+    const other = makeEntry({
+      id: '2',
+      kind: 'tool',
+      tsMs: 1000,
+      actor: 'maicraft_execute',
+      text: '',
+    });
+    const speech = makeEntry({
+      id: '3',
+      kind: 'speech',
+      tsMs: 1000,
+      actor: 'framework_delegate',
+      text: '',
+    });
     expect(isFrameworkDelegateEntry(tool)).toBe(true);
     expect(isFrameworkDelegateEntry(other)).toBe(false);
     expect(isFrameworkDelegateEntry(speech)).toBe(false);
@@ -1282,5 +1332,120 @@ describe('framework_delegate 专用卡面解析', () => {
       failed: true,
     });
     expect(isFrameworkDelegateCard(failed)).toBe(false);
+  });
+});
+
+describe('agent.lead.changed（动态主从切权事件）', () => {
+  it('formatLeadRoleLabel：streamer 与空串映射为主播主控，游戏名带括号标注', () => {
+    expect(formatLeadRoleLabel('streamer')).toBe('主播主控');
+    expect(formatLeadRoleLabel('')).toBe('主播主控');
+    expect(formatLeadRoleLabel('minecraft')).toBe('游戏主控（minecraft）');
+  });
+
+  it('formatLeadReasonLabel：覆盖后端真实固定原因码、前缀动态码与自定义说明透传', () => {
+    // 调度与生命周期原因码
+    expect(formatLeadReasonLabel('initial')).toBe('初始主播主控');
+    expect(formatLeadReasonLabel('manual_override')).toBe('导演手动切换');
+    expect(formatLeadReasonLabel('live_started')).toBe('开播同步主控');
+    expect(formatLeadReasonLabel('live_ended')).toBe('直播场次结束');
+    expect(formatLeadReasonLabel('rundown_changed')).toBe('流程单环节切换');
+    expect(formatLeadReasonLabel('periodic_sync')).toBe('状态周期同步');
+    expect(formatLeadReasonLabel('streamer_stop')).toBe('主播 Agent 停止');
+    expect(formatLeadReasonLabel('lead_mode_streamer_only')).toBe('已设为固定主播主控');
+
+    // 游戏侧故障与停止原因码
+    expect(formatLeadReasonLabel('mcp_disconnected')).toBe('游戏连接断开，自动收回');
+    expect(formatLeadReasonLabel('llm_unavailable')).toBe('模型不可用，自动收回');
+    expect(formatLeadReasonLabel('llm_unsendable')).toBe('模型请求无法发送，自动收回');
+    expect(formatLeadReasonLabel('llm_exception')).toBe('模型连续异常，自动收回');
+    expect(formatLeadReasonLabel('agent_stopped')).toBe('游戏 Agent 已停止，自动收回');
+    expect(formatLeadReasonLabel('game_unavailable')).toBe('游戏 Agent 不可用，自动收回');
+
+    // 带前缀动态原因码：llm_fatal:<detail> 与 fallback_after_refuse:<detail>
+    expect(formatLeadReasonLabel('llm_fatal:balance')).toBe('模型致命故障（余额不足），自动收回');
+    expect(formatLeadReasonLabel('llm_fatal:auth')).toBe('模型致命故障（鉴权失败），自动收回');
+    expect(formatLeadReasonLabel('llm_fatal:unreachable')).toBe(
+      '模型致命故障（服务不可达），自动收回',
+    );
+    expect(formatLeadReasonLabel('llm_fatal:quota_exceeded')).toBe(
+      '模型致命故障（quota_exceeded），自动收回',
+    );
+    expect(formatLeadReasonLabel('llm_fatal:')).toBe('模型致命故障，自动收回');
+    expect(formatLeadReasonLabel('fallback_after_refuse:minecraft')).toBe(
+      '目标拒收（minecraft），退回主播主控',
+    );
+    expect(formatLeadReasonLabel('fallback_after_refuse:')).toBe('目标拒收，退回主播主控');
+
+    // 自定义说明原样透传，空白返回空串
+    expect(formatLeadReasonLabel('玩家断线重试')).toBe('玩家断线重试');
+    expect(formatLeadReasonLabel('   ')).toBe('');
+  });
+
+  it('主播主控 → 游戏主控（自动跟随）：中文展示切换方向、原因与交接摘要', () => {
+    const entry = toEntry(
+      evt(
+        'agent.lead.changed',
+        {
+          lead_agent: 'minecraft',
+          previous_lead: 'streamer',
+          mode: 'game',
+          reason: 'rundown_changed',
+          manual_override: 'auto',
+          handover_summary: '进入建房环节，自由推进',
+          live_session_id: 42,
+        },
+        2000,
+      ),
+    );
+    expect(entry).toMatchObject({
+      kind: 'lead_change',
+      tsMs: 2000,
+      actor: 'minecraft',
+      text: '主控权切换：主播主控 → 游戏主控（minecraft）',
+      badge: '自动',
+      note: '流程单环节切换 · 进入建房环节，自由推进',
+    });
+    expect(agentGroupOf(entry!)).toBe('room');
+    // 主控切换属后台编排控制事件，不暴露在观众视角流里
+    expect(isAudienceEntry(entry!)).toBe(false);
+  });
+
+  it('游戏主控 → 主播主控（手动锁定）：徽标标手动且原因翻译为导演手动切换', () => {
+    const entry = toEntry(
+      evt('agent.lead.changed', {
+        lead_agent: 'streamer',
+        previous_lead: 'minecraft',
+        mode: 'streamer',
+        reason: 'manual_override',
+        manual_override: 'streamer',
+        handover_summary: '',
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'lead_change',
+      actor: 'streamer',
+      text: '主控权切换：游戏主控（minecraft） → 主播主控',
+      badge: '手动',
+      note: '导演手动切换',
+    });
+  });
+
+  it('缺省 previous_lead 时仍可读展示目标主控，且可经 buildLiveEntries 正常产出', () => {
+    const events = [
+      evt('agent.lead.changed', {
+        lead_agent: 'minecraft',
+        mode: 'game',
+        reason: '自定义理由',
+        manual_override: null,
+      }),
+    ];
+    const built = buildLiveEntries(events, new Set());
+    expect(built).toHaveLength(1);
+    expect(built[0]).toMatchObject({
+      kind: 'lead_change',
+      text: '主控权切换：游戏主控（minecraft）',
+      badge: '自动',
+      note: '自定义理由',
+    });
   });
 });

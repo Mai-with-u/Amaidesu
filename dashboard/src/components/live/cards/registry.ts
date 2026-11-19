@@ -40,8 +40,9 @@ export const CARD_REGISTRY: Record<ShowEntry['kind'], Component> = {
   super_chat: ChatBubbleCard,
   guard: ChatBubbleCard,
   game_chat: ChatBubbleCard,
-  // 横贯分隔行：环节推进与场次边界
+  // 横贯分隔行：环节推进、主控权切换与场次边界
   rundown: BeatCard,
+  lead_change: BeatCard,
   boundary: BeatCard,
   // 会话模式过程折叠条（合成条目）
   // 里程碑庆祝行

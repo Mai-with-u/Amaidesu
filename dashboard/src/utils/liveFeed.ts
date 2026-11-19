@@ -80,6 +80,8 @@ export type EntryKind =
   | 'delegate_receipt'
   /** 思考行：ReAct 各步/生成段思考流（视图层合成条目，不对应事件；流式期间文本原地增长） */
   | 'thinking'
+  /** 主控权切换（agent.lead.changed）：主播主控与游戏主控之间的交接分隔行 */
+  | 'lead_change'
   /** 系统事件行（core.error / core.startup / core.shutdown）：运营必看，两个视图档位都显示 */
   | 'system';
 
@@ -217,7 +219,10 @@ export function toolArgPills(args: unknown): ToolArgPill[] {
 // maicraft_execute 专用卡面解析（纯函数，ToolCard 按 actor 分流时调用）
 
 /** maicraft_execute 工具的 actor 取值：工具名历史上出现过 maicraft/minecraft 两种拼写 */
-const MINECRAFT_EXECUTE_ACTORS: ReadonlySet<string> = new Set(['maicraft_execute', 'minecraft_execute']);
+const MINECRAFT_EXECUTE_ACTORS: ReadonlySet<string> = new Set([
+  'maicraft_execute',
+  'minecraft_execute',
+]);
 
 /** 该工具条目是否走 maicraft_execute 专用卡面（actor = 工具名，来自 fromToolResult） */
 export function isMinecraftExecuteEntry(entry: ShowEntry): boolean {
@@ -982,10 +987,7 @@ const OTHERS_THINGS_BADGE: Record<string, string> = {
 
 /** 身体事件是否为 others_things 叙事：专名事件名或 payload.source_event_type
  *  任一命中即算——前端判定不依赖后端专名事件的上线顺序 */
-export function isOthersThingsBodyEvent(
-  eventType: string,
-  data: Record<string, unknown>,
-): boolean {
+export function isOthersThingsBodyEvent(eventType: string, data: Record<string, unknown>): boolean {
   const kind = eventType.startsWith(EVENT_FAMILY.gameBody)
     ? eventType.slice(EVENT_FAMILY.gameBody.length)
     : '';
@@ -1089,11 +1091,91 @@ function fromToolHealth(event: FeedEvent, data: Record<string, unknown>): ShowEn
   });
 }
 
+/** 主控方名称 → 中文主控角色标签（streamer 固定为「主播主控」，其余为「游戏主控（<agent>）」） */
+export function formatLeadRoleLabel(agent: string): string {
+  const normalized = agent.trim();
+  if (!normalized || normalized === 'streamer') return '主播主控';
+  return `游戏主控（${normalized}）`;
+}
+
+/** 动态主从切权原因码 → 中文说明（对照后端 LeadCoordinator / StreamerAgent / MinecraftAgent 实际发出的原因码） */
+const LEAD_REASON_LABELS: Record<string, string> = {
+  initial: '初始主播主控',
+  manual_override: '导演手动切换',
+  request_game_lead: '请求游戏主控',
+  reclaim_streamer_lead: '收回主播主控',
+  live_started: '开播同步主控',
+  live_ended: '直播场次结束',
+  rundown_changed: '流程单环节切换',
+  periodic_sync: '状态周期同步',
+  streamer_stop: '主播 Agent 停止',
+  lead_mode_streamer_only: '已设为固定主播主控',
+  mcp_disconnected: '游戏连接断开，自动收回',
+  llm_unavailable: '模型不可用，自动收回',
+  llm_unsendable: '模型请求无法发送，自动收回',
+  llm_exception: '模型连续异常，自动收回',
+  agent_stopped: '游戏 Agent 已停止，自动收回',
+  game_unavailable: '游戏 Agent 不可用，自动收回',
+};
+
+/** LLM 致命故障类型 → 中文短名（用于 llm_fatal:<detail> 前缀原因码的友好展示） */
+const LEAD_LLM_FATAL_KIND_LABELS: Record<string, string> = {
+  balance: '余额不足',
+  auth: '鉴权失败',
+  unreachable: '服务不可达',
+};
+
+const LEAD_LLM_FATAL_PREFIX = 'llm_fatal:';
+const LEAD_FALLBACK_REFUSE_PREFIX = 'fallback_after_refuse:';
+
+/** 动态主从切权原因码 → 中文说明；覆盖固定原因码与动态前缀码，未知非空文案原样透传 */
+export function formatLeadReasonLabel(reason: string): string {
+  const trimmed = reason.trim();
+  if (!trimmed) return '';
+  if (trimmed in LEAD_REASON_LABELS) return LEAD_REASON_LABELS[trimmed];
+  if (trimmed.startsWith(LEAD_LLM_FATAL_PREFIX)) {
+    const detail = trimmed.slice(LEAD_LLM_FATAL_PREFIX.length).trim();
+    if (!detail) return '模型致命故障，自动收回';
+    const detailLabel = LEAD_LLM_FATAL_KIND_LABELS[detail] ?? detail;
+    return `模型致命故障（${detailLabel}），自动收回`;
+  }
+  if (trimmed.startsWith(LEAD_FALLBACK_REFUSE_PREFIX)) {
+    const detail = trimmed.slice(LEAD_FALLBACK_REFUSE_PREFIX.length).trim();
+    return detail ? `目标拒收（${detail}），退回主播主控` : '目标拒收，退回主播主控';
+  }
+  return trimmed;
+}
+
+/** 主控权切换：agent.lead.changed（AgentLeadChangedPayload）。
+ *  中文展示切换方向（如「主控权切换：主播主控 → 游戏主控（minecraft）」）、触发方式与原因/交接摘要 */
+function fromLeadChanged(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const previousLead = str(data.previous_lead);
+  const leadAgent = str(data.lead_agent) || (str(data.mode) === 'game' ? 'game' : 'streamer');
+  const toLabel = formatLeadRoleLabel(leadAgent);
+  const direction = previousLead ? `${formatLeadRoleLabel(previousLead)} → ${toLabel}` : toLabel;
+  const manualOverride = str(data.manual_override);
+  const badge = manualOverride && manualOverride !== 'auto' ? '手动' : '自动';
+  const noteParts = [formatLeadReasonLabel(str(data.reason)), str(data.handover_summary)].filter(
+    Boolean,
+  );
+  return makeEntry({
+    id: event.id,
+    kind: 'lead_change',
+    tsMs: event.timestamp_ms,
+    actor: leadAgent,
+    text: `主控权切换：${direction}`,
+    note: noteParts.join(' · '),
+    badge,
+    detail: data,
+  });
+}
+
 /** 非控制台事件（未知 type 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
   if (event.type === EVENT.agentPrompted) return fromPrompt(event, data);
   if (event.type === EVENT.agentReplied) return fromAgentReply(event, data);
+  if (event.type === EVENT.agentLeadChanged) return fromLeadChanged(event, data);
   // room.message.* 族折叠广播，成员由 payload.message_type 判别
   if (event.type === EVENT.roomMessage) return fromRoomMessage(event, data);
   if (event.type === EVENT.streamerSpeech) return fromSpeech(event, data);

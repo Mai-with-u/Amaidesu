@@ -230,6 +230,27 @@ export interface AgentMemoResponse {
   reports?: Array<Record<string, string>> | null;
 }
 
+/** 动态主从模式：streamer=主播主控 / game=游戏主控 */
+export type AgentLeadMode = 'streamer' | 'game';
+
+/** 动态主从状态快照（`GET / POST /api/v1/agents/lead`） */
+export interface LeadStateResponse {
+  mode: AgentLeadMode | string;
+  lead_agent: string;
+  override: string;
+  enabled: boolean;
+  candidates: string[];
+  ready_candidates: string[];
+  since_ms: number;
+  reason: string;
+}
+
+/** 动态主从人工切换请求体（`target`: 'auto' / 'streamer' / 候选游戏 Agent 名） */
+export interface LeadSwitchRequest {
+  target: string;
+  reason?: string;
+}
+
 /** 任务卡（进行中 = 任务列表快照；已完结 = 事件环聚合的终态末次载荷） */
 export interface TaskCard {
   task_id: string;
