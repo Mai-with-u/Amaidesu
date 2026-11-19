@@ -76,6 +76,8 @@ def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> Non
             "game.milestone",
             "agent.prompted",
             "agent.replied",
+            # 动态主从切换事实（回看时间线还原主控权交接分隔行）
+            "agent.lead.changed",
             # tts 播报态三名（回看按 utterance_id 回填发言卡）
             "tts.utterance.started",
             "tts.utterance.finished",

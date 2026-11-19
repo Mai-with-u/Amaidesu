@@ -257,6 +257,32 @@ describe('buildReplayEntries：事件类明细', () => {
     });
   });
 
+  it('agent.lead.changed → lead_change 条目', () => {
+    const entries = buildReplayEntries([
+      item({
+        kind: 'event',
+        ts_ms: 300,
+        event_type: 'agent.lead.changed',
+        data: {
+          previous_lead: 'streamer',
+          lead_agent: 'minecraft',
+          mode: 'game',
+          reason: 'live_started',
+          manual_override: 'auto',
+          handover_summary: '进入游玩',
+        },
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: 'lead_change',
+      actor: 'minecraft',
+      badge: '自动',
+    });
+    expect(entries[0]?.text).toContain('主控权切换');
+    expect(entries[0]?.note).toContain('进入游玩');
+  });
+
   it('事件与明细行按时间归并（同一毫秒事件在前）', () => {
     const entries = buildReplayEntries([
       item({ kind: 'danmaku', ts_ms: 100, content: '弹幕', user_name: '观众' }),
