@@ -22,6 +22,8 @@ dashboard/src/types/events.ts 双向对账）。
   （AI 玩家身体事件流与游戏内聊天，直播时间线游戏域轻量行数据源）
 - ``tts.utterance.started`` / ``tts.utterance.finished``（直通；
   前端按 utterance_id 关联到发言行显示播报态，不新增时间线行）
+- ``tts.utterance.playback_started`` / ``tts.utterance.sentence_boundary``（直通；
+  流式发声进度锚点，调试页整场回放按 utterance_id 逐段点亮台词）
 - ``core.startup`` / ``core.shutdown`` / ``core.error``（直通）
 - ``background.task.changed``（直通；后台任务条与系统通知的数据源）
 - ``tool.result.#`` / ``tool.health.#`` 通配 → type 为具体事件名
@@ -58,6 +60,8 @@ from src.modules.events.payloads import (
     ToolHealthPayload,
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
+    UtterancePlaybackStartedPayload,
+    UtteranceSentenceBoundaryPayload,
     UtteranceStartedPayload,
     ToolResultPayload,
 )
@@ -176,6 +180,9 @@ class EventBroadcaster:
         # TTS 播报态两端点：前端按 utterance_id 关联到既有发言行打"播报中/已播完"标记
         CoreEvents.TTS_UTTERANCE_STARTED: (None, UtteranceStartedPayload),
         CoreEvents.TTS_UTTERANCE_FINISHED: (None, UtteranceFinishedPayload),
+        # 流式发声进度锚点（调试页整场回放逐段点亮台词：首块出声=首声锚，句间隙=已出声段计数）
+        CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED: (None, UtterancePlaybackStartedPayload),
+        CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY: (None, UtteranceSentenceBoundaryPayload),
         CoreEvents.TOOL_RESULT_WILDCARD: (None, ToolResultPayload),
         CoreEvents.TOOL_HEALTH_WILDCARD: (None, ToolHealthPayload),
         CoreEvents.CORE_STARTUP: (None, CoreStartupPayload),

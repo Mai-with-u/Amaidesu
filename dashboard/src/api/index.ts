@@ -213,8 +213,9 @@ export const debugApi = {
     api.post<SubtitleTestResponse>('/debug/subtitle/test', request),
   clearSubtitle: () => api.post<SubtitleClearResponse>('/debug/subtitle/clear'),
   getSubtitleStatus: () => api.get<SubtitleStatusResponse>('/debug/subtitle/status'),
-  testTts: (request: TtsTestRequest) =>
-    api.post<TtsTestResponse>('/debug/tts/test', request, { timeout: 60000 }),
+  // timeoutMs 可覆盖默认超时：整场回放的台词可能远长于手输单句，播放+合成耗时会超出默认值
+  testTts: (request: TtsTestRequest, timeoutMs = 60000) =>
+    api.post<TtsTestResponse>('/debug/tts/test', request, { timeout: timeoutMs }),
   // 台前重播：同文本重合成（发言卡"重播"按钮数据面），走 handle_speech 完整生产链路
   sayTts: (request: TtsSayRequest) =>
     api.post<TtsSayResponse>('/debug/tts/say', request, { timeout: 60000 }),

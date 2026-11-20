@@ -11,6 +11,33 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from src.modules.dashboard.api.debug import _UtteranceTimeline
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.utterance import (
+    UtteranceFinishedPayload,
+    UtterancePlaybackStartedPayload,
+)
+
+
+class FakeEventBus:
+    """订阅退订记账 + 暂存 handler；测试直接调用 handler 模拟事件到达。"""
+
+    def __init__(self) -> None:
+        self.registered: Dict[str, Any] = {}
+        self.unregistered: List[str] = []
+
+    def on(self, event_name: str, handler: Any, model_class: Any) -> None:
+        self.registered[event_name] = handler
+
+    def off(self, event_name: str, handler: Any) -> None:
+        self.registered.pop(event_name, None)
+        self.unregistered.append(event_name)
+
+    async def emit(self, event_name: str, payload: Any, source: str = "") -> None:
+        handler = self.registered.get(event_name)
+        if handler is not None:
+            await handler(event_name, payload, source)
+
 
 class FakeSubtitleService:
     def __init__(self, show_exception: Optional[Exception] = None, clear_exception: Optional[Exception] = None) -> None:
@@ -40,18 +67,33 @@ class FakeSubtitleService:
 
 class FakeTtsEngine:
     def __init__(
-        self, speech_exception: Optional[Exception] = None, synth_exception: Optional[Exception] = None
+        self,
+        speech_exception: Optional[Exception] = None,
+        synth_exception: Optional[Exception] = None,
+        event_bus: Optional[FakeEventBus] = None,
     ) -> None:
         self.speech_calls: List[Dict[str, Any]] = []
         self.synth_calls: List[Dict[str, Any]] = []
         self._speech_exception = speech_exception
         self._synth_exception = synth_exception
+        self.event_bus = event_bus
         self.tts_lock = asyncio.Lock()
 
     async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
         self.speech_calls.append({"text": text, "utterance_id": utterance_id})
         if self._speech_exception is not None:
             raise self._speech_exception
+        # 模拟流式引擎锚点时序：首块出声（playback_started）→ 播放中 → 播完（finished）
+        if self.event_bus is not None and utterance_id:
+            await self.event_bus.emit(
+                CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED,
+                UtterancePlaybackStartedPayload(utterance_id=utterance_id),
+            )
+            await asyncio.sleep(0.01)
+            await self.event_bus.emit(
+                CoreEvents.TTS_UTTERANCE_FINISHED,
+                UtteranceFinishedPayload(utterance_id=utterance_id, engine="fake", duration_ms=10),
+            )
 
     async def debug_synthesize(self, text: str, overrides: Optional[Dict[str, Any]] = None) -> bytes:
         self.synth_calls.append({"text": text, "overrides": overrides or {}})
@@ -160,6 +202,84 @@ def test_tts_audio_mode_returns_base64_and_filters_unset_overrides(mount) -> Non
 def test_tts_audio_mode_failures(mount, engine, message: str) -> None:
     resp = mount(tts_engine=engine).post("/api/v1/debug/tts/test", json={"text": "试听", "play_on_device": False})
     assert resp.status_code == 200 and resp.json()["success"] is False and message in resp.json()["error"]
+
+
+def test_tts_test_reports_elapsed_ms_in_both_modes(mount) -> None:
+    """整场回放的耗时统计面：播放/合成两模式与各失败路径都带 elapsed_ms（毫秒）。"""
+    client = mount(tts_engine=FakeTtsEngine())
+
+    # 播放模式：服务端处理总耗时（含播放）；无事件总线时时间线分段缺席
+    played = client.post("/api/v1/debug/tts/test", json={"text": "播放一句"}).json()
+    assert isinstance(played["elapsed_ms"], int)
+    assert played["first_audio_ms"] is None and played["playback_ms"] is None
+
+    # 合成模式：纯合成耗时
+    synthesized = client.post("/api/v1/debug/tts/test", json={"text": "合成一句", "play_on_device": False}).json()
+    assert isinstance(synthesized["elapsed_ms"], int)
+
+    # 失败路径同样带耗时（计到失败点）
+    failing_play = mount(tts_engine=FakeTtsEngine(speech_exception=RuntimeError("引擎挂了")))
+    body = failing_play.post("/api/v1/debug/tts/test", json={"text": "试说"}).json()
+    assert isinstance(body["elapsed_ms"], int)
+
+    failing_synth = mount(tts_engine=FakeTtsEngine(synth_exception=RuntimeError("合成挂了")))
+    body = failing_synth.post("/api/v1/debug/tts/test", json={"text": "试听", "play_on_device": False}).json()
+    assert isinstance(body["elapsed_ms"], int)
+
+    unsupported = mount(tts_engine=_MinimalEngine())
+    body = unsupported.post("/api/v1/debug/tts/test", json={"text": "试听", "play_on_device": False}).json()
+    assert isinstance(body["elapsed_ms"], int)
+
+
+def test_tts_test_reports_timeline_segments_with_event_bus(mount) -> None:
+    """播放模式时间线分段：引擎发锚点事件时响应带首声延迟与出声期，且订阅随请求退订。"""
+    bus = FakeEventBus()
+    engine = FakeTtsEngine(event_bus=bus)
+    body = mount(tts_engine=engine, event_bus=bus).post("/api/v1/debug/tts/test", json={"text": "你好"}).json()
+    assert body["success"] is True
+    assert body["first_audio_ms"] is not None and body["first_audio_ms"] >= 0
+    assert body["playback_ms"] is not None and body["playback_ms"] >= 5
+    assert bus.registered == {}
+
+
+async def test_utterance_timeline_records_segment_spans() -> None:
+    """时间线记录器：锚点事件按 utterance_id 记到达时刻，分段以请求起点为原点；stop 成对退订。"""
+    bus = FakeEventBus()
+    timeline = _UtteranceTimeline(bus)
+    timeline.start()
+    assert CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED in bus.registered
+    assert CoreEvents.TTS_UTTERANCE_FINISHED in bus.registered
+
+    playback_handler = bus.registered[CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED]
+    finished_handler = bus.registered[CoreEvents.TTS_UTTERANCE_FINISHED]
+
+    await playback_handler("", UtterancePlaybackStartedPayload(utterance_id="u1"), "")
+    await asyncio.sleep(0.02)
+    await finished_handler("", UtteranceFinishedPayload(utterance_id="u1", engine="fake", duration_ms=20), "")
+
+    first_audio_ms, playback_ms = timeline.spans_for("u1")
+    assert first_audio_ms is not None and first_audio_ms >= 0
+    assert playback_ms is not None and playback_ms >= 10
+
+    # 锚点不全的句子两段都按缺失处理
+    assert timeline.spans_for("u2") == (None, None)
+    assert timeline.spans_for(None) == (None, None)
+
+    timeline.stop()
+    assert bus.registered == {}
+    assert set(bus.unregistered) == {CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, CoreEvents.TTS_UTTERANCE_FINISHED}
+
+
+def test_tts_test_honors_client_utterance_id(mount) -> None:
+    """整场回放透传前端指定的 utterance_id（关联 WS 实时进度事件用）。"""
+    engine = FakeTtsEngine()
+    body = (
+        mount(tts_engine=engine)
+        .post("/api/v1/debug/tts/test", json={"text": "你好", "utterance_id": "replay-42-7"})
+        .json()
+    )
+    assert body["success"] is True and body["utterance_id"] == "replay-42-7"
+    assert engine.speech_calls[0]["utterance_id"] == "replay-42-7"
 
 
 def test_tts_say_replays_text_with_say_prefix_and_reports_failure(mount) -> None:

@@ -5,11 +5,11 @@
 import { computed, onBeforeUnmount, onMounted, shallowRef, watch, type Ref } from 'vue';
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart, PieChart } from 'echarts/charts';
-import { GridComponent, TooltipComponent } from 'echarts/components';
+import { GridComponent, MarkLineComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useThemeStore } from '@/stores/theme';
 
-echarts.use([BarChart, LineChart, PieChart, GridComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([BarChart, LineChart, PieChart, GridComponent, MarkLineComponent, TooltipComponent, CanvasRenderer]);
 
 /** 图表内可用的主题色板；canvas 不解析 CSS 变量，需运行时读取实际色值 */
 export interface ChartPalette {

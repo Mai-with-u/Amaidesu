@@ -16,6 +16,7 @@ import {
   formatCountCompact,
   formatNumber,
   formatRangeEnd,
+  formatSeconds,
   formatTimeHM,
   formatTimeHMS,
   getLatencyClass,
@@ -61,6 +62,22 @@ describe('formatElapsedMs', () => {
     expect(formatElapsedMs(40_000, { alwaysHours: true })).toBe('0:00:40');
     expect(formatElapsedMs(300_000, { alwaysHours: true })).toBe('0:05:00');
     expect(formatElapsedMs(5_423_045, { alwaysHours: true })).toBe('1:30:23');
+  });
+});
+
+describe('formatSeconds', () => {
+  it.each([
+    [0, '0.00 s'],
+    [850, '0.85 s'],
+    [10_144, '10.14 s'],
+    [1_470_530, '1470.53 s'],
+    [-5, '0.00 s'],
+  ])('%i 毫秒 → "%s"', (ms, expected) => {
+    expect(formatSeconds(ms)).toBe(expected);
+  });
+
+  it('自定义小数位', () => {
+    expect(formatSeconds(1639, 1)).toBe('1.6 s');
   });
 });
 

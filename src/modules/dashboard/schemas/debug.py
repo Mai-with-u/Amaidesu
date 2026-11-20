@@ -82,6 +82,8 @@ class TtsTestRequest(BaseModel):
 
     text: str
     play_on_device: bool = True
+    # 前端指定的 utterance_id（整场回放用它关联 WS 实时进度事件）；缺省按调试前缀现场生成
+    utterance_id: Optional[str] = None
     temperature: Optional[float] = None
     speed_factor: Optional[float] = None
     sample_steps: Optional[int] = None
@@ -97,6 +99,13 @@ class TtsTestResponse(BaseModel):
     error: Optional[str] = None
     # play_on_device=False 时返回的完整 wav 音频（base64）
     audio_base64: Optional[str] = None
+    # 服务端处理耗时（毫秒）：播放模式含播放时长，合成模式为纯合成耗时；失败时计到失败点
+    elapsed_ms: Optional[int] = None
+    # 播放模式 utterance 时间线分段（tts.utterance.* 事件到达时刻测得；事件缺席时为 None）：
+    # first_audio_ms = 请求起点 → 首个音频块写进声卡（观众等开口的时长，跨引擎口径一致）；
+    # playback_ms = 首声 → 播放完成（流式引擎此段合成与播放并行进行）
+    first_audio_ms: Optional[int] = None
+    playback_ms: Optional[int] = None
 
 
 class TtsSayRequest(BaseModel):

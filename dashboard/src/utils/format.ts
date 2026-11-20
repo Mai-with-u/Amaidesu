@@ -197,6 +197,14 @@ export function formatElapsedMs(ms: number, options?: { alwaysHours?: boolean })
   return `${hours}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+/**
+ * 时长（毫秒）→ 定点秒（"0.85 s"）：TTS 测速等需要秒级数值对比的场景。
+ * 内部口径仍是毫秒，本助手只做显示换算；负值按 0 处理。
+ */
+export function formatSeconds(ms: number, fractionDigits = 2): string {
+  return `${(Math.max(0, ms) / 1000).toFixed(fractionDigits)} s`;
+}
+
 // ==================== 注入截图 ====================
 
 /**

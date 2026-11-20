@@ -64,18 +64,124 @@
         试说经扬声器播放并联动字幕；生成试听按上方参数合成（表单初始值为引擎配置，非 GSV
         引擎不支持音频合成），可在页面内播放与下载对比。
       </p>
+
+      <el-divider content-position="left">整场回放</el-divider>
+
+      <!-- 整场回放：选场次逐句送当前引擎（与直播实机同一 handle_speech 入口），调参数、比合成速度 -->
+      <div class="replay-picker">
+        <el-select
+          v-model="selectedSessionId"
+          placeholder="选择要回放的场次"
+          :loading="sessionsLoading"
+          :disabled="running"
+          class="replay-session-select"
+        >
+          <el-option
+            v-for="session in sessions"
+            :key="session.live_session_id"
+            :label="sessionLabel(session)"
+            :value="session.live_session_id"
+          />
+        </el-select>
+        <el-button :disabled="selectedSessionId === null || running" :loading="linesLoading" @click="loadLines"
+          >载入台词</el-button
+        >
+      </div>
+      <p v-if="sessionsError" class="card-hint is-error">{{ sessionsError }}</p>
+      <p v-if="linesError" class="card-hint is-error">{{ linesError }}</p>
+
+      <!-- 回放模式与耗时口径 -->
+      <div class="replay-mode-row">
+        <el-radio-group v-model="mode" :disabled="running">
+          <el-radio-button value="play">扬声器播放</el-radio-button>
+          <el-radio-button value="synth">仅合成测速</el-radio-button>
+        </el-radio-group>
+        <span class="mode-hint">{{ modeHint }}</span>
+      </div>
+
+      <!-- 控制与进度 -->
+      <div class="card-actions">
+        <el-button type="primary" :disabled="!canStart" @click="startReplay">开始回放</el-button>
+        <el-button v-if="running" type="warning" @click="stopReplay">停止</el-button>
+        <span v-if="lines.length > 0" class="replay-progress">{{ doneCount }} / {{ lines.length }}</span>
+      </div>
+      <p v-if="currentLine" class="replay-current">
+        正在回放：<TtsStreamText :text="liveText || currentLine.content" :lit="liveLit" />
+      </p>
+
+      <!-- 汇总统计（内部口径毫秒，显示按秒） -->
+      <div v-if="summary.total > 0" class="replay-summary">
+        <span>成功 {{ summary.okCount }}</span>
+        <span v-if="summary.failedCount > 0" class="is-failed">失败 {{ summary.failedCount }}</span>
+        <span>总耗时 {{ formatSeconds(summary.totalMs) }}</span>
+        <span>平均每句 {{ formatSeconds(summary.avgMs) }}</span>
+        <span v-if="summary.avgFirstAudioMs !== null" title="请求起点到首个音频块出声：观众等主播开口的时长"
+          >平均首声 {{ formatSeconds(summary.avgFirstAudioMs) }}</span
+        >
+        <span>平均每字 {{ formatSeconds(summary.perCharMs) }}/字</span>
+        <el-button link type="primary" @click="copySummary">复制汇总</el-button>
+      </div>
+
+      <!-- 每句耗时趋势：首声延迟/总耗时两线（无分段回退单线），均值虚线标尺 -->
+      <TtsReplayChart
+        v-if="results.length > 0"
+        :results="results"
+        :avg-ms="summary.avgMs"
+        :avg-first-audio-ms="summary.avgFirstAudioMs"
+      />
+
+      <!-- 台词明细：回放前是预览，回放后逐行出耗时；弹性占满卡片剩余高度，表内滚动 -->
+      <div v-if="lines.length > 0" class="replay-table-wrap">
+        <el-table :data="lines" size="small" height="100%" class="replay-table">
+          <el-table-column type="index" label="#" width="48" />
+          <el-table-column label="台词" min-width="240">
+            <template #default="{ row }">
+              <TtsStreamText v-if="row.chat_id === liveChatId" :text="row.content" :lit="liveLit" />
+              <span v-else :class="{ 'is-dropped': row.dropped }">{{ row.content }}</span>
+              <el-tag v-if="row.dropped" size="small" type="info" class="replay-dropped-tag">未送达</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="字数" width="60">
+            <template #default="{ row }">{{ row.content.length }}</template>
+          </el-table-column>
+          <el-table-column label="耗时" width="100">
+            <template #default="{ row }">
+              <span :class="{ 'is-failed': isFailedRow(row.chat_id) }" :title="errorOf(row.chat_id)">{{
+                resultText(row.chat_id)
+              }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <!-- 测速模式：最近一句合成音频试听 -->
+      <template v-if="replayAudioUrl">
+        <audio controls :src="replayAudioUrl" class="tts-audio" />
+        <el-button tag="a" :href="replayAudioUrl" :download="replayAudioFilename">下载 wav</el-button>
+      </template>
+
+      <p class="card-hint">
+        回放经当前引擎的 handle_speech 生产入口逐句驱动，与直播实机同一链路（同文本规范化、同合成参数）；数据为场次落库台词。
+      </p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-// TTS 直测详情：无定时器与订阅，状态在挂载时加载一次（keep-alive 下复用缓存状态，可手动刷新）
-import { computed, onMounted, ref } from 'vue';
+// TTS 直测详情：单句直测 + 整场回放共用卡片头的一份引擎状态（挂载时加载一次，
+// keep-alive 下复用缓存状态，可手动刷新）。回放循环/统计/清理逻辑在 useTtsReplay，
+// 引擎可用性与名称由本组件注入（单一状态源）；循环为纯请求串行（无定时器/订阅），
+// 调试页 keep-alive 切走后继续跑，组件卸载时 dispose() 置停止并释放测速 blob URL。
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { debugApi } from '@/api';
 import { DEFAULT_DEBUG_TEXT } from '@/components/debug/debugDefaults';
-import type { TtsDebugParamInfo, TtsStatusResponse } from '@/types';
+import type { TtsDebugParamInfo, TtsStatusResponse, LiveSessionItem } from '@/types';
+import { formatDateTimeCn, formatSeconds } from '@/utils/format';
+import { useTtsReplay, type ReplayLineResult } from '@/composables/useTtsReplay';
+import TtsReplayChart from '@/components/debug/TtsReplayChart.vue';
+import TtsStreamText from '@/components/debug/TtsStreamText.vue';
 
 const status = ref<TtsStatusResponse | null>(null);
 const checked = ref(false);
@@ -106,6 +212,78 @@ const chipLabel = computed(() =>
     ? `${engineName.value || 'TTS 引擎'} · ${backend.value}`
     : engineName.value || 'TTS 引擎',
 );
+
+// ----- 整场回放（引擎状态由上方 loadStatus 单一供给） -----
+const {
+  sessions,
+  sessionsLoading,
+  sessionsError,
+  loadSessions,
+  selectedSessionId,
+  lines,
+  linesLoading,
+  linesError,
+  loadLines,
+  mode,
+  running,
+  doneCount,
+  currentLine,
+  canStart,
+  startReplay,
+  stopReplay,
+  results,
+  liveChatId,
+  liveText,
+  liveLit,
+  audioUrl: replayAudioUrl,
+  audioFilename: replayAudioFilename,
+  summary,
+  buildSummaryText,
+  dispose,
+} = useTtsReplay({ engineAvailable: available, engineName });
+
+const modeHint = computed(() =>
+  mode.value === 'play'
+    ? '逐句合成并在扬声器播放，播完一句才发下一句；耗时 = 服务端处理时长（含播放）'
+    : '只合成不播放，跑完全场更快；耗时 = 纯合成时间（引擎不支持合成接口时逐句报错）',
+);
+
+function sessionLabel(session: LiveSessionItem): string {
+  const kindLabel = session.kind === 'rehearsal' ? '彩排 · ' : '';
+  return `${kindLabel}${session.title || '未命名场次'} · ${formatDateTimeCn(session.started_at_ms)}`;
+}
+
+/** 回放结果按 chat_id 对回台词行（表格逐行出耗时用） */
+const resultMap = computed(() => {
+  const map = new Map<number, ReplayLineResult>();
+  for (const result of results.value) map.set(result.chatId, result);
+  return map;
+});
+
+function resultText(chatId: number): string {
+  const result = resultMap.value.get(chatId);
+  if (!result) return '—';
+  if (!result.success) return '失败';
+  return result.elapsedMs !== null ? formatSeconds(result.elapsedMs) : '请求失败';
+}
+
+function isFailedRow(chatId: number): boolean {
+  const result = resultMap.value.get(chatId);
+  return result ? !result.success : false;
+}
+
+function errorOf(chatId: number): string {
+  return resultMap.value.get(chatId)?.error || '';
+}
+
+async function copySummary(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(buildSummaryText());
+    ElMessage.success('汇总已复制');
+  } catch {
+    ElMessage.error('复制失败');
+  }
+}
 
 function resetTtsParams(): void {
   if (!debugParams.value) return;
@@ -198,12 +376,21 @@ async function renderTtsAudio(): Promise<void> {
 
 onMounted(() => {
   void loadStatus();
+  void loadSessions();
+});
+
+onBeforeUnmount(() => {
+  dispose();
 });
 </script>
 
 <style scoped>
 .debug-card {
   padding: var(--spacing-md) var(--spacing-lg);
+  /* 铺满详情面板高度（面板自身滚动，内容不足时卡片框压到底） */
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .card-head {
@@ -259,10 +446,14 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
+  /* 吃掉卡片除头部外的剩余高度，让台词明细表撑到面板底 */
+  flex: 1;
+  min-height: 0;
 }
 
 .card-actions {
   display: flex;
+  align-items: center;
   gap: var(--spacing-sm);
 }
 
@@ -270,6 +461,10 @@ onMounted(() => {
   margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.card-hint.is-error {
+  color: var(--color-danger, #f56c6c);
 }
 
 .tts-param-grid {
@@ -298,5 +493,76 @@ onMounted(() => {
 .tts-audio {
   width: 100%;
   height: 36px;
+}
+
+.replay-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.replay-session-select {
+  width: 360px;
+}
+
+.replay-mode-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.mode-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.replay-progress {
+  font-size: 13px;
+  color: var(--text-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-current {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replay-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 1px solid var(--border-color-light);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-summary .is-failed {
+  color: var(--color-danger, #f56c6c);
+}
+
+.replay-table-wrap {
+  /* 弹性占满卡片剩余高度，el-table height=100% 在其内部滚动 */
+  flex: 1;
+  min-height: 120px;
+}
+
+.replay-table .is-failed {
+  color: var(--color-danger, #f56c6c);
+}
+
+.replay-table :deep(.is-dropped) {
+  color: var(--text-secondary);
+}
+
+.replay-dropped-tag {
+  margin-left: 6px;
 }
 </style>

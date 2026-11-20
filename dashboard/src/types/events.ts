@@ -48,6 +48,8 @@ const EVENT = {
   ttsUtteranceStarted: 'tts.utterance.started',
   ttsUtteranceFinished: 'tts.utterance.finished',
   ttsUtteranceFailed: 'tts.utterance.failed',
+  ttsUtterancePlaybackStarted: 'tts.utterance.playback_started',
+  ttsUtteranceSentenceBoundary: 'tts.utterance.sentence_boundary',
 
   // —— 直通：系统生命周期 ——
   coreStartup: 'core.startup',

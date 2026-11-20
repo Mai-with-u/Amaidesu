@@ -5,6 +5,7 @@
 """
 
 import base64
+import time
 import uuid
 from typing import TYPE_CHECKING, Annotated, Any, List, Optional
 
@@ -29,6 +30,10 @@ from src.modules.dashboard.schemas.debug import (
 )
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.utterance import (
+    UtteranceFinishedPayload,
+    UtterancePlaybackStartedPayload,
+)
 from src.modules.logging import get_logger
 from src.modules.tts.protocol import TtsObservation
 from src.modules.utils.time_utils import now_ms
@@ -196,14 +201,64 @@ async def get_subtitle_status(
     )
 
 
-async def _play_utterance(engine: Any, text: str, id_prefix: str) -> tuple[str, Optional[str]]:
+class _UtteranceTimeline:
+    """一次调试请求内临时订阅 utterance 锚点事件，按 utterance_id 记到达时刻。
+
+    只订阅 ``tts.utterance.playback_started``（首个音频块写进声卡 = 观众听到
+    首声）与 ``tts.utterance.finished``（播放完成）两个锚点；到达时刻统一用
+    ``perf_counter`` 记录（与端点耗时计时同钟），分段以请求起点为原点：
+    首声延迟 = 原点 → playback_started，出声期 = playback_started → finished。
+    订阅生命周期与请求等长（stop 成对退订）；事件总线缺席（单测/装配降级）
+    时仅注册动作变为空转，spans 恒为 ``(None, None)``。
+    """
+
+    def __init__(self, event_bus: Optional[Any]) -> None:
+        self._bus = event_bus
+        self._origin = time.perf_counter()
+        self._first_audio: dict[str, float] = {}
+        self._finished: dict[str, float] = {}
+
+    async def _on_playback_started(
+        self, event_name: str, payload: UtterancePlaybackStartedPayload, source: str
+    ) -> None:
+        self._first_audio.setdefault(payload.utterance_id, time.perf_counter())
+
+    async def _on_finished(self, event_name: str, payload: UtteranceFinishedPayload, source: str) -> None:
+        self._finished.setdefault(payload.utterance_id, time.perf_counter())
+
+    def start(self) -> None:
+        if self._bus is None:
+            return
+        self._bus.on(
+            CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, self._on_playback_started, UtterancePlaybackStartedPayload
+        )
+        self._bus.on(CoreEvents.TTS_UTTERANCE_FINISHED, self._on_finished, UtteranceFinishedPayload)
+
+    def stop(self) -> None:
+        if self._bus is None:
+            return
+        self._bus.off(CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, self._on_playback_started)
+        self._bus.off(CoreEvents.TTS_UTTERANCE_FINISHED, self._on_finished)
+
+    def spans_for(self, utterance_id: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+        """返回 ``(first_audio_ms, playback_ms)``；锚点不全的句子两段都按缺失处理。"""
+        if utterance_id is None:
+            return (None, None)
+        first = self._first_audio.get(utterance_id)
+        finished = self._finished.get(utterance_id)
+        first_audio_ms = int((first - self._origin) * 1000) if first is not None else None
+        playback_ms = int((finished - first) * 1000) if first is not None and finished is not None else None
+        return (first_audio_ms, playback_ms)
+
+
+async def _play_utterance(engine: Any, text: str, utterance_id: str) -> tuple[str, Optional[str]]:
     """驱动 TTS 引擎试说一句（合成 + 声卡播放 + utterance 事件 + 字幕联动）。
 
     返回 ``(utterance_id, error)``：成功时 error 为 None；失败时引擎协议
     约定已主动发 ``tts.utterance.failed``，此处只回传 HTTP 面的失败原因。
-    test（试说）与 say（台前重播）共用本调用路径。
+    utterance_id 由调用方生成（调试前缀现场生成，或回放透传前端指定值以
+    关联 WS 实时进度事件）；test（试说）与 say（台前重播）共用本调用路径。
     """
-    utterance_id = f"{id_prefix}-{now_ms()}"
     try:
         await engine.handle_speech(text, utterance_id=utterance_id)
     except Exception as e:
@@ -217,18 +272,32 @@ async def _play_utterance(engine: Any, text: str, id_prefix: str) -> tuple[str, 
 async def test_tts(
     request: TtsTestRequest,
     engine: TtsEngineDep,  # noqa: B008
+    server: ServerDep,  # noqa: B008
 ) -> TtsTestResponse:
     """驱动 TTS 引擎调试合成。
 
     双模式：``play_on_device=True`` 试说一句（合成 + 真实音频汇播放 +
     tts.utterance.* 事件 + 字幕联动，忽略覆盖参数）；``False`` 生成试
     听音频（配置参数 + 覆盖参数合成，返回 base64 wav，不占声卡、不驱
-    动字幕）。同步长请求，前端需放宽超时并做 loading 防连点。
+    动字幕）。响应带 ``elapsed_ms`` 供整场回放统计引擎合成速度：播放模
+    式为服务端处理总耗时（含播放时长），合成模式为纯合成耗时；失败时
+    计到失败点。播放模式另带 utterance 时间线分段（``first_audio_ms`` /
+    ``playback_ms``，锚点事件到达时刻测得，流式引擎借此可见"首声延迟
+    vs 出声期"两段结构）。同步长请求，前端需放宽超时并做 loading 防连点。
     """
+    start = time.perf_counter()
+
+    def _elapsed_ms() -> int:
+        return int((time.perf_counter() - start) * 1000)
+
     if not request.play_on_device:
         synth = getattr(engine, "debug_synthesize", None)
         if not callable(synth):
-            return TtsTestResponse(success=False, error="当前引擎不支持音频合成接口（仅 GPT-SoVITS 支持）")
+            return TtsTestResponse(
+                success=False,
+                error="当前引擎不支持音频合成接口（仅 GPT-SoVITS 支持）",
+                elapsed_ms=_elapsed_ms(),
+            )
         overrides = {
             k: v
             for k, v in {
@@ -244,15 +313,35 @@ async def test_tts(
             audio = await synth(request.text, overrides)
         except Exception as e:
             logger.exception(f"TTS 调试合成失败: {e}")
-            return TtsTestResponse(success=False, error=str(e))
+            return TtsTestResponse(success=False, error=str(e), elapsed_ms=_elapsed_ms())
         audio_base64 = base64.b64encode(audio).decode("ascii")
         logger.info(f"TTS 调试合成完成: {len(audio)} bytes, overrides={overrides}")
-        return TtsTestResponse(success=True, audio_base64=audio_base64)
+        return TtsTestResponse(success=True, audio_base64=audio_base64, elapsed_ms=_elapsed_ms())
 
-    utterance_id, error = await _play_utterance(engine, request.text, "debug-test")
+    timeline = _UtteranceTimeline(getattr(server, "event_bus", None))
+    timeline.start()
+    utterance_id = (request.utterance_id or "").strip() or f"debug-test-{now_ms()}"
+    try:
+        utterance_id, error = await _play_utterance(engine, request.text, utterance_id)
+    finally:
+        timeline.stop()
+    first_audio_ms, playback_ms = timeline.spans_for(utterance_id)
     if error is not None:
-        return TtsTestResponse(success=False, utterance_id=utterance_id, error=error)
-    return TtsTestResponse(success=True, utterance_id=utterance_id)
+        return TtsTestResponse(
+            success=False,
+            utterance_id=utterance_id,
+            error=error,
+            elapsed_ms=_elapsed_ms(),
+            first_audio_ms=first_audio_ms,
+            playback_ms=playback_ms,
+        )
+    return TtsTestResponse(
+        success=True,
+        utterance_id=utterance_id,
+        elapsed_ms=_elapsed_ms(),
+        first_audio_ms=first_audio_ms,
+        playback_ms=playback_ms,
+    )
 
 
 @router.post("/tts/say", response_model=TtsSayResponse)
@@ -267,7 +356,7 @@ async def say_tts(
     ``handle_speech`` 完整生产链路（utterance 事件 + 字幕联动）。同步长
     请求，前端需放宽超时并做 loading 防连点。
     """
-    utterance_id, error = await _play_utterance(engine, request.text, "debug-say")
+    utterance_id, error = await _play_utterance(engine, request.text, f"debug-say-{now_ms()}")
     if error is not None:
         return TtsSayResponse(success=False, utterance_id=utterance_id, error=error)
     return TtsSayResponse(success=True, utterance_id=utterance_id)

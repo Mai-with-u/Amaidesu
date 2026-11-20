@@ -353,6 +353,8 @@ export interface TtsTestRequest {
   text: string;
   /** true=试说（声卡播放+字幕联动）；false=生成试听音频（返回 wav 数据） */
   play_on_device?: boolean;
+  /** 前端指定 utterance_id（整场回放按它关联 WS 实时进度事件）；缺省服务端按调试前缀生成 */
+  utterance_id?: string;
   /** 覆盖参数：仅生成试听模式生效，缺省用引擎配置值 */
   temperature?: number;
   speed_factor?: number;
@@ -368,6 +370,12 @@ export interface TtsTestResponse {
   error?: string;
   /** 生成试听模式返回的完整 wav 音频（base64） */
   audio_base64?: string;
+  /** 服务端处理耗时（毫秒）：播放模式含播放时长，合成模式为纯合成耗时；失败时计到失败点 */
+  elapsed_ms?: number;
+  /** 请求起点→首个音频块写进声卡（观众等开口的时长）；锚点事件缺席为 null */
+  first_audio_ms?: number | null;
+  /** 首声→播放完成（流式引擎此段合成与播放并行）；锚点事件缺席为 null */
+  playback_ms?: number | null;
 }
 
 /** 台前重播请求：同文本重合成（utterance 事件无服务端留档，前端回传原文本） */

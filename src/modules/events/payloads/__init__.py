@@ -83,6 +83,8 @@ from .utterance import (
     UtteranceDroppedPayload,
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
+    UtterancePlaybackStartedPayload,
+    UtteranceSentenceBoundaryPayload,
     UtteranceStartedPayload,
 )
 
@@ -137,6 +139,8 @@ __all__ = [
     "UtteranceFinishedPayload",
     "UtteranceFailedPayload",
     "UtteranceDroppedPayload",
+    "UtterancePlaybackStartedPayload",
+    "UtteranceSentenceBoundaryPayload",
     # streamer.speech 主播发言业务事实
     "StreamerSpeechPayload",
     # streamer.prompt_received 递话到达事实
