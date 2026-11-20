@@ -32,6 +32,7 @@ from src.agents.streamer.memory.recall import (
     WEAK_MATCH_MAX_RESULTS,
     WEAK_MATCH_NOTICE,
     MemoryRecallService,
+    RecallEntry,
     build_memory_recall_provider,
 )
 from src.agents.streamer.memory.search import MemorySearch, SearchResult
@@ -735,3 +736,131 @@ async def test_recall_reads_current_save_work_docs_with_masking_and_isolates_oth
     assert "路人甲" not in outcome.text, "跨场工作笔记须遮掉已知观众昵称"
     assert "旧脚手架已拆除" not in outcome.text, "已完成待办不返回"
     assert "隔壁旧档" not in outcome.text, "非当前存档的工作文档绝不串入"
+
+
+async def test_recall_searches_pinned_rules_with_masking_and_length_limit(
+    store: SQLiteDatabase,
+) -> None:
+    """存档工作文档的 pinned_rules 纳入回想检索，渲染为「当前存档长期规矩」，遵守遮名与长度上限。"""
+    await seed_viewer(store.viewers, platform="bilibili", user_id="u2", user_name="路人乙", timestamp_ms=500)
+    old = await _session(store, started=1_000, ended=50_000)
+    current = await _session(store, started=100_000)
+    long_rule = "公共高炉使用规矩：路人乙强调过烧矿前先检查燃料槽" + "细节" * 90
+
+    await store.game_work_docs.save_work_docs(
+        game="minecraft",
+        save_id="save-now",
+        save_name="现行世界",
+        notebook="",
+        todos=[],
+        pinned_rules=[long_rule],
+        updated_session_id=old,
+    )
+
+    service = MemoryRecallService(
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        viewer_repo=store.viewers,
+        current_session_provider=lambda: current,
+        clock=FakeClock().now_ms,
+        event_repo=store.events,
+        saves_provider=lambda: {"minecraft": GameSave(id="save-now", name="现行世界")},
+        search=MemorySearch(repo=store.memory_index, embedding=None),
+        work_docs_repo=store.game_work_docs,
+    )
+
+    outcome = await service.recall_detailed("公共高炉")
+    lines = _hit_lines(outcome.text)
+    assert len(lines) == 1
+    assert "当前存档长期规矩（minecraft「现行世界」）：公共高炉使用规矩：某位观众强调过烧矿前先检查燃料槽" in lines[0]
+    assert "路人乙" not in outcome.text
+    assert lines[0].endswith("…")
+    # 片段正文（冒号后）不得超过 SPEECH_SNIPPET_MAX_CHARS
+    body = lines[0].split("）：", 1)[1]
+    assert len(body) <= 140
+
+
+async def test_recall_merges_short_term_callback_with_dedup_privacy_and_error_isolation(
+    store: SQLiteDatabase,
+    loguru_capture: Any,
+) -> None:
+    """short_term_recall 在 all / this_stream 下拉取合并、去重、尊重遗忘名单遮名，且异常时隔离降级。"""
+    current = await _session(store, started=100_000)
+    await store.game_work_docs.save_work_docs(
+        game="minecraft",
+        save_id="save-now",
+        save_name="现行世界",
+        notebook="## 仓库\n- 东侧红石箱归同伴共用，取完要补齐",
+        todos=[],
+        updated_session_id=current,
+    )
+
+    class _FakePrivacy:
+        def mask_speech(self, text: str) -> str:
+            return text.replace("隐身观众", "某位观众")
+
+    seen_calls: list[tuple[str, str, int]] = []
+
+    async def _short_term(query: str, scope: str, limit: int) -> list[RecallEntry]:
+        seen_calls.append((query, scope, limit))
+        return [
+            RecallEntry(
+                source="short_term",
+                source_id=1,
+                timestamp_ms=120_000,
+                text="- 本场游戏短期记忆：东侧红石箱归同伴共用，取完要补齐",
+            ),
+            RecallEntry(
+                source="short_term",
+                source_id=2,
+                timestamp_ms=130_000,
+                text="本场游戏短期记忆：隐身观众提醒红石箱旁边有隐藏暗门",
+            ),
+        ]
+
+    service = MemoryRecallService(
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        privacy_service=_FakePrivacy(),
+        viewer_repo=store.viewers,
+        current_session_provider=lambda: current,
+        clock=FakeClock().now_ms,
+        event_repo=store.events,
+        saves_provider=lambda: {"minecraft": GameSave(id="save-now", name="现行世界")},
+        search=MemorySearch(repo=store.memory_index, embedding=None),
+        work_docs_repo=store.game_work_docs,
+        short_term_recall=_short_term,
+    )
+
+    all_outcome = await service.recall_detailed("红石箱", scope="all")
+    stream_outcome = await service.recall_detailed("红石箱", scope="this_stream")
+
+    assert [call[1] for call in seen_calls] == ["all", "this_stream"]
+    assert any("隐藏暗门" in entry.text for entry in all_outcome.entries)
+    assert any("隐藏暗门" in entry.text for entry in stream_outcome.entries)
+    assert "隐身观众" not in all_outcome.text and "某位观众提醒红石箱旁边有隐藏暗门" in all_outcome.text
+    # 与工作笔记重复的那条短期记忆被去重，不出现两次「东侧红石箱归同伴共用」
+    assert all_outcome.text.count("东侧红石箱归同伴共用") == 1
+
+    # 回调抛异常时记录 warning 并降级，其余记忆照常返回
+    async def _broken(_query: str, _scope: str, _limit: int) -> list[RecallEntry]:
+        raise RuntimeError("短期记忆暂不可用")
+
+    broken_service = MemoryRecallService(
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        viewer_repo=store.viewers,
+        current_session_provider=lambda: current,
+        clock=FakeClock().now_ms,
+        event_repo=store.events,
+        saves_provider=lambda: {"minecraft": GameSave(id="save-now", name="现行世界")},
+        search=MemorySearch(repo=store.memory_index, embedding=None),
+        work_docs_repo=store.game_work_docs,
+        short_term_recall=_broken,
+    )
+    fallback = await broken_service.recall_detailed("红石箱", scope="all")
+    assert "东侧红石箱归同伴共用" in fallback.text
+    assert any(rec["level"] == "WARNING" and "短期记忆回调失败" in rec["message"] for rec in loguru_capture.records)

@@ -32,10 +32,11 @@ ta 的发言和身份带到下一场；本场结果不替换。关键词恰好�
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Callable, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
@@ -105,8 +106,11 @@ _NEIGHBOR_TRUNCATE_MIN_CHARS = 12
 MAX_NEAR_DUPLICATE_SPEECH = 2
 NEAR_DUPLICATE_JACCARD = 0.85
 NEAR_DUPLICATE_MIN_TOKENS = 3
-# 混合检索也有命中时，当前存档工作笔记优先占的前排配额（混合检索不足 8 条时仍可继续用剩余工作笔记补齐）
+# 混合检索也有命中时，当前存档工作笔记与本场短期高信号各自优先占的前排配额（混合检索不足 8 条时仍可继续用余量补齐）
 _WORK_DOC_PRIMARY_QUOTA = 2
+_SHORT_TERM_PRIMARY_QUOTA = 2
+# 短期条目与已有记忆按归一化正文判重时的最小长度门槛（过短词组不做包含判重，避免误杀）
+_SHORT_TERM_CONTAINS_DEDUP_MIN_LEN = 8
 
 # 走混合检索的来源：精炼账本（档案、承诺）排在裸台词前，平分时优先给出带标题与存档注记的行
 _RECALL_SOURCES: Tuple[IndexSource, ...] = ("archive", "commitment", "speech")
@@ -297,6 +301,92 @@ def _extract_work_doc_segments(notebook: str, todos: Sequence[Mapping[str, Any]]
     return segments
 
 
+def _extract_work_doc_items(
+    notebook: str,
+    todos: Sequence[Mapping[str, Any]],
+    pinned_rules: Sequence[str] = (),
+) -> List[Tuple[str, str]]:
+    """把存档工作文档拆成带来源标签的短候选行（工作笔记 + 未完待办 + 长期钉住规矩）。"""
+    items: List[Tuple[str, str]] = [("当前存档工作笔记", seg) for seg in _extract_work_doc_segments(notebook, todos)]
+    seen_rules: Set[str] = set()
+    for raw_rule in pinned_rules or ():
+        if not isinstance(raw_rule, str):
+            continue
+        cleaned = " ".join(raw_rule.split())
+        if not cleaned or cleaned in seen_rules:
+            continue
+        seen_rules.add(cleaned)
+        items.append(("当前存档长期规矩", cleaned))
+    return items
+
+
+def _strip_bullet_prefix(text: str) -> str:
+    """去掉回想条目行首的短横线项目符号，便于统一渲染与正文去重。"""
+    stripped = (text or "").strip()
+    return stripped[2:].strip() if stripped.startswith("- ") else stripped
+
+
+def _recall_body_norm(text: str) -> str:
+    """提取回想条目冒号后的实质正文并归一化，避免不同来源前缀掩盖同内容重复。"""
+    body = _strip_bullet_prefix(text)
+    if "：" in body:
+        _prefix, after = body.split("：", 1)
+        if after.strip():
+            body = after.strip()
+    body = re.sub(r"^【[^】]{1,24}】", "", body).strip()
+    return normalize(body)
+
+
+def _is_duplicate_recall_entry(
+    entry: RecallEntry,
+    seen_keys: Set[Tuple[str, int]],
+    seen_norms: Sequence[Tuple[str, str]],
+) -> bool:
+    """判断一条待并入结果是否与已入选条目重复（同源主键一致，或跨来源实质正文等价/长文本互相包含）。"""
+    if entry.source_id > 0 and (entry.source, entry.source_id) in seen_keys:
+        return True
+    norm = _recall_body_norm(entry.text)
+    if not norm:
+        return True
+    for existing_source, existing_norm in seen_norms:
+        # 裸台词内部已由 _accept_speech_near_duplicate 控制最多留 2 条，此处保留跨场复读信号不二次误删
+        if entry.source == "speech" and existing_source == "speech":
+            continue
+        if norm == existing_norm:
+            return True
+        if (
+            len(norm) >= _SHORT_TERM_CONTAINS_DEDUP_MIN_LEN
+            and len(existing_norm) >= _SHORT_TERM_CONTAINS_DEDUP_MIN_LEN
+            and (norm in existing_norm or existing_norm in norm)
+        ):
+            return True
+    return False
+
+
+def _append_unique_entries(
+    target: List[RecallEntry],
+    candidates: Sequence[RecallEntry],
+    seen_keys: Set[Tuple[str, int]],
+    seen_norms: List[Tuple[str, str]],
+    *,
+    max_add: int,
+    max_total: int,
+) -> int:
+    """把去重后的候选条目按配额追加进目标列表，返回实际新增条数。"""
+    added = 0
+    for entry in candidates:
+        if added >= max_add or len(target) >= max_total:
+            break
+        if _is_duplicate_recall_entry(entry, seen_keys, seen_norms):
+            continue
+        target.append(entry)
+        if entry.source_id > 0:
+            seen_keys.add((entry.source, entry.source_id))
+        seen_norms.append((entry.source, _recall_body_norm(entry.text)))
+        added += 1
+    return added
+
+
 def _compose_speech_window(
     core_text: str,
     core_id: int,
@@ -354,10 +444,12 @@ class MemoryRecallService:
         search: Optional[MemorySearch] = None,
         social_fact_repo: Any = None,
         work_docs_repo: Any = None,
+        short_term_recall: Optional[Callable[[str, str, int], Awaitable[Sequence[RecallEntry]]]] = None,
     ) -> None:
         self._chat_repo = chat_repo
         self._social_fact_repo = social_fact_repo
         self._work_docs_repo = work_docs_repo
+        self._short_term_recall = short_term_recall
         self._search = search
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
@@ -466,40 +558,150 @@ class MemoryRecallService:
         )
 
         effective_query = " ".join(effective)
-        indexed = await self._indexed_hits(effective_query, context, archive_bounds)
-        work_docs = await self._work_doc_hits(effective_query, context)
+        indexed, work_docs, short_term = await asyncio.gather(
+            self._indexed_hits(effective_query, context, archive_bounds),
+            self._work_doc_hits(effective_query, context),
+            self._short_term_hits(effective_query, context),
+        )
 
-        # 合并当前存档工作笔记与混合检索结果：两者都有时工作笔记先给前排核心项，其余给历史记忆，空余再补齐，严守 8 条上限
+        # 合并当前存档工作文档、本场短期高信号记忆与混合检索结果，去重并严守 8 条上限：
+        # 本场或历史强命中并存时，工作文档与短期记忆各预留前排配额，其余给跨场检索，空余名额再用余量补齐。
         hits: List[RecallEntry] = []
-        if work_docs and indexed.hits and not indexed.weak_only:
-            primary_docs = work_docs[:_WORK_DOC_PRIMARY_QUOTA]
-            extra_docs = work_docs[_WORK_DOC_PRIMARY_QUOTA:]
-            hits.extend(primary_docs)
-            hits.extend(indexed.hits[: MAX_RESULTS - len(hits)])
-            if len(hits) < MAX_RESULTS and extra_docs:
-                hits.extend(extra_docs[: MAX_RESULTS - len(hits)])
-        elif work_docs:
-            hits.extend(work_docs[:MAX_RESULTS])
-            if len(hits) < MAX_RESULTS and indexed.hits:
-                hits.extend(indexed.hits[: MAX_RESULTS - len(hits)])
+        seen_keys: Set[Tuple[str, int]] = set()
+        seen_norms: List[Tuple[str, str]] = []
+        has_strong_indexed = bool(indexed.hits) and not indexed.weak_only
+
+        if has_strong_indexed:
+            if scope == SCOPE_THIS_STREAM:
+                _append_unique_entries(
+                    hits,
+                    short_term,
+                    seen_keys,
+                    seen_norms,
+                    max_add=_SHORT_TERM_PRIMARY_QUOTA,
+                    max_total=MAX_RESULTS,
+                )
+                _append_unique_entries(
+                    hits,
+                    work_docs,
+                    seen_keys,
+                    seen_norms,
+                    max_add=_WORK_DOC_PRIMARY_QUOTA,
+                    max_total=MAX_RESULTS,
+                )
+            else:
+                _append_unique_entries(
+                    hits,
+                    work_docs,
+                    seen_keys,
+                    seen_norms,
+                    max_add=_WORK_DOC_PRIMARY_QUOTA,
+                    max_total=MAX_RESULTS,
+                )
+                _append_unique_entries(
+                    hits,
+                    short_term,
+                    seen_keys,
+                    seen_norms,
+                    max_add=_SHORT_TERM_PRIMARY_QUOTA,
+                    max_total=MAX_RESULTS,
+                )
+            _append_unique_entries(
+                hits,
+                indexed.hits,
+                seen_keys,
+                seen_norms,
+                max_add=MAX_RESULTS,
+                max_total=MAX_RESULTS,
+            )
+            _append_unique_entries(
+                hits,
+                work_docs,
+                seen_keys,
+                seen_norms,
+                max_add=MAX_RESULTS,
+                max_total=MAX_RESULTS,
+            )
+            _append_unique_entries(
+                hits,
+                short_term,
+                seen_keys,
+                seen_norms,
+                max_add=MAX_RESULTS,
+                max_total=MAX_RESULTS,
+            )
+        elif work_docs or short_term:
+            if scope == SCOPE_THIS_STREAM:
+                _append_unique_entries(
+                    hits,
+                    short_term,
+                    seen_keys,
+                    seen_norms,
+                    max_add=MAX_RESULTS,
+                    max_total=MAX_RESULTS,
+                )
+                _append_unique_entries(
+                    hits,
+                    work_docs,
+                    seen_keys,
+                    seen_norms,
+                    max_add=MAX_RESULTS,
+                    max_total=MAX_RESULTS,
+                )
+            else:
+                _append_unique_entries(
+                    hits,
+                    work_docs,
+                    seen_keys,
+                    seen_norms,
+                    max_add=MAX_RESULTS,
+                    max_total=MAX_RESULTS,
+                )
+                _append_unique_entries(
+                    hits,
+                    short_term,
+                    seen_keys,
+                    seen_norms,
+                    max_add=MAX_RESULTS,
+                    max_total=MAX_RESULTS,
+                )
+            if indexed.hits:
+                _append_unique_entries(
+                    hits,
+                    indexed.hits,
+                    seen_keys,
+                    seen_norms,
+                    max_add=MAX_RESULTS,
+                    max_total=MAX_RESULTS,
+                )
         else:
             cap = WEAK_MATCH_MAX_RESULTS if indexed.weak_only else MAX_RESULTS
-            hits.extend(indexed.hits[:cap])
+            _append_unique_entries(
+                hits,
+                indexed.hits,
+                seen_keys,
+                seen_norms,
+                max_add=cap,
+                max_total=cap,
+            )
 
         danmaku_budget = (
             max(0, WEAK_MATCH_MAX_RESULTS - len(hits))
-            if (indexed.weak_only and not work_docs)
+            if (indexed.weak_only and not work_docs and not short_term)
             else max(0, MAX_RESULTS - len(hits))
         )
         raw_danmaku = await self._danmaku_hits(context)
-        if raw_danmaku:
-            # 本场弹幕按每个有效关键词都包含命中时，属于直接字面命中，可补满正常剩余名额
-            danmaku = raw_danmaku[: max(0, MAX_RESULTS - len(hits))]
-        else:
-            danmaku = raw_danmaku[:danmaku_budget]
-        hits.extend(danmaku)
+        danmaku_cap = max(0, MAX_RESULTS - len(hits)) if raw_danmaku else danmaku_budget
+        danmaku_added = _append_unique_entries(
+            hits,
+            raw_danmaku,
+            seen_keys,
+            seen_norms,
+            max_add=danmaku_cap,
+            max_total=MAX_RESULTS,
+        )
 
-        show_weak_notice = bool(hits) and indexed.weak_only and not work_docs and not danmaku
+        show_weak_notice = bool(hits) and indexed.weak_only and not work_docs and not short_term and danmaku_added == 0
         if order != ORDER_RELEVANT:
             hits.sort(key=lambda hit: hit.timestamp_ms, reverse=newest_first)
 
@@ -516,7 +718,8 @@ class MemoryRecallService:
             lines.extend(hit.text for hit in hits)
         outcome = RecallOutcome(text="\n".join(lines), entries=tuple(hits), vector_used=indexed.vector_used)
         work_detail = f"、工作笔记 {len(work_docs)}" if work_docs else ""
-        return outcome, f"{indexed.detail}{work_detail}、弹幕 {len(danmaku)}，给出 {len(hits)} 条"
+        short_detail = f"、本场短期 {len(short_term)}" if short_term else ""
+        return outcome, f"{indexed.detail}{work_detail}{short_detail}、弹幕 {danmaku_added}，给出 {len(hits)} 条"
 
     async def _indexed_hits(
         self, query: str, context: _RecallContext, archive_bounds: Sequence[Tuple[int, int]]
@@ -826,8 +1029,34 @@ class MemoryRecallService:
         )
         return kept_entries, weak_only
 
+    async def _short_term_hits(self, query: str, context: _RecallContext) -> List[RecallEntry]:
+        """拉取可选注册的本场短期高信号召回条目（通用回调，异常隔离降级并遵守隐私遮名）。"""
+        if self._short_term_recall is None or context.scope not in (SCOPE_THIS_STREAM, SCOPE_ALL):
+            return []
+        try:
+            raw_entries = await self._short_term_recall(query, context.scope, MAX_RESULTS)
+        except Exception as exc:  # noqa: BLE001 - 短期召回属增强通道，异常记日志降级不打断主回想
+            logger.warning(f"回想工具调用短期记忆回调失败（本次跳过）: {type(exc).__name__}: {exc}", exc=True)
+            return []
+        sanitized: List[RecallEntry] = []
+        for item in raw_entries or ():
+            if not isinstance(item, RecallEntry):
+                continue
+            body = _strip_bullet_prefix(item.text)
+            if not body:
+                continue
+            # 未在直播时按跨场口径全量遮名；本场直播中仍须经过本场遗忘名单遮名，防止已请求遗忘的观众昵称回流
+            if context.current_session_id is None:
+                masked = self._mask(body, None, context)
+            elif self._privacy_service is not None:
+                masked = self._privacy_service.mask_speech(body)
+            else:
+                masked = body
+            sanitized.append(replace(item, text=f"- {masked}"))
+        return sanitized
+
     async def _work_doc_hits(self, query: str, context: _RecallContext) -> List[RecallEntry]:
-        """只读检索眼下所在存档的 ``game_work_docs``（工作笔记行与未完成待办），别的存档绝不串入。"""
+        """只读检索眼下所在存档的 ``game_work_docs``（工作笔记、未完成待办与长期钉住规矩），别的存档绝不串入。"""
         if self._work_docs_repo is None or not context.current_saves:
             return []
         norm_keywords = [normalize(kw) for kw in context.keywords if normalize(kw) and not is_stopword_token(kw)]
@@ -851,8 +1080,9 @@ class MemoryRecallService:
                 continue
 
             save_label = save.label if save.name else GameSave(id=save.id, name=record.save_name).label
-            segments = _extract_work_doc_segments(record.notebook, record.todos)
-            for segment in segments:
+            pinned_rules = getattr(record, "pinned_rules", ()) or ()
+            items = _extract_work_doc_items(record.notebook, record.todos, pinned_rules)
+            for label, segment in items:
                 norm_seg = normalize(segment)
                 if not norm_seg:
                     continue
@@ -867,7 +1097,7 @@ class MemoryRecallService:
                 if not matched:
                     continue
                 seq += 1
-                # 工作笔记跨场持续保留，一律按跨场口径遮掉已知观众昵称与本场遗忘名单
+                # 工作笔记与长期规矩跨场持续保留，一律按跨场口径遮掉已知观众昵称与本场遗忘名单
                 masked = self._mask(segment, None, context)
                 if len(masked) > SPEECH_SNIPPET_MAX_CHARS:
                     masked = f"{masked[: SPEECH_SNIPPET_MAX_CHARS - 1]}…"
@@ -875,7 +1105,7 @@ class MemoryRecallService:
                     source="work_doc",
                     source_id=seq,
                     timestamp_ms=int(record.updated_at_ms or 0),
-                    text=f"- 当前存档工作笔记（{game}「{save_label}」）：{masked}",
+                    text=f"- {label}（{game}「{save_label}」）：{masked}",
                 )
                 scored.append((kw_hits, tok_hits, -seq, entry))
 
