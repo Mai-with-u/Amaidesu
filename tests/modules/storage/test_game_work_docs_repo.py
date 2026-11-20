@@ -79,6 +79,44 @@ async def test_move_world_migrates_once_without_clobbering_existing_target(db_pa
         await db.close()
 
 
+async def test_pinned_rules_round_trip_preserves_when_omitted_and_moves_with_world(db_path: Path) -> None:
+    """pinned_rules 独立读写：省略参数时不误清旧规矩，显式传空列表时清空，随 move_world 一并迁移。"""
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    try:
+        repo = db.game_work_docs
+        await repo.save_work_docs(
+            game="minecraft",
+            save_id="save-rules",
+            save_name="联机服",
+            notebook="笔记 V1",
+            pinned_rules=["公共熔炉组用完别拆漏斗", "公共熔炉组用完别拆漏斗", "不要拿主手木斧点选区"],
+        )
+        loaded = await repo.get_work_docs(game="minecraft", save_id="save-rules")
+        assert loaded is not None
+        assert loaded.pinned_rules == ["公共熔炉组用完别拆漏斗", "不要拿主手木斧点选区"]
+
+        # 仅覆写笔记而不传 pinned_rules 时，原有持久规矩必须原样保留
+        await repo.save_work_docs(game="minecraft", save_id="save-rules", notebook="笔记 V2")
+        kept = await repo.get_work_docs(game="minecraft", save_id="save-rules")
+        assert kept is not None
+        assert kept.notebook == "笔记 V2"
+        assert kept.pinned_rules == ["公共熔炉组用完别拆漏斗", "不要拿主手木斧点选区"]
+
+        # 迁移存档编号后 pinned_rules 随之完整保留
+        assert await repo.move_world(game="minecraft", from_save_id="save-rules", to_save_id="save-rules-v2") == 1
+        moved = await repo.get_work_docs(game="minecraft", save_id="save-rules-v2")
+        assert moved is not None
+        assert moved.pinned_rules == ["公共熔炉组用完别拆漏斗", "不要拿主手木斧点选区"]
+
+        # 显式传空列表时清空持久规矩
+        await repo.save_work_docs(game="minecraft", save_id="save-rules-v2", notebook="笔记 V2", pinned_rules=[])
+        cleared = await repo.get_work_docs(game="minecraft", save_id="save-rules-v2")
+        assert cleared is not None and cleared.pinned_rules == []
+    finally:
+        await db.close()
+
+
 async def test_v39_database_upgrades_to_v40_with_game_work_docs_table(db_path: Path) -> None:
     """v39 旧库缺 game_work_docs 表：重开升级到最新 SCHEMA_VERSION 并可正常读写。"""
     db = SQLiteDatabase(db_path)

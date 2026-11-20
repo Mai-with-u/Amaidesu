@@ -24,5 +24,9 @@ class GameWorkDocRecord(BaseModel):
     save_name: str = Field(default="", description="存档显示名（仅展示，不作主键）")
     notebook: str = Field(default="", description="工作笔记全文")
     todos: List[Dict[str, str]] = Field(default_factory=list, description="待办列表（content + status）")
+    pinned_rules: List[str] = Field(
+        default_factory=list,
+        description="按存档持久化的钉住规矩列表（设施使用约定、同伴规矩与工具禁忌）",
+    )
     updated_session_id: Optional[int] = Field(default=None, description="最近一次写入所属的场次主键")
     updated_at_ms: int = Field(default=0, description="最近一次写入时刻（毫秒）")

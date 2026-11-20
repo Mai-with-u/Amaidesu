@@ -38,6 +38,34 @@ def _parse_todos(raw: Any) -> List[Dict[str, str]]:
     return items
 
 
+def _normalize_pinned_rules(rules: Sequence[Any]) -> List[str]:
+    """规整钉住规矩列表：折叠多余空白、跳过空项并保序去重。"""
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for item in rules:
+        if not isinstance(item, str):
+            continue
+        cleaned = " ".join(item.split())
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
+def _parse_pinned_rules(raw: Any) -> List[str]:
+    """反序列化库里的 pinned_rules JSON 文本，异常或非列表时安全回退空列表。"""
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return _normalize_pinned_rules(parsed)
+
+
 class GameWorkDocsRepo(BaseRepo):
     """game_work_docs 表的读写入口（游戏 Agent 认出存档时读、文档更新时写）。"""
 
@@ -49,7 +77,7 @@ class GameWorkDocsRepo(BaseRepo):
         def _exec() -> Optional[GameWorkDocRecord]:
             with self._manager.transaction() as conn:
                 row = conn.execute(
-                    "SELECT save_id, save_name, notebook, todos, updated_session_id, updated_at_ms"
+                    "SELECT save_id, save_name, notebook, todos, pinned_rules, updated_session_id, updated_at_ms"
                     " FROM game_work_docs WHERE game=? AND save_id=?",
                     (game, save_id),
                 ).fetchone()
@@ -60,6 +88,7 @@ class GameWorkDocsRepo(BaseRepo):
                     save_name=str(row["save_name"] or ""),
                     notebook=str(row["notebook"] or ""),
                     todos=_parse_todos(row["todos"]),
+                    pinned_rules=_parse_pinned_rules(row["pinned_rules"]),
                     updated_session_id=row["updated_session_id"],
                     updated_at_ms=int(row["updated_at_ms"] or 0),
                 )
@@ -74,9 +103,14 @@ class GameWorkDocsRepo(BaseRepo):
         save_name: str = "",
         notebook: str = "",
         todos: Sequence[Mapping[str, Any]] = (),
+        pinned_rules: Optional[Sequence[str]] = None,
         updated_session_id: Optional[int] = None,
     ) -> None:
-        """按 ``(game, save_id)`` 覆盖写入工作笔记与待办列表。"""
+        """按 ``(game, save_id)`` 覆盖写入工作笔记、待办列表与钉住规矩。
+
+        ``pinned_rules`` 为 ``None`` 时表示调用方本次未修改钉住规矩：新建行写入空数组，
+        冲突更新时保留库里已有的 ``pinned_rules``，避免旧调用方只改笔记或待办时误清空规矩。
+        """
         if not save_id:
             return
         ts = now_ms()
@@ -84,21 +118,42 @@ class GameWorkDocsRepo(BaseRepo):
             {"content": str(item.get("content", "")), "status": str(item.get("status", "pending"))} for item in todos
         ]
         todos_json = json.dumps(normalized_todos, ensure_ascii=False, separators=(",", ":"))
+        keep_existing_rules = pinned_rules is None
+        rules_json = json.dumps(
+            _normalize_pinned_rules(pinned_rules or ()),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
         def _exec() -> None:
             with self._manager.transaction() as conn:
-                conn.execute(
-                    "INSERT INTO game_work_docs("
-                    "game, save_id, save_name, notebook, todos, updated_session_id, updated_at_ms"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?)"
-                    " ON CONFLICT(game, save_id) DO UPDATE SET"
-                    " save_name = CASE WHEN excluded.save_name != '' THEN excluded.save_name ELSE game_work_docs.save_name END,"
-                    " notebook = excluded.notebook,"
-                    " todos = excluded.todos,"
-                    " updated_session_id = excluded.updated_session_id,"
-                    " updated_at_ms = excluded.updated_at_ms",
-                    (game, save_id, save_name, notebook, todos_json, updated_session_id, ts),
-                )
+                if keep_existing_rules:
+                    conn.execute(
+                        "INSERT INTO game_work_docs("
+                        "game, save_id, save_name, notebook, todos, pinned_rules, updated_session_id, updated_at_ms"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                        " ON CONFLICT(game, save_id) DO UPDATE SET"
+                        " save_name = CASE WHEN excluded.save_name != '' THEN excluded.save_name ELSE game_work_docs.save_name END,"
+                        " notebook = excluded.notebook,"
+                        " todos = excluded.todos,"
+                        " updated_session_id = excluded.updated_session_id,"
+                        " updated_at_ms = excluded.updated_at_ms",
+                        (game, save_id, save_name, notebook, todos_json, rules_json, updated_session_id, ts),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO game_work_docs("
+                        "game, save_id, save_name, notebook, todos, pinned_rules, updated_session_id, updated_at_ms"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                        " ON CONFLICT(game, save_id) DO UPDATE SET"
+                        " save_name = CASE WHEN excluded.save_name != '' THEN excluded.save_name ELSE game_work_docs.save_name END,"
+                        " notebook = excluded.notebook,"
+                        " todos = excluded.todos,"
+                        " pinned_rules = excluded.pinned_rules,"
+                        " updated_session_id = excluded.updated_session_id,"
+                        " updated_at_ms = excluded.updated_at_ms",
+                        (game, save_id, save_name, notebook, todos_json, rules_json, updated_session_id, ts),
+                    )
 
         await self._run_in_executor(_exec)
 

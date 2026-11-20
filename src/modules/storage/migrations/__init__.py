@@ -71,6 +71,7 @@ from src.modules.storage.migrations import (
     v45_session_overview_backfill,
     v46_migration_ledger_content_hash,
     v47_viewer_self_candidates,
+    v48_game_work_docs_pinned_rules,
 )
 
 _MIGRATION_MODULES: Dict[int, ModuleType] = {
@@ -121,6 +122,7 @@ _MIGRATION_MODULES: Dict[int, ModuleType] = {
     45: v45_session_overview_backfill,
     46: v46_migration_ledger_content_hash,
     47: v47_viewer_self_candidates,
+    48: v48_game_work_docs_pinned_rules,
 }
 
 

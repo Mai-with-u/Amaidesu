@@ -64,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 47
+SCHEMA_VERSION: int = 48
 
 
 # =============================================================================
@@ -755,7 +755,7 @@ CREATE TABLE IF NOT EXISTS game_creatures (
 """.strip()
 
 
-# 游戏 Agent 的工作文档：按"游戏 + 存档编号"一存档一行，跨重启保留工作笔记全文与待办列表。
+# 游戏 Agent 的工作文档：按"游戏 + 存档编号"一存档一行，跨重启保留工作笔记全文、待办列表与钉住规矩。
 _GAME_WORK_DOCS_SQL = """
 CREATE TABLE IF NOT EXISTS game_work_docs (
     game               TEXT NOT NULL,
@@ -763,6 +763,7 @@ CREATE TABLE IF NOT EXISTS game_work_docs (
     save_name          TEXT NOT NULL DEFAULT '',
     notebook           TEXT NOT NULL DEFAULT '',
     todos              TEXT NOT NULL DEFAULT '[]',
+    pinned_rules       TEXT NOT NULL DEFAULT '[]',
     updated_session_id INTEGER REFERENCES live_sessions(id) ON DELETE SET NULL,
     updated_at_ms      INTEGER NOT NULL,
     PRIMARY KEY (game, save_id)
