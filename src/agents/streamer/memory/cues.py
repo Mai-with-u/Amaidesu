@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Mapping,
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.memory import NewCueLogEntry
+from src.modules.storage.privacy import mask_names_in_text, player_forget_kind
 from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
 from src.modules.types.session_kind import SESSION_KIND_LIVE
@@ -202,10 +203,11 @@ class _Round:
     probes: List[NewCueLogEntry] = field(default_factory=list)
     carded_viewers: Set[int] = field(default_factory=set)
     skipped: List[str] = field(default_factory=list)
+    max_cards: int = MAX_CARDS_PER_BATCH
 
     @property
     def full(self) -> bool:
-        return len(self.cards) >= MAX_CARDS_PER_BATCH
+        return len(self.cards) >= self.max_cards
 
     def ids(self, kind: str) -> Tuple[int, ...]:
         return tuple(int(card.key[1]) for card in self.cards if card.key[0] == kind)
@@ -425,6 +427,205 @@ class MemoryCueProvider:
         cleaned = (name or "").strip()
         if cleaned:
             self._known_names.add(cleaned)
+
+    def prefetch_game_text(self, text: str) -> None:
+        """游戏主控态收到公开玩家公屏时在后台非阻塞预取查询向量（遮名且过滤遗忘命令，绝不阻塞等待）。"""
+        if not self._vector_on() or self._search is None:
+            return
+        if self._current_session_provider is None or self._current_session_provider() is None:
+            return
+        cleaned = self._sanitize_game_text(text)
+        if not cleaned or not query_worthy(cleaned):
+            return
+        masked = mask_names_in_text(cleaned, self._known_names, "玩家")
+        if query_worthy(masked):
+            self._search.prefetch(masked)
+
+    async def cues_for_game_lead(
+        self,
+        *,
+        game: str,
+        texts: Sequence[str] = (),
+        players: Sequence[Tuple[str, str]] = (),
+        situation: Optional[Any] = None,
+        arrived_places: Sequence[str] = (),
+        current_saves: Optional[Mapping[str, GameSave]] = None,
+        brief_archive_ids: Sequence[int] = (),
+        brief_commitment_ids: Sequence[int] = (),
+        limit: int = MAX_CARDS_PER_BATCH,
+    ) -> List[str]:
+        """供自主主控游戏 Agent 按需拉取跨场被动记忆线索卡（纯只读、绝不泄露直播间观众隐私）。
+
+        复用路径：游戏玩家往来卡（``_player_cards``）-> 到达记住地点卡（``_place_cards`` 与显式
+        ``arrived_places``）-> 档案触发词规则卡（``_rule_cards``，不含观众老梗）-> 非阻塞向量联想
+        （不阻塞等慢嵌入）。严格共享本场每地点只推一次、10 分钟限频、已用编号去重、遗忘名单过滤
+        与最多 1–2 条上限。
+        """
+        normalized_game = (game or "").strip()
+        effective_limit = min(MAX_CARDS_PER_BATCH, max(0, int(limit)))
+        if not normalized_game or effective_limit <= 0:
+            return []
+        session_id = self._current_session_provider() if self._current_session_provider is not None else None
+        if session_id is None:
+            return []
+        sid = int(session_id)
+        self._reset_if_new_session(sid)
+
+        used, used_archive = await load_used_refs(self._chat, sid)
+        await self._mark_used(sid, used_archive, used)
+        recent_ids, earliest_ms, self_cutoff_ms = await self._recent_session_bounds(sid)
+        state = _Round(
+            used=used,
+            used_archive=used_archive,
+            brief_commitments={int(item) for item in brief_commitment_ids},
+            brief_archive={int(item) for item in brief_archive_ids},
+            saves=dict(current_saves or {}),
+            previous_session_id=await self._previous_session_id(),
+            recent_session_ids=recent_ids,
+            earliest_recent_ms=earliest_ms,
+            self_trigger_cutoff_ms=self_cutoff_ms,
+            max_cards=effective_limit,
+        )
+        self._round_labels = {}
+
+        # 游戏内往来玩家卡：过滤遗忘名单上的玩家，绝不触碰直播间观众表
+        valid_players = await self._filter_game_players(normalized_game, players)
+        if valid_players:
+            await self._player_cards(sid, valid_players, state)
+
+        clean_texts = [cleaned for raw in texts if (cleaned := self._sanitize_game_text(raw))]
+        game_situation = situation if isinstance(situation, GameSituation) else None
+        if game_situation is not None:
+            for player_name in game_situation.players:
+                self.note_name(player_name)
+
+        # 地点到达与档案触发词规则卡（用 SOURCE_PLAYER 来源，天然跳过直播间老梗）
+        if self._passive_enabled and not state.full:
+            await self._pool.refresh_if_stale()
+            if game_situation is not None:
+                await self._place_cards({normalized_game: game_situation}, state)
+            if arrived_places and not state.full:
+                await self._explicit_place_cards(
+                    game=normalized_game,
+                    arrived_places=arrived_places,
+                    situation=game_situation,
+                    state=state,
+                )
+            if clean_texts and not state.full:
+                cue_texts = [CueText(source=SOURCE_PLAYER, text=item) for item in clean_texts]
+                self._rule_cards(self._pool.match(cue_texts), sid=sid, state=state)
+
+        # 非阻塞向量联想：已算好的查询向量立即参与匹配，未算好的仅后台起算不等待
+        if self._vector_on() and not state.full:
+            await self._vector_cards_for_game_lead(
+                sid=sid,
+                game=normalized_game,
+                texts=clean_texts,
+                situation=game_situation,
+                state=state,
+            )
+
+        await self._record_round(sid, state)
+        return [card.text for card in state.cards[:effective_limit]]
+
+    def _sanitize_game_text(self, text: str) -> str:
+        """清洗游戏文本：去空白、跳过遗忘/撤回指令并经隐私遮名，防止遗忘观众名字经线索回流。"""
+        cleaned = " ".join(str(text or "").split())
+        if not cleaned:
+            return ""
+        if self._privacy is not None:
+            if self._privacy.is_forget_command(cleaned) or self._privacy.is_retract_command(cleaned):
+                return ""
+            cleaned = self._privacy.mask_speech(cleaned)
+        return cleaned
+
+    async def _filter_game_players(
+        self, default_game: str, players: Sequence[Tuple[str, str]]
+    ) -> List[Tuple[str, str]]:
+        """归一化游戏玩家 (game, uuid) 列表并排除遗忘名单上的身份标识。"""
+        filtered: List[Tuple[str, str]] = []
+        seen: Set[Tuple[str, str]] = set()
+        for pair in players or ():
+            if not isinstance(pair, (tuple, list)) or len(pair) < 2:
+                continue
+            game_name = str(pair[0] or "").strip() or default_game
+            player_uuid = str(pair[1] or "").strip()
+            if not player_uuid:
+                continue
+            key = (game_name, player_uuid)
+            if key in seen:
+                continue
+            if self._privacy is not None:
+                try:
+                    if await self._privacy.is_external_id_forgotten(
+                        id_kind=player_forget_kind(game_name), external_id=player_uuid
+                    ):
+                        continue
+                except Exception as exc:  # noqa: BLE001 - 查不了遗忘表时保守跳过该玩家
+                    logger.warning(f"核对游戏玩家遗忘名单失败（跳过该玩家线索）: {exc}", exc=exc)
+                    continue
+            seen.add(key)
+            filtered.append(key)
+        return filtered
+
+    async def _vector_cards_for_game_lead(
+        self,
+        *,
+        sid: int,
+        game: str,
+        texts: Sequence[str],
+        situation: Optional[GameSituation],
+        state: _Round,
+    ) -> None:
+        """游戏主控态非阻塞向量联想：只消费已就绪的查询向量，未就绪的后台起算、本次不等待。"""
+        search = self._search
+        if search is None:
+            return
+        queries: List[Tuple[str, str, str]] = []
+        for raw_text in texts[-VECTOR_MAX_QUERIES:]:
+            masked = mask_names_in_text(raw_text, self._known_names, "玩家")
+            if query_worthy(masked):
+                queries.append((SOURCE_PLAYER, "", masked))
+        if situation is not None:
+            self._situation.update({game: situation}, state.saves, {}, names=self._known_names)
+            if self._situation.pending:
+                queries.append((SOURCE_SITUATION, "", self._situation.pending))
+
+        results = []
+        for source, message_id, query_text in queries:
+            if not search.vector_ready(query_text, start=True):
+                if source == SOURCE_SITUATION:
+                    self._situation.missed()
+                continue
+            try:
+                result = await search.search_detailed(query_text, sources=("archive", "commitment"), limit=VECTOR_TOP)
+            except Exception as exc:  # noqa: BLE001 - 这一条查不了就跳过，不挡其余线索
+                logger.warning(f"游戏主控被动线索语义查询失败（跳过）: {exc}", exc=exc)
+                continue
+            if source == SOURCE_SITUATION:
+                self._situation.done()
+            results.append((source, message_id, result))
+
+        for hit in vector_hits(results):
+            if state.full:
+                return
+            if self._skip(hit.key, state, self._passive_blocked(hit.key, state)):
+                continue
+            text = await self._vector_card_text(hit, state)
+            if not text:
+                continue
+            detail: Dict[str, Any] = {
+                "cosine": round(hit.cosine or 0.0, 4),
+                "rank": hit.vector_rank,
+                "fused": round(hit.fused or 0.0, 5),
+            }
+            if hit.top3:
+                detail["top3"] = list(hit.top3)
+            self._push(
+                state,
+                _Card(key=hit.key, text=text, kind="vector", sources=tuple(sorted(hit.sources)), detail=detail),
+            )
+        del sid
 
     def _vector_on(self) -> bool:
         return (
@@ -895,6 +1096,35 @@ class MemoryCueProvider:
         arrivals = self._arrivals.update(situations, state.saves)
         if not arrivals:
             return
+        await self._emit_place_arrivals(arrivals, state)
+
+    async def _explicit_place_cards(
+        self,
+        *,
+        game: str,
+        arrived_places: Sequence[str],
+        situation: Optional[GameSituation],
+        state: _Round,
+    ) -> None:
+        """游戏主控侧已本地判定到达记住地标时，按本场每地点一次与同存档口径补推地点卡。"""
+        distances: Dict[str, int] = {}
+        if situation is not None:
+            for nearby in situation.places:
+                if nearby.name and nearby.name not in distances:
+                    distances[nearby.name] = int(nearby.distance)
+        arrivals: List[Tuple[str, str, int]] = []
+        for raw in arrived_places:
+            place = str(raw or "").strip()
+            if not place:
+                continue
+            if not self._arrivals.claim_arrived(game, place, state.saves):
+                continue
+            arrivals.append((game, place, distances.get(place, 0)))
+        if arrivals:
+            await self._emit_place_arrivals(arrivals, state)
+
+    async def _emit_place_arrivals(self, arrivals: Sequence[Tuple[str, str, int]], state: _Round) -> None:
+        """把已确认到达的地点元组转成地点档案卡与相关未搁置公开承诺卡（遵守同存档与 10 分钟限频）。"""
         game_commitments: Dict[str, List[Any]] = {}
         for game, place, distance in arrivals:
             for line in self._pool.lines_at(game, place, state.saves):
@@ -994,6 +1224,8 @@ class MemoryCueProvider:
         if SOURCE_DANMAKU in hit.sources:
             who = f"弹幕 {hit.message_id} " if hit.message_id else "观众"
             why = f"{who}提到「{keyword}」"
+        elif SOURCE_PLAYER in hit.sources:
+            why = f"游戏里刚提到「{keyword}」"
         else:
             why = f"你刚说到「{keyword}」"
         line = self._pool.archive_line(int(value))
@@ -1081,6 +1313,8 @@ class MemoryCueProvider:
         """向量命中的卡面；不是正式场的档案行、不能推的承诺、别的存档里的事返回空串。"""
         if SOURCE_DANMAKU in hit.sources:
             why = f"弹幕 {hit.message_id} 说的像这件事" if hit.message_id else "观众说的像这件事"
+        elif SOURCE_PLAYER in hit.sources:
+            why = "游戏里刚说的像这件事"
         else:
             why = "眼下游戏里的情境像这件事"
         kind, value = hit.key

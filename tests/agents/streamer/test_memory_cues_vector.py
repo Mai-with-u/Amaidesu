@@ -357,3 +357,182 @@ async def test_unpushed_vector_query_still_logs_top3_probe_without_inflating_pus
     )
     assert updated == 0
     assert compute_side_effects([], entries, duration_ms=600_000) is None
+
+
+async def test_cues_for_game_lead_reuses_player_place_rule_vector_without_leaking_viewer_privacy(
+    store: SQLiteDatabase,
+    privacy: PrivacyService,
+) -> None:
+    """cues_for_game_lead 复用玩家卡、地点卡、档案规则与非阻塞向量联想，守住限频、遗忘过滤与零观众隐私泄露。"""
+    memory = await _Memory(store).seed()
+    old_sid = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms() - 50_000_000)
+    await store.sessions.close_live_session(live_session_id=old_sid, ended_at_ms=memory.clock.now_ms() - 40_000_000)
+
+    # 1) 播种一位观众（含秘密承诺）——游戏线索绝不可泄露该观众或对她的承诺
+    viewer_res = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="viewer_secret_1",
+        user_name="秘密观众小蓝",
+        timestamp_ms=memory.clock.now_ms() - 10_000,
+        name_match_window_ms=0,
+    )
+    await store.commitments.insert_commitment(
+        what="秘密观众小蓝的私密点歌",
+        quote="下次一定唱给秘密观众小蓝听",
+        viewer_id=viewer_res.viewer_id,
+    )
+
+    # 2) 播种一位正常游戏同伴 + 一位已申请遗忘的游戏同伴
+    friend = await store.game_players.meet_player(
+        game="minecraft",
+        uuid="uuid-friend-1",
+        name="工匠阿铁",
+        live_session_id=old_sid,
+        save_id="b",
+        save_name="新档",
+        at_ms=memory.clock.now_ms() - 60_000,
+    )
+    await store.game_players.add_interaction(
+        player_id=friend.id,
+        live_session_id=old_sid,
+        kind="helped",
+        fact={"title": "一起在河边搭了自动化水车"},
+        save_id="b",
+        save_name="新档",
+        at_ms=memory.clock.now_ms() - 60_000,
+    )
+    forgotten = await store.game_players.meet_player(
+        game="minecraft",
+        uuid="uuid-forgotten-1",
+        name="已遗忘路人",
+        live_session_id=old_sid,
+        save_id="b",
+        save_name="新档",
+        at_ms=memory.clock.now_ms() - 60_000,
+    )
+    await store.game_players.add_interaction(
+        player_id=forgotten.id,
+        live_session_id=old_sid,
+        kind="helped",
+        fact={"title": "不应被想起的往事"},
+        save_id="b",
+        save_name="新档",
+        at_ms=memory.clock.now_ms() - 60_000,
+    )
+    await privacy.process_incoming_player_chat(
+        game="minecraft",
+        uuid="uuid-forgotten-1",
+        name="已遗忘路人",
+        content="麦麦忘了我",
+        at_ms=memory.clock.now_ms() - 5_000,
+    )
+
+    # 3) 播种带触发词和地点的档案行（同存档 "b"）
+    await store.archive.insert_line(
+        live_session_id=old_sid,
+        text="Minecraft：北岸水车房别拆主齿轮",
+        quote="北岸水车房的主齿轮拆了会卡停整条产线",
+        evidence_chat_id=10,
+        game="minecraft",
+        save_id="b",
+        save_name="新档",
+        place="北岸水车房",
+        keywords=["主齿轮"],
+    )
+
+    session_id = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms())
+    provider = await memory.provider(
+        session_id,
+        privacy=privacy,
+        game_player_repo=store.game_players,
+        inside_jokes="倒立洗头：观众爱提的直播间老梗",
+    )
+
+    # 校验 A：玩家卡 + 规则触发词命中，遗忘玩家被过滤，观众老梗与观众承诺绝不泄露
+    cards_a = await provider.cues_for_game_lead(
+        game="minecraft",
+        texts=("提醒一下主齿轮和倒立洗头还有秘密观众小蓝",),
+        players=[("minecraft", "uuid-friend-1"), ("minecraft", "uuid-forgotten-1")],
+        current_saves=_SAVES,
+        limit=2,
+    )
+    joined_a = "\n".join(cards_a)
+    assert len(cards_a) == 2
+    assert "工匠阿铁" in joined_a
+    assert "北岸水车房" in joined_a
+    assert "已遗忘路人" not in joined_a
+    assert "倒立洗头" not in joined_a
+    assert "秘密观众小蓝" not in joined_a
+
+    # 校验 B：10 分钟冷却内重复查询同一玩家与同一触发词不再重复推
+    cards_cooldown = await provider.cues_for_game_lead(
+        game="minecraft",
+        texts=("再提一次主齿轮",),
+        players=[("minecraft", "uuid-friend-1")],
+        current_saves=_SAVES,
+        limit=2,
+    )
+    assert cards_cooldown == []
+
+    # 校验 C：非阻塞向量联想——未预取的文本不阻塞直接返回空，预取就绪后自动命中跨场同义档案/承诺
+    query_cat = "那只橘猫最近还好吗"
+    cards_unready = await provider.cues_for_game_lead(
+        game="minecraft",
+        texts=(query_cat,),
+        current_saves=_SAVES,
+        limit=2,
+    )
+    assert cards_unready == []
+    await memory.warm(query_cat)
+    cards_vector = await provider.cues_for_game_lead(
+        game="minecraft",
+        texts=(query_cat,),
+        current_saves=_SAVES,
+        limit=2,
+    )
+    assert cards_vector
+    assert any("芝麻" in card or "给猫做个窝" in card for card in cards_vector)
+
+    # 校验 D：地点到达卡——从 60 格外走进 15 格内触发地标档案（推进 11 分钟越过冷却）
+    memory.clock.tick(11 * 60 * 1000)
+    far_sit = GameSituation(places=(NearbyPlace(name="北岸水车房", distance=60),), age_ms=0, players=())
+    near_sit = GameSituation(places=(NearbyPlace(name="北岸水车房", distance=15),), age_ms=0, players=())
+    assert await provider.cues_for_game_lead(game="minecraft", situation=far_sit, current_saves=_SAVES) == []
+    cards_place = await provider.cues_for_game_lead(game="minecraft", situation=near_sit, current_saves=_SAVES)
+    assert len(cards_place) == 1
+    assert "北岸水车房" in cards_place[0]
+
+    # 校验 E：显式 arrived_places（主控侧首次判定到达，_arrivals 从未见过远距读数）照常触发且同场每地点仅推一次
+    await store.archive.insert_line(
+        live_session_id=old_sid,
+        text="Minecraft：东郊灯塔地下室藏着应急箱",
+        quote="东郊灯塔地下室留了一组应急铁锭",
+        evidence_chat_id=11,
+        game="minecraft",
+        save_id="b",
+        save_name="新档",
+        place="东郊灯塔",
+        keywords=["应急铁锭"],
+    )
+    memory.clock.tick(11 * 60 * 1000)
+    lighthouse_sit = GameSituation(places=(NearbyPlace(name="东郊灯塔", distance=12),), age_ms=0, players=())
+    cards_explicit = await provider.cues_for_game_lead(
+        game="minecraft",
+        situation=lighthouse_sit,
+        arrived_places=("东郊灯塔",),
+        current_saves=_SAVES,
+    )
+    assert len(cards_explicit) == 1
+    assert "东郊灯塔" in cards_explicit[0]
+    # 同场即便越过冷却再次到达同一地标也不重复推送
+    memory.clock.tick(11 * 60 * 1000)
+    assert (
+        await provider.cues_for_game_lead(
+            game="minecraft",
+            situation=lighthouse_sit,
+            arrived_places=("东郊灯塔",),
+            current_saves=_SAVES,
+        )
+        == []
+    )

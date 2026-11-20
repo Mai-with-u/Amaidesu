@@ -116,7 +116,7 @@ from .memory.brief import build_brief
 from .memory.cues import MemoryCueProvider
 from .memory.index import MemoryIndexer
 from .memory.last_wrapup import OPENING_WRAPUP_MAX_WINDOWS, build_last_wrapup
-from .memory.recall import MemoryRecallService, build_memory_recall_provider
+from .memory.recall import SCOPE_THIS_STREAM, MemoryRecallService, RecallEntry, build_memory_recall_provider
 from .memory.search import MemorySearch
 from .memory.settle import SessionSettler
 from .session_overview import SessionOverviewWriter
@@ -836,10 +836,11 @@ class StreamerAgent(BaseAgent):
                 viewer_repo=viewer_repo,
                 current_session_provider=self._current_session_pk,
                 event_repo=event_repo,
-                saves_provider=lambda: self._current_saves,
+                saves_provider=self._current_saves_snapshot,
                 search=self._memory_search,
                 social_fact_repo=social_fact_repo,
                 work_docs_repo=work_docs_repo,
+                short_term_recall=self._query_active_short_term_recall if self._lead_coordinator is not None else None,
             )
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None
@@ -1067,6 +1068,8 @@ class StreamerAgent(BaseAgent):
             self._lead_coordinator.bind_lead_changed_listener(self._on_lead_changed)
             if hasattr(self._lead_coordinator, "bind_ready_listener"):
                 self._lead_coordinator.bind_ready_listener(self._on_lead_agent_ready)
+            if self._memory_cues is not None and hasattr(self._lead_coordinator, "set_passive_cue_provider"):
+                self._lead_coordinator.set_passive_cue_provider(self._fetch_passive_cues_for_game_lead)
             self._lead_hooks_bound = True
             if not self._spoken_echo_registered:
                 self._speech.add_spoken_listener(self._on_spoken_echo)
@@ -1097,6 +1100,8 @@ class StreamerAgent(BaseAgent):
             self._lead_coordinator.unbind_lead_changed_listener(self._on_lead_changed)
             if hasattr(self._lead_coordinator, "unbind_ready_listener"):
                 self._lead_coordinator.unbind_ready_listener(self._on_lead_agent_ready)
+            if hasattr(self._lead_coordinator, "set_passive_cue_provider"):
+                self._lead_coordinator.set_passive_cue_provider(None)
             if self._lead_coordinator.is_game_lead:
                 try:
                     await self._lead_coordinator.reclaim_streamer_lead(reason="streamer_stop")
@@ -2660,6 +2665,78 @@ class StreamerAgent(BaseAgent):
         lines = await self._archive_repo.list_lines_by_ids(line_ids=[int(line_id)])
         return lines[0] if lines else None
 
+    def _current_saves_snapshot(self) -> Dict[str, GameSave]:
+        """返回各游戏当前所在存档快照；在游戏主控期或尚未同步过存档时主动只读拉取一次，避免跨场检索缺存档上下文。"""
+        if not self._current_saves or self._is_game_lead_active():
+            self._sync_current_saves()
+        return self._current_saves
+
+    async def _fetch_passive_cues_for_game_lead(
+        self,
+        *,
+        game: str,
+        texts: Sequence[str] = (),
+        players: Sequence[Tuple[str, str]] = (),
+        situation: Optional[Any] = None,
+        arrived_places: Sequence[str] = (),
+        limit: int = 2,
+    ) -> List[str]:
+        """供主控游戏 Agent 按需拉取跨场被动记忆线索卡（复用 MemoryCueProvider，绝不泄露观众隐私）。"""
+        if self._memory_cues is None:
+            return []
+        # 游戏主控期间主播 Planner 零唤醒，按需拉线索前只读同步一次当前存档，确保按存档隔离的档案与玩家卡准确命中；
+        # 主播的常驻简报并不注入游戏 Agent 上下文，因此这里不传 brief_*_ids 屏蔽上一场档案，只共享本场已用与 10 分钟限频
+        self._sync_current_saves()
+        return await self._memory_cues.cues_for_game_lead(
+            game=game,
+            texts=texts,
+            players=players,
+            situation=situation if isinstance(situation, GameSituation) else None,
+            arrived_places=arrived_places,
+            current_saves=self._current_saves,
+            limit=limit,
+        )
+
+    async def _query_active_short_term_recall(
+        self,
+        query: str,
+        scope: str,
+        limit: int,
+    ) -> List[RecallEntry]:
+        """委托动态主从协调器聚合活跃游戏 Agent 的本场短期记忆条目，并转换为回想条目。
+
+        隐私边界：私聊条目在未开播或全历史（非本场）检索时一律过滤，防止私聊跨场或面向公开外泄。
+        """
+        coord = self._lead_coordinator
+        if coord is None or not hasattr(coord, "query_active_short_term_memory"):
+            return []
+        raw_items = await coord.query_active_short_term_memory(query, scope=scope, limit=limit)
+        current_sid = self._current_session_pk()
+        entries: List[RecallEntry] = []
+        for item in raw_items or ():
+            is_private = bool(item.get("private", False))
+            # 私聊仅限本场且明确本场检索口径时安全保留并标注警示，跨场或未开播一律过滤
+            if is_private and (current_sid is None or scope != SCOPE_THIS_STREAM):
+                continue
+            body = str(item.get("text") or "").strip()
+            if not body:
+                continue
+            source_label = str(item.get("source_label") or "本场游戏记忆").strip()
+            timestamp_ms = int(item.get("timestamp_ms") or 0)
+            if is_private:
+                rendered = f"本场 {source_label}（私聊，仅自己知悉、勿在直播念出）：{body}"
+            else:
+                rendered = f"本场 {source_label}：{body}"
+            entries.append(
+                RecallEntry(
+                    source="short_term",
+                    source_id=0,
+                    timestamp_ms=timestamp_ms,
+                    text=f"- {rendered}",
+                )
+            )
+        return entries
+
     async def _collect_memory_cues(
         self, batch: List[Any], open_games: Sequence[str], game_players: Sequence[Tuple[str, str]] = ()
     ) -> Any:
@@ -2973,8 +3050,12 @@ class StreamerAgent(BaseAgent):
                     self._proactive_signals.set_game()
                     self._notify_fresh_input()
                 # 游戏里说过话的人记成已知玩家名：游戏情境查询发给嵌入服务前把它换掉
-                if self._memory_cues is not None and payload.sender:
-                    self._memory_cues.note_name(payload.sender)
+                if self._memory_cues is not None:
+                    if payload.sender:
+                        self._memory_cues.note_name(payload.sender)
+                    # 游戏主控态收到公开公屏时顺手在后台非阻塞预取查询向量，供 2 秒合批刷出时零等待命中
+                    if self._is_game_lead_active() and not payload.private and payload.content:
+                        self._memory_cues.prefetch_game_text(payload.content)
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}", exc=True)
 

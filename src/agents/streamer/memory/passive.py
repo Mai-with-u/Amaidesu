@@ -413,6 +413,25 @@ class PlaceArrivals:
             self._previous[game] = (save_id, max((int(place.distance) for place in situation.places), default=0))
         return arrivals
 
+    def claim_arrived(
+        self,
+        game: str,
+        place: str,
+        current_saves: Mapping[str, GameSave],
+    ) -> bool:
+        """登记游戏主控侧已本地确认到达的记住地标（同场同存档同地点仅放行一次，与距离滞回共享去重集）。"""
+        normalized_game = (game or "").strip()
+        normalized_place = (place or "").strip()
+        if not normalized_game or not normalized_place:
+            return False
+        save = current_saves.get(normalized_game)
+        save_id = save.id if save is not None and save.known else ""
+        key = (normalized_game, save_id, normalized_place)
+        if key in self._arrived:
+            return False
+        self._arrived.add(key)
+        return True
+
     def _forget_game(self, game: str) -> None:
         """丢掉一个游戏记下的距离：之后第一次新读数当"之前在哪不清楚"。"""
         self._previous.pop(game, None)
