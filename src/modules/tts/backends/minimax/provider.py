@@ -133,7 +133,7 @@ class MiniMaxTTSProvider:
             return
         self.logger.info("MiniMaxTTSProvider 清理中...")
         if self.audio_manager:
-            self.audio_manager.stop_stream()
+            self.audio_manager.stop_stream(discard_pending=True)
         if self.client:
             await self.client.close()
         self._is_connected = False
@@ -170,9 +170,11 @@ class MiniMaxTTSProvider:
             duration_ms=None,
         )
 
-        write_task: Optional[asyncio.Task] = None
+        lock_acquired = False
+        in_flight_task: Optional[asyncio.Task[Any]] = None
         try:
             async with self.tts_lock:
+                lock_acquired = True
                 # 打开声卡输出流放工作线程（在事件循环里同步打开，每句开口形象都顿一两百毫秒）；
                 # 开始这一句仍在事件循环上做：口型分析器要在循环里起后台任务
                 stream = await asyncio.to_thread(self.audio_manager.open_output_stream)
@@ -185,14 +187,13 @@ class MiniMaxTTSProvider:
                     chunk = np.frombuffer(pcm_bytes, dtype=DTYPE)
                     if chunk.size == 0:
                         continue
-                    # 写声卡放工作线程：预缓冲冲入与背压会阻塞 write 达数秒
-                    # （等播放消费腾缓冲），同步执行会冻结事件循环
-                    write_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.write_chunk, chunk))
-                    await write_task
+                    in_flight_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.write_chunk, chunk))
+                    await in_flight_task
                     total_samples += int(chunk.size)
 
-                # 收尾含预缓冲残余冲播（同样阻塞数秒），一并放工作线程
-                await asyncio.to_thread(self.audio_manager.stop_stream)
+                # 收尾放工作线程等待回调流播完余量，期间被取消则由取消分支立即 abort 唤醒
+                in_flight_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.stop_stream))
+                await in_flight_task
 
             self.logger.debug(f"TTS 播放完成: '{final_text[:30]}...'")
             self.render_count += 1
@@ -205,22 +206,21 @@ class MiniMaxTTSProvider:
             )
 
         except asyncio.CancelledError:
-            # 队列看门狗超时取消：声卡流必须显式关闭并丢弃未播预缓冲，
-            # 否则 PCM 残留会继续播出，与下一条 utterance 的音频重叠。
-            # 先等在途的写线程退出（PortAudio 并发 write/close 未定义），
-            # 线程会在流关闭异常上快速失败，shield 防止连带取消。
-            if write_task is not None and not write_task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(write_task), timeout=1.0)
-                except Exception as exc:  # noqa: BLE001 — 流已关闭的写失败属预期，仅需等待收敛
-                    self.logger.debug(f"取消路径在途写收敛等待失败（流已关闭，属预期）: {exc}", exc=True)
-            self.audio_manager.stop_stream(discard_pending=True)
+            # 仅持锁方有权重置当前声卡会话：先同步 abort+丢弃缓冲唤醒在途 stop_stream，再等待工作线程收敛
+            if lock_acquired:
+                self.audio_manager.stop_stream(discard_pending=True)
+                if in_flight_task is not None and not in_flight_task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(in_flight_task), timeout=1.0)
+                    except Exception as exc:  # noqa: BLE001 — 流已关闭的在途任务收尾异常属预期
+                        self.logger.debug(f"取消路径在途写/收尾收敛等待失败（流已关闭，属预期）: {exc}", exc=True)
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except MiniMaxTTSApiError as e:
             # 接口不可达 / 业务拒绝是预期内的环境故障：简短告警即可，不打全量 traceback。
-            # 错误路径同样关流并丢弃预缓冲（失败半句不冲播）
-            self.audio_manager.stop_stream(discard_pending=True)
+            # 错误路径仅在持锁时关流并丢弃预缓冲（失败半句不冲播）
+            if lock_acquired:
+                self.audio_manager.stop_stream(discard_pending=True)
             self.error_count += 1
             self.logger.warning(f"TTS 渲染失败: {e}（本条放弃，等待服务恢复）")
             await emit_utterance_failed(
@@ -233,7 +233,8 @@ class MiniMaxTTSProvider:
             )
             raise
         except Exception as e:
-            self.audio_manager.stop_stream(discard_pending=True)
+            if lock_acquired:
+                self.audio_manager.stop_stream(discard_pending=True)
             self.error_count += 1
             self.logger.exception(f"TTS 渲染失败: {e}")
             # 先发 failed 让字幕出字再上抛；cause=e 给异常打"已报告"标记，队列兜底不再补发第二条

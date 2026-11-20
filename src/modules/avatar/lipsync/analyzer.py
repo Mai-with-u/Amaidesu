@@ -20,6 +20,7 @@ Warudo 等尚未移植的平台把信号翻译为本平台参数）。
 """
 
 import asyncio
+import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -208,6 +209,8 @@ class LipSyncAnalyzer:
         # 会话状态
         self.is_speaking = False
         self.current_utterance_id: str = ""
+        # feed（分接后台泵线程）与分析循环（事件循环线程）跨线程共享缓冲，必须加锁隔离读写切片
+        self._buffer_lock = threading.Lock()
         self._audio_buffer = bytearray()
         self._analysis_task: Optional[asyncio.Task] = None
         self._buffer_sample_rate: int = self._sample_rate
@@ -260,7 +263,8 @@ class LipSyncAnalyzer:
 
         self.is_speaking = True
         self.current_utterance_id = utterance_id
-        self._audio_buffer = bytearray()
+        with self._buffer_lock:
+            self._audio_buffer = bytearray()
         self.last_signal = MouthSignal(utterance_id=utterance_id)
         self._last_emit_time = 0.0
 
@@ -286,9 +290,11 @@ class LipSyncAnalyzer:
                 if np.issubdtype(array.dtype, np.floating):
                     array = np.clip(array, -1.0, 1.0) * 32767.0
                 array = array.astype(np.int16)
-            self._buffer_sample_rate = int(sample_rate)
-            self._audio_buffer.extend(array.astype(np.int16).tobytes())
-            self._trim_audio_buffer()
+            pcm_bytes = array.astype(np.int16).tobytes()
+            with self._buffer_lock:
+                self._buffer_sample_rate = int(sample_rate)
+                self._audio_buffer.extend(pcm_bytes)
+                self._trim_audio_buffer()
         except Exception as e:
             self.logger.warning(f"口型缓冲追加失败（已忽略）: {e}")
 
@@ -375,15 +381,17 @@ class LipSyncAnalyzer:
                 await self._emit(volume, vowel_values)
                 return
 
-            # 缓冲读写都在事件循环线程内同步完成（feed 非阻塞、此处切片
-            # 无 await 点），无交错可能，不需要加锁
-            buffer_len = len(self._audio_buffer)
-            if buffer_len >= 1024:
-                # 只分析最近一个窗口的音频，反应当前播放位置（真实时间游标）；
-                # 窗口换算用实际喂入采样率（feed 报告值），与配置值解耦
-                window_bytes = int(self._analysis_window_seconds * self._buffer_sample_rate * 2)
-                audio_bytes = bytes(self._audio_buffer[-window_bytes:])
+            # 持锁仅作整数读取与字节切片复制，保证跨线程读写的缓冲区快照一致性
+            with self._buffer_lock:
+                buffer_len = len(self._audio_buffer)
+                sample_rate = self._buffer_sample_rate
+                if buffer_len >= 1024:
+                    window_bytes = int(self._analysis_window_seconds * sample_rate * 2)
+                    audio_bytes = bytes(self._audio_buffer[-window_bytes:])
+                else:
+                    audio_bytes = b""
 
+            if audio_bytes:
                 audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
                 audio_array = audio_array / 32768.0
 
@@ -391,7 +399,7 @@ class LipSyncAnalyzer:
                 volume = min(1.0, rms / _FULL_VOLUME_RMS)
 
                 if volume > self._volume_threshold * 0.3:
-                    vowel_values = self._detect_vowels(audio_array, sample_rate=self._buffer_sample_rate)
+                    vowel_values = self._detect_vowels(audio_array, sample_rate=sample_rate)
 
         await self._emit(volume, vowel_values)
 

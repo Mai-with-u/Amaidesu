@@ -170,7 +170,7 @@ class GPTSoVITSProvider:
         if self._warmup_task is not None and not self._warmup_task.done():
             self._warmup_task.cancel()
         if self.audio_manager:
-            self.audio_manager.stop_stream()
+            self.audio_manager.stop_stream(discard_pending=True)
         self.input_pcm_queue.clear()
         self.audio_data_queue.clear()
         self._is_connected = False
@@ -235,10 +235,10 @@ class GPTSoVITSProvider:
             duration_ms=None,
         )
 
-        # 在途写线程句柄：取消分支要等它收敛，初始化必须在 try 之前——
-        # 取消可能落在等锁 / 发请求 / 开声卡任一阶段（如调试试播占锁期间
-        # 看门狗超时），若在锁内才初始化，取消分支会引用未绑定名字
-        write_task: asyncio.Task | None = None
+        # 在途任务句柄与持锁标志：取消可能落在等锁 / 发请求 / 写入 / 排空任一阶段，
+        # 仅持锁方有权重置当前声卡会话，等锁期被取消不得误杀正在播的上一句
+        lock_acquired = False
+        in_flight_task: Optional[asyncio.Task[Any]] = None
         try:
             if not (self.ref_audio_path and self.prompt_text):
                 raise RuntimeError(
@@ -247,6 +247,7 @@ class GPTSoVITSProvider:
                 )
 
             async with self.tts_lock:
+                lock_acquired = True
                 # 同步 requests 调用（连接+等待响应头），放线程池执行：GPTSoVITS
                 # 推理慢时在事件循环线程内等待会冻结整个循环（WebUI 同循环全卡）
                 audio_stream = await asyncio.to_thread(
@@ -266,16 +267,14 @@ class GPTSoVITSProvider:
                 total_samples = 0
                 async for chunk in self._process_audio_stream(audio_stream):
                     if chunk is not None:
-                        # 写声卡放工作线程：预缓冲冲入与背压会阻塞 write 达
-                        # 数秒（等播放消费腾缓冲），同步执行会冻结事件循环
-                        # （心跳/弹幕/WS 每句停顿 2.6~3.5s，实测场次 24/26）
-                        write_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.write_chunk, chunk))
-                        await write_task
+                        in_flight_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.write_chunk, chunk))
+                        await in_flight_task
                         chunk_index += 1
                         total_samples += int(chunk.size)
 
-                # 收尾含预缓冲残余冲播（同样阻塞数秒），一并放工作线程
-                await asyncio.to_thread(self.audio_manager.stop_stream)
+                # 收尾放工作线程等待回调流播完余量，期间被取消则由取消分支立即 abort 唤醒
+                in_flight_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.stop_stream))
+                await in_flight_task
 
             self.logger.debug(f"TTS 播放完成: '{final_text[:30]}...'")
             self.render_count += 1
@@ -288,24 +287,21 @@ class GPTSoVITSProvider:
             )
 
         except asyncio.CancelledError:
-            # 队列看门狗超时取消：声卡流必须显式关闭并丢弃未播预缓冲，
-            # 否则 PCM 残留会继续播出，与下一条 utterance 的音频重叠。
-            # 先等在途的写线程退出（PortAudio 并发 write/close 未定义），
-            # 线程会在流关闭异常上快速失败，shield 防止连带取消。
-            if write_task is not None and not write_task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(write_task), timeout=1.0)
-                except Exception as exc:  # noqa: BLE001 — 流已关闭的写失败属预期，仅需等待收敛
-                    self.logger.debug(f"取消路径在途写收敛等待失败（流已关闭，属预期）: {exc}", exc=True)
-            self.audio_manager.stop_stream(discard_pending=True)
+            # 先同步 abort+丢弃缓冲唤醒可能在排空的 stop_stream，再等在途工作线程收敛
+            if lock_acquired:
+                self.audio_manager.stop_stream(discard_pending=True)
+                if in_flight_task is not None and not in_flight_task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(in_flight_task), timeout=1.0)
+                    except Exception as exc:  # noqa: BLE001 — 流已关闭的在途任务收尾异常属预期
+                        self.logger.debug(f"取消路径在途写/收尾收敛等待失败（流已关闭，属预期）: {exc}", exc=True)
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except GPTSoVITSServiceError as e:
             # 服务未启动等环境故障是预期内的：简短告警即可，不打全量 traceback。
-            # 失败路径同样关流：声卡已开后流式中断时，不关会泄漏声卡句柄并残留
-            # 口型分接会话与断流巡检（stop_stream 幂等，声卡未开时早退无害）；
-            # 丢弃预缓冲，失败半句不冲播
-            self.audio_manager.stop_stream(discard_pending=True)
+            # 失败路径同样关流并丢弃未播缓冲
+            if lock_acquired:
+                self.audio_manager.stop_stream(discard_pending=True)
             self.error_count += 1
             self.logger.warning(f"TTS 渲染失败: {e}（本条放弃，等待服务恢复）")
             # 先发 failed 让字幕出字再上抛；cause=e 给异常打"已报告"标记，队列兜底不再补发第二条
@@ -319,8 +315,9 @@ class GPTSoVITSProvider:
             )
             raise
         except Exception as e:
-            # 同上：失败路径必须关流（声卡已开后流式迭代中途失败落在本分支）
-            self.audio_manager.stop_stream(discard_pending=True)
+            # 同上：仅持锁方负责关流
+            if lock_acquired:
+                self.audio_manager.stop_stream(discard_pending=True)
             self.error_count += 1
             self.logger.exception(f"TTS 渲染失败: {e}")
             # 同上：事件发出后给异常打"已报告"标记，避免队列再补发一条重复的 failed

@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 import pytest
@@ -126,6 +127,7 @@ async def test_cancellation_mid_stream_emits_no_finished(event_bus: EventBus) ->
     await event_bus.cleanup()
 
     assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED]
+    mgr.stop_stream.assert_called_with(discard_pending=True)
 
 
 async def test_missing_reference_audio_fails_before_synthesis(event_bus: EventBus) -> None:
@@ -145,12 +147,7 @@ async def test_missing_reference_audio_fails_before_synthesis(event_bus: EventBu
 
 
 async def test_cancellation_while_waiting_for_lock_keeps_cancelled_error() -> None:
-    """等锁期取消（如调试试播占锁时看门狗超时）原样抛 CancelledError。
-
-    回归锚：write_task 曾在锁内才初始化，取消落在等锁 / 发请求 / 开声卡
-    阶段时取消分支引用未绑定名字，CancelledError 被替换成 UnboundLocalError，
-    编排队列的取消语义随之错乱。
-    """
+    """等锁期取消（如调试试播或上一句占锁时超时）原样抛 CancelledError 且不误杀在播流。"""
     provider = GPTSoVITSProvider(config=dict(CONFIGURED))
     mgr = await _started(provider, _stream_client())
     await provider.tts_lock.acquire()  # 模拟调试面板试播占锁
@@ -163,7 +160,37 @@ async def test_cancellation_while_waiting_for_lock_keeps_cancelled_error() -> No
             await task
     finally:
         provider.tts_lock.release()
-    mgr.stop_stream.assert_called_with(discard_pending=True)  # 取消收尾照常执行
+    mgr.stop_stream.assert_not_called()  # 未拿到锁的任务不得截断持锁者正在播放的流
+
+
+async def test_cancellation_during_stop_stream_drain_calls_discard(event_bus: EventBus) -> None:
+    """收尾排空期被取消时，必须立即调用 stop_stream(discard_pending=True) 唤醒并截断播放。"""
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED), event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    loop = asyncio.get_running_loop()
+    drain_entered = asyncio.Event()
+    unblock_drain = threading.Event()
+
+    def _stop_side_effect(discard_pending: bool = False) -> None:
+        if discard_pending:
+            unblock_drain.set()
+            return
+        loop.call_soon_threadsafe(drain_entered.set)
+        unblock_drain.wait(timeout=2.0)
+
+    mgr = make_audio_manager()
+    mgr.stop_stream.side_effect = _stop_side_effect
+    await _started(provider, _stream_client(b"\x00\x00" * 1600), mgr)
+
+    task = asyncio.create_task(provider.handle_speech("你好", utterance_id="utt_drain_cancel"))
+    await drain_entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await event_bus.cleanup()
+
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED]
+    assert call(discard_pending=True) in mgr.stop_stream.call_args_list
 
 
 async def test_mid_stream_failure_closes_audio_stream_and_discards_pending(event_bus: EventBus) -> None:

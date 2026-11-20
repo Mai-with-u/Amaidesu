@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
+import threading
+from unittest.mock import MagicMock, call
 
 import numpy as np
 import pytest
@@ -101,6 +102,55 @@ async def test_cancellation_mid_stream_emits_no_finished_and_discards_pending(ev
 
     assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED]
     mgr.stop_stream.assert_called_with(discard_pending=True)
+
+
+async def test_cancellation_while_waiting_for_lock_does_not_stop_active_stream() -> None:
+    """等锁期被取消不得调用 stop_stream，以免误杀持锁者正在播放的语音。"""
+    provider = MiniMaxTTSProvider(config=dict(CONFIGURED))
+    mgr = await _started(provider, _stream_client())
+    await provider.tts_lock.acquire()
+    try:
+        task = asyncio.create_task(provider.handle_speech("你好", utterance_id="utt_wait_cancel"))
+        for _ in range(20):
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        provider.tts_lock.release()
+    mgr.stop_stream.assert_not_called()
+
+
+async def test_cancellation_during_stop_stream_drain_calls_discard(event_bus) -> None:
+    """收尾排空期被取消时，立即调用 stop_stream(discard_pending=True) 且不发 finished。"""
+    from src.modules.events.names import CoreEvents
+
+    provider = MiniMaxTTSProvider(config=dict(CONFIGURED), event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    loop = asyncio.get_running_loop()
+    drain_entered = asyncio.Event()
+    unblock_drain = threading.Event()
+
+    def _stop_side_effect(discard_pending: bool = False) -> None:
+        if discard_pending:
+            unblock_drain.set()
+            return
+        loop.call_soon_threadsafe(drain_entered.set)
+        unblock_drain.wait(timeout=2.0)
+
+    mgr = make_audio_manager()
+    mgr.stop_stream.side_effect = _stop_side_effect
+    await _started(provider, _stream_client(b"\x00\x00" * 1200), mgr)
+
+    task = asyncio.create_task(provider.handle_speech("你好", utterance_id="utt_drain_cancel"))
+    await drain_entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await event_bus.cleanup()
+
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED]
+    assert call(discard_pending=True) in mgr.stop_stream.call_args_list
 
 
 async def test_api_error_emits_failed_and_discards_pending_half_sentence(event_bus) -> None:
