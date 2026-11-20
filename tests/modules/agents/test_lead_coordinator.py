@@ -41,6 +41,7 @@ from src.modules.events.payloads.agents import AgentLeadChangedPayload
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
+from src.modules.types.emotion_vocab import Emotion
 
 
 class _PlainAgent(BaseAgent):
@@ -125,6 +126,10 @@ class _AutonomousGameAgent(BaseAgent):
         self.entered_contexts: List[LeadHandoverContext] = []
         self.yield_reasons: List[str] = []
         self.spoken_echoes: List[tuple[str, str, int]] = []
+        self.rundown_updates: List[tuple[str, str, str, int]] = []
+        self.raise_on_rundown_update: bool = False
+        self.silence_nudges: List[int] = []
+        self.raise_on_silence_nudge: bool = False
         self.suggestions: List[tuple[str, str, Optional[List[str]]]] = []
         self.delegations: List[tuple[str, str]] = []
 
@@ -158,6 +163,23 @@ class _AutonomousGameAgent(BaseAgent):
         if self.raise_on_echo:
             raise RuntimeError("echo boom")
         self.spoken_echoes.append((text, source, timestamp_ms))
+
+    def receive_rundown_update(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        segment_goal: str = "",
+        expected_ms: int = 0,
+    ) -> None:
+        if self.raise_on_rundown_update:
+            raise RuntimeError("rundown boom")
+        self.rundown_updates.append((segment_id, segment_title, segment_goal, expected_ms))
+
+    def receive_silence_nudge(self, *, silent_ms: int) -> None:
+        if self.raise_on_silence_nudge:
+            raise RuntimeError("nudge boom")
+        self.silence_nudges.append(silent_ms)
 
     async def receive_suggestion(
         self,
@@ -907,6 +929,134 @@ async def test_framework_suggest_forwards_source_dialogue_from_attachment_and_ar
     )
     assert res3.success is True
     assert game.suggestions[-1] == ("记得插火把", "streamer", ["观众B: 矿洞太黑了"])
+
+    await mgr.stop_all()
+    await bus.cleanup()
+
+
+async def test_publish_rundown_update_forwards_only_in_game_lead_and_isolates_errors(fake_clock: Any) -> None:
+    """publish_rundown_update 仅在游戏主控态同步当前环节给主控游戏 Agent，并隔离异常；BaseAgent 默认空实现。"""
+    plain = _PlainAgent("plain_rundown")
+    assert (
+        plain.receive_rundown_update(
+            segment_id="seg_0",
+            segment_title="闲聊",
+            segment_goal="随便聊聊",
+            expected_ms=60_000,
+        )
+        is None
+    )
+
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    game = _AutonomousGameAgent("rundown_game")
+    mgr.register(game)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, clock=fake_clock.now_ms)
+    # 主播主控态下调用静默跳过
+    coord.publish_rundown_update(segment_id="s1", segment_title="开场", segment_goal="聊两句", expected_ms=300_000)
+    assert game.rundown_updates == []
+
+    # 切入游戏主控后转发环节更新
+    assert await coord.request_game_lead(LeadHandoverContext(segment_id="s1"), target="rundown_game") == "rundown_game"
+    coord.publish_rundown_update(
+        segment_id="s2",
+        segment_title="主线推进",
+        segment_goal="探索并建造仓库",
+        expected_ms=1_800_000,
+    )
+    assert game.rundown_updates == [("s2", "主线推进", "探索并建造仓库", 1_800_000)]
+
+    # 游戏侧抛出异常被隔离，不反噬流程单链路
+    game.raise_on_rundown_update = True
+    coord.publish_rundown_update(segment_id="s3", segment_title="收尾", segment_goal="整理背包", expected_ms=300_000)
+    await mgr.stop_all()
+
+
+async def test_publish_silence_nudge_forwards_only_in_game_lead_and_isolates_errors(fake_clock: Any) -> None:
+    """publish_silence_nudge 仅在游戏主控态投递给当前主控游戏并隔离异常；BaseAgent 默认空操作。"""
+    plain = _PlainAgent("plain_nudge")
+    assert plain.receive_silence_nudge(silent_ms=80_000) is None
+
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    game = _AutonomousGameAgent("nudge_game")
+    mgr.register(game)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, clock=fake_clock.now_ms)
+    # 主播主控态下返回 False 不投递
+    assert coord.publish_silence_nudge(silent_ms=80_000) is False
+    assert game.silence_nudges == []
+
+    # 游戏主控态下正常投递并返回 True
+    assert await coord.request_game_lead(LeadHandoverContext(segment_id="play"), target="nudge_game") == "nudge_game"
+    assert coord.publish_silence_nudge(silent_ms=76_500) is True
+    assert game.silence_nudges == [76_500]
+
+    # 异常隔离返回 False，不拖垮主循环
+    game.raise_on_silence_nudge = True
+    assert coord.publish_silence_nudge(silent_ms=90_000) is False
+    await mgr.stop_all()
+
+
+async def test_commentary_spec_aligns_mood_vocab_and_passes_correction_flag(fake_clock: Any) -> None:
+    """framework_commentary 的 mood 枚举与全局 Emotion 词表对齐，且支持可选布尔 correction 透传。"""
+    bus = EventBus(enable_stats=False)
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    game = _AutonomousGameAgent("commentary_game")
+    mgr.register(game)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, event_bus=bus, clock=fake_clock.now_ms)
+    received: List[CommentaryRequest] = []
+
+    async def _handler(req: CommentaryRequest) -> CommentaryAck:
+        received.append(req)
+        return CommentaryAck(accepted=True, spoken=True, reason="dispatched")
+
+    coord.bind_commentary_handler(_handler)
+    assert (
+        await coord.request_game_lead(LeadHandoverContext(segment_id="main"), target="commentary_game")
+        == "commentary_game"
+    )
+
+    registry = ToolRegistry(event_bus=bus)
+    provider = build_agent_control_provider(mgr, event_bus=bus, clock=fake_clock.now_ms, lead_coordinator=coord)
+    registry.register_provider(provider)
+
+    spec = next(item for item in provider.list_tools() if item.full_name == "framework_commentary")
+    props = (spec.parameters_schema or {}).get("properties", {})
+    assert props["mood"]["enum"] == [emotion.value for emotion in Emotion]
+    assert props["correction"]["type"] == "boolean"
+    assert "correction" not in (spec.parameters_schema or {}).get("required", [])
+
+    # 默认省略 correction -> False
+    res_default = await registry.invoke(
+        ToolInvocation(
+            tool_name="framework_commentary",
+            arguments={"summary": "刚把箱子放好", "mood": "happy"},
+            source="commentary_game-react",
+            invoking_agent="commentary_game",
+        )
+    )
+    assert res_default.success is True
+    assert received[-1].correction is False
+
+    # 显式传 correction=True -> 透传至 CommentaryRequest
+    res_fix = await registry.invoke(
+        ToolInvocation(
+            tool_name="framework_commentary",
+            arguments={"summary": "刚才说错啦，那是铁矿不是钻石", "mood": "embarrassed", "correction": True},
+            source="commentary_game-react",
+            invoking_agent="commentary_game",
+        )
+    )
+    assert res_fix.success is True
+    assert received[-1].correction is True
+    assert received[-1].mood == "embarrassed"
 
     await mgr.stop_all()
     await bus.cleanup()

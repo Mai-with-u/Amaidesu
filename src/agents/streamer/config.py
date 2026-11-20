@@ -598,9 +598,16 @@ class StreamerConfig(BaseConfig):
     )
     game_lead_idle_fallback_ms: int = Field(
         title="游戏主控冷场兜底时长",
-        default=50_000,
-        ge=5_000,
-        description="游戏主控态下全场连续无声超过该时长才由主播轻从侧暖一句闲话（毫秒）",
+        default=0,
+        ge=0,
+        description="游戏主控态下主播侧冷场兜底时长（毫秒；0 = 关闭主播侧冷场兜底，改由前线游戏侧承接静默暖场）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    game_lead_silence_nudge_ms: int = Field(
+        title="游戏主控静默暖场提醒时长",
+        default=75_000,
+        ge=0,
+        description="游戏主控态下全场连续无声达到该时长时，向当前主控游戏侧发送静默暖场提醒（毫秒；0 = 关闭）",
         json_schema_extra={"x-ui-advanced": True},
     )
     game_lead_commentary_min_interval_ms: int = Field(

@@ -33,9 +33,9 @@ ta 的发言和身份带到下一场；本场结果不替换。关键词恰好�
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
@@ -45,8 +45,8 @@ from src.modules.storage.repos.memory_index import (
     IndexSource,
 )
 from src.modules.storage.repos.viewers import is_placeholder_name
-from src.modules.tools.models import ToolInvocation, ToolSpec
-from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.provider import BaseToolProvider, ToolProvider, as_tool_impl
 from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
 
@@ -1157,23 +1157,73 @@ def _path_counts(found: Sequence[SearchHit], vector_used: bool) -> str:
     return f"候选 {len(found)}（关键词 {keyword}、子串 {like}、{vector_text}）"
 
 
-def build_memory_recall_provider(service: MemoryRecallService) -> ToolProvider:
-    """组装回想工具 Provider（provider="memory"，工具全名 ``memory_recall``）。
+class _MemoryRecallProvider(BaseToolProvider):
+    """回想工具 Provider：按运行期回调动态计算 ``memory_recall`` 的可见 Agent 名单。"""
 
-    简单工具正典路径：ToolSpec + 普通 async 函数（``as_tool_impl`` 包装）+
-    ``make_provider_from_specs`` 组装，装配处一行 ``register_provider``。
-    """
+    category: ClassVar[str] = MEMORY_TOOL_CATEGORY
+    # 名册启停变化（如热启用或停用自主游戏 Agent）时随 AgentManager 自动刷新可见名单
+    syncs_with_agent_roster: ClassVar[bool] = True
 
-    async def _recall(invocation: ToolInvocation) -> str:
+    def __init__(
+        self,
+        service: MemoryRecallService,
+        *,
+        extra_visible_agents: Optional[Callable[[], Sequence[str]]] = None,
+    ) -> None:
+        self._service = service
+        self._extra_visible_agents = extra_visible_agents
+        self._impl = as_tool_impl(MEMORY_RECALL_SPEC.full_name, self._recall)
+
+    @property
+    def name(self) -> str:
+        return MEMORY_RECALL_PROVIDER_NAME
+
+    async def _recall(self, invocation: ToolInvocation) -> str:
         args = invocation.arguments or {}
-        return await service.recall(
+        return await self._service.recall(
             query=str(args.get("query", "") or ""),
             scope=str(args.get("scope", SCOPE_ALL) or SCOPE_ALL),
             order=str(args.get("order", ORDER_RELEVANT) or ORDER_RELEVANT),
         )
 
-    return make_provider_from_specs(
-        MEMORY_RECALL_PROVIDER_NAME,
-        [(MEMORY_RECALL_SPEC, as_tool_impl(MEMORY_RECALL_SPEC.full_name, _recall))],
-        category=MEMORY_TOOL_CATEGORY,
-    )
+    def _visible_agents(self) -> List[str]:
+        """构造可见名单：始终包含主播，按需拼入动态回调返回的额外 Agent 注册名（保序去重）。"""
+        visible: List[str] = ["streamer"]
+        if self._extra_visible_agents is None:
+            return visible
+        try:
+            extras = self._extra_visible_agents() or ()
+        except Exception as exc:  # noqa: BLE001 - 动态名单回调异常降级为仅主播可见
+            logger.warning(f"memory_recall 读取额外可见 Agent 名单失败（仅保留 streamer）: {exc}", exc=True)
+            return visible
+        for raw_name in extras:
+            agent_name = str(raw_name or "").strip()
+            if agent_name and agent_name != "*" and agent_name not in visible:
+                visible.append(agent_name)
+        return visible
+
+    def list_tools(self) -> Iterable[ToolSpec]:
+        """列出回想工具规格：每次列出时现算 ``visible_to``，不修改模块级常量规格。"""
+        return [replace(MEMORY_RECALL_SPEC, visible_to=self._visible_agents())]
+
+    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        if invocation.tool_name == MEMORY_RECALL_SPEC.full_name:
+            return await self._impl(invocation)
+        return ToolExecutionResult(
+            tool_name=invocation.tool_name,
+            success=False,
+            error_message=f"工具 '{invocation.tool_name}' 不属于 Provider '{self.name}'",
+        )
+
+
+def build_memory_recall_provider(
+    service: MemoryRecallService,
+    *,
+    extra_visible_agents: Optional[Callable[[], Sequence[str]]] = None,
+) -> ToolProvider:
+    """组装回想工具 Provider（provider="memory"，工具全名 ``memory_recall``）。
+
+    默认仅对 ``"streamer"`` 可见；传入 ``extra_visible_agents`` 回调时，每次 ``list_tools()``
+    动态把具备自主领航能力等附加 Agent 注册名并入 ``visible_to``（零硬编码游戏名）。
+    """
+    return _MemoryRecallProvider(service, extra_visible_agents=extra_visible_agents)

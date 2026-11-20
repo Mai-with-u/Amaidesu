@@ -343,6 +343,31 @@ class BaseAgent(abc.ABC):
         del text, source, timestamp_ms
         return None
 
+    def receive_rundown_update(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        segment_goal: str = "",
+        expected_ms: int = 0,
+    ) -> None:
+        """接收流程单环节变更同步通知（纯同步旁路写入，默认空操作）。
+
+        触发条件：处于游戏自主主控期间流程单推进或续时，且新环节仍维持游戏主控时，
+        由动态主从协调器同步给当前主控游戏 Agent，防止游戏侧交接简报整场停留在旧环节。
+        """
+        del segment_id, segment_title, segment_goal, expected_ms
+        return None
+
+    def receive_silence_nudge(self, *, silent_ms: int) -> None:
+        """接收直播间静默暖场提醒（纯同步旁路写入，默认空操作）。
+
+        触发条件：处于游戏自主主控期间全场连续无声达到配置阈值且无观众弹幕/运营提醒待处理时，
+        由动态主从协调器通知当前主控游戏 Agent 按需提交一句实况解说，不强行打断当前游戏行动。
+        """
+        del silent_ms
+        return None
+
     async def receive_suggestion(
         self,
         content: str,

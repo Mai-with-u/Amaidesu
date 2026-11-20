@@ -1185,6 +1185,13 @@ register_file_hook(
     "agents.toml", "retire_speech_gate_and_widen_budget", "2.0.52", _upgrade_streamer_speech_gate_and_budget
 )
 
+# agents.toml v2.0.53：游戏主控冷场兜底默认时长 50_000 → 0 毫秒（关闭主播侧兜底，移交前线游戏侧承接静默暖场）。
+# 仅改写落盘值恰为旧默认 50_000 的存量文件，用户显式设成其他值的原样保留。
+_disable_game_lead_idle_fallback = swap_default("agents.streamer.game_lead_idle_fallback_ms", 50_000, 0)
+
+# 生产钩子登记：agents.toml v2.0.53（游戏主控冷场兜底默认 50s → 0）
+register_file_hook("agents.toml", "disable_game_lead_idle_fallback", "2.0.53", _disable_game_lead_idle_fallback)
+
 
 __all__ = [
     "FileUpgradeHook",

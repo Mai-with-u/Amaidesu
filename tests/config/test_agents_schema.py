@@ -62,7 +62,11 @@ def test_streamer_defaults_are_the_full_package_config() -> None:
     assert streamer.command.tool_mappings == []  # 工具映射表默认空：委派 mappings 不受影响
     assert streamer.thinking_stream.enabled is True
     assert streamer.lead_mode == "dynamic"
-    assert (streamer.game_lead_idle_fallback_ms, streamer.game_lead_commentary_min_interval_ms) == (50_000, 8_000)
+    assert (
+        streamer.game_lead_idle_fallback_ms,
+        streamer.game_lead_silence_nudge_ms,
+        streamer.game_lead_commentary_min_interval_ms,
+    ) == (0, 75_000, 8_000)
     assert not hasattr(streamer, "narrative")  # 叙事回放配置已随追加式历史退役
 
 

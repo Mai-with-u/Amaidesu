@@ -61,6 +61,7 @@ class CommentaryRequest(BaseModel):
     mood: str = "neutral"
     urgency: Literal["normal", "high"] = "normal"
     about_player: str = ""
+    correction: bool = False
     timestamp_ms: int = 0
 
 
@@ -624,6 +625,53 @@ class LeadCoordinator:
                 f"向主控游戏 '{self._active_lead_agent}' 转发发言回声失败（已忽略）: {exc}",
                 exc=True,
             )
+
+    def publish_rundown_update(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        segment_goal: str = "",
+        expected_ms: int = 0,
+    ) -> None:
+        """把最新流程单环节同步转发给当前主控游戏 Agent（异常隔离、零硬编码游戏名）。"""
+        if not self.is_game_lead or self._active_lead_agent is None:
+            return
+        agent: Optional[BaseAgent] = self._agent_manager.get_agent_by_name(self._active_lead_agent)
+        if agent is None:
+            return
+        try:
+            agent.receive_rundown_update(
+                segment_id=(segment_id or "").strip(),
+                segment_title=(segment_title or "").strip(),
+                segment_goal=(segment_goal or "").strip(),
+                expected_ms=max(0, int(expected_ms)),
+            )
+        except Exception as exc:  # noqa: BLE001 - 环节同步旁路异常隔离，不阻断流程单与主控主链
+            logger.warning(
+                f"向主控游戏 '{self._active_lead_agent}' 同步流程单环节失败（已忽略）: {exc}",
+                exc=True,
+            )
+
+    def publish_silence_nudge(self, *, silent_ms: int) -> bool:
+        """向当前主控游戏 Agent 发送直播间静默暖场提醒（异常隔离、零硬编码游戏名）。
+
+        仅在当前处于游戏主控态且主控 Agent 在名册中时投递；投递成功返回 True，否则返回 False。
+        """
+        if not self.is_game_lead or self._active_lead_agent is None:
+            return False
+        agent: Optional[BaseAgent] = self._agent_manager.get_agent_by_name(self._active_lead_agent)
+        if agent is None:
+            return False
+        try:
+            agent.receive_silence_nudge(silent_ms=max(0, int(silent_ms)))
+            return True
+        except Exception as exc:  # noqa: BLE001 - 静默提醒旁路异常隔离，不阻断主循环
+            logger.warning(
+                f"向主控游戏 '{self._active_lead_agent}' 发送静默暖场提醒失败（已忽略）: {exc}",
+                exc=True,
+            )
+            return False
 
     async def send_suggestion(
         self,

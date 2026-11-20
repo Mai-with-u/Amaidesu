@@ -119,7 +119,7 @@ class ProactiveTrigger:
         self,
         config: StreamerProactiveConfig,
         *,
-        game_lead_idle_fallback_ms: int = 50_000,
+        game_lead_idle_fallback_ms: int = 0,
     ) -> None:
         """注入 proactive 子配置（字段默认值即"未配置降级"，在 Schema 一处表达）。"""
         self._enabled: bool = config.enabled
@@ -271,15 +271,16 @@ class ProactiveTrigger:
         if not self._enabled:
             return None
 
-        # rundown_pending：环节切换即时信号——只受总开关约束，立即触发
-        # （新环节开场白必须马上说，不等任何间隔）
-        if rundown_pending:
+        # rundown_pending：环节切换即时信号——主播主控态或切入杂谈模式时立即触发新环节开场白；
+        # 处于游戏主控且仍非杂谈模式时（如 Planner 自身刚调 next/renew 推进或续时游玩环节），
+        # 由游戏侧承接新环节目标，不再立刻无意义唤醒主播 Planner 连跑一轮
+        if rundown_pending and not (in_game_lead and not talk_mode):
             self._last_rundown_immediate = True
             return TriggerKind.RUNDOWN
 
-        # game_pending：游戏待定夺即时信号——同 rundown_pending，只受总开关
-        # 约束，立即触发（游戏停在选项处等主播定夺，不等任何间隔）
-        if game_pending:
+        # game_pending：游戏待定夺即时信号——仅主播主控态生效；游戏自主主控期间由前线游戏侧自行处理，
+        # 不再唤醒主播 Planner 抢夺控制权
+        if game_pending and not in_game_lead:
             return TriggerKind.GAME
 
         last_speech_ms = getattr(room_state, "last_speech_ms", None)

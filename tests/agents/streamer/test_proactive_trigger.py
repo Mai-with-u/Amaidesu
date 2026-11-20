@@ -273,3 +273,35 @@ def test_rundown_ready_yields_to_waiting_viewer_batch_up_to_a_cap() -> None:
         trigger.should_trigger(room, now_ms=2_001_000, rundown_pending=True, viewer_waiting_since_ms=waiting_since)
         is TriggerKind.RUNDOWN
     )
+
+
+def test_game_lead_rundown_pending_skips_redundant_wake_unless_entering_talk() -> None:
+    """游戏主控态下非杂谈环节的 rundown_pending 不再无意义唤醒主播；切入杂谈态或主播主控态照常立即触发。"""
+    trigger = _trigger()
+    room = _Room(last_speech_ms=1_000_000)
+
+    # 游戏主控态（非杂谈）：忽略 rundown_pending，避免 Planner 刚调 next/renew 立刻又连跑一轮
+    assert (
+        trigger.should_trigger(room, now_ms=1_010_000, rundown_pending=True, in_game_lead=True, talk_mode=False) is None
+    )
+    # 切入杂谈模式：必须立即唤醒主播说杂谈开场白
+    assert (
+        trigger.should_trigger(room, now_ms=1_010_000, rundown_pending=True, in_game_lead=True, talk_mode=True)
+        is TriggerKind.RUNDOWN
+    )
+    # 主播主控态：保持原行为立即触发
+    assert (
+        trigger.should_trigger(room, now_ms=1_010_000, rundown_pending=True, in_game_lead=False, talk_mode=False)
+        is TriggerKind.RUNDOWN
+    )
+
+
+def test_game_lead_idle_fallback_defaults_to_disabled_and_guards_game_pending() -> None:
+    """ProactiveTrigger 游戏主控冷场兜底默认关闭（0），且游戏主控态纵深拦截 game_pending 不唤醒主播。"""
+    trigger = _trigger()
+    room = _Room(last_speech_ms=1_000_000)
+    # 默认关闭主播侧冷场兜底（移交前线游戏侧承接静默暖场）
+    assert trigger.should_trigger(room, now_ms=2_000_000, in_game_lead=True) is None
+    # 游戏主控态下 game_pending 被纵深守卫拦截；主播主控态照常立即触发
+    assert trigger.should_trigger(room, now_ms=1_010_000, game_pending=True, in_game_lead=True) is None
+    assert trigger.should_trigger(room, now_ms=1_010_000, game_pending=True, in_game_lead=False) is TriggerKind.GAME

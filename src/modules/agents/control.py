@@ -63,6 +63,7 @@ from src.modules.tools.tasks import (
     TaskLedger,
     TaskRecord,
 )
+from src.modules.types.emotion_vocab import Emotion
 from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("AgentControl")
@@ -1701,7 +1702,11 @@ class AgentControlProvider(BaseToolProvider):
                 },
                 "mood": {
                     "type": "string",
-                    "description": "可选：此刻画面或处境的情绪倾向（默认 'neutral'）",
+                    "enum": [emotion.value for emotion in Emotion],
+                    "description": (
+                        "可选：此刻画面或处境的情绪倾向，从标准情绪词表选取（默认 'neutral'）；"
+                        "没有明确场景情绪时保持 'neutral'"
+                    ),
                 },
                 "urgency": {
                     "type": "string",
@@ -1711,6 +1716,13 @@ class AgentControlProvider(BaseToolProvider):
                 "about_player": {
                     "type": "string",
                     "description": "可选：涉及的游戏内其他玩家名（无则留空）",
+                },
+                "correction": {
+                    "type": "boolean",
+                    "description": (
+                        "可选：是否为即时纠偏（默认 false）；刚播出的解说出现事实偏差需要立刻纠正时设 true，"
+                        "可直接穿透常规出声间隔防抖立即播报"
+                    ),
                 },
             },
             "required": ["summary"],
@@ -2001,6 +2013,13 @@ class AgentControlProvider(BaseToolProvider):
             )
         mood = str(args.get("mood", "neutral") or "neutral").strip() or "neutral"
         about_player = str(args.get("about_player", "") or "").strip()
+        raw_correction = args.get("correction", False)
+        if isinstance(raw_correction, bool):
+            correction = raw_correction
+        elif isinstance(raw_correction, str):
+            correction = raw_correction.strip().lower() in ("true", "1", "yes")
+        else:
+            correction = bool(raw_correction)
         caller_agent = (invoking_agent or "").strip() or (caller or "").strip().removesuffix("-react")
 
         req = CommentaryRequest(
@@ -2009,6 +2028,7 @@ class AgentControlProvider(BaseToolProvider):
             mood=mood,
             urgency=urgency,  # type: ignore[arg-type]
             about_player=about_player,
+            correction=correction,
             timestamp_ms=started_ms,
         )
         ack = await self.lead_coordinator.submit_commentary(caller_agent, req)

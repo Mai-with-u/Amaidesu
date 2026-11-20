@@ -723,6 +723,10 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
         "test",
         "test_speech_gate_retire_migration.py#test_gate_keys_removed_and_old_default_budget_rewritten",
     ),
+    "disable_game_lead_idle_fallback": (
+        "test",
+        "test_game_lead_idle_fallback_migration.py#test_old_default_rewritten_and_written_back",
+    ),
 }
 
 
