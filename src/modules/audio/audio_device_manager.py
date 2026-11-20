@@ -8,6 +8,8 @@
 """
 
 import asyncio
+from dataclasses import dataclass, field
+import queue
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -16,14 +18,24 @@ import numpy as np
 
 from src.modules.logging import get_logger
 
+from .pcm_stream_buffer import PcmStreamBuffer, UnderrunStats
+
 # sounddevice 是可选依赖：缺失时保持模块可加载，相关 API 走优雅降级路径。
 # 注意 import sounddevice 有副作用——导入期即初始化 PortAudio，无音频子系统
 # 的环境（如无头 CI 的 Linux runner）会抛 PortAudioError 而非 ImportError，
 # 故降级须一并兜住；否则模块在收集期炸穿，"保持可加载"名存实亡。
 DEPENDENCIES_OK = False
+
+
+class _FallbackCallbackStop(Exception):
+    """sounddevice 不可用或被替身替换时的流停止回调占位异常。"""
+
+
+_CALLBACK_STOP_CLS: type[BaseException] = _FallbackCallbackStop
 try:
     import sounddevice as sd
 
+    _CALLBACK_STOP_CLS = getattr(sd, "CallbackStop", _FallbackCallbackStop)
     DEPENDENCIES_OK = True
 except ImportError as exc:
     get_logger("AudioDeviceManager").debug(f"sounddevice 未安装，设备枚举与播放 API 走降级路径: {exc}")
@@ -33,15 +45,33 @@ except Exception as exc:  # noqa: BLE001 - 降级路径本身：记录后按依�
     )
 
 
+@dataclass
+class _StreamSession:
+    """单次流式播放会话的运行期状态。"""
+
+    stream: Any
+    buffer: PcmStreamBuffer
+    sink_queue: Optional[queue.Queue[Optional[np.ndarray]]]
+    sink_drop: threading.Event
+    # 序列化同一底层流上的 start 与 stop/abort/close，绝不跨排空等待持有
+    stream_op_lock: threading.Lock = field(default_factory=threading.Lock)
+    sink_thread: Optional[threading.Thread] = None
+    utterance_id: str = ""
+    started: bool = False
+    closed: bool = False
+    underrun_reported_events: int = 0
+
+
 class AudioDeviceManager:
     """
     音频设备管理器
 
     管理音频输出设备和音频播放。可挂载一个 ``AudioSink`` 分接（全量与
     流式两种播法都会把音频复制递入；分接是装饰性路径，任何 sink 异常
-    只记日志，不影响播放）。分接按**播放进度**递入而非按到达递入——
-    到达节奏受合成停顿/整段突发影响，与听感脱节，消费方（口型分析）
-    的"分析当前播放位置"假设依赖两者一致。
+    只记日志，不影响播放）。流式播放通过 PortAudio 异步回调驱动线程安全
+    PCM 队列：上游非阻塞入队，回调按声卡帧率实时消费，队列在句中读空时
+    显式填入静音零值（避免 MME 等老驱动循环末端硬件缓冲拖出长音怪叫）；
+    分接随回调已播帧经独立后台泵递入，使口型和句间隙检测贴合听感进度。
     """
 
     def __init__(
@@ -65,8 +95,8 @@ class AudioDeviceManager:
             sink: 可选音频分接接收方（``AudioSink`` 协议形状；口型分析等
                 消费者经构造链注入）
             prebuffer_seconds: 流式播放预缓冲秒数——声卡流攒够这么多音频才
-                开播，吸收上游合成/网络的短暂停顿；上游吞吐长期低于实时时
-                仍会欠载（那需要上游提速，缓冲无法根治）
+                开播，吸收上游合成/网络的短暂停顿；上游吞吐长期低于实时或
+                句中停顿超过余量时，回调自动补静音零值防止硬件重复末帧
             stall_threshold_ms: 播放中断流判定阈值（毫秒）——播放会话进行中
                 且超过该时长没有收到任何新音频块即告警
             stall_watchdog_enabled: 是否在播放会话期间启动后台巡检线程。
@@ -86,51 +116,72 @@ class AudioDeviceManager:
         self.output_device_name: Optional[str] = None
         self.output_device_index: Optional[int] = None
 
-        # 播放状态（_stream 由 start_stream 创建；未启动时 write/stop 静默跳过）
+        # 播放状态（由 _state_lock 保护跨线程读写）
+        self._state_lock = threading.Lock()
         self.is_playing = False
         self.current_stream: Optional[Any] = None
         self._stream: Optional[Any] = None
-        # 预缓冲状态：攒够 prebuffer_seconds 才启动声卡流
-        self._pending_chunks: list[np.ndarray] = []
-        self._pending_samples = 0
         self._stream_started = False
-        # 供给断流监控：块间间隔扣除写背压（write 等播放消费的阻塞）后仍超
-        # 阈值，才判定上游真断供（欠载前兆）——不扣除会把"数据过剩的背压"
-        # 误报成断流（turbo 吞吐大于实时时背压为常态，实测每场 80+ 次假阳性）
+        self._prepared_sessions: Dict[int, _StreamSession] = {}
+        self._active_session: Optional[_StreamSession] = None
+        self._last_underrun_stats: Optional[UnderrunStats] = None
+
+        # 供给块间诊断与断流巡检：用实时缓冲余量替代旧写阻塞扣除，
+        # 数据充裕时不误报断流，真停供耗尽后照常告警
         self._last_feed_monotonic: float | None = None
-        self._last_write_block_sec: float = 0.0
-        # 播放中断流检测：声卡流已实际开播且超过阈值没有任何新音频块到达，
-        # 判定上游供给已断（告警面）。判定锚定"声卡流已开播"而非"播放会话
-        # 存活"——会话随 utterance 开启，但预缓冲未攒够/合成慢期间声卡没出
-        # 声，那属于发言间静默，不告警。检测由独立看门狗线程驱动（上游完全
-        # 无数据时写块函数不会被调用，只能靠定时巡检）
         self.stall_threshold_ms = stall_threshold_ms
         self.stall_watchdog_enabled = stall_watchdog_enabled
         self._clock: Optional[Callable[[], float]] = clock
-        # 断流判定基线：最近一块的到达时刻
         self._last_block_monotonic: float | None = None
-        # 累计写声卡阻塞时长与其在"上一块到达时刻"的快照：判定断流时须扣除
-        # 这段背压（数据过剩造成的等待，不是上游断供）
-        self._backpressure_total: float = 0.0
-        self._backpressure_at_last_block: float = 0.0
         self._stall_alerted: bool = False
         self._playback_session_active: bool = False
-        # 本句声卡流已实际开播（首块冲入启动声卡的时刻，与分接消费方收到的
-        # "真正出声"时刻一致）；开播前的静默不进断流告警面
         self._playback_begun: bool = False
         self._stall_stop_event = threading.Event()
         self._stall_watchdog: Optional[threading.Thread] = None
         self._stall_poll_interval_s = 0.5
-        # 分接递入时机 = 写声卡时刻，且按此片长切成小片逐片递入：write 在
-        # 声卡缓冲满时按实时阻塞（背压），紧贴 write 的逐片递入因此跟随播
-        # 放节奏。随"到达"递入或整块先递后写都会让分接超前于听感——合成
-        # 停顿、整段突发、网关整句下发都会把分接推到句尾，消费方（口型分
-        # 析、句间隙检测）读到的"当前播放位置"随之失真。片长与全量播法的
-        # 逐片节奏一致
+        # 全量播法（play_audio）分接逐片步长：与事件循环异步等待节奏一致
         self._PLAYBACK_FEED_PIECE_S = 0.05
 
         if not DEPENDENCIES_OK:
             self.logger.error("音频依赖缺失，请安装: pip install sounddevice soundfile")
+
+    @property
+    def is_stream_started(self) -> bool:
+        """当前流式播放会话的底层声卡流是否已启动"""
+        with self._state_lock:
+            return self._stream_started
+
+    @property
+    def is_stream_draining(self) -> bool:
+        """当前流式播放会话是否已收到上游结束信号、处于排空收尾期"""
+        with self._state_lock:
+            session = self._active_session
+        return session is not None and session.buffer.is_eos
+
+    @property
+    def buffered_frames(self) -> int:
+        """当前流式播放缓冲队列中的待播帧数"""
+        with self._state_lock:
+            session = self._active_session
+        return session.buffer.buffered_frames if session is not None else 0
+
+    @property
+    def stream_underrun_stats(self) -> Optional[UnderrunStats]:
+        """返回活动会话的实时欠载统计；无活动会话时返回上一句的收尾统计"""
+        with self._state_lock:
+            session = self._active_session
+            last_stats = self._last_underrun_stats
+        if session is not None:
+            return session.buffer.stats()
+        return last_stats
+
+    def wait_until_sink_drained(self) -> None:
+        """等待当前会话已递给分接泵的音频帧全部消费完毕"""
+        with self._state_lock:
+            session = self._active_session
+            sink_queue = session.sink_queue if session is not None else None
+        if sink_queue is not None:
+            sink_queue.join()
 
     # -----分接（复制音频给注入的 sink；装饰性路径 fail-soft）-----
 
@@ -301,6 +352,15 @@ class AudioDeviceManager:
 
             self.logger.debug("音频播放完成")
 
+        except asyncio.CancelledError:
+            # 取消即刻截断在播全量音频并收口分接会话，防止继续出声或口型残留
+            try:
+                sd.stop()
+            except Exception as exc:  # noqa: BLE001 - 取消收尾仅记日志，继续状态复位并重抛 CancelledError
+                self.logger.debug(f"全量播放取消时停止声卡异常（已忽略）: {exc}")
+            self.is_playing = False
+            self._sink_stop()
+            raise
         except Exception as e:
             self.logger.exception(f"音频播放失败: {e}")
             self.is_playing = False
@@ -308,7 +368,7 @@ class AudioDeviceManager:
             raise
 
     def open_output_stream(self) -> Optional[Any]:
-        """打开一个声卡输出流（不开播、不碰分接）；打不开时记日志返回 None。
+        """打开一个声卡异步回调输出流（不开播、不碰分接）；打不开时记日志返回 None。
 
         打开声卡在 Windows 上要几十到上百毫秒，在事件循环线程里调用会让同一
         循环上的一切顿一下（形象每句开口都卡一帧），事件循环里的调用方应放到
@@ -318,23 +378,82 @@ class AudioDeviceManager:
             self.logger.error("sounddevice 库不可用")
             return None
         try:
-            return sd.OutputStream(
+            sink_queue: Optional[queue.Queue[Optional[np.ndarray]]] = queue.Queue() if self._sink is not None else None
+            sink_drop = threading.Event()
+            buffer = PcmStreamBuffer(
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                dtype=self.dtype,
+                on_played_frames=sink_queue.put_nowait if sink_queue is not None else None,
+            )
+
+            # 实时声卡回调只从环形缓冲拷贝 PCM 与缺口补零：不在回调线程打日志或同步喂分接
+            def _audio_callback(outdata: np.ndarray, frames: int, time_info: Any, status: Any) -> None:
+                _ = (frames, time_info)
+                if status:
+                    buffer.record_driver_status(str(status))
+                if buffer.pull_into(outdata):
+                    raise _CALLBACK_STOP_CLS
+
+            stream = sd.OutputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype=self.dtype,
                 device=self.output_device_index,
+                callback=_audio_callback,
+                finished_callback=buffer.mark_stream_finished,
             )
+            session = _StreamSession(
+                stream=stream,
+                buffer=buffer,
+                sink_queue=sink_queue,
+                sink_drop=sink_drop,
+            )
+            with self._state_lock:
+                self._prepared_sessions[id(stream)] = session
+            return stream
         except Exception as e:
             self.logger.error(f"打开声卡输出流失败: {e}")
             return None
 
     def start_stream(self, utterance_id: str = "") -> None:
-        """启动流式播放：创建声卡流但暂不开播，等预缓冲攒够再启动（同步打开声卡，见 open_output_stream）。
+        """启动流式播放：创建回调声卡流但暂不开播，等预缓冲攒够再启动（同步打开声卡，见 open_output_stream）。
 
-        上游块先入 pending；攒满 ``prebuffer_seconds`` 后由 ``write_chunk``
-        统一冲入声卡。短句（总量不足预缓冲）在 ``stop_stream`` 收尾冲播。
+        上游块非阻塞入队；攒满 ``prebuffer_seconds`` 后由 ``write_chunk``
+        启动声卡流。短句（总量不足预缓冲）在 ``stop_stream`` 收尾开播排空。
         """
         self.start_prepared_stream(self.open_output_stream(), utterance_id)
+
+    def _run_sink_pump(
+        self,
+        sink_queue: "queue.Queue[Optional[np.ndarray]]",
+        drop_flag: threading.Event,
+    ) -> None:
+        """后台消费已播帧队列并递入 AudioSink：让口型与句间隙检测脱离音频回调线程。"""
+        while True:
+            item = sink_queue.get()
+            try:
+                if item is None:
+                    return
+                if drop_flag.is_set():
+                    continue
+                self._sink_feed(item, self.sample_rate)
+            finally:
+                sink_queue.task_done()
+
+    def _close_stream_handle(self, stream: Any, *, use_abort: bool) -> None:
+        """安全停止并关闭底层声卡流句柄。"""
+        try:
+            if use_abort and hasattr(stream, "abort"):
+                stream.abort()
+            else:
+                stream.stop()
+        except Exception as e:
+            self.logger.warning(f"停止音频流失败: {e}")
+        try:
+            stream.close()
+        except Exception as e:
+            self.logger.warning(f"关闭音频流失败: {e}")
 
     def start_prepared_stream(self, stream: Optional[Any], utterance_id: str = "") -> None:
         """用已打开的声卡流开始一句（``stream`` 为 None 时这一句不出声）。
@@ -344,27 +463,90 @@ class AudioDeviceManager:
         """
         if stream is None:
             # 声卡没打开：清理分接，不把失败路径当作成功播放
-            self._stream = None
+            with self._state_lock:
+                self._stream = None
+                self._stream_started = False
+                self.is_playing = False
             self._sink_stop()
             return
+
+        # 兜底清理上次残留未关的活动会话，防止句柄泄漏
+        with self._state_lock:
+            has_stale_active = self._active_session is not None
+        if has_stale_active:
+            self.stop_stream(discard_pending=True)
+
+        with self._state_lock:
+            session = self._prepared_sessions.pop(id(stream), None)
+        if session is None:
+            # 外部直接传入裸流时兜底构建一个未关联回调的会话对象，保证生命周期字段完整
+            sink_queue: Optional[queue.Queue[Optional[np.ndarray]]] = queue.Queue() if self._sink is not None else None
+            sink_drop = threading.Event()
+            buffer = PcmStreamBuffer(
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                dtype=self.dtype,
+                on_played_frames=sink_queue.put_nowait if sink_queue is not None else None,
+            )
+            session = _StreamSession(
+                stream=stream,
+                buffer=buffer,
+                sink_queue=sink_queue,
+                sink_drop=sink_drop,
+            )
+
+        session.utterance_id = utterance_id
         try:
-            self._stream = stream
-            self._pending_chunks = []
-            self._pending_samples = 0
-            self._stream_started = False
-            self._last_feed_monotonic = None
-            self._last_write_block_sec = 0.0
-            self.is_playing = True
-            # 分接：开播同步开 session（流式播法在写声卡时逐块递入）
+            with self._state_lock:
+                self._stream = stream
+                self._active_session = session
+                self._stream_started = False
+                self._last_feed_monotonic = None
+                self.is_playing = True
+            # 分接必须在事件循环线程开启，且早于后台分接泵启动，确保 start 先于任意 feed
             self._sink_start(utterance_id)
+            if session.sink_queue is not None:
+                sink_thread = threading.Thread(
+                    target=self._run_sink_pump,
+                    args=(session.sink_queue, session.sink_drop),
+                    name="audio-sink-pump",
+                    daemon=True,
+                )
+                session.sink_thread = sink_thread
+                sink_thread.start()
             self._start_playback_session()
-            self.logger.debug("流式播放已就绪（等待预缓冲）")
+            self.logger.debug("流式回调播放已就绪（等待预缓冲）")
         except Exception as e:
             self.logger.error(f"启动流式播放失败: {e}")
-            self._stream = None
+            with self._state_lock:
+                if self._active_session is session:
+                    self._active_session = None
+                if self._stream is stream:
+                    self._stream = None
+                self._stream_started = False
+                self.is_playing = False
+            session.sink_drop.set()
+            session.buffer.abort()
+            with session.stream_op_lock:
+                if not session.closed:
+                    self._close_stream_handle(session.stream, use_abort=True)
+                    session.closed = True
+            self._finish_sink_pump(session)
             self._sink_stop()
+            self._stop_playback_session()
 
-    # -----播放中断流检测（播放会话期间的上游供给监控）-----
+    def _finish_sink_pump(self, session: _StreamSession) -> None:
+        """优雅结束分接泵线程（推入哨兵并等待已入队帧处理完成）。"""
+        if session.sink_queue is None:
+            return
+        session.sink_queue.put_nowait(None)
+        sink_thread = session.sink_thread
+        if sink_thread is not None and sink_thread is not threading.current_thread():
+            sink_thread.join(timeout=2.0)
+            if sink_thread.is_alive():
+                self.logger.warning(f"音频分接泵收尾超时未退出: utterance_id={session.utterance_id or '-'}")
+
+    # -----播放中断流与实时欠载检测（播放会话期间的上游供给监控）-----
 
     def _now(self) -> float:
         """当前单调时刻（秒）。注入时钟优先，缺省取系统单调时钟。"""
@@ -374,8 +556,9 @@ class AudioDeviceManager:
 
     def _record_block_arrival(self) -> None:
         """记录一个上游音频块的到达时刻（断流判定的基线）。"""
-        self._last_block_monotonic = self._now()
-        self._backpressure_at_last_block = self._backpressure_total
+        with self._state_lock:
+            self._last_block_monotonic = self._now()
+            self._stall_alerted = False
 
     def _start_playback_session(self) -> None:
         """开启播放会话监控：会话期间声卡开播后上游应有块持续到达。
@@ -383,11 +566,11 @@ class AudioDeviceManager:
         告警只在声卡流实际开播后判定（见 :meth:`check_playback_stall`）；
         开播前的合成慢/预缓冲期属于发言间静默，不进告警面。
         """
-        self._playback_session_active = True
-        self._playback_begun = False
-        self._stall_alerted = False
-        self._backpressure_total = 0.0
-        self._record_block_arrival()
+        with self._state_lock:
+            self._playback_session_active = True
+            self._playback_begun = False
+            self._stall_alerted = False
+            self._last_block_monotonic = self._now()
         if not self.stall_watchdog_enabled:
             return
         self._stall_stop_event.clear()
@@ -396,7 +579,9 @@ class AudioDeviceManager:
 
     def _stop_playback_session(self) -> None:
         """关闭播放会话监控（句间静默期不判断流）。"""
-        self._playback_session_active = False
+        with self._state_lock:
+            self._playback_session_active = False
+            self._playback_begun = False
         self._stall_stop_event.set()
         watchdog = self._stall_watchdog
         self._stall_watchdog = None
@@ -404,147 +589,234 @@ class AudioDeviceManager:
             watchdog.join(timeout=1.0)
 
     def _watchdog_loop(self) -> None:
-        """后台巡检：定时判定播放会话是否断流。
-
-        上游完全无数据时写块函数不会被调用，断流只能靠定时巡检发现——
-        这是旧告警在 s59 断流期零告警的根因。
-        """
+        """后台巡检：定时判定播放会话是否断流或已发生真实声卡欠载。"""
         while not self._stall_stop_event.wait(self._stall_poll_interval_s):
             try:
                 self.check_playback_stall()
+                self.check_playback_underrun()
             except Exception as e:  # noqa: BLE001 - 巡检线程不得因单次异常退出
-                self.logger.error(f"播放断流巡检异常: {e}")
+                self.logger.error(f"播放监控巡检异常: {e}")
 
     def check_playback_stall(self) -> bool:
-        """检测播放中断流：声卡流已开播且超过阈值没有新音频块即告警。
-
-        判定锚定"声卡流已实际开播"而非"播放会话存活"——会话随 utterance
-        开启，预缓冲未攒够/合成慢期间声卡没出声（发言间静默），不产生告警；
-        开播后的真断供照告。写声卡的背压时长（数据过剩造成的等待）从间隔中
-        扣除，否则数据过剩会被误报成上游断供。
+        """检测播放中断流：声卡流已开播、尚未 EOS 且缓冲余量扣除后仍超阈值无新块即告警。
 
         Returns:
             本次调用是否发出了告警。
         """
-        if not self._playback_session_active or not self._playback_begun or self._last_block_monotonic is None:
+        with self._state_lock:
+            session = self._active_session
+            if (
+                not self._playback_session_active
+                or not self._playback_begun
+                or self._last_block_monotonic is None
+                or session is None
+            ):
+                return False
+            last_block = self._last_block_monotonic
+            already_alerted = self._stall_alerted
+
+        if session.buffer.is_eos or session.buffer.is_aborted:
             return False
-        idle_sec = (self._now() - self._last_block_monotonic) - (
-            self._backpressure_total - self._backpressure_at_last_block
-        )
+
+        # 扣除缓冲队列里尚未消耗的可播余量：上游突发推完一大段后短暂暂停不算断流，缓冲耗尽后才算真停供
+        idle_sec = (self._now() - last_block) - session.buffer.buffered_seconds()
         if idle_sec * 1000 < self.stall_threshold_ms:
             return False
-        if self._stall_alerted:
+        if already_alerted:
             return False
-        self._stall_alerted = True
+
+        with self._state_lock:
+            if self._active_session is not session or self._stall_alerted:
+                return False
+            self._stall_alerted = True
+
         self.logger.warning(f"播放中断流：正在播放但已 {idle_sec:.1f}s 未收到新音频块（TTS 上游供给中断）")
         return True
 
-    def _write_with_tap(self, chunk: np.ndarray) -> None:
-        """把一块音频切成小片，逐片交替"递分接 → 写声卡"。
+    def check_playback_underrun(self) -> bool:
+        """检查当前活动流是否新增了真实欠载（回调在句中读空缓冲并补零静音）。
 
-        写声卡在缓冲满时按实时阻塞（背压），紧贴它逐片递入使分接节奏跟随
-        播放；整块先递后写时块越大分接越超前于听感——分接消费方（口型分
-        析、句间隙检测）都以"最近递入的窗口"为当前播放位置，超前会让口型
-        与字幕整体提前。片长见 ``_PLAYBACK_FEED_PIECE_S``。
+        Returns:
+            本次调用是否发出了新的欠载告警。
         """
-        piece_samples = max(1, int(self._PLAYBACK_FEED_PIECE_S * self.sample_rate))
-        for start in range(0, len(chunk), piece_samples):
-            part = chunk[start : start + piece_samples]
-            self._sink_feed(part, self.sample_rate)
-            self._stream.write(part)
+        with self._state_lock:
+            session = self._active_session
+            if session is None or not session.started or session.buffer.is_aborted:
+                return False
+            stats = session.buffer.stats()
+            if stats.events <= session.underrun_reported_events:
+                return False
+            session.underrun_reported_events = stats.events
+            utterance_id = session.utterance_id
 
-    def _flush_pending(self) -> None:
-        """把预缓冲冲入声卡：首次冲入时启动流，随后逐块写入。"""
-        if self._stream is None:
-            return
-        if not self._stream_started:
-            self._stream.start()
-            self._stream_started = True
-            # 断流告警锚点：此刻起声卡真正出声，之后上游断供才进告警面
-            self._playback_begun = True
-            self.logger.debug(f"预缓冲达阈值（{self.prebuffer_seconds:.1f}s），声卡流开播")
-        t0 = time.perf_counter()
-        for chunk in self._pending_chunks:
-            # 逐片"递分接→写声卡"：冲播批次写入时按实时阻塞（缓冲满后），
-            # 递入因此与听感同步——短句兜底冲播的整段也在这里逐片递给分接
-            self._write_with_tap(chunk)
-        self._last_write_block_sec = time.perf_counter() - t0
-        self._backpressure_total += self._last_write_block_sec
-        self._pending_chunks = []
-        self._pending_samples = 0
+        self.logger.warning(
+            f"声卡播放欠载：utterance_id={utterance_id or '-'}，"
+            f"累计 {stats.events} 次（已补静音 {stats.duration_ms}ms，等待上游补块）"
+        )
+        return True
+
+    def _start_session_stream_if_needed(self, session: _StreamSession) -> None:
+        """在流级操作锁保护下启动尚未开播且未关闭/未中止的声卡流。"""
+        started_now = False
+        with session.stream_op_lock:
+            if not session.started and not session.closed and not session.buffer.is_aborted:
+                session.stream.start()
+                session.started = True
+                started_now = True
+        if started_now:
+            with self._state_lock:
+                if self._active_session is session:
+                    self._stream_started = True
+                    self._playback_begun = True
 
     def write_chunk(self, chunk: np.ndarray) -> None:
-        """向流写入一个音频块,立即输出到扬声器。
+        """向流式播放缓冲非阻塞写入一个音频块。
 
-        预缓冲未满时块入 pending（声卡流保持未启动）；攒够阈值统一冲入。
-        此后各块直接写声卡（write 在缓冲满时按实时节奏阻塞，形成背压）。
+        预缓冲未满时仅入队暂不开播；攒满 ``prebuffer_seconds`` 后启动声卡回调流，
+        队列继续作为实时缓冲吸收后续块间抖动，函数立即返回不阻塞等播放。
 
         Args:
             chunk: 音频数据块 (1D 或 2D ndarray)
         """
-        # 分接紧贴写声卡（见 _flush_pending 内注释）；预缓冲期的块未进声卡、
-        # 不递——随到达递入会让 sink 跳到句尾，短句句身整段被消费方跳过
         if not DEPENDENCIES_OK:
             return
-        if self._stream is None:
+        with self._state_lock:
+            session = self._active_session
+            last_feed = self._last_feed_monotonic
+        if session is None:
             return
+
         try:
-            now = time.monotonic()
-            if self._last_feed_monotonic is not None:
-                net_gap = (now - self._last_feed_monotonic) - self._last_write_block_sec
-                if net_gap > 2.0:
-                    # 块间隔偏大只作诊断信息：逐句系统性触发，与听感断流无关，
-                    # 不进告警面（真断流由播放中断流检测负责）
+            now = self._now()
+            if last_feed is not None:
+                gap = now - last_feed
+                if gap > 2.0:
+                    # 块间隔偏大只作诊断信息：回调由缓冲余量兜底，缓冲耗尽由欠载/断流监控上报
                     self.logger.debug(
-                        f"上游块间隔偏大 {net_gap:.1f}s（已扣除写背压 {self._last_write_block_sec:.1f}s）"
+                        f"上游块间隔偏大 {gap:.1f}s（当前缓冲余量 {session.buffer.buffered_seconds():.2f}s）"
                     )
-            self._last_feed_monotonic = now
-            self._record_block_arrival()
-            if not self._stream_started:
-                self._pending_chunks.append(chunk)
-                self._pending_samples += len(chunk)
-                if self._pending_samples >= int(self.prebuffer_seconds * self.sample_rate):
-                    self._flush_pending()
-            else:
-                t0 = time.perf_counter()
-                self._write_with_tap(chunk)
-                self._last_write_block_sec = time.perf_counter() - t0
-                self._backpressure_total += self._last_write_block_sec
+            with self._state_lock:
+                if self._active_session is session:
+                    self._last_feed_monotonic = now
+                    self._last_block_monotonic = now
+                    self._stall_alerted = False
+
+            session.buffer.push(chunk)
+
+            if not session.started and session.buffer.ready_to_start(self.prebuffer_seconds):
+                self._start_session_stream_if_needed(session)
+                if session.started:
+                    self.logger.debug(
+                        f"预缓冲达阈值（{self.prebuffer_seconds:.1f}s），声卡回调流开播"
+                        f"（当前缓冲 {session.buffer.buffered_seconds():.2f}s）"
+                    )
+
+            self.check_playback_underrun()
         except Exception as e:
             self.logger.error(f"写入音频流失败: {e}")
+
+    def _teardown_session(self, session: _StreamSession, *, abort_stream: bool) -> None:
+        """收尾单次流式播放会话：关闭底层流、排空分接泵、结束监控并汇报统计。"""
+        with session.stream_op_lock:
+            if not session.closed:
+                self._close_stream_handle(session.stream, use_abort=abort_stream)
+                session.closed = True
+
+        self._finish_sink_pump(session)
+        self._sink_stop()
+        self._stop_playback_session()
+
+        stats = session.buffer.stats()
+        driver_statuses = session.buffer.driver_statuses()
+        with self._state_lock:
+            self._last_underrun_stats = stats
+
+        if stats.events > 0 or driver_statuses:
+            status_suffix = f", driver_statuses={driver_statuses}" if driver_statuses else ""
+            self.logger.warning(
+                f"流式播放结束含欠载/驱动告警：utterance_id={session.utterance_id or '-'}, "
+                f"events={stats.events}, 补零静音={stats.duration_ms}ms, "
+                f"最长单次={stats.max_contiguous_ms}ms, 已播={stats.played_ms}ms{status_suffix}"
+            )
+        self.logger.debug(f"流式播放已停止（已播 {stats.played_ms}ms）")
 
     def stop_stream(self, discard_pending: bool = False) -> None:
         """停止并关闭流式播放。
 
         Args:
-            discard_pending: True 时直接丢弃未冲播的预缓冲（取消/截断语义，
-                避免 buffer 残留与下一次发声重叠）；默认 False 先冲播残余
-                （正常收尾，短句兜底）。
+            discard_pending: True 时立即中止声卡流并丢弃所有未播缓冲（取消/截断语义，
+                可瞬间打断另一线程正在进行的排空等待）；默认 False 时标记上游结束，
+                等待余量音频按回调正常播完再收尾。
         """
         if not DEPENDENCIES_OK:
             return
-        if self._stream is None:
+
+        aborted_prepared: list[_StreamSession] = []
+        owns_teardown = False
+        session: Optional[_StreamSession] = None
+
+        with self._state_lock:
+            if discard_pending and self._prepared_sessions:
+                aborted_prepared = list(self._prepared_sessions.values())
+                self._prepared_sessions.clear()
+            session = self._active_session
+            if session is not None and discard_pending:
+                # 取消路径立刻抢占清理权并清状态，同时置 abort 唤醒可能阻塞在 wait_finished 的正常收尾线程
+                self._active_session = None
+                self._stream = None
+                self._stream_started = False
+                self.is_playing = False
+                self._last_feed_monotonic = None
+                self._playback_session_active = False
+                self._playback_begun = False
+                owns_teardown = True
+
+        if session is None:
+            for prep in aborted_prepared:
+                with prep.stream_op_lock:
+                    if not prep.closed:
+                        self._close_stream_handle(prep.stream, use_abort=True)
+                        prep.closed = True
             return
-        try:
-            if self._pending_chunks and not discard_pending:
-                self._flush_pending()
-            self._stream.stop()
-            self._stream.close()
-        except Exception as e:
-            self.logger.warning(f"停止音频流失败: {e}")
-        finally:
-            self._stream = None
-            self._pending_chunks = []
-            self._pending_samples = 0
-            self._stream_started = False
-            self._last_feed_monotonic = None
-            self._last_write_block_sec = 0.0
-            self.is_playing = False
-            # 分接：播完同步收 session
-            self._sink_stop()
-            # 播完即退出断流监控：句间静默期不判断流
-            self._stop_playback_session()
-            self.logger.debug("流式播放已停止")
+
+        if discard_pending:
+            session.sink_drop.set()
+            session.buffer.abort()
+        else:
+            has_audio = session.buffer.mark_eos()
+            if has_audio and not session.started and not session.buffer.is_aborted:
+                try:
+                    self._start_session_stream_if_needed(session)
+                except Exception as e:
+                    self.logger.warning(f"收尾启动短句声卡流失败: {e}")
+
+            if session.started and not session.buffer.is_aborted:
+                drain_timeout_s = max(5.0, session.buffer.buffered_seconds() + 5.0)
+                finished = session.buffer.wait_finished(timeout=drain_timeout_s)
+                if not finished and not session.buffer.is_aborted:
+                    self.logger.warning(f"流式播放排空超时（>{drain_timeout_s:.1f}s），强制中止底层音频流")
+                    session.buffer.abort()
+
+            with self._state_lock:
+                # 若并发取消已抢先接管清理，当前线程直接退出，避免双关流与双停分接
+                if self._active_session is session:
+                    self._active_session = None
+                    self._stream = None
+                    self._stream_started = False
+                    self.is_playing = False
+                    self._last_feed_monotonic = None
+                    self._playback_session_active = False
+                    self._playback_begun = False
+                    owns_teardown = True
+
+        if owns_teardown:
+            self._teardown_session(session, abort_stream=discard_pending or session.buffer.is_aborted)
+
+        for prep in aborted_prepared:
+            with prep.stream_op_lock:
+                if not prep.closed:
+                    self._close_stream_handle(prep.stream, use_abort=True)
+                    prep.closed = True
 
     def stop_audio(self) -> None:
         """停止音频播放"""
