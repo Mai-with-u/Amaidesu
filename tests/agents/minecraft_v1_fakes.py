@@ -593,12 +593,16 @@ def assemble_minecraft_agent(
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
     social_fact_repo: Optional[Any] = None,
+    embedding_setup: Optional[Any] = None,
     lead_coordinator: Optional[Any] = None,
     lead_idle_wakeup_s: Optional[float] = None,
     lead_max_empty_turns: Optional[int] = None,
     lead_llm_failure_threshold: Optional[int] = None,
     lead_llm_retry_delay_s: Optional[float] = None,
     lead_llm_cooldown_s: Optional[float] = None,
+    chat_batch_window_ms: Optional[int] = None,
+    chat_flush_wait: Optional[Callable[[int], Any]] = None,
+    passive_cue_timeout_ms: Optional[int] = None,
 ) -> MinecraftAgent:
     """构造未启动的 MinecraftAgent（装配单入口）。
 
@@ -619,6 +623,14 @@ def assemble_minecraft_agent(
         lead_kwargs["lead_llm_retry_delay_s"] = lead_llm_retry_delay_s
     if lead_llm_cooldown_s is not None:
         lead_kwargs["lead_llm_cooldown_s"] = lead_llm_cooldown_s
+    if embedding_setup is not None:
+        lead_kwargs["embedding_setup"] = embedding_setup
+    if chat_batch_window_ms is not None:
+        lead_kwargs["chat_batch_window_ms"] = chat_batch_window_ms
+    if chat_flush_wait is not None:
+        lead_kwargs["chat_flush_wait"] = chat_flush_wait
+    if passive_cue_timeout_ms is not None:
+        lead_kwargs["passive_cue_timeout_ms"] = passive_cue_timeout_ms
     return MinecraftAgent(
         config if config is not None else offline_config(),
         llm_manager=llm,
@@ -658,12 +670,16 @@ async def make_minecraft_agent(
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
     social_fact_repo: Optional[Any] = None,
+    embedding_setup: Optional[Any] = None,
     lead_coordinator: Optional[Any] = None,
     lead_idle_wakeup_s: Optional[float] = None,
     lead_max_empty_turns: Optional[int] = None,
     lead_llm_failure_threshold: Optional[int] = None,
     lead_llm_retry_delay_s: Optional[float] = None,
     lead_llm_cooldown_s: Optional[float] = None,
+    chat_batch_window_ms: Optional[int] = None,
+    chat_flush_wait: Optional[Callable[[int], Any]] = None,
+    passive_cue_timeout_ms: Optional[int] = None,
 ) -> Tuple[MinecraftAgent, Any, Any]:
     """装配并启动一个接上 MaiCraft 替身的玩家（直播中），返回 ``(agent, llm, bus)``。
 
@@ -699,12 +715,16 @@ async def make_minecraft_agent(
         creature_repo=creature_repo,
         work_docs_repo=work_docs_repo,
         social_fact_repo=social_fact_repo,
+        embedding_setup=embedding_setup,
         lead_coordinator=lead_coordinator,
         lead_idle_wakeup_s=lead_idle_wakeup_s,
         lead_max_empty_turns=lead_max_empty_turns,
         lead_llm_failure_threshold=lead_llm_failure_threshold,
         lead_llm_retry_delay_s=lead_llm_retry_delay_s,
         lead_llm_cooldown_s=lead_llm_cooldown_s,
+        chat_batch_window_ms=chat_batch_window_ms,
+        chat_flush_wait=chat_flush_wait,
+        passive_cue_timeout_ms=passive_cue_timeout_ms,
     )
     await agent.start()
     return agent, llm, bus

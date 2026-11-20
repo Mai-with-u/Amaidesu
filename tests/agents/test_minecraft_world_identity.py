@@ -163,7 +163,13 @@ def test_state_adopts_unowned_docs_then_shelves_and_restores_per_world() -> None
     state.add_report("delivery", "屋子盖好了")
 
     assert state.switch_world("bbb") is True
-    assert state.to_dict() == {"todo": [], "notebook": "", "recent_reports": []}
+    assert state.to_dict() == {
+        "todo": [],
+        "notebook": "",
+        "pinned_rules": [],
+        "session_rules": [],
+        "recent_reports": [],
+    }
     state.set_notebook("新世界出生点有村庄")
 
     assert state.switch_world("aaa") is True
