@@ -166,6 +166,7 @@ async def _start_dual_agent_rig(
     planner_handler: Optional[Callable[[List[Dict[str, Any]], List[Dict[str, Any]]], Response]] = None,
     replyer_handler: Optional[Callable[[List[Dict[str, Any]], str], Response]] = None,
     streamer_sections: Optional[Dict[str, Any]] = None,
+    rundown: Optional[Rundown] = None,
     start_streamer_first: bool = True,
     on_before_start: Optional[Callable[[LeadCoordinator], None]] = None,
 ) -> _DualAgentRig:
@@ -206,13 +207,13 @@ async def _start_dual_agent_rig(
     registry.register_provider(server)
 
     # 装配真实 StreamerAgent（真实 Planner + 真实 Replyer + 真实 DecisionRoundExecutor + 真实 SpeechDispatcher）
-    rundown = _play_then_talk_rundown()
+    effective_rundown = rundown or _play_then_talk_rundown()
     streamer_llm = _ProfileRoutedFakeLLM(
         planner_handler=planner_handler,
         replyer_handler=replyer_handler,
     )
     merged_sections: Dict[str, Any] = {
-        "rundown_id": rundown.rundown_id,
+        "rundown_id": effective_rundown.rundown_id,
         "lead_mode": "dynamic",
         "speech_max_chars": 30,
         "game_lead_commentary_min_interval_ms": 0,
@@ -234,7 +235,7 @@ async def _start_dual_agent_rig(
         prompt=prompts,
         event_bus=bus,
         tool_registry=registry,
-        rundown_repo=_FakeRundownRepo(rundown),
+        rundown_repo=_FakeRundownRepo(effective_rundown),
         task_ledger=ledger,
         lead_coordinator=coordinator,
         clock=fake_clock.now_ms,
@@ -834,5 +835,149 @@ async def test_e2e_reclaim_on_rundown_talk_and_live_ended(prompts: Any, fake_clo
         assert len(rig.streamer_llm.planner_calls) > planner_calls_before_end
         signoff_prompt = _texts(rig.streamer_llm.planner_calls[-1]["messages"])
         assert "采铁矿补工具" in signoff_prompt
+    finally:
+        await rig.stop()
+
+
+async def test_e2e_rundown_play_to_play_syncs_new_segment_to_minecraft_handover_brief(
+    prompts: Any,
+    fake_clock: Any,
+) -> None:
+    """链路 6：游戏主控期流程单从游玩段 A 切到游玩段 B，经 LeadCoordinator 同步刷新真实 MinecraftAgent 固定层交接简报。"""
+    two_play_rundown = Rundown(
+        rundown_id="e2e_two_play_segments",
+        title="双游玩段端到端流程单",
+        segments=[
+            RundownSegment(
+                id="seg_opening",
+                title="开场交代",
+                task_description="先盘点营地物资并与观众打招呼",
+                expected_ms=600_000,
+                mode="play",
+            ),
+            RundownSegment(
+                id="seg_nether",
+                title="下界寻堡探险",
+                task_description="进入下界寻找下界要塞并收集烈焰棒",
+                expected_ms=2_400_000,
+                mode="play",
+            ),
+        ],
+    )
+
+    rig = await _start_dual_agent_rig(
+        prompts=prompts,
+        fake_clock=fake_clock,
+        mc_script=lambda _m: _resp("明白当前环节"),
+        rundown=two_play_rundown,
+    )
+    try:
+        await rig.bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=906, kind="live", started_at_ms=fake_clock.now_ms()),
+            source="e2e_test",
+        )
+        await rig.bus.wait_until_drained()
+        await _wait_until(lambda: len(rig.minecraft_llm.seen) >= 1 and not rig.minecraft.batch_active)
+        assert rig.coordinator.mode == "game"
+        assert "开场交代" in _texts(rig.minecraft_llm.seen[0])
+
+        calls_before_next = len(rig.minecraft_llm.seen)
+        ok, _, _ = await rig.streamer.rundown_control("next", now_ms=fake_clock.now_ms())
+        assert ok is True
+        await rig.bus.wait_until_drained()
+        await _wait_until(lambda: len(rig.minecraft_llm.seen) > calls_before_next and not rig.minecraft.batch_active)
+
+        # 仍保持游戏自主主控态，且游戏侧固定层交接简报已同步更新为新环节，不再残留“开场交代”
+        assert rig.coordinator.mode == "game"
+        assert rig.minecraft.in_lead_mode is True
+        latest_text = _texts(rig.minecraft_llm.seen[-1])
+        assert "下界寻堡探险" in latest_text
+        assert "进入下界寻找下界要塞并收集烈焰棒" in latest_text
+        assert "[流程单切换]" in latest_text
+        assert "开场交代" not in latest_text
+    finally:
+        await rig.stop()
+
+
+async def test_e2e_silence_nudge_wakes_minecraft_commentary_with_zero_planner_wakeups(
+    prompts: Any,
+    fake_clock: Any,
+) -> None:
+    """链路 7：游戏主控期连续静默超过阈值，由前线游戏侧承接静默提醒调用 framework_commentary 暖场且主播 Planner 零唤醒。"""
+    goal_started = [False]
+    commentary_sent = [False]
+
+    def _mc_script(messages: List[Dict[str, Any]]) -> Response:
+        joined = _texts(messages)
+        if not goal_started[0]:
+            goal_started[0] = True
+            return _resp(
+                "先下达采矿后台目标",
+                calls=[
+                    _call(
+                        "maicraft_execute",
+                        {"goal": {"ability": "gather", "purpose": "在矿洞深层挖铁矿"}},
+                        "c_silence_gather",
+                    )
+                ],
+            )
+        if "[直播间静默提醒]" in joined and not commentary_sent[0]:
+            commentary_sent[0] = True
+            return _resp(
+                "顺手向观众汇报正在挖铁矿的进度",
+                calls=[
+                    _call(
+                        "framework_commentary",
+                        {
+                            "summary": "正在深层矿洞挖铁矿，已经挖到半组准备回营地烧铁",
+                            "mood": "happy",
+                            "urgency": "normal",
+                        },
+                        "c_silence_commentary",
+                    )
+                ],
+            )
+        return _resp("继续等待后台挖矿目标完成")
+
+    rig = await _start_dual_agent_rig(
+        prompts=prompts,
+        fake_clock=fake_clock,
+        mc_script=_mc_script,
+        replyer_handler=lambda _m, _s: Response(
+            success=True,
+            content="正在深层矿洞挖铁矿呢，已经挖到半组准备回去烧铁啦！",
+            request_id="rep_silence_nudge",
+        ),
+        streamer_sections={
+            "game_lead_idle_fallback_ms": 0,
+            "game_lead_silence_nudge_ms": 75_000,
+            "proactive": {"enabled": True},
+        },
+    )
+    try:
+        await rig.bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=907, kind="live", started_at_ms=fake_clock.now_ms()),
+            source="e2e_test",
+        )
+        await rig.bus.wait_until_drained()
+        await _wait_until(lambda: len(rig.minecraft.tracked_goal_ids) == 1 and not rig.minecraft.batch_active)
+        goal_id = rig.minecraft.tracked_goal_ids[0]
+        assert rig.coordinator.mode == "game"
+        assert rig.server.goals[goal_id]["state"] == "running"
+        assert len(rig.streamer_llm.planner_calls) == 0
+        assert len(rig.speech_events) == 0
+
+        # 推进假时钟越过 75s 静默提醒阈值：由 StreamerAgent 触发 publish_silence_nudge 通知游戏侧
+        fake_clock.tick(80_000)
+        await _wait_until(lambda: len(rig.speech_events) == 1 and not rig.minecraft.batch_active)
+        await rig.bus.wait_until_drained()
+
+        assert "挖铁矿" in rig.speech_events[0].text
+        # 全程未唤醒主播侧重型 Planner，且游戏后台施工目标未被打断
+        assert len(rig.streamer_llm.planner_calls) == 0
+        assert rig.minecraft.tracked_goal_ids == [goal_id]
+        assert rig.server.goals[goal_id]["state"] == "running"
     finally:
         await rig.stop()
