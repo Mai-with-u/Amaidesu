@@ -32,8 +32,9 @@ minecraft_chat_send / minecraft_context_fold / minecraft_context_recall）
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional, Union
 
 from src.modules.agents.game_tools import GameToolProvider, business_fail_result, run_dict_tool
 from src.modules.logging import get_logger
@@ -487,8 +488,8 @@ def build_context_recall_spec() -> ToolSpec:
         kind="sync",
         description=(
             "读回被折叠或收起的历史原文（历史里写着“已折叠 b3”或“原文已收起 b5”的那些）。"
-            "block 填块号读整块原文；query 填关键词（坐标、编号、物品名）在所有块里查，只返回命中的片段；"
-            "两个都填只在这一块里查。摘要够用就不必读。"
+            "block 填块号读整块原文；query 填关键词（坐标、编号、物品名或相关描述）在所有块里查，"
+            "字面未命中时会自动按语义回捞相近折叠块摘要与块号；两个都填只在这一块里查。摘要够用就不必读。"
         ),
         parameters_schema={
             "type": "object",
@@ -611,8 +612,8 @@ class MinecraftToolProvider(GameToolProvider):
     situation_reader: Optional[Callable[[], Optional[GameSituation]]] = None
     # 读工作文档时附一段现查的当前状态快照：由 Agent 现查一次身体现状（未注入时按不可用处理）
     snapshot_reader: Optional[Callable[[], Awaitable[str]]] = None
-    # 取回被折叠或收起的原文：由 Agent 按块号或关键词查自己的块库（未开后台折叠时不提供折叠与取回两个工具）
-    context_recall: Optional[Callable[[str, str], Dict[str, Any]]] = None
+    # 取回被折叠或收起的原文：由 Agent 按块号或关键词查自己的块库（支持同步或异步语义回捞；未开后台折叠时不提供折叠与取回两个工具）
+    context_recall: Optional[Callable[[str, str], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]] = None
     # 委派后台生成建筑图纸：由 Agent 注入图纸生成器的受理入口（同步——受理即挂后台协程并当场返回；
     # 未注入/未启用时不提供该工具）
     drawing_starter: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
@@ -762,7 +763,10 @@ class MinecraftToolProvider(GameToolProvider):
 
     async def _invoke_context_recall(self, args: Dict[str, Any]) -> Dict[str, Any]:
         assert self.context_recall is not None  # 处理器表按回调在册建表
-        return self.context_recall(str(args.get("block", "") or ""), str(args.get("query", "") or ""))
+        result = self.context_recall(str(args.get("block", "") or ""), str(args.get("query", "") or ""))
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     async def _invoke_todo(self, args: Dict[str, Any]) -> Dict[str, Any]:
         action = str(args.get("action", ""))

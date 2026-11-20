@@ -103,6 +103,8 @@ def _make_lead_env(
     lead_llm_failure_threshold: int = 3,
     lead_llm_retry_delay_s: float = 0.0,
     lead_llm_cooldown_s: float = 60.0,
+    chat_batch_window_ms: Optional[int] = None,
+    chat_flush_wait: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """同步构造测试环境句柄（由协程内启动 agent 与 manager）。"""
     bus = EventBus(enable_stats=False)
@@ -127,6 +129,8 @@ def _make_lead_env(
         "lead_llm_failure_threshold": lead_llm_failure_threshold,
         "lead_llm_retry_delay_s": lead_llm_retry_delay_s,
         "lead_llm_cooldown_s": lead_llm_cooldown_s,
+        "chat_batch_window_ms": chat_batch_window_ms,
+        "chat_flush_wait": chat_flush_wait,
     }
 
 
@@ -147,6 +151,8 @@ async def _start_lead_env(env: Dict[str, Any]) -> tuple[MinecraftAgent, ScriptLl
         lead_llm_failure_threshold=env["lead_llm_failure_threshold"],
         lead_llm_retry_delay_s=env["lead_llm_retry_delay_s"],
         lead_llm_cooldown_s=env["lead_llm_cooldown_s"],
+        chat_batch_window_ms=env["chat_batch_window_ms"],
+        chat_flush_wait=env["chat_flush_wait"],
         config=offline_config(events_wait_ms=1000),
     )
     env["manager"].register(agent)
@@ -631,7 +637,7 @@ async def test_lead_loop_bounded_idle_wakeup_then_halts_until_external_event(fak
 
 
 async def test_lead_mode_directly_handles_player_chat_even_casual_banter(fake_clock: Any) -> None:
-    """主控态下任何玩家公屏消息都立即唤醒游戏循环，由游戏侧直接用 chat 回应同伴。"""
+    """主控态下身边同伴的日常闲聊公屏经 2 秒合批窗唤醒游戏循环，由游戏侧直接用 chat 回应同伴。"""
     server = FakeMaicraft()
     replied = [False]
 
@@ -650,11 +656,15 @@ async def test_lead_mode_directly_handles_player_chat_even_casual_banter(fake_cl
             )
         return _resp("先看着")
 
+    async def _no_real_sleep(_delay_ms: int) -> None:
+        return None
+
     env = _make_lead_env(
         server=server,
         script=script,
         fake_clock=fake_clock,
         lead_idle_wakeup_s=0.0,
+        chat_flush_wait=_no_real_sleep,
     )
     agent, llm, _ = await _start_lead_env(env)
     coord: LeadCoordinator = env["coordinator"]
@@ -665,16 +675,26 @@ async def test_lead_mode_directly_handles_player_chat_even_casual_banter(fake_cl
         )
         await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
 
-        # 发送一条不含喊停/点名关键词的普通日常闲聊公屏
+        # 发送一条身边同伴（10 格内）不含喊停/点名关键词的普通日常闲聊公屏，推进假时钟 2 秒后经合批唤醒
         await env["bus"].emit(
             CoreEvents.GAME_CHAT_RECEIVED,
-            GameChatPayload(game="minecraft", kind="player", sender="同伴甲", content="今天建得不错呀"),
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="同伴甲",
+                sender_distance=10.0,
+                content="今天建得不错呀",
+            ),
             source="test",
         )
         await env["bus"].wait_until_drained()
+        fake_clock.tick(2_000)
+        assert await agent.flush_pending_chat() is True
 
         await _wait_until(lambda: replied[0] and not agent.batch_active)
-        assert "[公屏] 玩家 同伴甲：今天建得不错呀" in _texts(llm.seen[1])
+        prompt_text = _texts(llm.seen[1])
+        assert "[公屏合批]" in prompt_text
+        assert "[公屏·身边10格] 同伴甲：今天建得不错呀" in prompt_text
         chat_calls = [args for args in server.calls_to("execute") if (args.get("goal") or {}).get("ability") == "chat"]
         assert len(chat_calls) == 1
         assert chat_calls[0]["goal"]["parameters"]["message"] == "谢谢夸奖，一会来参观"

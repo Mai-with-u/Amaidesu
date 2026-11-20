@@ -24,9 +24,10 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, ClassVar, Deque, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Awaitable, ClassVar, Deque, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from src.agents.minecraft.attention_material import AttentionMaterialPublisher
+from src.agents.minecraft.chat_gate import DEFAULT_BATCH_WINDOW_MS, MinecraftChatGate
 from src.agents.minecraft.chosen_death import is_suicide_ability
 from src.agents.minecraft.context import (
     FACTS_KEY,
@@ -125,6 +126,7 @@ from src.agents.minecraft.picture import (
 from src.agents.minecraft.place_marks import NearPlaceTracker, PlaceMark, place_change_of
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents, spar_interaction
+from src.agents.minecraft.short_term_memory import SessionShortTermMemory
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.social_rules import SOCIAL_RULES_MSG_KEY, WORLD_SOCIAL_RULES_KEY, WorldSocialRulesCache
 from src.agents.minecraft.sparring import spar_outcome_line
@@ -229,6 +231,154 @@ _SYSTEM_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 # 抗折叠钉住规矩固定层消息标记：挂在固定层（带 FACTS_KEY），随 minecraft_rules 变动原地刷新
 PINNED_RULES_MSG_KEY = "_minecraft_pinned_rules"
 
+# 折叠块保留人类原话的体积上限：单条 120 字、单块最多 6 条、总长不超过 500 字
+_PRESERVED_LINE_MAX_CHARS = 120
+_PRESERVED_MAX_LINES = 6
+_PRESERVED_MAX_TOTAL_CHARS = 500
+_MSG_REF_PREFIX_RE = re.compile(r"^\[m\d+\]\s*")
+# 游戏主控态拉取被动 [脑中闪过] 线索的单次短超时保护（毫秒），绝不阻塞慢嵌入拖慢行动步
+_DEFAULT_PASSIVE_CUE_TIMEOUT_MS = 250
+# 宿主自身生成的系统/状态/通知前缀（非人类原话，折叠原话抽取时跳过）
+_HOST_NON_HUMAN_PREFIXES: Tuple[str, ...] = (
+    "[系统]",
+    "[系统提示]",
+    "[开局资料]",
+    "[继续原游戏任务]",
+    "[当前任务状态]",
+    "[当前存档公共规矩]",
+    "[钉住规矩",
+    "[主控交接简报]",
+    "[流程单切换]",
+    "[直播间刚说过]",
+    "[直播间静默提醒]",
+    "[已折叠",
+    "[原文已收起",
+    "[身体]",
+    "[互动]",
+    "[天色]",
+    "[计时]",
+    "[跟随]",
+    "[拿过别人",
+    "[动过别人",
+    "[交接摘要]",
+    "[原任务事实",
+    "[历史推理摘要",
+    "[自主推进]",
+    "[任务尚需行动]",
+    "[还没交付]",
+    "[脑中闪过]",
+    "[公屏旁听]",
+)
+
+
+def _message_plain_text(content: Any) -> str:
+    """把消息 content 提取为纯文本（兼容字符串与多段文本列表）。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if isinstance(part, Mapping) and part.get("type") == "text":
+                parts.append(str(part.get("text", "")))
+        return "".join(parts)
+    return ""
+
+
+def _trim_preserved_line(text: str) -> str:
+    """压空白并把单条保留人类原话截断到 120 字以内。"""
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    if len(cleaned) > _PRESERVED_LINE_MAX_CHARS:
+        return f"{cleaned[: _PRESERVED_LINE_MAX_CHARS - 1]}…"
+    return cleaned
+
+
+def _extract_preserved_human_lines(originals: Sequence[Mapping[str, Any]]) -> List[str]:
+    """从被折叠区间机械抽取人类原话（公屏、直播间建议与主播/运营递话）。
+
+    剥离 ``[mNNNN]`` 编号与附尾 ``[脑中闪过]``/``[直播间刚说过]`` 只读段，单条限 120 字、
+    单块最多保留 6 条且总字符不超过 500 字（超限时优先保住较新的原话）。
+    """
+    raw_candidates: List[str] = []
+    for message in originals:
+        if message.get("role") != "user":
+            continue
+        raw = _message_plain_text(message.get("content")).strip()
+        if not raw:
+            continue
+        text = _MSG_REF_PREFIX_RE.sub("", raw, count=1).strip()
+        if not text:
+            continue
+        # 裁掉附在尾部消息下方的只读回执/线索段，避免把回声或闪过误当成人类原话保留
+        for marker in ("\n\n[脑中闪过]", "\n\n[直播间刚说过]", "\n\n[公屏旁听]"):
+            if marker in text:
+                text = text.split(marker, 1)[0].strip()
+        if not text or text.startswith(_HOST_NON_HUMAN_PREFIXES):
+            continue
+
+        if text.startswith("[公屏合批]"):
+            for line in text.splitlines()[1:]:
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    item = _trim_preserved_line(stripped[2:])
+                    if item:
+                        raw_candidates.append(item)
+            continue
+
+        if text.startswith("[公屏"):
+            # 附尾只读段已剥净，此处保留整条多行玩家公屏原话（压缩空白后统一限 120 字）
+            item = _trim_preserved_line(text)
+            if item:
+                raw_candidates.append(item)
+            continue
+
+        if text.startswith("[直播间建议]"):
+            suggestion_body = ""
+            dialogue_items: List[str] = []
+            for line in text.splitlines()[1:]:
+                stripped = line.strip()
+                if stripped.startswith("建议内容："):
+                    suggestion_body = stripped.removeprefix("建议内容：").strip()
+                elif stripped.startswith("- "):
+                    dialogue_items.append(stripped[2:].strip())
+            if suggestion_body:
+                item = _trim_preserved_line(f"[直播间建议] {suggestion_body}")
+                if item:
+                    raw_candidates.append(item)
+            for dlg in dialogue_items[:2]:
+                item = _trim_preserved_line(f"[直播间建议原话] {dlg}")
+                if item:
+                    raw_candidates.append(item)
+            continue
+
+        if text.startswith(tuple(PROMPT_SOURCE_LABELS.values())) or not text.startswith(_HOST_NON_HUMAN_PREFIXES):
+            cleaned = text.split("\n[交付提醒]", 1)[0].strip()
+            item = _trim_preserved_line(cleaned)
+            if item:
+                raw_candidates.append(item)
+
+    # 去重后优先保住最近 6 条，且总长严格控制在 500 字以内
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for line in raw_candidates:
+        if line in seen:
+            continue
+        seen.add(line)
+        deduped.append(line)
+
+    selected_rev: List[str] = []
+    total_chars = 0
+    for line in reversed(deduped[-_PRESERVED_MAX_LINES:]):
+        if total_chars + len(line) > _PRESERVED_MAX_TOTAL_CHARS:
+            if not selected_rev:
+                selected_rev.append(line[:_PRESERVED_MAX_TOTAL_CHARS])
+            break
+        selected_rev.append(line)
+        total_chars += len(line)
+    selected_rev.reverse()
+    return selected_rev
+
 
 def _is_system_join_leave_noise(content: str, message_key: str) -> bool:
     """判断一条系统消息是否为纯玩家进退服提示噪声。"""
@@ -328,12 +478,16 @@ class MinecraftAgent(BaseAgent):
         creature_repo: Optional[Any] = None,
         work_docs_repo: Optional[Any] = None,
         social_fact_repo: Optional[Any] = None,
+        embedding_setup: Optional[Any] = None,
         lead_coordinator: Optional[LeadCoordinator] = None,
         lead_idle_wakeup_s: float = _LEAD_IDLE_WAKEUP_S,
         lead_max_empty_turns: int = _LEAD_MAX_EMPTY_TURNS,
         lead_llm_failure_threshold: int = _LEAD_LLM_FAILURE_THRESHOLD,
         lead_llm_retry_delay_s: float = _LEAD_LLM_RETRY_DELAY_S,
         lead_llm_cooldown_s: float = _LEAD_LLM_COOLDOWN_S,
+        chat_batch_window_ms: Optional[int] = None,
+        chat_flush_wait: Optional[Callable[[int], Awaitable[None]]] = None,
+        passive_cue_timeout_ms: int = _DEFAULT_PASSIVE_CUE_TIMEOUT_MS,
         clock: Optional[Callable[[], float]] = None,
         live_active: Optional[bool] = None,
         mcp_client: Optional[Any] = None,
@@ -374,6 +528,8 @@ class MinecraftAgent(BaseAgent):
         super().__init__(event_bus=event_bus)
         # 时间流逝统一经此时钟：缺省用系统单调时钟，测试注入假时钟冻结或推进时间
         self._clock = clock or time.monotonic
+        # 毫秒时钟视图：供公屏门控与本场短期记忆共享同一注入时间轴（零真实 sleep 漂移）
+        self._clock_ms: Callable[[], int] = lambda: int(round(self._clock() * 1000))
         self._skills = skill_library
         self.typed_config = config
         # llm_manager 另需 async generate（ReAct 推理用）；视觉查询契约在装配期校验，
@@ -504,10 +660,39 @@ class MinecraftAgent(BaseAgent):
         # 最近一次完整进入历史的任务状态；唤醒续做只补交它之后的变化。
         self._shown_context: Dict[str, Any] = {}
         self._idle_prep: BackgroundCheckpoint[None] = BackgroundCheckpoint("minecraft 等待期间历史整理")
+        # 本场短期动态记忆（纯内存级，开播/下播/停机清空，缺失嵌入服务时自动降级关键词检索）
+        embedding_client = getattr(embedding_setup, "client", None) if embedding_setup is not None else None
+        self._short_term_memory = SessionShortTermMemory(
+            embedding_client=embedding_client,
+            clock=self._clock_ms,
+        )
+        # 公屏门控：主控态 2 秒短合并窗、防刷屏、24 格/2 分钟分级唤醒、远处旁听滑窗与近期人类原话滚动窗
+        self._chat_gate = MinecraftChatGate(
+            clock=self._clock_ms,
+            batch_window_ms=(
+                DEFAULT_BATCH_WINDOW_MS if chat_batch_window_ms is None else max(0, int(chat_batch_window_ms))
+            ),
+        )
+        self._chat_flush_wait: Optional[Callable[[int], Awaitable[None]]] = chat_flush_wait
+        self._chat_flush_task: Optional[asyncio.Task[None]] = None
+        self._passive_cue_timeout_ms: int = max(10, int(passive_cue_timeout_ms))
+        # 当前待刷出唤醒合并窗的附加元数据（供刷出时拉取跨场玩家/语义线索与登记互动同伴）
+        self._pending_chat_texts: List[str] = []
+        self._pending_chat_players: List[Tuple[str, str]] = []
+        self._pending_chat_senders: List[str] = []
+        self._last_chat_reply_candidates: List[str] = []
+        # 主控态刚走近记住地标时暂存的只读 [脑中闪过] 线索（下步附尾，绝不改写头部固定层）
+        self._pending_place_flash: Optional[str] = None
+
         # 后台折叠：历史过了折叠线，另发一次与行动步同前缀的请求，请模型把用完的区间折成摘要，
         # 原文进块库可取回；身体照常行动，写好的折叠在下一步开始前换上。开关关掉时不编号、不折叠
         self._fold_enabled = config.context.active_fold
-        self._folds = ContextFolds(TokenCounter(), is_pinned=is_pinned_message, recall_hint=RECALL_HINT)
+        self._folds = ContextFolds(
+            TokenCounter(),
+            is_pinned=is_pinned_message,
+            recall_hint=RECALL_HINT,
+            extract_preserved_lines=_extract_preserved_human_lines,
+        )
         self._fold_pacer = FoldPacer()
         self._fold_job: BackgroundCheckpoint[FoldProposal] = BackgroundCheckpoint("minecraft 后台折叠")
         # 开新任务、重开对话时加一：在这之前发起的折叠提议对应的是已丢掉的历史，算完也不再套用
@@ -631,13 +816,17 @@ class MinecraftAgent(BaseAgent):
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令；当前收工态，开播后接受委派）")
 
     async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
-        """live.started 回调：开播，清空上场临时规矩、恢复接受委派并在具备自主领航条件时通知主从协调器重评交权。"""
+        """live.started 回调：开播，清空上场临时规矩与本场短期记忆、恢复接受委派并在具备自主领航条件时通知主从协调器重评交权。"""
         del event_name, source
         self._live_active = True
         self._current_session_id = payload.live_session_id
+        # 新场次开播先等待残留合批定时器彻底退出，再清空上场公屏门控与纯内存本场短期记忆
+        await self._cancel_chat_flush_task(await_done=True)
+        self._reset_session_chat_and_memory()
         # 新场次开播自动清空仅本场有效的临时钉住规矩（长期持久规矩不受影响）
         if self._mc_state.clear_session_rules():
             self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
+        self._sync_short_term_work_docs()
         # 名册按场次决定已死的还提不提：死在上一场的，这一场是最后一次提起
         self._creatures.start_session(payload.live_session_id)
         await self._save_creatures()
@@ -660,6 +849,9 @@ class MinecraftAgent(BaseAgent):
             if self._in_lead_mode:
                 await self.yield_lead(reason="live_ended")
         await self._save_work_docs()
+        # 下播先等待挂起的合批定时器退出，再清空纯内存本场短期记忆与公屏门控
+        await self._cancel_chat_flush_task(await_done=True)
+        self._reset_session_chat_and_memory()
         # 下播清空仅本场有效的临时钉住规矩与系统提示节流状态，不带入下一场
         if self._mc_state.clear_session_rules():
             self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
@@ -839,6 +1031,8 @@ class MinecraftAgent(BaseAgent):
         self._lead_handover_context = None
         self._spoken_echo_buffer.clear()
         self._reset_lead_idle_state()
+        await self._cancel_chat_flush_task(await_done=True)
+        self._reset_session_chat_and_memory()
         self._wake_event.set()
         if self._event_bus is not None:
             self._event_bus.off(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat)
@@ -984,7 +1178,13 @@ class MinecraftAgent(BaseAgent):
             self._logger.debug("MinecraftAgent 已处于游戏主控态，enter_lead 幂等返回 True")
             return True
 
-        # 切入主控前推进收手纪元并清理旧队列陈旧通知，让自主循环以干净开局启动
+        # 切入主控前推进收手纪元、终止残留合批定时器并清理旧门控待发/旁听窗口，让自主循环以干净开局启动
+        await self._cancel_chat_flush_task(await_done=True)
+        self._chat_gate.clear_pending_windows()
+        self._pending_chat_texts.clear()
+        self._pending_chat_players.clear()
+        self._pending_chat_senders.clear()
+        self._pending_place_flash = None
         self._release_epoch += 1
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
@@ -1026,6 +1226,12 @@ class MinecraftAgent(BaseAgent):
             self._goal_ledger.forget(gid)
 
         await self._save_work_docs()
+        await self._cancel_chat_flush_task(await_done=True)
+        self._chat_gate.clear_pending_windows()
+        self._pending_chat_texts.clear()
+        self._pending_chat_players.clear()
+        self._pending_chat_senders.clear()
+        self._pending_place_flash = None
         self._wait_progress.resume()
         self._furnace_waits.clear()
         self._set_open_question("")
@@ -1059,6 +1265,8 @@ class MinecraftAgent(BaseAgent):
             return False
 
         wrapped = format_suggestion_message(text, source=source, source_dialogue=source_dialogue)
+        # 记入近期人类原话滚动窗，供集中整理或对话重开保真，不改写头部固定层
+        self._chat_gate.record_streamer_suggestion(text)
         # 用普通通知入队：不建委派账本、不触发新任务清历史、不取消当前在跑目标
         self._wake_queue.push_notice(wrapped)
         self._reset_lead_idle_state()
@@ -1269,7 +1477,33 @@ class MinecraftAgent(BaseAgent):
         echo_notice = self._spoken_echo_buffer.drain_notice()
         if not echo_notice:
             return
-        # 优先并入本步刚追加的普通 user 消息，保持单步消息紧凑且不触碰既有前缀或固定层
+        self._append_tail_readonly_note(messages, echo_notice, step_start_len=step_start_len)
+
+    def _append_eavesdrop_chats(self, messages: List[Dict[str, Any]], *, step_start_len: int) -> None:
+        """主控态正常推理步前顺带附入远处非点名旁听滑窗（只读扫一眼，不主动唤醒、不改写前缀）。"""
+        if not self._in_lead_mode:
+            return
+        eavesdrop = self._chat_gate.drain_eavesdrop()
+        if eavesdrop is None or not eavesdrop.text:
+            return
+        self._append_tail_readonly_note(messages, eavesdrop.text, step_start_len=step_start_len)
+
+    def _append_pending_place_flash(self, messages: List[Dict[str, Any]], *, step_start_len: int) -> None:
+        """主控态刚走近记住地标产生只读 [脑中闪过] 线索时，顺带附到尾部新消息下方。"""
+        if not self._in_lead_mode or not self._pending_place_flash:
+            return
+        flash = self._pending_place_flash
+        self._pending_place_flash = None
+        self._append_tail_readonly_note(messages, flash, step_start_len=step_start_len)
+
+    @staticmethod
+    def _append_tail_readonly_note(
+        messages: List[Dict[str, Any]],
+        note: str,
+        *,
+        step_start_len: int,
+    ) -> None:
+        """把只读附注拼入本步刚追加的普通 user 尾消息（或新追加一条 user 尾消息），绝不触碰历史前缀或固定层。"""
         if len(messages) > step_start_len:
             last = messages[-1]
             if (
@@ -1278,9 +1512,41 @@ class MinecraftAgent(BaseAgent):
                 and not last.get(INSTRUCTION_KEY)
                 and not last.get(FACTS_KEY)
             ):
-                last["content"] = f"{last['content']}\n\n{echo_notice}"
+                last["content"] = f"{last['content']}\n\n{note}"
                 return
-        messages.append({"role": "user", "content": echo_notice})
+        messages.append({"role": "user", "content": note})
+
+    async def query_short_term_memory(
+        self,
+        query: str,
+        *,
+        scope: str = "all",
+        limit: int = 6,
+    ) -> Sequence[Mapping[str, Any]]:
+        """供记忆回想工具检索本场公屏、折叠块摘要与当前存档/本场规矩（纯内存只读，绝不写跨场库）。"""
+        del scope
+        clean_query = (query or "").strip()
+        if not clean_query or limit <= 0:
+            return ()
+        self._sync_short_term_work_docs()
+        hits = await self._short_term_memory.search_entries(clean_query, limit=limit)
+        source_labels = {
+            "player_chat": "游戏公屏",
+            "fold_block": "游戏折叠摘要",
+            "work_doc": "游戏笔记与规矩",
+        }
+        return [
+            {
+                "text": hit.text,
+                "timestamp_ms": hit.timestamp_ms,
+                "source_label": source_labels.get(hit.kind, "本场游戏记忆"),
+                "private": hit.private,
+                "kind": hit.kind,
+                "sender": hit.sender,
+                "block_id": hit.block_id,
+            }
+            for hit in hits
+        ]
 
     # ==================================================================
     # 命令驱动 ReAct（命令 → 消息队列 → 持续推进任务 → 回空闲）
@@ -1300,6 +1566,8 @@ class MinecraftAgent(BaseAgent):
         if not chat_only and source != "委派看门狗" and self._delegations.tracked_ids():
             body = f"{content}{SUPPLEMENT_DELIVERY_REMINDER}"
         label = PROMPT_SOURCE_LABELS.get(source, "")
+        if source != "委派看门狗":
+            self._chat_gate.record_streamer_suggestion(content)
         self._wake_queue.push_instruction("", f"{label}\n{body}" if label else body)
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到递话（source={source or '未知'}）：{content[:60]}")
@@ -1719,8 +1987,10 @@ class MinecraftAgent(BaseAgent):
                 self._delegations.mark_running()
             # 推理前确保抗折叠钉住规矩固定层与当前状态同步（无规矩时不占槽位，有规矩时紧跟固定前缀）
             self._sync_pinned_rules_message(messages, expect_rewrite=False)
-            # 主控态正常推理步前拼入未读的 [直播间刚说过] 只读回执（零唤醒、不破坏既有历史前缀）
+            # 主控态正常推理步前拼入未读的 [直播间刚说过] 回执、远处 [公屏旁听] 与地标 [脑中闪过]（均只附尾、保前缀缓存）
             self._append_unread_spoken_echoes(messages, step_start_len=step_start_len)
+            self._append_eavesdrop_chats(messages, step_start_len=step_start_len)
+            self._append_pending_place_flash(messages, step_start_len=step_start_len)
             steps += 1
 
             # 先换上后台写好的折叠、给新消息编号，再看预算；过了折叠线就在后台请模型折叠，这一步照常行动
@@ -1871,6 +2141,8 @@ class MinecraftAgent(BaseAgent):
                 self._absorb_reply(call.name, arguments, observation)
                 await self._flush_place_marks()
                 await self._flush_self_chats()
+                if self._in_lead_mode and call.name == OBSERVE and arguments.get("what") == "self":
+                    await self._check_place_arrival_flash()
                 if self._in_lead_mode and not self._maicraft_ready():
                     await self._notify_lead_unavailable("mcp_disconnected")
                     return
@@ -2313,6 +2585,13 @@ class MinecraftAgent(BaseAgent):
             coords = self_coords(data)
             if coords is not None:
                 self._last_self_coords = coords
+            pos = self_position(MaicraftReply(ok=True, data=data))
+            if pos is not None:
+                self._last_position = (pos, self._clock())
+            return
+        if name == OBSERVE and arguments.get("what", "scene") == "scene":
+            # 顺手同步身边玩家名单，供旧版 Mod 未报 sender_distance 时公屏门控降级判定 [公屏·身边]
+            self._nearby_players = nearby_player_names(MaicraftReply(ok=True, data=data))
             return
         if name not in (EXECUTE, GOAL):
             return
@@ -2326,6 +2605,9 @@ class MinecraftAgent(BaseAgent):
         if run is None:
             return
         if name == EXECUTE:
+            if run.ability == "chat" or run.ability.endswith(":chat"):
+                # 角色发游戏内 chat 时把目标玩家或刚回应的公屏对话人记入近 2 分钟互动同伴窗
+                self._note_chat_partner_from_execute(arguments)
             if run.finished:
                 if run.ability == REMEMBER and run.result_status == "done":
                     # 记地点、忘掉地点、圈地盘成功：世界记忆刚改过，下一次速览重读记住的地点，
@@ -2584,6 +2866,12 @@ class MinecraftAgent(BaseAgent):
         if not self._live_active:
             self._logger.info(f"收工态不叫醒：{message[:60]}")
             return
+        # 收到玩家肢体互动时记入近 2 分钟互动同伴窗，其后续公屏即使超出 24 格仍可唤醒
+        player_info = event.get("player")
+        if isinstance(player_info, dict):
+            actor_name = str(player_info.get("name") or "").strip()
+            if actor_name:
+                self._chat_gate.note_partner_interaction(actor_name)
         # 只有正在干活的批次才算"本来就要读"：只回应互动的那一批里再来的，照闲着时一样攒着，
         # 否则他一直蹲，每来一条就把那一批续上一步、或回完又开一批，20 秒节流等于没有
         reading_now = self._batch_active and not self._interaction_only
@@ -2673,6 +2961,8 @@ class MinecraftAgent(BaseAgent):
         await self._apply_world_change(self._world.absorb(page.world_fields))
         self._flush_due_interactions()
         self._flush_throttled_system_chats()
+        if self._in_lead_mode and self._chat_gate.next_flush_delay_ms() == 0:
+            await self.flush_pending_chat()
         self._wake_for_overdue_furnaces()
         self._check_lead_idle_wakeup()
         # 本页自带新事件时紧接着就会逐条消费目标与身体变化，不在消费前抢跑无进展看门狗
@@ -2776,8 +3066,9 @@ class MinecraftAgent(BaseAgent):
         self._mc_state.switch_world(change.after.id)
         await self._ensure_world_work_docs_loaded(change.after.id, change.after.name)
         await self._refresh_world_social_rules(change.after.id)
-        # 认出或切换存档后立即同步固定层钉住规矩，防止旧存档规矩残留或新存档规矩延迟生效
+        # 认出或切换存档后立即同步固定层钉住规矩与本场短期记忆工作文档切片，防止旧存档残留
         self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
+        self._sync_short_term_work_docs()
         # 认出了（另一个）存档：手上记住的地点清单可能是别的存档的，整份丢掉，下一次速览按这个存档重读
         self._remembered_places.forget()
         if not change.switched or change.before is None:
@@ -2843,6 +3134,7 @@ class MinecraftAgent(BaseAgent):
                 self._mc_state.loaded_from_repo = True
         if self._mc_state.dirty:
             await self._save_work_docs_for(save_id, save_name)
+        self._sync_short_term_work_docs()
 
     def _format_pinned_rules_message(self) -> Optional[Dict[str, Any]]:
         """构造抗折叠钉住规矩固定层消息（长期规矩 + 本场临时硬拒绝）；双空时返回 None 不占槽位。"""
@@ -2887,8 +3179,9 @@ class MinecraftAgent(BaseAgent):
             self._prefix_guard.expect_rewrite("插入钉住规矩固定层")
 
     async def _on_rules_changed(self, durable_changed: bool) -> None:
-        """minecraft_rules 增删后的统一回调：立即原地刷新固定层，并在长期规矩变化时落库当前存档。"""
+        """minecraft_rules 增删后的统一回调：立即原地刷新固定层与本场短期记忆，并在长期规矩变化时落库当前存档。"""
         self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
+        self._sync_short_term_work_docs()
         if durable_changed:
             await self._save_work_docs()
 
@@ -2902,7 +3195,8 @@ class MinecraftAgent(BaseAgent):
         )
 
     async def _save_work_docs(self) -> None:
-        """把当前存档的工作笔记与待办写回仓储；还没认出存档或未装配仓储时只留在内存里。"""
+        """把当前存档的工作笔记与待办写回仓储并同步本场短期记忆；还没认出存档或未装配仓储时只留在内存里。"""
+        self._sync_short_term_work_docs()
         save_id, save_name = self._world.save_fields()
         await self._save_work_docs_for(save_id, save_name)
 
@@ -2989,6 +3283,10 @@ class MinecraftAgent(BaseAgent):
             context["pinned_rules"] = list(self._mc_state.pinned_rules)
         if self._mc_state.session_rules:
             context["session_rules"] = list(self._mc_state.session_rules)
+        # 近期人类原话滚动窗（仅存在近期公屏或主播建议时提供，供集中整理/重开对话保真，不改写头部固定层）
+        recent_human = self._chat_gate.format_recent_human_lines()
+        if recent_human:
+            context["recent_human_lines"] = recent_human
         # 当前世界已观测到的模组能力、最近一次连锁挖矿统计与取材留坑记录（未报过的键不出现）
         context.update(self._mining_facts.view(self._mining_world_key()))
         return context
@@ -3208,6 +3506,24 @@ class MinecraftAgent(BaseAgent):
             self._logger.warning(f"后台折叠有一段没套上：{error}")
         if not outcome.blocks:
             return
+        # 每个新落地的折叠块收录进本场短期动态记忆，供 minecraft_context_recall 字面未命中时同义回捞；
+        # 若被折区间原始消息或保留原话含私聊标记，显式标 private=True 以防止私聊跨场外泄或发往外部嵌入
+        now_tick_ms = self._clock_ms()
+        for block in outcome.blocks:
+            span = block.start if block.start == block.end else f"{block.start}–{block.end}"
+            has_private_chat = (
+                "[公屏·私聊]" in (block.summary or "")
+                or any("[公屏·私聊]" in line for line in block.preserved_lines)
+                or any("[公屏·私聊]" in _message_plain_text(msg.get("content")) for msg in block.originals)
+            )
+            self._short_term_memory.record_fold_block(
+                block.block_id,
+                span,
+                block.summary,
+                block.preserved_lines,
+                private=has_private_chat,
+                timestamp_ms=now_tick_ms,
+            )
         # 折叠就地改写了历史中段，下一次请求重算前缀是预期内的
         self._prefix_guard.expect_rewrite("后台折叠")
         # 折掉的区间里有任务状态：紧跟着补一份完整的，再量体积、记基线
@@ -3240,9 +3556,28 @@ class MinecraftAgent(BaseAgent):
         # 新补的这条在发出前就编号，之后不再改它的正文
         self._number_messages(messages)
 
-    def _recall_context(self, block: str, query: str) -> Dict[str, Any]:
-        """取回被折叠或收起的原文（minecraft_context_recall 的执行后端）。"""
-        return self._folds.recall(block=block, query=query, max_chars=RECALL_MAX_CHARS)
+    async def _recall_context(self, block: str, query: str) -> Dict[str, Any]:
+        """取回被折叠或收起的原文（minecraft_context_recall 的执行后端）。
+
+        先走精确子串查找；当只给 ``query``（未指定 ``block``）且字面 0 命中时，自动走本场短期记忆
+        语义/关键词回捞相近折叠块的摘要、保留原话与块号，方便模型随后按 ``block`` 读回完整原文。
+        """
+        result = self._folds.recall(block=block, query=query, max_chars=RECALL_MAX_CHARS)
+        clean_block = (block or "").strip()
+        clean_query = (query or "").strip()
+        if not clean_block and clean_query and result.get("ok") and not result.get("hits"):
+            semantic_blocks = await self._short_term_memory.search_fold_blocks(clean_query, limit=3)
+            if semantic_blocks:
+                return {
+                    "ok": True,
+                    "hits": [],
+                    "semantic_blocks": semantic_blocks,
+                    "note": (
+                        "精确子串未命中，以下为语义/关键词相近的折叠块摘要与保留原话；"
+                        "如需完整原文请按 block 块号再次调用 minecraft_context_recall"
+                    ),
+                }
+        return result
 
     def _build_thinking_callback(self, round_id: str, step: int, seq_box: List[int]) -> Any:
         """构造 LLM 层增量回调（duck-typed sink），只转发 reasoning 增量。"""
@@ -3329,9 +3664,12 @@ class MinecraftAgent(BaseAgent):
             if worth:
                 view["worth_seeing"] = worth
             # 拿这次读到的位置和地点清单认"走近""离开"了哪个记住的地点（不多读游戏），连同待发的一起发出
-            for mark in self._near_places.observe(self._world.save_fields()[0], self._current_situation()):
+            marks = self._near_places.observe(self._world.save_fields()[0], self._current_situation())
+            for mark in marks:
                 self._queue_place_mark(mark)
             await self._flush_place_marks()
+            if self._in_lead_mode and any(mark.kind == "near" for mark in marks):
+                await self._prepare_place_arrival_flash(marks)
         view["work"] = self._glance_work()
         return {"tool": "glance", "brief": glance_brief(view), **view}
 
@@ -3489,9 +3827,272 @@ class MinecraftAgent(BaseAgent):
                     self._reset_lead_idle_state()
                 self._enqueue_chat_notice(f"system:{key}:merged", summary, wake_if_waiting=True)
 
+    # ==================================================================
+    # 本场短期记忆、公屏门控合批与被动 [脑中闪过] 线索
+    # ==================================================================
+
+    def _sync_short_term_work_docs(self) -> None:
+        """把工作笔记、长期规矩与本场临时规矩同步到纯内存本场短期记忆（无变动时指纹短路零开销）。"""
+        self._short_term_memory.sync_work_docs(
+            self._mc_state.notebook,
+            self._mc_state.pinned_rules,
+            self._mc_state.session_rules,
+            timestamp_ms=self._clock_ms(),
+        )
+
+    def _cancel_chat_flush_task_nowait(self) -> None:
+        """同步取消挂起的公屏合批刷出定时器（幂等）。"""
+        task = self._chat_flush_task
+        self._chat_flush_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _cancel_chat_flush_task(self, *, await_done: bool = False) -> None:
+        """取消挂起的公屏合批刷出定时器，可选等待协程退出。"""
+        task = self._chat_flush_task
+        self._chat_flush_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        if await_done and task is not asyncio.current_task():
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    def _reset_session_chat_and_memory(self) -> None:
+        """开播/下播/停机统一清空公屏门控、待刷元数据与纯内存本场短期记忆，取消合批定时器。"""
+        self._cancel_chat_flush_task_nowait()
+        self._chat_gate.clear()
+        self._short_term_memory.clear_session()
+        self._pending_chat_texts.clear()
+        self._pending_chat_players.clear()
+        self._pending_chat_senders.clear()
+        self._last_chat_reply_candidates.clear()
+        self._pending_place_flash = None
+
+    def _note_chat_partner_from_execute(self, arguments: Dict[str, Any]) -> None:
+        """角色发游戏内 chat 时把目标玩家或刚回应的公屏对话人记入近 2 分钟互动同伴窗。"""
+        goal = arguments.get("goal") if isinstance(arguments.get("goal"), dict) else {}
+        target = goal.get("target") if isinstance(goal.get("target"), dict) else {}
+        if target.get("kind") == "player":
+            target_name = str(target.get("name") or "").strip()
+            if target_name:
+                self._chat_gate.note_partner_interaction(target_name)
+                return
+        for sender in self._last_chat_reply_candidates:
+            self._chat_gate.note_partner_interaction(sender)
+
+    def _schedule_chat_flush(self) -> None:
+        """挂起可取消异步刷出任务，在 2 秒短合并窗或冷却到点时刷出 ``[公屏合批]``。"""
+        if self._chat_flush_task is not None and not self._chat_flush_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._chat_flush_task = loop.create_task(self._run_chat_flush_timer(), name="mc-chat-gate-flush")
+
+    async def _run_chat_flush_timer(self) -> None:
+        """按公屏门控剩余毫秒异步等待并刷出 ``[公屏合批]``（支持注入等待器避免测试真实 sleep）。"""
+        try:
+            while self._running and self._live_active and self._in_lead_mode:
+                delay_ms = self._chat_gate.next_flush_delay_ms()
+                if delay_ms is None:
+                    return
+                if delay_ms > 0:
+                    if self._chat_flush_wait is not None:
+                        await self._chat_flush_wait(delay_ms)
+                        # 使用测试注入等待器时若假时钟尚未推进到点，直接退出交由测试推进后显式刷出
+                        if (self._chat_gate.next_flush_delay_ms() or 0) > 0:
+                            return
+                    else:
+                        await asyncio.sleep(delay_ms / 1000.0)
+                    continue
+                await self._deliver_due_chat_batch(force=False)
+                # 投递过程可能因拉取被动线索让出事件循环，期间新到的公屏会开启新窗口；继续循环复检防漏调度
+                continue
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 - 公屏合批定时器异常不拖垮主循环
+            self._logger.warning(f"公屏合批刷出定时器异常（已忽略）: {type(exc).__name__}: {exc}", exc=True)
+        finally:
+            if self._chat_flush_task is asyncio.current_task():
+                self._chat_flush_task = None
+
+    async def flush_pending_chat(self, *, force: bool = False) -> bool:
+        """检查并刷出已到点（或强制刷出）的 ``[公屏合批]``，返回本次是否产出了批次。"""
+        if not (self._live_active and self._in_lead_mode):
+            return False
+        return await self._deliver_due_chat_batch(force=force)
+
+    async def _deliver_due_chat_batch(self, *, force: bool = False) -> bool:
+        """从公屏门控刷出 ``[公屏合批]``，在主控态顺手附带最多 1–2 条只读 ``[脑中闪过]`` 并按需唤醒循环。"""
+        batch = self._chat_gate.flush_due(force=force)
+        if batch is None:
+            return False
+        batch_texts = list(self._pending_chat_texts)
+        batch_players = list(self._pending_chat_players)
+        batch_senders = list(self._pending_chat_senders)
+        self._pending_chat_texts.clear()
+        self._pending_chat_players.clear()
+        self._pending_chat_senders.clear()
+        if batch_senders:
+            self._last_chat_reply_candidates = batch_senders[-4:]
+
+        notice = batch.text
+        flash = await self._build_passive_flash_notice(
+            texts=batch_texts,
+            players=batch_players,
+            situation=self._current_situation(),
+            max_items=2,
+        )
+        # 跨 await 拉取线索期间可能已退出主控或下播，复核运行态防止向已停止主控队列脏投递
+        if not (self._in_lead_mode and self._live_active):
+            return False
+        if flash:
+            notice = f"{notice}\n\n{flash}"
+
+        self._wake_queue.push_notice(notice)
+        if batch.should_wake:
+            self._reset_lead_idle_state()
+            if not self._task_suspended:
+                self._wake_event.set()
+        return True
+
+    async def _check_place_arrival_flash(self) -> None:
+        """主控态读取自身位置后检测是否刚走近记住地标，命中则准备只读 ``[脑中闪过]`` 供下步附尾。"""
+        if not (self._in_lead_mode and self._live_active):
+            return
+        marks = self._near_places.observe(self._world.save_fields()[0], self._current_situation())
+        if not marks:
+            return
+        for mark in marks:
+            self._queue_place_mark(mark)
+        await self._flush_place_marks()
+        if any(mark.kind == "near" for mark in marks):
+            await self._prepare_place_arrival_flash(marks)
+
+    async def _prepare_place_arrival_flash(self, marks: Sequence[PlaceMark]) -> None:
+        """刚走近记住地标时快速拉取跨场与本场被动线索，写入待附尾槽位（不改写头部固定层）。"""
+        near_places = [mark.place for mark in marks if mark.kind == "near" and mark.place]
+        if not near_places:
+            return
+        flash = await self._build_passive_flash_notice(
+            texts=near_places,
+            players=(),
+            situation=self._current_situation(),
+            arrived_places=near_places,
+            max_items=2,
+        )
+        if not (self._in_lead_mode and self._live_active):
+            return
+        if flash:
+            self._pending_place_flash = flash
+
+    async def _build_passive_flash_notice(
+        self,
+        *,
+        texts: Sequence[str],
+        players: Sequence[Tuple[str, str]] = (),
+        situation: Optional[GameSituation] = None,
+        arrived_places: Sequence[str] = (),
+        max_items: int = 2,
+    ) -> str:
+        """游戏主控态快速拉取最多 1–2 条被动线索（跨场 + 本场短期语义），整体带短超时保护且不阻塞慢嵌入。"""
+        if not (self._in_lead_mode and self._live_active) or max_items <= 0:
+            return ""
+        clean_texts = [" ".join(str(t or "").split()) for t in texts if str(t or "").strip()]
+        clean_arrived_places = [p for raw in arrived_places if (p := " ".join(str(raw or "").split()))]
+        if not clean_texts and not players and situation is None and not clean_arrived_places:
+            return ""
+
+        self._sync_short_term_work_docs()
+        timeout_s = self._passive_cue_timeout_ms / 1000.0
+
+        async def _load_cross_session() -> List[str]:
+            if self._lead_coordinator is None:
+                return []
+            return await asyncio.wait_for(
+                self._lead_coordinator.fetch_passive_cues(
+                    game=_GAME,
+                    texts=clean_texts,
+                    players=players,
+                    situation=situation,
+                    arrived_places=clean_arrived_places,
+                    limit=max_items,
+                ),
+                timeout=timeout_s,
+            )
+
+        async def _load_short_term() -> List[str]:
+            query_text = "\n".join(clean_texts).strip()
+            if not query_text:
+                return []
+            # 排除近期尾部已见原话及本批触发文本自身，只闪出早先记住的规矩、折叠摘要或更早公屏；
+            # 传 wait_vector_ms=0：命中缓存即时融合余弦，未就绪仅后台预取并毫秒级返回关键词命中，不被慢嵌入取消
+            excludes = set(self._chat_gate.recent_human_texts())
+            excludes.update(clean_texts)
+            hits = await asyncio.wait_for(
+                self._short_term_memory.search_entries(
+                    query_text,
+                    exclude_texts=excludes,
+                    limit=max_items,
+                    wait_vector_ms=0,
+                ),
+                timeout=timeout_s,
+            )
+            return [hit.text for hit in hits if hit.text]
+
+        cross_res, local_res = await asyncio.gather(_load_cross_session(), _load_short_term(), return_exceptions=True)
+        cross_lines: List[str] = []
+        if isinstance(cross_res, BaseException):
+            if isinstance(cross_res, asyncio.TimeoutError):
+                self._logger.debug(f"拉取跨场被动线索超时（{self._passive_cue_timeout_ms}ms），本次跳过")
+            else:
+                self._logger.warning(f"拉取跨场被动线索异常（本次跳过）: {cross_res}", exc=True)
+        else:
+            cross_lines = [line.strip() for line in cross_res if str(line or "").strip()]
+
+        local_lines: List[str] = []
+        if isinstance(local_res, BaseException):
+            if isinstance(local_res, asyncio.TimeoutError):
+                self._logger.debug(f"拉取本场短期线索超时（{self._passive_cue_timeout_ms}ms），本次跳过")
+            else:
+                self._logger.warning(f"拉取本场短期线索异常（本次跳过）: {local_res}", exc=True)
+        else:
+            local_lines = [line.strip() for line in local_res if str(line or "").strip()]
+
+        # 跨场与本场都命中时优先各留 1 条（总计 ≤ max_items），单路命中时可补满上限，并去重
+        picked: List[str] = []
+        seen: set[str] = set()
+
+        def _take(pool: Sequence[str], quota: int) -> None:
+            added = 0
+            for raw in pool:
+                if added >= quota or len(picked) >= max_items:
+                    break
+                line = " ".join(raw.split())
+                if not line or line in seen:
+                    continue
+                seen.add(line)
+                picked.append(line)
+                added += 1
+
+        if cross_lines and local_lines and max_items >= 2:
+            _take(cross_lines, 1)
+            _take(local_lines, 1)
+        _take(cross_lines, max_items)
+        _take(local_lines, max_items)
+
+        if not picked:
+            return ""
+        return "\n".join(["[脑中闪过]（只读联想线索，切题时可参考，无需逐条回应）", *(f"- {line}" for line in picked)])
+
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
         """``game.chat.received`` 回调：
-        1. 玩家公屏聊天：主控态立即唤醒直答，非主控委派态仅活跃任务期间旁听（严格空闲零消耗）；
+        1. 玩家公屏聊天：主控态经公屏门控（2 秒短合并窗、防刷屏、24 格/2 分钟分级唤醒、远处旁听滑窗）处理，
+           并同步收录本场短期记忆；非主控委派态仅活跃任务期间旁听（严格空闲零消耗）；
         2. 系统死亡播报：认出生物名册里的个体并上报主播（不唤醒模型，保持空闲零消耗）；
         3. 非死亡系统提示：在主控态或活跃委派任务期间放行服务器权限/领地/插件等反馈，过滤空白与
            纯进退服噪声并经 15 秒节流合并计数后以 ``[系统提示]`` 入队，空闲时严格零消耗忽略。
@@ -3500,19 +4101,40 @@ class MinecraftAgent(BaseAgent):
         if payload.game != "minecraft":
             return
         if payload.kind == "player":
-            # 主控态下玩家公屏由游戏 Agent 直接主导：只要开播即受理并立即唤醒循环；
-            # 非主控委派态严格保持空闲零消耗（仅活跃委派任务期间旁听）
+            # 主控态下玩家公屏由游戏 Agent 经公屏门控统一节流、合批并附带被动联想线索
             if self._in_lead_mode:
                 if not self._live_active:
                     return
-                content = (payload.content or "").strip()
+                content = " ".join((payload.content or "").split())
                 if not content:
                     return
                 sender = (payload.sender or "").strip() or "其他玩家"
-                prefix = "[公屏·私聊]" if payload.private else "[公屏]"
-                notice = f"{prefix} 玩家 {sender}：{content}"
-                self._reset_lead_idle_state()
-                self._enqueue_chat_notice(f"player:{sender}", notice, wake_if_waiting=True)
+                self._short_term_memory.record_player_chat(
+                    sender,
+                    content,
+                    private=bool(payload.private),
+                    timestamp_ms=int(payload.timestamp_ms or 0) or self._clock_ms(),
+                )
+                ingest_result = self._chat_gate.ingest(payload, nearby_players=frozenset(self._nearby_players))
+                if not ingest_result.accepted:
+                    return
+                if ingest_result.routed_to == "wake_window":
+                    # 私聊正文绝不送往跨场被动检索与外部嵌入服务；仅保留发言者身份供玩家往来卡与同伴窗使用
+                    if not payload.private:
+                        self._pending_chat_texts.append(content)
+                        if ingest_result.due_in_ms != 0:
+                            # 2 秒合批窗口期间提前后台非阻塞预取查询向量，到期刷出时 wait_vector_ms=0 可即时融合同义余弦
+                            await self._short_term_memory.search_entries(content, limit=1, wait_vector_ms=0)
+                    if payload.sender_id and payload.sender_online:
+                        player_pair = (_GAME, payload.sender_id)
+                        if player_pair not in self._pending_chat_players:
+                            self._pending_chat_players.append(player_pair)
+                    if sender and sender not in self._pending_chat_senders:
+                        self._pending_chat_senders.append(sender)
+                    if ingest_result.due_in_ms == 0:
+                        await self._deliver_due_chat_batch(force=False)
+                    elif ingest_result.should_schedule_flush or self._chat_flush_task is None:
+                        self._schedule_chat_flush()
                 return
             # 空闲零消耗：没有活跃委派任务时不入队、不唤醒 LLM
             if not self._has_active_delegation_task():
@@ -3521,6 +4143,12 @@ class MinecraftAgent(BaseAgent):
             if not content:
                 return
             sender = (payload.sender or "").strip() or "其他玩家"
+            self._short_term_memory.record_player_chat(
+                sender,
+                content,
+                private=bool(payload.private),
+                timestamp_ms=int(payload.timestamp_ms or 0) or self._clock_ms(),
+            )
             prefix = "[公屏·私聊]" if payload.private else "[公屏]"
             notice = f"{prefix} 玩家 {sender}：{content}"
             self._enqueue_chat_notice(
