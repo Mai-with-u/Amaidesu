@@ -363,3 +363,89 @@ def test_pacer_baseline_follows_history_down() -> None:
     assert not pacer.due(40_000, line=80_000, growth=20_000)
     # 涨过折叠线、比压小后的体积多出一截：该请了（按旧基线要等到 14.9 万）
     assert pacer.due(81_000, line=80_000, growth=20_000)
+
+
+def test_apply_appends_preserved_lines_and_exposes_block_readers() -> None:
+    """配置保留原话回调时：折叠替身末尾附 [本段人类原话保留]，块对象与只读查询接口均可取回原话。"""
+
+    def _extract(originals: List[Mapping[str, Any]]) -> List[str]:
+        found: List[str] = []
+        for message in originals:
+            text = str(message.get("content") or "")
+            if "回执1:" in text:
+                found.extend(["同伴甲：北边那个箱子别动", "  ", "同伴甲：北边那个箱子别动", "- 主播建议：先看清领地"])
+        return found
+
+    folds = ContextFolds(TokenCounter(), is_pinned=_pinned, recall_hint=HINT, extract_preserved_lines=_extract)
+    messages = _history(rounds=6, size=400)
+    folds.number(messages)
+
+    outcome = folds.apply(
+        messages,
+        [FoldRequest("m0001", "m0003", "前三步查过矿洞")],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+
+    assert not outcome.errors and len(outcome.blocks) == 1
+    stand_in_text = messages[2]["content"]
+    assert "[本段人类原话保留]" in stand_in_text
+    assert "- 同伴甲：北边那个箱子别动" in stand_in_text
+    assert "- 主播建议：先看清领地" in stand_in_text
+    assert stand_in_text.count("同伴甲：北边那个箱子别动") == 1
+    block = folds.get_block("b1")
+    assert block is not None
+    assert block.preserved_lines == ("同伴甲：北边那个箱子别动", "- 主播建议：先看清领地")
+    assert block.tokens_after == TokenCounter().message(messages[2])
+    assert folds.get_block("b99") is None
+    assert [item.block_id for item in folds.list_blocks()] == ["b1"]
+
+
+def test_apply_counts_preserved_lines_toward_net_token_saving_guardrail() -> None:
+    """保留原话的体积计入折后替身 token：即便摘要很短，加上保留原话后净省不足仍必须拒收。"""
+    folds = ContextFolds(
+        TokenCounter(),
+        is_pinned=_pinned,
+        recall_hint=HINT,
+        extract_preserved_lines=lambda _originals: ["原话" * 350],
+    )
+    messages = _history(rounds=6, size=400)
+    folds.number(messages)
+    before = [dict(message) for message in messages]
+
+    outcome = folds.apply(
+        messages,
+        [FoldRequest("m0001", "m0002", "很短的摘要")],
+        keep_recent=2,
+        min_tokens=600,
+        max_summary_chars=500,
+    )
+
+    assert not outcome.blocks
+    assert "净省不足" in outcome.errors[0]
+    assert messages == before and folds.list_blocks() == []
+
+
+def test_apply_degrades_gracefully_when_preserved_line_extractor_fails(loguru_capture: Any) -> None:
+    """保留原话抽取回调抛异常时记录 warning 并按无保留原话照常折叠，不阻断整理。"""
+
+    def _broken(_originals: List[Mapping[str, Any]]) -> List[str]:
+        raise RuntimeError("抽取失败")
+
+    folds = ContextFolds(TokenCounter(), is_pinned=_pinned, recall_hint=HINT, extract_preserved_lines=_broken)
+    messages = _history(rounds=6, size=400)
+    folds.number(messages)
+
+    outcome = folds.apply(
+        messages,
+        [FoldRequest("m0001", "m0003", "前三步查过矿洞")],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+
+    assert not outcome.errors and len(outcome.blocks) == 1
+    assert "[本段人类原话保留]" not in messages[2]["content"]
+    assert outcome.blocks[0].preserved_lines == ()
+    assert any(rec["level"] == "WARNING" and "保留原话" in rec["message"] for rec in loguru_capture.records)

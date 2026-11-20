@@ -27,6 +27,9 @@ from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional,
 
 from src.modules.context.checkpoint import group_spans
 from src.modules.context.tokens import TokenCounter
+from src.modules.logging import get_logger
+
+logger = get_logger("ContextFolds")
 
 __all__ = [
     "BLOCK_KEY",
@@ -56,6 +59,8 @@ _MIN_SAVED_TOKENS = 400
 # 关键词查找最多返回的片段数，以及每个片段在命中处前后各带的字符数
 _MAX_HITS = 8
 _SNIPPET_RADIUS = 160
+# 折叠替身消息末尾附带保留原话时的段标题（通用层不绑定任何具体业务或游戏）
+_PRESERVED_LINES_HEADER = "[本段人类原话保留]"
 
 
 @dataclass(frozen=True)
@@ -81,7 +86,8 @@ class FoldRequest:
 class FoldBlock:
     """块库里的一块：被折叠或收起的原文，以及它在历史里留下的替身占多少 token。
 
-    ``kind`` 为 ``fold``（模型写了摘要）或 ``stow``（宿主收起，只留一行占位）。
+    ``kind`` 为 ``fold``（模型写了摘要）或 ``stow``（宿主收起，只留一行占位）；
+    ``preserved_lines`` 记录折叠时按调用方回调抽出的需原样留存的话，供上层语义索引复用。
     """
 
     block_id: str
@@ -92,6 +98,7 @@ class FoldBlock:
     originals: List[Dict[str, Any]]
     tokens_before: int
     tokens_after: int
+    preserved_lines: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -151,10 +158,12 @@ class ContextFolds:
         *,
         is_pinned: Callable[[Mapping[str, Any]], bool],
         recall_hint: str,
+        extract_preserved_lines: Optional[Callable[[Sequence[Mapping[str, Any]]], Sequence[str]]] = None,
     ) -> None:
         self._counter = counter
         self._is_pinned = is_pinned
         self._recall_hint = recall_hint
+        self._extract_preserved_lines = extract_preserved_lines
         self._next_ref = 1
         self._next_block = 1
         self._blocks: Dict[str, FoldBlock] = {}
@@ -162,6 +171,14 @@ class ContextFolds:
     @property
     def blocks(self) -> List[FoldBlock]:
         """块库里现有的块（按创建先后）。"""
+        return list(self._blocks.values())
+
+    def get_block(self, block_id: str) -> Optional[FoldBlock]:
+        """按块号只读查询单个折叠块；块号不存在时返回 ``None``。"""
+        return self._blocks.get(block_id.strip())
+
+    def list_blocks(self) -> List[FoldBlock]:
+        """按创建先后只读列出块库里的全部折叠块，供上层语义索引遍历摘要与保留原话。"""
         return list(self._blocks.values())
 
     def clear(self) -> None:
@@ -226,7 +243,7 @@ class ContextFolds:
         allowed = self._allowed_groups(messages, spans, keep_recent)
         group_of = {index: number for number, (start, end) in enumerate(spans) for index in range(start, end)}
         positions = {label: index for index, message in enumerate(messages) if (label := _label(message))}
-        accepted: List[Tuple[int, int, str]] = []
+        accepted: List[Tuple[int, int, str, Tuple[str, ...]]] = []
         for request in requests:
             start, end, summary = request.start.strip(), request.end.strip(), request.summary.strip()
             first, last = positions.get(start), positions.get(end)
@@ -238,20 +255,22 @@ class ContextFolds:
             elif not summary:
                 error = "摘要为空"
             else:
-                # 先扩展到完整工具调用配对组并核对区间边界，再收敛超长摘要，最后拿完整替身消息对比原区间算净省 token：
-                # 轻微超限保留全文、超出缓冲在句号或换行处截断附注，但折后若不比原区间小或省不下足够空间则拒收，防止折出比原文更胖的摘要。
+                # 先扩展到完整工具调用配对组并核对区间边界，再收敛超长摘要并抽出需保留原话，
+                # 最后拿包含保留原话的完整替身消息对比原区间算净省 token：确保保留原话的体积计入折后门槛，
+                # 防止附带原话后替身反而比原文更胖或省不下足够空间。
                 head, tail = group_of[first], group_of[last]
                 low, high = spans[head][0], spans[tail][1]
                 originals = messages[low:high]
                 before = self._counter.messages(originals)
                 if not all(allowed[head : tail + 1]):
                     error = "区间含不能折的消息（固定层或最近几组记录）"
-                elif any(low < taken_high and taken_low < high for taken_low, taken_high, _ in accepted):
+                elif any(low < taken_high and taken_low < high for taken_low, taken_high, _, _ in accepted):
                     error = "与同批另一段区间重叠"
                 elif before < min_tokens:
                     error = f"区间只有约 {before} token，不值得折（至少 {min_tokens}）"
                 else:
                     fitted = _fit_summary(summary, max_summary_chars, self._recall_hint)
+                    preserved = self._extract_preserved(originals)
                     labels = [label for label in (_label(message) for message in originals) if label]
                     preview = self._build_stand_in(
                         f"b{self._next_block + len(accepted)}",
@@ -259,6 +278,7 @@ class ContextFolds:
                         labels[-1],
                         before,
                         fitted,
+                        preserved_lines=preserved,
                     )
                     after = self._counter.message(preview)
                     floor_saved = min(_MIN_SAVED_TOKENS, max(1, min_tokens // 2))
@@ -268,13 +288,13 @@ class ContextFolds:
                             f"折后约 {after} token（原文约 {before} token），净省不足 {required_saved} token，不划算"
                         )
                     else:
-                        accepted.append((low, high, fitted))
+                        accepted.append((low, high, fitted, preserved))
             if error:
                 outcome.errors.append(f"{start}–{end}：{error}")
         # 从后往前替换：后面的区间先换，前面区间的下标不受影响；块号仍按历史先后分配
         blocks: List[Tuple[int, int, FoldBlock, Dict[str, Any]]] = []
-        for low, high, summary in sorted(accepted):
-            block, stand_in = self._fold_block(messages[low:high], summary)
+        for low, high, summary, preserved in sorted(accepted):
+            block, stand_in = self._fold_block(messages[low:high], summary, preserved_lines=preserved)
             blocks.append((low, high, block, stand_in))
         for low, high, _, stand_in in reversed(blocks):
             messages[low:high] = [stand_in]
@@ -352,22 +372,63 @@ class ContextFolds:
             return _miss(query, "")
         return {"ok": True, "hits": found_hits[:_MAX_HITS]}
 
-    def _build_stand_in(self, block_id: str, start: str, end: str, before: int, summary: str) -> Dict[str, Any]:
+    def _extract_preserved(self, originals: Sequence[Mapping[str, Any]]) -> Tuple[str, ...]:
+        """调用上层注入的回调抽取本段需原样留存的话：去空白并保序去重，回调异常时降级为空。"""
+        if self._extract_preserved_lines is None:
+            return ()
+        try:
+            raw_lines = self._extract_preserved_lines(originals)
+        except Exception as exc:  # noqa: BLE001 - 保留原话抽取属增强能力，失败记日志降级不阻断折叠
+            logger.warning(f"抽取折叠区间保留原话失败，本次按无保留原话继续: {exc}", exc=True)
+            return ()
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for item in raw_lines or ():
+            if not isinstance(item, str):
+                continue
+            line = item.strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            cleaned.append(line)
+        return tuple(cleaned)
+
+    def _build_stand_in(
+        self,
+        block_id: str,
+        start: str,
+        end: str,
+        before: int,
+        summary: str,
+        *,
+        preserved_lines: Sequence[str] = (),
+    ) -> Dict[str, Any]:
         """拼装折叠替身消息：统一用于入账前的折后 token 预估与正式落块，保证两侧计量口径一致。"""
         span = start if start == end else f"{start}–{end}"
+        body = f"[已折叠 {block_id} · {span} · 原文约 {before} token，{self._recall_hint}]\n{summary}"
+        if preserved_lines:
+            rendered = "\n".join(line if line.startswith("- ") else f"- {line}" for line in preserved_lines)
+            body = f"{body}\n\n{_PRESERVED_LINES_HEADER}\n{rendered}"
         return {
             "role": "user",
-            "content": f"[已折叠 {block_id} · {span} · 原文约 {before} token，{self._recall_hint}]\n{summary}",
+            "content": body,
             BLOCK_KEY: block_id,
         }
 
-    def _fold_block(self, originals: Sequence[Dict[str, Any]], summary: str) -> Tuple[FoldBlock, Dict[str, Any]]:
+    def _fold_block(
+        self,
+        originals: Sequence[Dict[str, Any]],
+        summary: str,
+        *,
+        preserved_lines: Sequence[str] = (),
+    ) -> Tuple[FoldBlock, Dict[str, Any]]:
         """为一段原文建块并生成替身消息（user 角色，带块号标记，不再编号）。"""
         labels = [label for label in (_label(message) for message in originals) if label]
         start, end = labels[0], labels[-1]
         before = self._counter.messages(originals)
         block_id = self._take_block_id()
-        stand_in = self._build_stand_in(block_id, start, end, before, summary)
+        preserved = tuple(preserved_lines)
+        stand_in = self._build_stand_in(block_id, start, end, before, summary, preserved_lines=preserved)
         block = FoldBlock(
             block_id,
             "fold",
@@ -377,6 +438,7 @@ class ContextFolds:
             [deepcopy(message) for message in originals],
             before,
             self._counter.message(stand_in),
+            preserved_lines=preserved,
         )
         self._blocks[block_id] = block
         return block, stand_in
