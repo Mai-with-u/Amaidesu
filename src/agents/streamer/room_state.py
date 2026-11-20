@@ -287,29 +287,46 @@ class RoomState:
     # 进房记录（room.message.enter 驱动）
     # ------------------------------------------------------------------
 
-    def record_enter(self, user_id: str, user_name: str, *, now_ms: Optional[int] = None) -> None:
-        """记录一位观众进房（内存态；本场已欢迎过或限频窗口内重复进房的不重复记）。
+    def record_enter(self, user_id: str, user_name: str, *, now_ms: Optional[int] = None) -> bool:
+        """记录一位观众进房（内存态；返回本次是否新记入待欢迎名单）。
+
+        去重策略：
+        - 本场已欢迎过的观众直接忽略，不再重复进待欢迎名单；
+        - 尚未被欢迎的观众仅在渲染窗口（``ENTER_WINDOW_MS``）内防刷屏去重，
+          超过渲染窗口后再次进房允许刷新其进房时刻重新进入待欢迎名单，避免漏迎后被 30 分钟长去重锁死。
 
         Args:
             user_id: 观众唯一 ID（限频与本场已欢迎的判定键）
             user_name: 昵称（activity_line 点名用）
             now_ms: 进房时刻（Unix 毫秒）；None 时使用真实时钟
+
+        Returns:
+            True 表示本次进房已新记入待欢迎列表；False 表示已欢迎或在短时防刷屏窗口内被忽略。
         """
         ts = self._resolve_now(now_ms)
-        if user_id and user_id in self._welcomed_ids:
-            return
-        if user_name and any(user_name.lower() == existing.lower() for existing in self._welcomed_names):
-            return
-        for entry_ts, entry_id, _ in reversed(self._enters):
-            if entry_id == user_id:
-                if ts - entry_ts < ENTER_DEDUP_MS:
-                    return
-                break
+        if self._is_welcomed(user_id, user_name):
+            return False
+        norm_name = (user_name or "").strip().lower()
+        # 检查同一未欢迎观众是否已有进房记录：渲染窗口内防反复进出刷屏，过窗后移除旧条并刷新进房时刻
+        stale_indices: List[int] = []
+        for idx in range(len(self._enters) - 1, -1, -1):
+            entry_ts, entry_id, entry_name = self._enters[idx]
+            same_user = (bool(user_id) and entry_id == user_id) or (
+                not user_id and bool(norm_name) and entry_name.strip().lower() == norm_name
+            )
+            if not same_user:
+                continue
+            if ts - entry_ts < ENTER_WINDOW_MS:
+                return False
+            stale_indices.append(idx)
+        for idx in stale_indices:
+            self._enters.pop(idx)
         self._enters.append((ts, user_id, user_name))
         # 记录只为限频与渲染服务：超出限频窗口的旧记录裁掉，长播不无限增长
         cutoff = ts - ENTER_DEDUP_MS
         while self._enters and self._enters[0][0] < cutoff:
             self._enters.pop(0)
+        return True
 
     def record_player_join(self, player_name: str) -> None:
         """登记一位刚加入游戏的玩家：任一出口随后欢迎过他即写入本场已欢迎表，防另一出口再次欢迎。"""
@@ -355,6 +372,10 @@ class RoomState:
         self._pending_join_names.clear()
         self._welcomed_ids.clear()
         self._welcomed_names.clear()
+
+    def is_welcomed(self, *, user_id: str = "", user_name: str = "") -> bool:
+        """判断一位观众或玩家本场是否已被任一出口点名欢迎过（只读查询）。"""
+        return self._is_welcomed(user_id, user_name)
 
     def _is_welcomed(self, user_id: str, user_name: str) -> bool:
         if user_id and user_id in self._welcomed_ids:

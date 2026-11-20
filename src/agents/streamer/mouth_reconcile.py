@@ -47,8 +47,12 @@ _LOGGER = get_logger("StreamerAgent.MouthReconcile")
 # 名字切主片段：中文连字或英文数字连串（如 "Player_abc" -> ["Player", "abc"]，"观众甲Abc" -> ["观众甲", "Abc"]）
 _NAME_PART = re.compile(r"[A-Za-z0-9]+|[一-鿿]+")
 
-# 断句：按句末标点切开，同时保留每句末尾标点以便删掉重复欢迎半句后自然拼接剩余句子
-_CLAUSE_WITH_PUNCT = re.compile(r"[^。！？!?…~～；;\n]+[。！？!?…~～；;\n]*")
+# 断句：按逗号与句末标点切开，同时保留每句末尾标点，避免半句欢迎新人与半句顺口提到已欢迎者粘连误杀
+_CLAUSE_WITH_PUNCT = re.compile(r"[^，,。！？!?…~～；;\n]+[，,。！？!?…~～；;\n]*")
+
+# 句末终止标点与孤立语气开头：剥除重复欢迎分句时修整悬空逗号与孤立叹词，保证剩余台词自然连贯
+_SENTENCE_END_PUNCT = "。！？!?…~～；;"
+_INTERJECTION_ONLY = frozenset({"诶", "哎", "啊", "呀", "哇", "咦", "哈", "嗯", "哦", "呐", "喂"})
 
 # 欢迎招呼特征词：只有点到名字且同时出现招呼语的句子才算"欢迎句"，普通对话喊对方名字不算欢迎
 _GREETING_WORDS: Tuple[str, ...] = (
@@ -190,14 +194,23 @@ def is_greeting_sentence(sentence: str, name: str) -> bool:
     return any(word in sentence for word in _GREETING_WORDS)
 
 
-def strip_duplicate_greetings(speech: str, welcomed_names: Iterable[str]) -> Tuple[str, bool]:
-    """从 ``speech`` 里剥掉对本场已欢迎名单 ``welcomed_names`` 的重复欢迎句。
+def strip_duplicate_greetings(
+    speech: str,
+    welcomed_names: Iterable[str],
+    *,
+    unwelcomed_names: Iterable[str] = (),
+) -> Tuple[str, bool]:
+    """从 ``speech`` 里剥掉对本场已欢迎名单 ``welcomed_names`` 的重复欢迎分句。
+
+    按逗号与句末标点细分分句；若某个分句同时点到了任意一位未欢迎观众（``unwelcomed_names``），
+    则绝不剥除该分句，避免同一分句合迎新人与提及已欢迎者时误杀新人欢迎。
 
     返回 ``(剩余台词, 是否剥除过欢迎句)``：
     - 整段只有重复欢迎时，剩余台词为空串，调用方直接按重复处理不再发声；
-    - 前半句顺口重复欢迎、后半句在讲新的游戏进展时，只剥掉前半句欢迎，保留后半句出声。
+    - 前半句顺口重复欢迎、后半句在讲新进展或欢迎新人时，只剥掉重复欢迎分句，保留其余内容出声。
     """
     names = [name.strip() for name in welcomed_names if name and name.strip()]
+    unwelcomed = [name.strip() for name in unwelcomed_names if name and name.strip()]
     if not names or not speech.strip():
         return speech.strip(), False
     clauses = _CLAUSE_WITH_PUNCT.findall(speech)
@@ -206,13 +219,37 @@ def strip_duplicate_greetings(speech: str, welcomed_names: Iterable[str]) -> Tup
     kept: List[str] = []
     removed = False
     for clause in clauses:
-        if any(is_greeting_sentence(clause, name) for name in names):
-            removed = True
+        stripped = clause.strip()
+        if not stripped:
             continue
-        kept.append(clause.strip())
+        is_dup = any(is_greeting_sentence(stripped, name) for name in names)
+        # 同一分句若同时点到了未欢迎观众，优先保护新人欢迎，绝不剥除该分句
+        if is_dup and unwelcomed and any(mentions_name(u, stripped) for u in unwelcomed):
+            is_dup = False
+        if is_dup:
+            removed = True
+            # 若紧邻的前导分句仅是孤立单字叹词（如"诶，"），随其后被剥除的重复欢迎句一并清理
+            if kept:
+                prev = kept[-1]
+                prev_body = prev.rstrip("，," + _SENTENCE_END_PUNCT).strip()
+                prev_is_sentence_head = len(kept) == 1 or (bool(kept[-2]) and kept[-2][-1] in _SENTENCE_END_PUNCT)
+                if prev_is_sentence_head and prev.endswith(("，", ",")) and prev_body in _INTERJECTION_ONLY:
+                    kept.pop()
+            # 若前一条保留分句以逗号收尾、而被剥除的当前分句带句末标点，把悬空逗号还原为该句末标点
+            if kept and kept[-1].endswith(("，", ",")) and stripped[-1] in _SENTENCE_END_PUNCT:
+                kept[-1] = kept[-1][:-1] + stripped[-1]
+            continue
+        kept.append(stripped)
     if not removed:
         return speech.strip(), False
-    return "".join(kept).strip(), True
+    result = "".join(kept).strip()
+    if not result:
+        return "", True
+    # 若剥除后仅剩纯标点或单字叹词，按整句剥空处理
+    body_only = result.rstrip("，," + _SENTENCE_END_PUNCT).strip()
+    if not body_only or body_only in _INTERJECTION_ONLY:
+        return "", True
+    return result, True
 
 
 def _parse_reconcile_output(raw: str, working_speech: str) -> Tuple[ReconcileAction, str, str]:
@@ -241,6 +278,7 @@ async def reconcile_with_mouth(
     mouth_entries: Sequence[SpokenEntry],
     new_game_lines: Sequence[str] = (),
     welcomed_names: Iterable[str] = (),
+    unwelcomed_names: Iterable[str] = (),
     llm_service: Optional[Any] = None,
     profile: str = "verifier",
 ) -> ReconcileVerdict:
@@ -254,8 +292,12 @@ async def reconcile_with_mouth(
     if not text:
         return ReconcileVerdict(action="duplicate", reason="空台词")
 
-    # 第一道（确定性，不看嘴本轮有没开口）：已在欢迎表里的人不再欢迎第二遍
-    working, stripped_greeting = strip_duplicate_greetings(text, welcomed_names)
+    # 第一道（确定性，不看嘴本轮有没开口）：已在欢迎表里的人不再欢迎第二遍，同时保护未欢迎观众分句
+    working, stripped_greeting = strip_duplicate_greetings(
+        text,
+        welcomed_names,
+        unwelcomed_names=unwelcomed_names,
+    )
     if stripped_greeting and not working:
         _LOGGER.info(f"出声前拦下重复欢迎整句: {text!r}")
         return ReconcileVerdict(action="duplicate", reason="同一位观众或玩家本场已欢迎过")

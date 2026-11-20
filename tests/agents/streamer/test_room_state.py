@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from src.agents.streamer.room_state import HEAT_HIGH_THRESHOLD_MPS, HEAT_LOW_THRESHOLD_MPS, HEAT_WINDOW_MS, RoomState
+from src.agents.streamer.room_state import (
+    ENTER_DEDUP_MS,
+    ENTER_WINDOW_MS,
+    HEAT_HIGH_THRESHOLD_MPS,
+    HEAT_LOW_THRESHOLD_MPS,
+    HEAT_WINDOW_MS,
+    RoomState,
+)
 
 
 class _Msg:
@@ -70,3 +77,30 @@ def test_audience_total_is_zero_until_pushed_and_the_latest_push_wins() -> None:
     room.set_audience_total(150, now_ms=2_000)
     snap = room.get_snapshot(now_ms=3_000)
     assert (snap.audience_total, snap.audience_total_at_ms) == (150, 2_000)  # 变化即推，最后一次推送即当前状态
+
+
+def test_unwelcomed_enter_refreshes_after_render_window_instead_of_30min_lockout() -> None:
+    """未欢迎观众仅在渲染窗口内防刷屏去重；过渲染窗口后再次进房允许刷新重新进入待欢迎名单，不被 30 分钟去重锁死。"""
+    room = RoomState()
+    t0 = 1_000_000
+
+    # 首次进房：进入待欢迎名单
+    assert room.record_enter("u_new", "新观众", now_ms=t0) is True
+    assert room.recent_unwelcomed_enters(now_ms=t0 + 10_000) == [("u_new", "新观众")]
+
+    # 渲染窗口（90s）内反复进出：短时防刷屏忽略，不重复追加
+    assert room.record_enter("u_new", "新观众", now_ms=t0 + 20_000) is False
+    assert room.recent_unwelcomed_enters(now_ms=t0 + 20_000) == [("u_new", "新观众")]
+
+    # 14 分钟后（远超 90s 渲染窗口、但仍小于 30 分钟 ENTER_DEDUP_MS）：此前漏迎未进已欢迎表，再次进房必须允许刷新
+    t_reenter = t0 + 14 * 60_000
+    assert ENTER_WINDOW_MS < (t_reenter - t0) < ENTER_DEDUP_MS
+    assert room.recent_unwelcomed_enters(now_ms=t_reenter - 1_000) == []
+    assert room.record_enter("u_new", "新观众", now_ms=t_reenter) is True
+    assert room.recent_unwelcomed_enters(now_ms=t_reenter) == [("u_new", "新观众")]
+
+    # 一旦核销为已欢迎，本场内再次进房不再进入待欢迎名单
+    room.note_spoken("欢迎新观众进来坐呀！")
+    assert room.is_welcomed(user_id="u_new", user_name="新观众") is True
+    assert room.record_enter("u_new", "新观众", now_ms=t_reenter + ENTER_DEDUP_MS + 10_000) is False
+    assert room.recent_unwelcomed_enters(now_ms=t_reenter + ENTER_DEDUP_MS + 10_000) == []

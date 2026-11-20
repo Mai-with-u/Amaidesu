@@ -64,20 +64,33 @@ def test_mentions_name_handles_shortened_nicknames(name: str, speech: str, expec
 
 
 @pytest.mark.parametrize(
-    ("speech", "welcomed", "expected_text", "expected_stripped"),
+    ("speech", "welcomed", "unwelcomed", "expected_text", "expected_stripped"),
     [
-        # 整条只有重复欢迎：剥空后调用方按重复处理不再发声
-        ("诶，欢迎玩家甲上线呀，快来一起玩！", {"玩家甲"}, "", True),
+        # 整条只有重复欢迎（含孤立前导叹词）：剥空后调用方按重复处理不再发声
+        ("诶，欢迎玩家甲上线呀！", {"玩家甲"}, set(), "", True),
+        # 逗号切分：前半句重复欢迎、后半句为邀请/进展，只剥前半句欢迎、保留后半句
+        ("诶，欢迎玩家甲上线呀，快来一起玩！", {"玩家甲"}, set(), "快来一起玩！", True),
+        # 逗号切分：前半句欢迎新人、后半句顺口提到已欢迎者，只剥后半句并保留句末标点不误杀新人欢迎
+        ("欢迎新人乙进直播间，欢迎玩家甲也来啦！", {"玩家甲"}, {"新人乙"}, "欢迎新人乙进直播间！", True),
+        # 同一分句同时点到未欢迎观众和已欢迎观众：因保护未欢迎名单绝不剥除该分句
+        ("欢迎新人乙和玩家甲一起来玩！", {"玩家甲"}, {"新人乙"}, "欢迎新人乙和玩家甲一起来玩！", False),
         # 前半句顺口重复欢迎、后半句是新的游戏进展：只剥前半句欢迎，保留后半句
-        ("欢迎 Player_abc 来啦！这边橡树苗还差两棵没种完。", {"Player_abc"}, "这边橡树苗还差两棵没种完。", True),
+        ("欢迎 Player_abc 来啦！这边橡树苗还差两棵没种完。", {"Player_abc"}, set(), "这边橡树苗还差两棵没种完。", True),
         # 正常互动里提到名字但不是欢迎招呼：原样保留不误剥
-        ("玩家甲刚才递给我的铁镐还挺顺手的。", {"玩家甲"}, "玩家甲刚才递给我的铁镐还挺顺手的。", False),
+        ("玩家甲刚才递给我的铁镐还挺顺手的。", {"玩家甲"}, set(), "玩家甲刚才递给我的铁镐还挺顺手的。", False),
     ],
 )
 def test_strip_duplicate_greetings_preserves_non_greeting_clauses(
-    speech: str, welcomed: set[str], expected_text: str, expected_stripped: bool
+    speech: str,
+    welcomed: set[str],
+    unwelcomed: set[str],
+    expected_text: str,
+    expected_stripped: bool,
 ) -> None:
-    assert strip_duplicate_greetings(speech, welcomed) == (expected_text, expected_stripped)
+    assert strip_duplicate_greetings(speech, welcomed, unwelcomed_names=unwelcomed) == (
+        expected_text,
+        expected_stripped,
+    )
 
 
 def test_spoken_log_deduplicates_rapid_same_source_and_attaches_trigger() -> None:
@@ -161,8 +174,8 @@ def _reply_tool_call(call_id: str, summary: str) -> ToolCall:
 @pytest.mark.parametrize(
     ("planner_draft", "expected_planner_speech", "expected_silent"),
     [
-        # 第 65 场 24 秒双欢迎回归：整句只剩重复欢迎时静默收尾，不发第二条 streamer.speech
-        ("欢迎玩家甲上线呀，快来一起种树！", None, "mouth_covered"),
+        # 纯重复欢迎整句：确定性剥空后静默收尾，不发第二条 streamer.speech
+        ("欢迎玩家甲上线呀！", None, "mouth_covered"),
         # 前半句顺口重复欢迎、后半句有新游戏进展：剥掉重复欢迎分句，只播新进展
         ("欢迎玩家甲上线呀！西坡这边还差四棵橡树苗没栽上。", "西坡这边还差四棵橡树苗没栽上。", None),
     ],
@@ -493,3 +506,22 @@ async def test_contradiction_bounce_records_mouth_superseded_when_planner_choose
 
     assert outcome.replied is False
     assert outcome.silent_reason == "mouth_superseded"
+
+
+async def test_reconcile_protects_unwelcomed_viewer_in_same_clause_end_to_end() -> None:
+    """StreamerAgent 调用 reconcile_with_mouth 时传入未欢迎进房名单，避免同句合迎新人与已欢迎者时误杀新人。"""
+    clock_now = 10_000
+    agent = make_streamer_agent({}, clock=lambda: clock_now)
+    # 观众甲本场已欢迎，新人乙刚进房尚未欢迎
+    agent._room_state.mark_welcomed(user_id="u_old", user_name="观众甲")
+    agent._room_state.record_enter("u_new", "新人乙", now_ms=clock_now)
+
+    # 同一分句同时点到新人乙与观众甲：因包含未欢迎的新人乙，整句保护放行
+    same_clause = await agent._reconcile_with_mouth("欢迎新人乙和观众甲一起来玩！", since_ms=clock_now)
+    assert same_clause.action == "pass"
+    assert same_clause.speech == "欢迎新人乙和观众甲一起来玩！"
+
+    # 逗号隔开的分句：前半句欢迎新人乙、后半句重复欢迎观众甲 -> 仅剥后半句，完整保留新人欢迎
+    split_clause = await agent._reconcile_with_mouth("欢迎新人乙进直播间，欢迎观众甲也来啦！", since_ms=clock_now)
+    assert split_clause.action == "trim"
+    assert split_clause.speech == "欢迎新人乙进直播间！"

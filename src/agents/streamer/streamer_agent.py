@@ -32,11 +32,25 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 from collections import deque
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from src.agents.streamer.delegation_posture import (
     DelegationPosture,
@@ -82,6 +96,7 @@ from src.modules.tools.tasks import (
     TASK_QUEUED,
 )
 from src.modules.tools.registry import ToolRegistry
+from src.modules.types.emotion_vocab import Emotion
 from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KINDS, SessionKind
@@ -109,7 +124,14 @@ from .message_buffer import MessageBuffer
 from .delegation_workbench import PLANNER_CALL_SOURCE
 from .delegation_stall_watch import DelegationStallWatch
 from .mouth import MOUTH_BODY_KINDS, SCENE_CHANGING_BODY_KINDS, Mouth
-from .mouth_reconcile import ReconcileVerdict, SpokenLog, extract_player_join_name, reconcile_with_mouth
+from .mouth_reconcile import (
+    ReconcileVerdict,
+    SpokenLog,
+    extract_player_join_name,
+    mentions_name,
+    reconcile_with_mouth,
+    strip_duplicate_greetings,
+)
 from .plan import DecisionPlan
 from .planner import Planner, PlannerConfig, PlannerEnv
 from .planner_context import age_text
@@ -117,7 +139,7 @@ from .paid_viewers import PaidViewerLookup
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
 from .replyer import TARGET_EXTRA_CHARS, Replyer
-from .room_state import RoomState
+from .room_state import ENTER_RENDER_CAP, RoomState
 from .scene_card import brief_of
 from .speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT, SPEECH_PRIORITY_NORMAL, SpeechDispatcher
 from .speech_guard import WordFilter, guard
@@ -184,6 +206,9 @@ _GAME_ACTIVE_WINDOW_MS = 5 * 60 * 1000
 
 # 周期巡检触发自动切权的最小重试间隔（毫秒）：游戏拒收或未就绪时不按 300ms tick 高频刷交权
 _LEAD_SYNC_RETRY_INTERVAL_MS = 5_000
+
+# 游戏主控态下独立进房欢迎通道的短合并窗口（毫秒）：将数秒内同时进房的新观众合为一句由 Replyer 轻量秒迎
+_GAME_LEAD_ENTER_WELCOME_DEBOUNCE_MS = 7_000
 
 # 主播主动收回或人工显式覆盖的切权原因：与游戏断连/故障引起的被动降级区分（被动降级需唤醒主播圆场）
 _INTENTIONAL_RECLAIM_REASONS = frozenset(
@@ -318,6 +343,8 @@ class StreamerAgent(BaseAgent):
         lead_coordinator: Optional[LeadCoordinator] = None,
         events_dir: Optional[Path] = None,
         settle_wait_ms: int = _STREAM_END_SETTLE_WAIT_MS,
+        enter_welcome_debounce_ms: int = _GAME_LEAD_ENTER_WELCOME_DEBOUNCE_MS,
+        enter_welcome_wait: Optional[Callable[[int], Awaitable[None]]] = None,
         clock: Callable[[], int] = now_ms,
     ) -> None:
         """初始化主播 Agent。
@@ -427,8 +454,15 @@ class StreamerAgent(BaseAgent):
         # 实况解说串行锁与被防抖压下的解说摘要缓冲（避免短时间内两笔解说同时调 Replyer 撞词）
         self._commentary_lock = asyncio.Lock()
         self._commentary_buffer: deque[str] = deque(maxlen=12)
-        # 进入游戏主控态的时刻（未开口前的冷场兜底基线）与周期切权防抖时刻、最近一次已入账收尾摘要
+        # 游戏主控态独立轻量进房欢迎通道（短合并窗防抖 + 串行生成锁 + 待迎队列 + 在途任务）
+        self._enter_welcome_debounce_ms: int = max(0, int(enter_welcome_debounce_ms))
+        self._enter_welcome_wait: Optional[Callable[[int], Awaitable[None]]] = enter_welcome_wait
+        self._enter_welcome_lock = asyncio.Lock()
+        self._enter_welcome_task: Optional[asyncio.Task[None]] = None
+        self._pending_enter_welcomes: List[Tuple[str, str]] = []
+        # 进入游戏主控态的时刻（未开口前的冷场兜底/静默提醒基线）、静默提醒冷却时刻与周期切权防抖时刻
         self._game_lead_entered_ms: Optional[int] = None
+        self._last_silence_nudge_ms: Optional[int] = None
         self._last_lead_sync_attempt_ms: int = 0
         self._last_recorded_handover_summary: str = ""
         # 任务记录表引用：委派渲染的机器状态从这里查询（None 时 planner 降级只看交付语）
@@ -1052,6 +1086,9 @@ class StreamerAgent(BaseAgent):
         """Agent 停止钩子。"""
         self._running = False
 
+        # 先取消未跑完的轻量进房欢迎任务，防止停机途中继续向发声管线塞台词
+        await self._cancel_enter_welcome_task()
+
         # 动态主从解绑并在停机前安全收回游戏主控权，避免停止后仍收到解说或回声转发
         if self._lead_coordinator is not None:
             self._lead_hooks_bound = False
@@ -1231,8 +1268,14 @@ class StreamerAgent(BaseAgent):
             registered = "streamer_reply / streamer_note / rundown_control"
             # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕（唯一的记忆工具）
             if self._memory_recall is not None:
+                recall_kwargs: Dict[str, Any] = {}
+                # 当回想工具工厂支持扩展可见名单时，动态传入具备自主领航能力的游戏 Agent 查询回调（零硬编码游戏名）
+                if "extra_visible_agents" in inspect.signature(build_memory_recall_provider).parameters:
+                    recall_kwargs["extra_visible_agents"] = (
+                        self._lead_coordinator.lead_capable_agents if self._lead_coordinator is not None else None
+                    )
                 self.register_tool_provider(
-                    build_memory_recall_provider(self._memory_recall),
+                    build_memory_recall_provider(self._memory_recall, **recall_kwargs),
                     registry=self._tool_registry,
                 )
                 registered += " / memory_recall"
@@ -1466,7 +1509,11 @@ class StreamerAgent(BaseAgent):
             self._game_activity_ms.clear()
             self._session_games.clear()
             self._commentary_buffer.clear()
-            self._game_lead_entered_ms = None
+            await self._cancel_enter_welcome_task()
+            self._last_silence_nudge_ms = None
+            # 仅在当前未处于游戏主控态时清空进入锚点，防止合法主控的冷场兜底基线被清零
+            if not self._is_game_lead_active():
+                self._game_lead_entered_ms = None
             if resumed:
                 self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
                 # 先从诊断事件流划出上一进程的时间段，递话与玩家聊天的重放共用这一段
@@ -1767,6 +1814,8 @@ class StreamerAgent(BaseAgent):
         self._live_active = False
         self._opening_wrapup_active = False
         self._commentary_buffer.clear()
+        self._last_silence_nudge_ms = None
+        await self._cancel_enter_welcome_task()
         self._pace_wakeup.set()
         if self._mouth is not None:
             self._mouth.reset()
@@ -2781,8 +2830,10 @@ class StreamerAgent(BaseAgent):
                 )
         except Exception as exc:  # noqa: BLE001 - 入账失败不阻断撤单兜底
             self._logger.warning(f"停滞告警材料入账失败（task_id={payload.task_id}）: {exc}", exc=exc)
-        self._proactive_signals.set_game()
-        self._notify_fresh_input()
+        # 游戏自主主控态下由前线游戏侧自主调度，不再通过停滞告警置位 game_pending 唤醒主播 Planner
+        if not self._is_game_lead_active():
+            self._proactive_signals.set_game()
+            self._notify_fresh_input()
         if outcome.auto_cancel:
             spawn_background_task(
                 self._cancel_stalled_delegation(str(payload.task_id)),
@@ -3034,6 +3085,8 @@ class StreamerAgent(BaseAgent):
         resolved_source: Literal["mouth", "planner"] = "mouth" if source == "mouth" else "planner"
         self._spoken_log.record(text, at_ms, source=resolved_source)
         self._room_state.note_spoken(text)
+        # 任一出口新发言后立即复位静默暖场提醒冷却
+        self._last_silence_nudge_ms = None
         if self._mouth is not None:
             self._mouth.note_speech(text, at_ms)
 
@@ -3043,11 +3096,14 @@ class StreamerAgent(BaseAgent):
 
     async def _reconcile_with_mouth(self, candidate: str, since_ms: int) -> ReconcileVerdict:
         """决策台词出声前核对：剥掉本场重复欢迎，并对照 ``since_ms`` 之后嘴说出口的话及新到游戏事件裁决。"""
+        # 读取当前渲染窗口内尚未欢迎的进房观众名单，避免同一分句同时提到新人与已欢迎者时误杀新人欢迎
+        unwelcomed = [name for _uid, name in self._room_state.recent_unwelcomed_enters(now_ms=self._clock()) if name]
         return await reconcile_with_mouth(
             candidate,
             mouth_entries=self._spoken_log.mouth_since(since_ms),
             new_game_lines=self._game_ledger.pending_lines(),
             welcomed_names=self._room_state.welcomed_names,
+            unwelcomed_names=unwelcomed,
             llm_service=self._llm,
             profile=_PROFILE_VERIFIER,
         )
@@ -3064,7 +3120,10 @@ class StreamerAgent(BaseAgent):
         return ctx
 
     def _on_mouth_superseded(self) -> None:
-        """出声前因现场已变撤回过时台词后：若账本已有新游戏事件待出账，置位主动信号唤醒下一轮评估。"""
+        """出声前因现场已变撤回过时台词后：主播主控态且账本已有新游戏事件待出账时唤醒下一轮评估。"""
+        # 游戏自主主控态下现场事件由前线游戏侧消化，不因主播侧撤回过时台词而置位 game_pending 唤醒 Planner
+        if self._is_game_lead_active():
+            return
         if self._game_ledger.pending_lines():
             self._proactive_signals.set_game()
             self._flush_kick.set()
@@ -3093,13 +3152,223 @@ class StreamerAgent(BaseAgent):
         payload: RoomMessagePayload,
         source: str,
     ) -> None:
-        """``room.message.enter`` 回调：记 RoomState 进房名单（限频去重在 RoomState 内）。
+        """``room.message.enter`` 回调：记 RoomState 进房名单，游戏主控态下触发独立轻量合批秒迎。
 
         观众进房名单经【房间活跃度】行进决策上下文，供欢迎话术顺口点名。
-        （观众数协议无源恒 0，人数门槛做不了；进房名单是唯一的观众到场景来源。）
+        游戏自主主控期间，常规主动发言已降频为 90 秒冷场兜底且易被解说复位计时器，
+        因此在此处为新进房且尚未被欢迎的观众启用独立短合并窗（默认 7 秒），直通轻量 Replyer
+        合并为一句热情点名欢迎，不唤醒重型 Planner。
         """
         del event_name, source
-        self._room_state.record_enter(payload.user.id, payload.user.name, now_ms=payload.timestamp_ms)
+        enter_ts = payload.timestamp_ms or self._clock()
+        user_id = (payload.user.id or "").strip() if payload.user is not None else ""
+        user_name = (payload.user.name or "").strip() if payload.user is not None else ""
+        recorded = self._room_state.record_enter(user_id, user_name, now_ms=enter_ts)
+        if not recorded or not user_name or not self._should_use_game_lead_enter_welcome():
+            return
+        # 按用户去重加入待合批队列，首人触发短合并窗口任务，避免连续进房重复排队
+        key = user_id or user_name.lower()
+        if not any((uid or uname.lower()) == key for uid, uname in self._pending_enter_welcomes):
+            self._pending_enter_welcomes.append((user_id, user_name))
+        if self._enter_welcome_task is None or self._enter_welcome_task.done():
+            self._enter_welcome_task = asyncio.create_task(
+                self._run_enter_welcome_loop(),
+                name="StreamerAgent.enter_welcome",
+            )
+
+    def _should_use_game_lead_enter_welcome(self) -> bool:
+        """是否满足游戏主控态独立轻量进房欢迎门禁：运行中 + 开播中 + 非收尾态 + 处于游戏主控。"""
+        return self._running and self._live_active and self._closings_in_flight == 0 and self._is_game_lead_active()
+
+    def _cancel_enter_welcome_sync(self) -> None:
+        """同步取消在途进房欢迎任务并清空待迎缓冲（供同步状态切换回调调用）。"""
+        self._pending_enter_welcomes.clear()
+        task = self._enter_welcome_task
+        self._enter_welcome_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _cancel_enter_welcome_task(self) -> None:
+        """取消在途进房欢迎任务并等待退出（停机、下播或新开场清场时调用，幂等）。"""
+        self._pending_enter_welcomes.clear()
+        task = self._enter_welcome_task
+        self._enter_welcome_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _run_enter_welcome_loop(self) -> None:
+        """游戏主控态进房合批欢迎循环：等待短合并窗后将同批新观众交由 Replyer 合为一句播报。"""
+        current_task = asyncio.current_task()
+        try:
+            while self._pending_enter_welcomes and self._should_use_game_lead_enter_welcome():
+                if self._enter_welcome_debounce_ms > 0:
+                    if self._enter_welcome_wait is not None:
+                        await self._enter_welcome_wait(self._enter_welcome_debounce_ms)
+                    else:
+                        await asyncio.sleep(self._enter_welcome_debounce_ms / 1000.0)
+                if not self._should_use_game_lead_enter_welcome():
+                    self._pending_enter_welcomes.clear()
+                    return
+                # 取出本批尚未被其他路径欢迎的观众，单批最多 ENTER_RENDER_CAP 位防点名过长
+                batch_entries: List[Tuple[str, str]] = []
+                seen_keys: set[str] = set()
+                while self._pending_enter_welcomes and len(batch_entries) < ENTER_RENDER_CAP:
+                    uid, uname = self._pending_enter_welcomes.pop(0)
+                    if not uname or self._room_state.is_welcomed(user_id=uid, user_name=uname):
+                        continue
+                    key = uid or uname.lower()
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    batch_entries.append((uid, uname))
+                if not batch_entries:
+                    continue
+                await self._speak_enter_welcome_batch(batch_entries)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 轻量欢迎异常隔离，绝不阻断事件循环
+            self._logger.exception(f"游戏主控轻量进房欢迎循环异常: {exc}")
+        finally:
+            if self._enter_welcome_task is current_task:
+                self._enter_welcome_task = None
+
+    async def _speak_enter_welcome_batch(self, entries: Sequence[Tuple[str, str]]) -> None:
+        """把一批刚进房的未欢迎观众直通 Replyer 生成一句点名欢迎并播报，播后仅核销确实点到名的观众。"""
+        names = [uname for _uid, uname in entries if uname]
+        if not names:
+            return
+        async with self._enter_welcome_lock:
+            if not self._should_use_game_lead_enter_welcome():
+                return
+            joined_names = "、".join(names)
+            state_facts = (
+                f"刚进直播间待欢迎的新观众：{joined_names}\n"
+                "请用自然热情的口语逐一点名欢迎以上每一位新观众，不要漏掉任何人的昵称，不要展开讲游戏操作。"
+            )
+            reply_guidance = f"顺口逐一点名欢迎刚进直播间的观众（{joined_names}），一两句热情自然的短话就好"
+            plan = DecisionPlan(
+                should_reply=True,
+                target=None,
+                topic_summary=f"欢迎观众进房：{joined_names}",
+                reply_guidance=reply_guidance,
+                emotion=Emotion.HAPPY,
+                intensity=0.5,
+            )
+            recent_speeches = self._spoken_log.recent_texts(limit=8)
+            rundown_text = self._rundown_coord.build_text_sync()
+            try:
+                generated = await self._replyer.generate(
+                    plan=plan,
+                    batch=[],
+                    history=[],
+                    rundown=rundown_text,
+                    state_facts=state_facts,
+                    recent_speeches=recent_speeches,
+                    reply_to=joined_names,
+                    speech_mode="play",
+                )
+            except Exception as exc:  # noqa: BLE001 - Replyer 异常隔离，保留未欢迎状态待下次进房补迎
+                self._logger.exception(f"轻量进房欢迎调用 Replyer 异常（names={joined_names}）: {exc}")
+                return
+
+            if not generated or not isinstance(generated, dict):
+                return
+            raw_speech = str(generated.get("speech") or "").strip()
+            if not raw_speech:
+                return
+
+            final_speech = self._guard_replyer_speech(
+                raw_speech,
+                reply_to=joined_names,
+                required_names=names,
+                log_label="轻量进房欢迎",
+            )
+            if final_speech is None:
+                return
+            if not final_speech or not self._should_use_game_lead_enter_welcome():
+                return
+
+            # 并发飞行窗口复核：Replyer 生成期间若并发决策轮已欢迎了本批观众，剥除重复欢迎分句，剥空则跳过不播
+            still_unwelcomed = [
+                uname
+                for uid, uname in entries
+                if uname and not self._room_state.is_welcomed(user_id=uid, user_name=uname)
+            ]
+            final_speech, stripped_dup = strip_duplicate_greetings(
+                final_speech,
+                self._room_state.welcomed_names,
+                unwelcomed_names=still_unwelcomed,
+            )
+            if stripped_dup and not final_speech:
+                self._logger.info("轻量进房欢迎在生成期间已被并发轮次覆盖，跳过重复播报")
+                return
+            if not final_speech:
+                return
+
+            now = self._clock()
+            reply_payload: Dict[str, Any] = {
+                "speech": final_speech,
+                "emotion": {"name": Emotion.HAPPY.value, "intensity": 0.5},
+                "llm_request_id": generated.get("llm_request_id"),
+            }
+            dispatched = await self._speech.dispatch(
+                reply_payload,
+                round_id=f"enter_welcome_{now}",
+                priority=SPEECH_PRIORITY_NORMAL,
+                allow_hard_interrupt=False,
+                source="enter_welcome",
+            )
+            if dispatched is None:
+                return
+
+            spoken_text = dispatched[0]
+            # 仅按实际说出的文本核销已欢迎表：台词未点到某人名字时不误标已欢迎
+            self._room_state.note_spoken(spoken_text)
+            self._room_state.record_speech(self._clock())
+            self._last_silence_nudge_ms = None
+            await self._scope.remember_round([], speech=spoken_text, batch_persisted=True)
+
+    def _guard_replyer_speech(
+        self,
+        raw_speech: str,
+        *,
+        reply_to: str,
+        required_names: Sequence[str] = (),
+        log_label: str,
+    ) -> Optional[str]:
+        """对直通 Replyer 的输出做外层预算与敏感词兜底；真实 Replyer 已保名补全时不因二次截断误丢称呼。"""
+        budget_fn = getattr(self._replyer, "budget_for", None)
+        if callable(budget_fn):
+            budget = int(budget_fn("play", has_target=bool(reply_to)))
+        else:
+            base_budget = int(self.typed_config.speech_max_chars)
+            budget = 0 if base_budget <= 0 else (base_budget + TARGET_EXTRA_CHARS if reply_to else base_budget)
+
+        verdict = guard(raw_speech, speech_max_chars=budget, word_filter=self._word_filter)
+        if verdict.text is None:
+            self._logger.info(f"{log_label}台词命中敏感词过滤，整条丢弃")
+            return None
+        candidate = verdict.text.strip()
+
+        # 真实 Replyer 内层已完成预算控制与保名补回：若外层再次按 budget 切句把原本保住的称呼切丢，
+        # 仅保留敏感词净化后的完整保名句，避免多观众欢迎或带同伴解说被二次截断丢名
+        if (
+            isinstance(self._replyer, Replyer)
+            and required_names
+            and candidate != raw_speech.strip()
+            and any(mentions_name(name, raw_speech) and not mentions_name(name, candidate) for name in required_names)
+        ):
+            filtered_only = guard(raw_speech, speech_max_chars=0, word_filter=self._word_filter)
+            if filtered_only.text is None:
+                self._logger.info(f"{log_label}台词命中敏感词过滤，整条丢弃")
+                return None
+            return filtered_only.text.strip()
+        return candidate
 
     async def _on_room_message_received(
         self,
@@ -3149,9 +3418,24 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     def _on_rundown_changed_proactive(self) -> None:
-        """流程单环节变更通知（协调器回调）：置位主动发言信号，按环节模式异步同步动态主从与常驻简报。"""
-        self._proactive_signals.set_rundown()
-        self._notify_fresh_input()
+        """流程单环节变更通知（协调器回调）：同步游戏侧环节信息，并按主控与环节模式决定是否置位主动发言信号。"""
+        next_segment_mode = self._rundown_coord.current_segment_mode()
+        staying_in_game_lead = self._is_game_lead_active() and next_segment_mode != "talk"
+
+        # 游戏主控态下推进或续时到非杂谈环节时：将新环节同步给当前主控游戏侧防止其交接简报整场冻结，
+        # 同时不再置位 rundown_pending 避免把主播 Planner 立刻无意义唤醒连跑一轮
+        if staying_in_game_lead and self._lead_coordinator is not None:
+            segment = self._rundown_coord.current_segment()
+            if segment is not None:
+                self._lead_coordinator.publish_rundown_update(
+                    segment_id=segment.id,
+                    segment_title=segment.title,
+                    segment_goal=segment.task_description,
+                    expected_ms=int(segment.expected_ms),
+                )
+        else:
+            self._proactive_signals.set_rundown()
+            self._notify_fresh_input()
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -3196,6 +3480,19 @@ class StreamerAgent(BaseAgent):
         # 运营从控制台发来的提醒除了进当窗【运营提醒】，还落成本场常驻更正提醒（本场未完不消失，下播整理按事实参考处理）
         if source in ("operator", "dashboard") and self._current_session_pk() is not None:
             self._pending_operator_notes.append(text)
+        # 游戏自主主控态下运营/控制台递话额外异步转发一份非强杀建议给主控游戏侧，确保控制台指示直达前线
+        if source in ("operator", "dashboard") and self._is_game_lead_active() and self._lead_coordinator is not None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                self._logger.debug("无运行中的事件循环，跳过向主控游戏转发运营递话")
+            else:
+                spawn_background_task(
+                    self._forward_operator_prompt_to_game_lead(text),
+                    logger=self._logger,
+                    tasks=self._memory_tasks,
+                    label="StreamerAgent.forward_operator_prompt",
+                )
         # 到达即唤醒放行等待与 flush 循环：递话不必陪弹幕批次或旧独白等完当前 tick
         self._notify_fresh_input()
         self._emit_prompt_received(text=text, source=source)
@@ -3204,6 +3501,16 @@ class StreamerAgent(BaseAgent):
             f"{len(self._reminder_queue)}/{_REMINDER_QUEUE_MAX}）：{text[:60]}"
         )
         return True
+
+    async def _forward_operator_prompt_to_game_lead(self, text: str) -> None:
+        """把运营/控制台递话以非强杀建议形式转发给当前主控游戏 Agent（异常隔离）。"""
+        coord = self._lead_coordinator
+        if coord is None or not self._is_game_lead_active():
+            return
+        try:
+            await coord.send_suggestion(text, source="operator")
+        except Exception as exc:  # noqa: BLE001 - 转发异常不阻断主播侧提醒主链
+            self._logger.warning(f"向主控游戏转发运营递话失败（已忽略）: {exc}", exc=True)
 
     def _emit_prompt_received(self, *, text: str, source: str) -> None:
         """发递话到达事件（含全文原文，不截断；事件名注释见 events/names.py）。"""
@@ -3381,7 +3688,35 @@ class StreamerAgent(BaseAgent):
             # 本 tick 带着递话已经判过一次、没有触发：同样的信号再判一遍结果不变，不重复判
             if reminder_evaluated:
                 return
-            await self._evaluate_proactive_round()
+            if await self._evaluate_proactive_round():
+                return
+            # 游戏自主主控态下：弹幕与提醒队列均为空且主播未触发主动发言时，检查连续无声是否达到静默提醒阈值
+            self._maybe_publish_game_lead_silence_nudge()
+
+    def _maybe_publish_game_lead_silence_nudge(self) -> None:
+        """游戏自主主控态静默暖场提醒：全场连续无声满阈值且过冷却时通知前线游戏侧按需解说。"""
+        coord = self._lead_coordinator
+        if coord is None or not self._running or not self._live_active or self._closings_in_flight > 0:
+            return
+        if not self._is_game_lead_active():
+            return
+        if not self._buffer.is_empty or self._reminder_queue:
+            return
+        nudge_ms = int(self.typed_config.game_lead_silence_nudge_ms)
+        if nudge_ms <= 0:
+            return
+        last_speech_ms = self._room_state.last_speech_ms
+        reference_ms = last_speech_ms if last_speech_ms is not None else self._game_lead_entered_ms
+        if reference_ms is None:
+            return
+        now = self._clock()
+        silent_ms = now - reference_ms
+        if silent_ms < nudge_ms:
+            return
+        if self._last_silence_nudge_ms is not None and (now - self._last_silence_nudge_ms) < nudge_ms:
+            return
+        if coord.publish_silence_nudge(silent_ms=silent_ms):
+            self._last_silence_nudge_ms = now
 
     async def _evaluate_proactive_round(self) -> bool:
         """一个 tick 的主动发言判定序：读信号 → 判定 → 命中即执行一轮主动决策。
@@ -3596,6 +3931,9 @@ class StreamerAgent(BaseAgent):
 
     async def _maybe_periodic_lead_sync(self) -> None:
         """周期巡检健康恢复与状态对齐：检测到应切换时按防抖节奏调用 ``_sync_lead_mode``。"""
+        # 未运行、动态主从回调尚未绑定或开播初始化仍在进行中时禁止抢跑交权
+        if not self._running or not self._lead_hooks_bound or self._live_start_in_progress:
+            return
         coord = self._lead_coordinator
         if coord is None:
             return
@@ -3722,15 +4060,18 @@ class StreamerAgent(BaseAgent):
         ts = payload.timestamp_ms or self._clock()
         if payload.mode == "game":
             self._game_lead_entered_ms = ts
+            self._last_silence_nudge_ms = None
             self._last_recorded_handover_summary = ""
             # 游戏自主接管本环节后，清掉切环节瞬间挂起的旧 rundown/game 主动信号，避免未来被动降级时误触发旧开场白
             self._proactive_signals.clear_superseded_by_game_lead()
             self._logger.info(f"主播切换为轻从模式：当前由 '{payload.lead_agent}' 自主主控（reason={payload.reason}）")
             return
 
-        # 游戏主控 → 主播主控：清进入锚点、记收尾摘要；若属开播期异常被动降级则唤醒主播圆场
+        # 游戏主控 → 主播主控：取消轻量欢迎通道、清进入锚点与静默提醒冷却、记收尾摘要；若属开播期异常被动降级则唤醒主播圆场
         if payload.previous_lead and payload.previous_lead != self.name:
+            self._cancel_enter_welcome_sync()
             self._game_lead_entered_ms = None
+            self._last_silence_nudge_ms = None
             summary = (payload.handover_summary or "").strip()
             if summary:
                 self._last_recorded_handover_summary = summary
@@ -3828,11 +4169,13 @@ class StreamerAgent(BaseAgent):
             if self._mouth is not None:
                 self._mouth.note_game(summary)
 
-            # 普通实况解说防抖：距上次任意出声不足最小间隔时记入缓冲合并，避免刷屏抢戏
+            # 普通实况解说防抖：距上次任意出声不足最小间隔时记入缓冲合并，避免刷屏抢戏；
+            # 突发高优（urgency == "high"）或即时纠偏（correction=True）直接穿透防抖立即播报
             min_interval_ms = self.typed_config.game_lead_commentary_min_interval_ms
             last_speech_ms = self._room_state.last_speech_ms
+            bypass_debounce = req.urgency == "high" or req.correction
             if (
-                req.urgency == "normal"
+                not bypass_debounce
                 and min_interval_ms > 0
                 and last_speech_ms is not None
                 and (now - last_speech_ms) < min_interval_ms
@@ -3887,19 +4230,17 @@ class StreamerAgent(BaseAgent):
             if not raw_speech:
                 return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
 
-            # 经过 speech_guard 兜底把关（短句预算与敏感词净化）：与 Replyer.budget_for 复用同一预算口径，
-            # 填了 about_player 时按 speech_max_chars + TARGET_EXTRA_CHARS 放宽（而非 0 无上限放行）
-            budget_fn = getattr(self._replyer, "budget_for", None)
-            if callable(budget_fn):
-                budget = int(budget_fn("play", has_target=bool(reply_to)))
-            else:
-                base_budget = int(self.typed_config.speech_max_chars)
-                budget = 0 if base_budget <= 0 else (base_budget + TARGET_EXTRA_CHARS if reply_to else base_budget)
-            verdict = guard(raw_speech, speech_max_chars=budget, word_filter=self._word_filter)
-            if verdict.text is None:
-                self._logger.info("实况解说台词命中敏感词过滤，整条丢弃")
+            # 经过外层预算与敏感词兜底把关：与 Replyer.budget_for 复用同一预算口径，
+            # 同时保护真实 Replyer 内层补回的同伴称呼不被二次裁句误丢
+            required_names = [reply_to] if reply_to else []
+            final_speech = self._guard_replyer_speech(
+                raw_speech,
+                reply_to=reply_to,
+                required_names=required_names,
+                log_label="实况解说",
+            )
+            if final_speech is None:
                 return CommentaryAck(accepted=True, spoken=False, reason="word_filtered")
-            final_speech = verdict.text.strip()
             if not final_speech:
                 return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
 
@@ -3920,8 +4261,9 @@ class StreamerAgent(BaseAgent):
                 return CommentaryAck(accepted=True, spoken=False, reason="dispatch_empty")
 
             spoken_at = self._clock()
-            # 推进全局最近发声时刻：同步复位冷场兜底计时器并更新下一条普通解说的防抖基准
+            # 推进全局最近发声时刻：同步复位冷场兜底与静默提醒冷却，并更新下一条普通解说的防抖基准
             self._room_state.record_speech(spoken_at)
+            self._last_silence_nudge_ms = None
             await self._scope.remember_round([], speech=dispatched[0], batch_persisted=True)
             return CommentaryAck(accepted=True, spoken=True, reason="dispatched")
 
