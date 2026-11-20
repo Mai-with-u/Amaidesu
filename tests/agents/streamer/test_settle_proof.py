@@ -362,3 +362,76 @@ async def test_unverified_claim_cannot_be_highlight_and_session_caps_highlights_
         ("Minecraft：过桥踩空摔进岩浆", True),
         ("和观众对上开场暗号", False),
     ]
+
+
+async def test_dimension_changed_event_proves_cross_dimension_claim_in_settle(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """跨维度事件 dimension_changed 纳入可作证游戏记录，去下界/末地等完成说法不被误标未核实。"""
+    records = game_records([_event("dimension_changed", "从主世界到了下界", 5 * _MINUTE)], [])
+    assert [(r.number, r.kind, r.text, r.proves) for r in records] == [(1, "跨维度", "从主世界到了下界", True)]
+    assert proof_for("记录#1", records, game="minecraft", at_ms=6 * _MINUTE) is not None
+
+    session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=30 * _MINUTE)
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="dimension_changed",
+        message="从主世界到了下界",
+        timestamp_ms=5 * _MINUTE,
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=6 * _MINUTE,
+        sender_role="assistant",
+        content="终于穿过传送门来到下界啦",
+        message_type="speech",
+    )
+    archive = [
+        {
+            "line": 1,
+            "title": "Minecraft：抵达下界探索",
+            "quote": "终于穿过传送门来到下界啦",
+            "game": "Minecraft",
+            "evidence": "记录#1",
+        }
+    ]
+    llm = FakeLLMManager(
+        responses=[
+            Response(success=True, content=json.dumps({"archive": archive}, ensure_ascii=False)),
+            Response(success=True, content='{"commitments": []}'),
+        ]
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 9_000,
+    )
+
+    assert await settler.settle_session(session_id) is True
+    assert "跨维度：从主世界到了下界" in str(llm.calls[0]["input"])
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [line.text for line in lines] == ["Minecraft：抵达下界探索"]
+
+
+def test_settle_prompts_enforce_persona_commitment_and_facility_rules(prompt_manager: PromptManager) -> None:
+    """三份下播整理提示词收紧守护：区分设定自述与本场新事、过滤无对象畅想、纳入共用设施与环境限制。"""
+    archive_prompt = prompt_manager.render("memory_archive_system")
+    assert "角色固有设定背景的自述" in archive_prompt
+    assert "并非本场实际发生的新事件或新发现" in archive_prompt
+    assert "跨维度迁移" in archive_prompt
+
+    commitment_prompt = prompt_manager.render("memory_commitment_system")
+    assert "承诺须指向具体听众、联机同伴或明确的后续直播计划" in commitment_prompt
+    assert "无具体对象、无实际执行意图的随口畅想" in commitment_prompt
+
+    social_prompt = prompt_manager.render("memory_social_fact_system")
+    assert "服务器或存档环境限制、工具使用边界" in social_prompt
+    assert "共用设施操作惯例" in social_prompt

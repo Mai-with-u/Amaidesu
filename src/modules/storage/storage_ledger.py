@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from src.modules.config.storage_schemas import ViewerIdentityConfig
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.live import LiveEndedPayload
@@ -214,6 +215,16 @@ class StorageLedger:
         )
         self._subscriptions[CoreEvents.GAME_PLACE_NOTED] = place_handler
 
+        # 跨维度事件是三层身体事件，单层 game.* 接不住：显式订阅写入 game_events（event_type="dimension_changed"），
+        # 让去下界/末地等真实跨维度经历能进入场次概览并作为下播整理证源
+        dimension_handler = self._on_dimension_changed
+        self.event_bus.on(
+            CoreEvents.GAME_BODY_DIMENSION_CHANGED,
+            dimension_handler,
+            model_class=BodyEventPayload,
+        )
+        self._subscriptions[CoreEvents.GAME_BODY_DIMENSION_CHANGED] = dimension_handler
+
         # 委派账：受理与终态各落一行，进度变化（running / 等定夺）不落
         task_handler = self._on_task_changed
         self.event_bus.on(
@@ -243,6 +254,7 @@ class StorageLedger:
             f" + {CoreEvents.TTS_UTTERANCE_DROPPED}"
             f" + {_GAME_EVENT_WILDCARD}"
             f" + {CoreEvents.GAME_PLACE_NOTED}"
+            f" + {CoreEvents.GAME_BODY_DIMENSION_CHANGED}"
             f" + {CoreEvents.TASK_CHANGED}"
             f" + {CoreEvents.LIVE_ENDED}"
         )
@@ -764,6 +776,33 @@ class StorageLedger:
             )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
             logger.error(f"StorageLedger 写入地点动静失败（kind={getattr(payload, 'kind', '?')}）：{exc}", exc=True)
+
+    async def _on_dimension_changed(
+        self,
+        event_name: str,
+        payload: BodyEventPayload,
+        source: str,
+    ) -> None:
+        """``game.body.dimension_changed`` 回调：跨维度迁移写入 game_events（event_type="dimension_changed"）。"""
+        try:
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
+                logger.debug("跨维度事件无法归属场次，跳过落库")
+                return
+            message = (payload.summary or "").strip() or "换了个维度"
+            await self.event_repo.insert_game_event(
+                live_session_id=live_pk,
+                game=payload.game,
+                event_type="dimension_changed",
+                message=message,
+                scene=None,
+                timestamp_ms=payload.occurred_at_ms or payload.timestamp_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(
+                f"StorageLedger 写入跨维度事件失败（event={event_name}, game={getattr(payload, 'game', '?')}）：{exc}",
+                exc=True,
+            )
 
     async def _resolve_viewer(self, payload: RoomMessagePayload) -> Optional[int]:
         try:

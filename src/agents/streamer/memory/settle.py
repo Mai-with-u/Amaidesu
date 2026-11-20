@@ -1635,7 +1635,12 @@ class SessionSettler:
         if self._events is None:
             return [], ""
         try:
-            records = await self._events.list_session_game_events(live_session_id=int(session.id))
+            # 优先走跨全时段分阶段抽样读口，防止长场前半段主线事件在档案整理原料中被截断
+            sampled_fn = getattr(self._events, "list_session_game_events_sampled", None)
+            if callable(sampled_fn):
+                records = await sampled_fn(live_session_id=int(session.id), limit=120)
+            else:
+                records = await self._events.list_session_game_events(live_session_id=int(session.id))
         except Exception as exc:  # noqa: BLE001 - 少一类原料不影响整理
             logger.warning(f"场次 {session.id} 读游戏事件失败，原料少游戏这一类: {exc}", exc=exc)
             return [], ""

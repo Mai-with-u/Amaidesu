@@ -20,10 +20,14 @@ from datetime import datetime
 from typing import Any, Callable, List, Optional
 
 from src.modules.background import BackgroundTaskRegistry
+from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.storage.models.sessions import LiveSession
 from src.modules.storage.models.topics import TimelineSummaryEntry
+from src.modules.storage.repos.events import OVERVIEW_HIGH_SIGNAL_EVENT_TYPES, sample_game_events
 from src.modules.utils.time_utils import now_ms
+
+logger = get_logger("SessionOverviewWriter")
 
 # 用途 profile：与后台摘要同一个（短文本生成；不新增 profile，不动配置里的封闭集合）
 _OVERVIEW_PROFILE = "summary"
@@ -34,8 +38,10 @@ _OVERVIEW_TEMPLATE = "session_overview_system"
 # 窗口摘要取多少段（每段一分钟，一场三小时约 180 段）
 _SUMMARY_SEGMENTS_MAX = 600
 
-# 游戏事件取多少条
-_GAME_EVENTS_MAX = 60
+# 场次概览注入的游戏事件上限（跨全时段分阶段抽样后的条数，兼顾前中后段主线与输入预算）
+_GAME_EVENTS_MAX = 120
+# 兼容未实现分桶采样读口的仓储桩时，按较大上限读取后再本地分阶段采样
+_GAME_EVENTS_FALLBACK_SCAN = 500
 
 # 任务面板里的任务名（与整理任务区分开）
 _TASK_ID_PREFIX = "session-overview"
@@ -131,13 +137,32 @@ class SessionOverviewWriter:
     # ------------------------------------------------------------------
 
     async def _load_game_events(self, live_session_id: int) -> List[Any]:
+        """跨全时段分阶段读取游戏事件，避免长场次前半段主线被只取末尾事件截断。"""
         if self._events is None:
             return []
         try:
-            return list(
-                await self._events.list_session_game_events(live_session_id=live_session_id, limit=_GAME_EVENTS_MAX)
+            sampled_fn = getattr(self._events, "list_session_game_events_sampled", None)
+            if callable(sampled_fn):
+                return list(
+                    await sampled_fn(
+                        live_session_id=live_session_id,
+                        limit=_GAME_EVENTS_MAX,
+                        high_signal_types=OVERVIEW_HIGH_SIGNAL_EVENT_TYPES,
+                    )
+                )
+            rows = list(
+                await self._events.list_session_game_events(
+                    live_session_id=live_session_id,
+                    limit=_GAME_EVENTS_FALLBACK_SCAN,
+                )
             )
-        except Exception:  # noqa: BLE001 - 少了游戏这一路就只按话题摘要写
+            return sample_game_events(
+                rows,
+                limit=_GAME_EVENTS_MAX,
+                high_signal_types=OVERVIEW_HIGH_SIGNAL_EVENT_TYPES,
+            )
+        except Exception as exc:  # noqa: BLE001 - 少了游戏这一路就只按话题摘要写
+            logger.warning(f"场次 #{live_session_id} 读取游戏事件失败，概览将只按话题摘要生成: {exc}", exc=True)
             return []
 
     def _build_prompt(

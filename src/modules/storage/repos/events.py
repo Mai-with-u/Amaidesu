@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, TypeVar
 
 from src.modules.storage.models.events import (
     DelegationRecord,
@@ -45,6 +45,129 @@ _QUEUED_INTERRUPTED_SUMMARY = "重启前在待办排队，被打断了，还没�
 _IS_DELEGATION_EVENT = f"substr(event_type, 1, {len(DELEGATION_EVENT_PREFIX)}) = '{DELEGATION_EVENT_PREFIX}'"
 # 读游戏进展、按类型计数只看真正的游戏事件：地点动静与委派账都不算
 _GAME_PROGRESS_EVENT = f"{_NOT_PLACE_EVENT} AND NOT ({_IS_DELEGATION_EVENT})"
+# 跨全时段采样时优先保留的高信号游戏事件类型（跨维度/阵亡最稀缺关键，其次阶段汇报与里程碑）
+OVERVIEW_HIGH_SIGNAL_EVENT_TYPES: Tuple[str, ...] = ("dimension_changed", "died", "report", "milestone")
+_CRITICAL_SIGNAL_EVENT_TYPES: frozenset[str] = frozenset({"dimension_changed", "died"})
+# 全时段采样单场读取安全上界，避免异常刷屏事件导致内存膨胀
+_SAMPLED_SCAN_CAP: int = 5000
+
+_EventT = TypeVar("_EventT")
+
+
+def _pick_uniform_indices(count: int, take: int) -> List[int]:
+    """从长度为 ``count`` 的有序序列中均匀挑出 ``take`` 个下标（优先覆盖起止两端）。"""
+    if take <= 0 or count <= 0:
+        return []
+    if take >= count:
+        return list(range(count))
+    if take == 1:
+        return [0]
+    chosen: List[int] = []
+    seen: Set[int] = set()
+    for step in range(take):
+        idx = round(step * (count - 1) / (take - 1))
+        if idx not in seen:
+            seen.add(idx)
+            chosen.append(idx)
+    # 极端舍入碰撞时顺序补齐剩余名额
+    for idx in range(count):
+        if len(chosen) >= take:
+            break
+        if idx not in seen:
+            seen.add(idx)
+            chosen.append(idx)
+    return sorted(chosen)
+
+
+def _select_from_bucket(
+    bucket: Sequence[Tuple[int, _EventT]],
+    quota: int,
+    high_signal_set: Set[str],
+) -> List[Tuple[int, _EventT]]:
+    """单个时间桶内按信号等级优先挑出 ``quota`` 条事件，同等级内均匀抽样并保持原顺序。"""
+    if quota >= len(bucket):
+        return list(bucket)
+    critical: List[Tuple[int, _EventT]] = []
+    high: List[Tuple[int, _EventT]] = []
+    normal: List[Tuple[int, _EventT]] = []
+    for item in bucket:
+        event_type = str(getattr(item[1], "event_type", "") or "")
+        if event_type in _CRITICAL_SIGNAL_EVENT_TYPES and event_type in high_signal_set:
+            critical.append(item)
+        elif event_type in high_signal_set:
+            high.append(item)
+        else:
+            normal.append(item)
+    picked: List[Tuple[int, _EventT]] = []
+    remain = quota
+    for tier in (critical, high, normal):
+        if remain <= 0:
+            break
+        if len(tier) <= remain:
+            picked.extend(tier)
+            remain -= len(tier)
+        else:
+            picked.extend(tier[idx] for idx in _pick_uniform_indices(len(tier), remain))
+            remain = 0
+    picked.sort(key=lambda item: item[0])
+    return picked
+
+
+def sample_game_events(
+    records: Sequence[_EventT],
+    *,
+    limit: int,
+    high_signal_types: Sequence[str] = OVERVIEW_HIGH_SIGNAL_EVENT_TYPES,
+) -> List[_EventT]:
+    """按时间正序跨全时段分阶段抽样游戏事件，兼顾长场前中后段覆盖与高信号事件留存。
+
+    当事件总数不超过 ``limit`` 时原样按时间正序返回；超出时按全场时间跨度均匀分桶、
+    轮转分配各非空时段桶配额（避免后半场刷屏挤掉前半场主线），并在每桶内优先保留
+    ``dimension_changed`` / ``died`` / ``report`` / ``milestone`` 等高信号事件。
+    """
+    target_limit = max(1, int(limit))
+    ordered = sorted(enumerate(records), key=lambda item: (int(getattr(item[1], "timestamp_ms", 0) or 0), item[0]))
+    if len(ordered) <= target_limit:
+        return [record for _, record in ordered]
+
+    bucket_count = min(max(6, target_limit // 10), target_limit)
+    start_ms = int(getattr(ordered[0][1], "timestamp_ms", 0) or 0)
+    end_ms = int(getattr(ordered[-1][1], "timestamp_ms", 0) or 0)
+    span_ms = end_ms - start_ms
+
+    buckets: List[List[Tuple[int, _EventT]]] = [[] for _ in range(bucket_count)]
+    total = len(ordered)
+    for pos, item in enumerate(ordered):
+        if span_ms > 0:
+            ts = int(getattr(item[1], "timestamp_ms", 0) or 0)
+            b_idx = min(bucket_count - 1, max(0, ((ts - start_ms) * bucket_count) // (span_ms + 1)))
+        else:
+            b_idx = min(bucket_count - 1, (pos * bucket_count) // total)
+        buckets[b_idx].append(item)
+
+    non_empty = [bucket for bucket in buckets if bucket]
+    quotas = [0] * len(non_empty)
+    allocated = 0
+    # 轮转给仍有余量的时间桶逐个加配额，既保证前中后段均衡覆盖，又不浪费稀疏桶的剩余名额
+    while allocated < target_limit:
+        progressed = False
+        for idx, bucket in enumerate(non_empty):
+            if allocated >= target_limit:
+                break
+            if quotas[idx] < len(bucket):
+                quotas[idx] += 1
+                allocated += 1
+                progressed = True
+        if not progressed:
+            break
+
+    high_signal_set = {str(t) for t in high_signal_types}
+    selected: List[Tuple[int, _EventT]] = []
+    for bucket, quota in zip(non_empty, quotas, strict=True):
+        if quota > 0:
+            selected.extend(_select_from_bucket(bucket, quota, high_signal_set))
+    selected.sort(key=lambda item: (int(getattr(item[1], "timestamp_ms", 0) or 0), item[0]))
+    return [record for _, record in selected]
 
 
 class EventRepo(BaseRepo):
@@ -99,6 +222,33 @@ class EventRepo(BaseRepo):
                     (int(live_session_id), page_limit),
                 ).fetchall()
                 return [GameEventRecord.model_validate(dict(row)) for row in reversed(rows)]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_game_events_sampled(
+        self,
+        *,
+        live_session_id: int,
+        limit: int = 120,
+        high_signal_types: Sequence[str] = OVERVIEW_HIGH_SIGNAL_EVENT_TYPES,
+    ) -> List[GameEventRecord]:
+        """按时间正序跨全时段分阶段抽样指定场次的游戏事件（不含地点动静与委派账）。
+
+        相比 ``list_session_game_events`` 只取末尾 ``limit`` 条，本读口按时间正序扫描全本场进展事件
+        并在超限时均匀分桶抽样，优先保留 ``dimension_changed`` / ``died`` / ``report`` / ``milestone``
+        等高信号事件，保证 2–3 小时直播的前中后段主线都能进入场次概览与回顾原料。
+        """
+        target_limit = max(1, min(int(limit), 500))
+
+        def _exec() -> List[GameEventRecord]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT game, event_type, message, scene, timestamp_ms, save_id, save_name FROM game_events"
+                    f" WHERE live_session_id=? AND {_GAME_PROGRESS_EVENT} ORDER BY timestamp_ms ASC, id ASC LIMIT ?",  # noqa: S608
+                    (int(live_session_id), _SAMPLED_SCAN_CAP),
+                ).fetchall()
+                records = [GameEventRecord.model_validate(dict(row)) for row in rows]
+                return sample_game_events(records, limit=target_limit, high_signal_types=high_signal_types)
 
         return await self._run_in_executor(_exec)
 
@@ -383,4 +533,12 @@ def _delegations_of(conn: Any, *, live_session_id: Optional[int]) -> List[Delega
     return sorted(records.values(), key=lambda record: (record.started_ms or record.ended_ms, record.task_id))
 
 
-__all__ = ["DELEGATION_ACCEPTED", "DELEGATION_EVENT_PREFIX", "DELEGATION_INTERRUPTED", "DELEGATION_QUEUED", "EventRepo"]
+__all__ = [
+    "DELEGATION_ACCEPTED",
+    "DELEGATION_EVENT_PREFIX",
+    "DELEGATION_INTERRUPTED",
+    "DELEGATION_QUEUED",
+    "OVERVIEW_HIGH_SIGNAL_EVENT_TYPES",
+    "EventRepo",
+    "sample_game_events",
+]

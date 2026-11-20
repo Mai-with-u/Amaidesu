@@ -134,3 +134,48 @@ async def test_overview_system_prompt_identifies_main_character_as_streamer(
     system_prompt = str(llm.calls[0]["system"])
     assert "游戏里的主控角色就是主播本人" in system_prompt
     assert "归在主播名下叙述" in system_prompt
+
+
+async def test_write_overview_covers_early_mid_late_events_for_long_session(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """2.5 小时 200 条事件长场：场次概览原料同时覆盖前段跨维度、中段汇报与末段进展，不截断前半场。"""
+    t0 = 1_700_000_000_000
+    minute = 60_000
+    session_id = await store.sessions.insert_live_session(started_at_ms=t0, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=t0 + 150 * minute)
+
+    # 前段（第 8 分钟）跨维度 + 中段（第 70 分钟）阶段汇报
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="minecraft",
+        event_type="dimension_changed",
+        message="从主世界到了下界",
+        timestamp_ms=t0 + 8 * minute,
+    )
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="minecraft",
+        event_type="report",
+        message="交付：完成自动磨坊布线",
+        timestamp_ms=t0 + 70 * minute,
+    )
+    # 后段（第 100–149 分钟）198 条密集常规事件，远超原先 DESC LIMIT 60 上限
+    for idx in range(198):
+        await store.events.insert_game_event(
+            live_session_id=session_id,
+            game="minecraft",
+            event_type="attention_required" if idx % 2 else "milestone",
+            message=f"末段常规事件 #{idx}",
+            timestamp_ms=t0 + 100 * minute + idx * 15_000,
+        )
+
+    llm = FakeLLMManager(Response(success=True, content="本场先去下界探险，中段搭起磨坊，后半场继续推进。"))
+    writer = _writer(store, llm, prompt_manager)
+
+    assert await writer.write_overview(session_id) is True
+    prompt = str(llm.calls[0]["input"])
+    assert "从主世界到了下界" in prompt
+    assert "交付：完成自动磨坊布线" in prompt
+    assert "末段常规事件 #197" in prompt
+    assert prompt.index("从主世界到了下界") < prompt.index("交付：完成自动磨坊布线") < prompt.index("末段常规事件 #197")

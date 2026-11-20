@@ -9,6 +9,7 @@ import pytest
 from src.modules.events.event_bus import EventBus
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -542,3 +543,30 @@ async def test_repeated_start_then_stop_unsubscribes_everything(make_ledger, sto
     for event, payload in _ALL_EVENTS:
         await _emit(event_bus, event, payload)
     assert set((await _counts(store)).values()) == {0}
+
+
+async def test_dimension_changed_body_event_persists_to_game_events(
+    ledger: StorageLedger,
+    store: SQLiteDatabase,
+    event_bus: EventBus,
+) -> None:
+    """三层身体事件 game.body.dimension_changed 显式落入 game_events，可供概览与整理证源读取。"""
+    payload = BodyEventPayload(
+        game="minecraft",
+        kind="dimension_changed",
+        summary="从主世界到了下界",
+        occurred_at_ms=1_700_000_500_000,
+        timestamp_ms=1_700_000_501_000,
+    )
+    await _emit(event_bus, CoreEvents.GAME_BODY_DIMENSION_CHANGED, payload)
+
+    rows = await store.events.list_session_game_events(live_session_id=_FAKE_PK)
+    assert len(rows) == 1
+    assert (rows[0].game, rows[0].event_type, rows[0].message, rows[0].timestamp_ms) == (
+        "minecraft",
+        "dimension_changed",
+        "从主世界到了下界",
+        1_700_000_500_000,
+    )
+    sampled = await store.events.list_session_game_events_sampled(live_session_id=_FAKE_PK)
+    assert len(sampled) == 1 and sampled[0].event_type == "dimension_changed"

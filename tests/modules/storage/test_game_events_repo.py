@@ -113,3 +113,64 @@ async def test_startup_settles_every_open_delegation_as_interrupted_once(store: 
     assert statuses == {"deleg_1": "cancelled", "deleg_2": "interrupted", "deleg_3": "accepted"}
     [old_record] = await store.events.list_session_delegations(live_session_id=old)
     assert (old_record.status, old_record.summary) == ("interrupted", "重启前在做，被打断了，做到哪不确定")
+
+
+async def test_list_session_game_events_sampled_covers_full_span_and_prioritizes_high_signal(
+    store: SQLiteDatabase,
+) -> None:
+    """长场跨全时段分桶抽样：保留前中后段主线与高信号事件，同时不破坏 list_session_game_events 原契约。"""
+    sid = await _session(store, 1_000_000)
+    minute = 60_000
+    # 前半场（10–40 分钟）：只有稀疏但极其关键的跨维度与阵亡事件
+    await store.events.insert_game_event(
+        live_session_id=sid,
+        game="minecraft",
+        event_type="dimension_changed",
+        message="从主世界到了下界",
+        timestamp_ms=1_000_000 + 10 * minute,
+    )
+    await store.events.insert_game_event(
+        live_session_id=sid,
+        game="minecraft",
+        event_type="died",
+        message="在下界堡垒阵亡",
+        timestamp_ms=1_000_000 + 25 * minute,
+    )
+    # 中段（80 分钟）：阶段汇报
+    await store.events.insert_game_event(
+        live_session_id=sid,
+        game="minecraft",
+        event_type="report",
+        message="交付：建成动力磨坊",
+        timestamp_ms=1_000_000 + 80 * minute,
+    )
+    # 后半场（100–170 分钟）：连续 140 条密集常规事件
+    for idx in range(140):
+        await store.events.insert_game_event(
+            live_session_id=sid,
+            game="minecraft",
+            event_type="attention_required" if idx % 3 else "milestone",
+            message=f"后半场事件 #{idx}",
+            timestamp_ms=1_000_000 + 100 * minute + idx * 30_000,
+        )
+    # 地点动静与委派账仍须排除
+    await store.events.insert_place_mark(
+        live_session_id=sid, game="minecraft", kind="near", place="基地", timestamp_ms=1_000_000 + 5 * minute
+    )
+    await _delegation(store, sid, "deleg_x", "accepted", "造风车", 1_000_000 + 15 * minute)
+
+    # 既有读口仍保持末尾 limit 条契约（不含前半场）
+    tail_only = await store.events.list_session_game_events(live_session_id=sid, limit=60)
+    assert len(tail_only) == 60
+    assert all(ev.event_type != "dimension_changed" for ev in tail_only)
+
+    # 新分桶读口覆盖前中后全时段、严格时间正序且优先保留高信号事件
+    sampled = await store.events.list_session_game_events_sampled(live_session_id=sid, limit=60)
+    assert len(sampled) == 60
+    assert [ev.timestamp_ms for ev in sampled] == sorted(ev.timestamp_ms for ev in sampled)
+    messages = [ev.message for ev in sampled]
+    assert "从主世界到了下界" in messages
+    assert "在下界堡垒阵亡" in messages
+    assert "交付：建成动力磨坊" in messages
+    assert any(msg.startswith("后半场事件 #") for msg in messages)
+    assert all(not ev.event_type.startswith(("place_", "delegation_")) for ev in sampled)
