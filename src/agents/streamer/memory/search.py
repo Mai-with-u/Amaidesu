@@ -300,7 +300,32 @@ class MemorySearch:
         *,
         min_cosine: float = 0.0,
     ) -> List[Tuple[int, float]]:
-        """语义这一路：当前模型的全部向量与查询向量算余弦，丢弃低于 ``min_cosine`` 的低分噪声后取最高的一批。"""
+        """语义这一路：优先复用仓储按 ``(source, model_key)`` 缓存的归一化矩阵算余弦，丢弃低于 ``min_cosine`` 的低分噪声。"""
+        matrix_loader = getattr(self._repo, "stored_vector_matrix", None)
+        if callable(matrix_loader):
+            stored_matrix = await matrix_loader(
+                source=source, model_key=embedding.model_key, live_session_id=live_session_id
+            )
+            if not stored_matrix.source_ids or stored_matrix.matrix.size == 0:
+                return []
+            if stored_matrix.matrix.shape[1] != query_vector.shape[0]:
+                logger.warning(
+                    f"{source} 的向量维度 {stored_matrix.matrix.shape[1]} 与查询向量 {query_vector.shape[0]} 不一致，这一路跳过"
+                )
+                return []
+            query_unit = np.asarray(query_vector, dtype=np.float32)
+            query_norm = float(np.linalg.norm(query_unit))
+            if query_norm:
+                query_unit = query_unit / query_norm
+            cosines = stored_matrix.matrix @ query_unit
+            order = np.argsort(-cosines)[:CANDIDATES_PER_PATH]
+            return [
+                (stored_matrix.source_ids[int(index)], float(cosines[int(index)]))
+                for index in order
+                if float(cosines[int(index)]) >= min_cosine
+            ]
+
+        # 兼容仅实现 stored_vectors 的轻量测试替身
         stored = [
             item
             for item in await self._repo.stored_vectors(

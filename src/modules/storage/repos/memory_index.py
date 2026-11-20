@@ -22,14 +22,20 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 from dataclasses import dataclass
+from threading import RLock
 from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 import numpy as np
 
+from src.modules.logging import get_logger
+from src.modules.storage.connection import SQLiteConnectionManager
 from src.modules.storage.models.memory import IndexCandidate, IndexDoc, IndexVector
 from src.modules.storage.repos._base import BaseRepo
+
+logger = get_logger("MemoryIndexRepo")
 
 IndexSource = Literal["archive", "commitment", "speech", "event", "social_fact"]
 INDEX_SOURCES: Tuple[IndexSource, ...] = ("archive", "commitment", "speech", "event", "social_fact")
@@ -155,17 +161,215 @@ def delete_session_index_rows(conn: sqlite3.Connection, *, live_session_id: int)
     """删掉某一场台词与游戏事件的全文行和向量行（场次改成彩排时，在改类型的同一个事务里调用）。
 
     彩排的话观众没听过，她不该"记得"；来源行本身不变，触发器管不到，只能在这里删。改回正式场后
-    这些行重新变成"该收的"，由索引任务补回来。
+    这些行重新变成"该收的"，由索引任务补回来。同时递增进程内向量矩阵缓存版本号，避免语义检索读到脏缓存。
     """
     for source in ("speech", "event"):
         spec = _SPECS[source]
         rows = f"SELECT id FROM {spec.table} WHERE live_session_id = ?"  # noqa: S608 常量表名
         conn.execute(f"DELETE FROM {spec.fts} WHERE rowid IN ({rows})", (int(live_session_id),))  # noqa: S608
         conn.execute(f"DELETE FROM {spec.vectors} WHERE {spec.key} IN ({rows})", (int(live_session_id),))  # noqa: S608
+    _bump_vector_cache_epoch(_db_cache_key_from_conn(conn), ("speech", "event"))
+
+
+@dataclass(frozen=True)
+class StoredVectorMatrix:
+    """按 ``(source, model_key)`` 缓存在进程内的归一化 ``float32`` 向量矩阵。
+
+    ``source_ids``、``session_ids`` 与 ``matrix`` 的行一一对应；``matrix`` 每行已完成 L2 单位化，
+    检索引擎可直接与单位化查询向量做矩阵点积求余弦；``session_ids`` 用 ``-1`` 表示未归属场次，
+    支持带 ``live_session_id`` 限定时直接在内存切片筛选子集。
+    """
+
+    source_ids: Tuple[int, ...]
+    matrix: np.ndarray
+    session_ids: np.ndarray
+
+
+@dataclass(frozen=True)
+class _CachedVectorMatrix:
+    """单份缓存矩阵及其一致性凭证（显式版本号 + 数据库轻量标量指纹）。"""
+
+    epoch: Tuple[int, int]
+    fingerprint: Tuple[int, int, int, int, int]
+    data: StoredVectorMatrix
+
+
+# 跨同库实例共享的向量缓存显式失效版本号（按主库规范化路径隔离，内存库走全局版本号）
+_CACHE_EPOCH_LOCK = RLock()
+_DB_SOURCE_EPOCHS: Dict[str, Dict[IndexSource, int]] = {}
+_GLOBAL_SOURCE_EPOCHS: Dict[IndexSource, int] = {source: 0 for source in INDEX_SOURCES}
+
+
+def _normalize_db_cache_key(raw_path: str) -> str:
+    """把 SQLite 文件路径归一化为进程内缓存键；内存库与空路径返回空串。"""
+    cleaned = (raw_path or "").strip()
+    if not cleaned or cleaned == ":memory:":
+        return ""
+    return os.path.normcase(os.path.abspath(cleaned))
+
+
+def _db_cache_key_from_conn(conn: sqlite3.Connection) -> str:
+    """从 SQLite 连接反查主库文件路径，供跨仓储事务删除索引后精准失效对应库的向量缓存。"""
+    try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+    except sqlite3.Error as exc:
+        logger.warning(f"查询数据库连接文件路径失败，改走全局向量缓存失效: {exc}", exc=True)
+        return ""
+    for row in rows:
+        if len(row) >= 3 and str(row[1]) == "main":
+            return _normalize_db_cache_key(str(row[2] or ""))
+    return ""
+
+
+def _bump_vector_cache_epoch(db_key: str, sources: Sequence[IndexSource]) -> None:
+    """递增指定来源的向量缓存版本号：有具体库路径时按库递增，内存库或路径不明时递增全局版本号。"""
+    with _CACHE_EPOCH_LOCK:
+        if not db_key:
+            for source in sources:
+                _GLOBAL_SOURCE_EPOCHS[source] = _GLOBAL_SOURCE_EPOCHS.get(source, 0) + 1
+            return
+        bucket = _DB_SOURCE_EPOCHS.setdefault(db_key, {})
+        for source in sources:
+            bucket[source] = bucket.get(source, 0) + 1
+
+
+def _read_vector_cache_epoch(db_key: str, source: IndexSource) -> Tuple[int, int]:
+    """读取当前库与全局的向量缓存版本二元组，任一侧递增即判定旧缓存失效。"""
+    with _CACHE_EPOCH_LOCK:
+        db_epoch = _DB_SOURCE_EPOCHS.get(db_key, {}).get(source, 0) if db_key else 0
+        global_epoch = _GLOBAL_SOURCE_EPOCHS.get(source, 0)
+        return (db_epoch, global_epoch)
+
+
+def _empty_vector_matrix() -> StoredVectorMatrix:
+    """空向量矩阵（只读，零行零列）。"""
+    empty_matrix = np.empty((0, 0), dtype=np.float32)
+    empty_matrix.setflags(write=False)
+    empty_sessions = np.empty((0,), dtype=np.int64)
+    empty_sessions.setflags(write=False)
+    return StoredVectorMatrix(source_ids=(), matrix=empty_matrix, session_ids=empty_sessions)
+
+
+def _build_normalized_matrix(
+    source: IndexSource, rows: Sequence[Tuple[int, Optional[int], bytes]]
+) -> StoredVectorMatrix:
+    """把 SQLite 读出的原始小端 float32 字节一次性拼装并做 L2 行归一化，设为只读供缓存复用。"""
+    source_ids: List[int] = []
+    session_ids: List[int] = []
+    vectors: List[np.ndarray] = []
+    expected_dim: Optional[int] = None
+    for source_id, session_id, raw_bytes in rows:
+        if not raw_bytes:
+            continue
+        vec = np.frombuffer(raw_bytes, dtype="<f4")
+        if vec.size == 0:
+            continue
+        if expected_dim is None:
+            expected_dim = int(vec.shape[0])
+        elif int(vec.shape[0]) != expected_dim:
+            logger.warning(
+                f"{source} 向量行 id={source_id} 维度 {vec.shape[0]} 与首行维度 {expected_dim} 不一致，已跳过"
+            )
+            continue
+        source_ids.append(int(source_id))
+        session_ids.append(int(session_id) if session_id is not None else -1)
+        vectors.append(vec)
+    if not vectors:
+        return _empty_vector_matrix()
+    stacked = np.stack(vectors).astype(np.float32, copy=False)
+    norms = np.linalg.norm(stacked, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    normalized = (stacked / norms).astype(np.float32, copy=False)
+    normalized.setflags(write=False)
+    session_array = np.asarray(session_ids, dtype=np.int64)
+    session_array.setflags(write=False)
+    return StoredVectorMatrix(source_ids=tuple(source_ids), matrix=normalized, session_ids=session_array)
+
+
+def _slice_session_matrix(data: StoredVectorMatrix, live_session_id: int) -> StoredVectorMatrix:
+    """从已缓存的全量矩阵按场次号内存切片，避免重复查库与反序列化。"""
+    if not data.source_ids:
+        return data
+    mask = data.session_ids == int(live_session_id)
+    if not bool(np.any(mask)):
+        return _empty_vector_matrix()
+    indices = np.flatnonzero(mask)
+    sliced_ids = tuple(data.source_ids[int(idx)] for idx in indices)
+    sliced_matrix = np.ascontiguousarray(data.matrix[indices], dtype=np.float32)
+    sliced_matrix.setflags(write=False)
+    sliced_sessions = np.ascontiguousarray(data.session_ids[indices], dtype=np.int64)
+    sliced_sessions.setflags(write=False)
+    return StoredVectorMatrix(source_ids=sliced_ids, matrix=sliced_matrix, session_ids=sliced_sessions)
+
+
+def _vector_fingerprint(conn: sqlite3.Connection, spec: _Spec, model_key: str) -> Tuple[int, int, int, int, int]:
+    """只扫索引与轻量标量列算一致性指纹（不碰大 BLOB 内容），兜底触发器删行与外部 SQL 变更。
+
+    对 ``v.text_hash`` 采样前 12 位十六进制字符（拆为两组 6 位多项式和，单行上界远低于 64 位整型上限），
+    大幅压低外部 SQL 原位改动正文哈希时的理论碰撞率。
+    """
+    sql = (
+        "SELECT COUNT(*), COALESCE(SUM(t.id), 0), COALESCE(MAX(t.id), 0),"
+        " COALESCE(SUM("
+        "  unicode(substr(v.text_hash, 1, 1)) * 1048576"
+        "  + unicode(substr(v.text_hash, 2, 1)) * 65536"
+        "  + unicode(substr(v.text_hash, 3, 1)) * 4096"
+        "  + unicode(substr(v.text_hash, 4, 1)) * 256"
+        "  + unicode(substr(v.text_hash, 5, 1)) * 16"
+        "  + unicode(substr(v.text_hash, 6, 1))"
+        "  + length(v.vector)"
+        " ), 0),"
+        " COALESCE(SUM("
+        "  unicode(substr(v.text_hash, 7, 1)) * 1048576"
+        "  + unicode(substr(v.text_hash, 8, 1)) * 65536"
+        "  + unicode(substr(v.text_hash, 9, 1)) * 4096"
+        "  + unicode(substr(v.text_hash, 10, 1)) * 256"
+        "  + unicode(substr(v.text_hash, 11, 1)) * 16"
+        "  + unicode(substr(v.text_hash, 12, 1))"
+        " ), 0)"
+        f" {_from(spec)}"  # noqa: S608 常量片段
+        f" JOIN {spec.vectors} v ON v.{spec.key} = t.id"
+        f" WHERE v.model = ? AND {spec.eligible}"
+    )
+    row = conn.execute(sql, (model_key,)).fetchone()
+    if row is None:
+        return (0, 0, 0, 0, 0)
+    return (
+        int(row[0] or 0),
+        int(row[1] or 0),
+        int(row[2] or 0),
+        int(row[3] or 0),
+        int(row[4] or 0),
+    )
 
 
 class MemoryIndexRepo(BaseRepo):
-    """派生索引的读写入口（索引任务用）。"""
+    """派生索引的读写入口（索引任务与混合检索共用，含按 ``(source, model_key)`` 缓存的归一化向量矩阵）。"""
+
+    def __init__(self, manager: SQLiteConnectionManager) -> None:
+        super().__init__(manager)
+        self._db_cache_key = _normalize_db_cache_key(str(getattr(manager, "db_path", "")))
+        self._cache_lock = RLock()
+        self._vector_cache: Dict[Tuple[IndexSource, str], _CachedVectorMatrix] = {}
+        # 累计从 SQLite 读取全量向量并构建归一化矩阵的次数（便于诊断与测试验证缓存命中）
+        self._vector_cache_loads = 0
+
+    @property
+    def vector_cache_loads(self) -> int:
+        """累计发生的全量向量矩阵构建次数（缓存命中时不递增）。"""
+        with self._cache_lock:
+            return self._vector_cache_loads
+
+    def invalidate_vector_cache(self, *, source: Optional[IndexSource] = None) -> None:
+        """精准失效进程内向量矩阵缓存；``source`` 为 None 时清空全部来源。"""
+        sources: Tuple[IndexSource, ...] = (source,) if source is not None else INDEX_SOURCES
+        with self._cache_lock:
+            if source is None:
+                self._vector_cache.clear()
+            else:
+                for key in [k for k in self._vector_cache if k[0] == source]:
+                    self._vector_cache.pop(key, None)
+        _bump_vector_cache_epoch(self._db_cache_key, sources)
 
     async def pending_full_text(self, *, source: IndexSource, now_ms: int, limit: int) -> List[IndexDoc]:
         """该收、却还没有全文行的来源行（按主键从小到大，至多 ``limit`` 行）。"""
@@ -263,7 +467,11 @@ class MemoryIndexRepo(BaseRepo):
             )
             for doc, vector in items
         ]
-        return await self._run_in_executor(self._write_rows, sql, rows)
+        written = await self._run_in_executor(self._write_rows, sql, rows)
+        if written > 0:
+            # 向量写入后立刻失效该来源的进程内矩阵缓存，确保紧接着的语义查询看到最新向量
+            self.invalidate_vector_cache(source=source)
+        return written
 
     async def keyword_candidates(
         self, *, source: IndexSource, match_query: str, limit: int, live_session_id: Optional[int] = None
@@ -320,6 +528,80 @@ class MemoryIndexRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 rows = conn.execute(sql, params).fetchall()
             return [IndexVector(source_id=int(row[0]), vector=bytes(row[1])) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def stored_vector_matrix(
+        self, *, source: IndexSource, model_key: str, live_session_id: Optional[int] = None
+    ) -> StoredVectorMatrix:
+        """返回按 ``(source, model_key)`` 缓存的归一化 float32 向量矩阵，避免每次语义检索全表反序列化。
+
+        执行顺序：
+        1. 先核对显式版本号（向量写入、场次改彩排清索引、外部手动失效均会递增）与轻量标量指纹
+           （兜底触发器删行或绕过本仓储的 SQL 改动）；
+        2. 全量缓存新鲜时直接返回（带 ``live_session_id`` 则直接在内存按场次切片）；
+        3. 缓存缺失或失效时：若限定了单场则走单场精确查询避免把全库拉入内存；未限定场次则一次加载、
+           归一化并缓存供后续复用。
+        """
+        spec = _SPECS[source]
+        cache_key = (source, model_key)
+
+        def _exec() -> StoredVectorMatrix:
+            current_epoch = _read_vector_cache_epoch(self._db_cache_key, source)
+            with self._cache_lock:
+                cached = self._vector_cache.get(cache_key)
+                if cached is not None and cached.epoch != current_epoch:
+                    self._vector_cache.pop(cache_key, None)
+                    cached = None
+
+            with self._manager.transaction() as conn:
+                if cached is not None:
+                    fp = _vector_fingerprint(conn, spec, model_key)
+                    if fp == cached.fingerprint:
+                        if live_session_id is None:
+                            return cached.data
+                        return _slice_session_matrix(cached.data, int(live_session_id))
+                    # 轻量指纹失配：说明存在外部表变更或触发器删除，立即清掉脏缓存
+                    with self._cache_lock:
+                        if self._vector_cache.get(cache_key) is cached:
+                            self._vector_cache.pop(cache_key, None)
+
+                # 限定了单场且当前没有可用的全量缓存：只读该场向量，不把跨场全库拖进内存
+                if live_session_id is not None:
+                    session_clause, session_params = _session_clause(spec, live_session_id)
+                    sql = (
+                        f"SELECT t.id, t.{spec.session_column}, v.vector {_from(spec)}"  # noqa: S608 常量片段
+                        f" JOIN {spec.vectors} v ON v.{spec.key} = t.id"
+                        f" WHERE v.model = ? AND {spec.eligible}{session_clause}"
+                    )
+                    rows = conn.execute(sql, (model_key, *session_params)).fetchall()
+                    raw_rows = [
+                        (int(row[0]), int(row[1]) if row[1] is not None else None, bytes(row[2])) for row in rows
+                    ]
+                    return _build_normalized_matrix(source, raw_rows)
+
+                # 未限定场次：在同一事务内同时读取标量指纹与全量向量，构建只读归一化矩阵并入缓存
+                epoch_before = _read_vector_cache_epoch(self._db_cache_key, source)
+                fp = _vector_fingerprint(conn, spec, model_key)
+                sql = (
+                    f"SELECT t.id, t.{spec.session_column}, v.vector {_from(spec)}"  # noqa: S608 常量片段
+                    f" JOIN {spec.vectors} v ON v.{spec.key} = t.id"
+                    f" WHERE v.model = ? AND {spec.eligible}"
+                )
+                rows = conn.execute(sql, (model_key,)).fetchall()
+                raw_rows = [(int(row[0]), int(row[1]) if row[1] is not None else None, bytes(row[2])) for row in rows]
+                built = _build_normalized_matrix(source, raw_rows)
+
+            with self._cache_lock:
+                self._vector_cache_loads += 1
+                # 若构建期间未发生新的显式失效，写入缓存；否则只返回本次结果不留旧快照
+                if _read_vector_cache_epoch(self._db_cache_key, source) == epoch_before:
+                    self._vector_cache[cache_key] = _CachedVectorMatrix(
+                        epoch=epoch_before,
+                        fingerprint=fp,
+                        data=built,
+                    )
+            return built
 
         return await self._run_in_executor(_exec)
 
@@ -380,6 +662,7 @@ __all__ = [
     "SPEECH_SETTLE_MS",
     "IndexSource",
     "MemoryIndexRepo",
+    "StoredVectorMatrix",
     "delete_session_index_rows",
     "text_hash",
 ]

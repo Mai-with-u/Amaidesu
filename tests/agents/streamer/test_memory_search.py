@@ -212,3 +212,36 @@ async def test_recency_bias_prefers_newer_status_in_same_relevance_band_without_
 
     unique_hits = await search.search("紫水晶 望远镜", sources=("archive",))
     assert [hit.source_id for hit in unique_hits[:2]] == [early_unique, late_partial]
+
+
+async def test_semantic_search_reuses_cached_vector_matrix_and_drops_rehearsal_immediately(
+    store: SQLiteDatabase,
+) -> None:
+    """连续多次语义检索复用进程内归一化矩阵缓存，且场次改彩排清索引后绝不命中脏缓存。"""
+    clock = FakeClock()
+    s1 = await _session(store, clock)
+    s2 = await _session(store, clock)
+    await store.sessions.close_live_session(live_session_id=s1, ended_at_ms=clock.now_ms() - 10_000)
+    cat_s1 = await _say(store, clock, s1, "黑猫芝麻在屋顶睡觉")
+    cat_s2 = await _say(store, clock, s2, "小猫趴在工作台边")
+    server = FakeEmbeddingServer()
+    embedding = server.client()
+    await _index(store, clock, embedding)
+    search = MemorySearch(repo=store.memory_index, embedding=embedding)
+
+    first = await search.search("猫咪", sources=("speech",), wait_vector_ms=5_000)
+    second = await search.search("猫咪", sources=("speech",), wait_vector_ms=5_000)
+    only_s2 = await search.search("猫咪", sources=("speech",), live_session_id=s2, wait_vector_ms=5_000)
+
+    assert {hit.source_id for hit in first} == {cat_s1, cat_s2}
+    assert {hit.source_id for hit in second} == {cat_s1, cat_s2}
+    assert [hit.source_id for hit in only_s2] == [cat_s2]
+    assert store.memory_index.vector_cache_loads == 1, "连续语义查与单场筛选应直接复用同一份归一化矩阵缓存"
+
+    # 第一场改成彩排后，语义检索立即看不到第一场内容
+    await store.sessions.set_live_session_kind_with_ledger(
+        live_session_id=s1, kind="rehearsal", updated_at_ms=clock.now_ms()
+    )
+    after_rehearsal = await search.search("猫咪", sources=("speech",), wait_vector_ms=5_000)
+    assert [hit.source_id for hit in after_rehearsal] == [cat_s2]
+    assert store.memory_index.vector_cache_loads == 2

@@ -263,3 +263,68 @@ async def test_blank_speech_and_newline_only_documents_never_enter_vector_queue(
     archive_docs = await store.memory_index.pending_full_text(source="archive", now_ms=NOW_MS, limit=50)
     await store.memory_index.write_full_text(source="archive", items=[(doc, "") for doc in archive_docs])
     assert await store.memory_index.pending_total(model_key="m", now_ms=NOW_MS) == 0
+
+
+async def test_stored_vector_matrix_caches_normalized_matrix_and_invalidates_on_all_mutations(
+    store: SQLiteDatabase,
+) -> None:
+    """进程内向量矩阵缓存：重复查询与单场切片复用归一化矩阵；写向量、改彩排清索引与外部改动均精准失效。"""
+    s1 = await _session(store, start_ms=NOW_MS - 7_200_000)
+    s2 = await _session(store, start_ms=NOW_MS - 3_600_000)
+    c1 = await _speech(store, s1, "第一场挖到了很多铁矿")
+    c2 = await _speech(store, s2, "第二场搭好了刷铁机")
+    docs = await store.memory_index.pending_vectors(source="speech", model_key="m", now_ms=NOW_MS, limit=10)
+    by_id = {doc.source_id: doc for doc in docs}
+    await store.memory_index.write_vectors(
+        source="speech",
+        model_key="m",
+        items=[(by_id[c1], [3.0, 4.0]), (by_id[c2], [0.0, 2.0])],
+    )
+
+    # 首次全量查询触发 1 次矩阵构建并归一化；后续重复查与按场次切片均直接命中缓存
+    first = await store.memory_index.stored_vector_matrix(source="speech", model_key="m")
+    assert first.source_ids == (c1, c2)
+    assert first.matrix.dtype == np.float32
+    assert np.allclose(first.matrix[0], [0.6, 0.8])
+    assert np.allclose(first.matrix[1], [0.0, 1.0])
+    assert store.memory_index.vector_cache_loads == 1
+
+    second = await store.memory_index.stored_vector_matrix(source="speech", model_key="m")
+    assert second is first
+    assert store.memory_index.vector_cache_loads == 1
+
+    only_s1 = await store.memory_index.stored_vector_matrix(source="speech", model_key="m", live_session_id=s1)
+    assert only_s1.source_ids == (c1,)
+    assert np.allclose(only_s1.matrix[0], [0.6, 0.8])
+    assert store.memory_index.vector_cache_loads == 1
+
+    # 写入新向量后自动失效，下一次全量查询看到新向量
+    c3 = await _speech(store, s2, "第二场又种了小麦")
+    (doc3,) = await store.memory_index.pending_vectors(source="speech", model_key="m", now_ms=NOW_MS, limit=10)
+    assert doc3.source_id == c3
+    await store.memory_index.write_vectors(source="speech", model_key="m", items=[(doc3, [1.0, 0.0])])
+    after_write = await store.memory_index.stored_vector_matrix(source="speech", model_key="m")
+    assert after_write.source_ids == (c1, c2, c3)
+    assert store.memory_index.vector_cache_loads == 2
+
+    # 场次改彩排走 delete_session_index_rows 清索引：精准失效，不再返回该场向量
+    await store.sessions.set_live_session_kind_with_ledger(live_session_id=s1, kind="rehearsal", updated_at_ms=NOW_MS)
+    after_rehearsal = await store.memory_index.stored_vector_matrix(source="speech", model_key="m")
+    assert after_rehearsal.source_ids == (c2, c3)
+    assert store.memory_index.vector_cache_loads == 3
+
+    # 绕过本仓储直接标台词为未播出（由触发器或 eligible 条件过滤）：轻量指纹立即识破，绝无脏缓存
+    await store.execute("UPDATE live_chat SET dropped_at_ms = ? WHERE id = ?", (NOW_MS, c2))
+    after_drop = await store.memory_index.stored_vector_matrix(source="speech", model_key="m")
+    assert after_drop.source_ids == (c3,)
+    assert store.memory_index.vector_cache_loads == 4
+
+    # 外部直接 SQL 原位改写 text_hash（保持前 3 位相同、仅改动第 10 位）也能被 12 位指纹立即感知失效
+    (orig_row,) = await store.execute("SELECT text_hash FROM memory_vectors_speech WHERE chat_id = ?", (c3,))
+    orig_hash = str(orig_row["text_hash"])
+    flipped_char = "0" if orig_hash[9] != "0" else "1"
+    mutated_hash = orig_hash[:9] + flipped_char + orig_hash[10:]
+    await store.execute("UPDATE memory_vectors_speech SET text_hash = ? WHERE chat_id = ?", (mutated_hash, c3))
+    after_hash_mutation = await store.memory_index.stored_vector_matrix(source="speech", model_key="m")
+    assert after_hash_mutation.source_ids == (c3,)
+    assert store.memory_index.vector_cache_loads == 5
