@@ -55,7 +55,7 @@ from tests.agents.minecraft_v1_fakes import (
     assemble_minecraft_agent,
     offline_config,
 )
-from tests.agents.streamer.helpers import make_streamer_agent
+from tests.agents.streamer.helpers import ActiveSessionStub, make_streamer_agent
 from tests.modules.llm.fakes import FakeLLMManager
 
 
@@ -169,6 +169,11 @@ async def _start_dual_agent_rig(
     rundown: Optional[Rundown] = None,
     start_streamer_first: bool = True,
     on_before_start: Optional[Callable[[LeadCoordinator], None]] = None,
+    chat_batch_window_ms: int = 0,
+    chat_flush_wait: Optional[Callable[[int], Any]] = None,
+    embedding_setup: Optional[Any] = None,
+    streamer_extra_kwargs: Optional[Dict[str, Any]] = None,
+    work_docs_repo: Optional[Any] = None,
 ) -> _DualAgentRig:
     """按生产装配拓扑启动真实 StreamerAgent + 真实 MinecraftAgent 同台环境。"""
     register_core_events()
@@ -239,6 +244,7 @@ async def _start_dual_agent_rig(
         task_ledger=ledger,
         lead_coordinator=coordinator,
         clock=fake_clock.now_ms,
+        **(streamer_extra_kwargs or {}),
     )
 
     # 装配真实 MinecraftAgent（live=None 沿用生产语义：启动落收工态，待 live.started 置位）
@@ -252,8 +258,12 @@ async def _start_dual_agent_rig(
         live=None,
         mcp_client=SimpleNamespace(connected=True),
         mcp_provider=server,
+        work_docs_repo=work_docs_repo,
+        embedding_setup=embedding_setup,
         lead_coordinator=coordinator,
         lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=chat_batch_window_ms,
+        chat_flush_wait=chat_flush_wait,
         clock=lambda: fake_clock.now_ms() / 1000.0,
     )
 
@@ -474,7 +484,7 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
         assert len(rig.minecraft_llm.seen) == 2
         assert rig.minecraft.observation()["spoken_echo_count"] == 1
 
-        # 3) 等下一次真实外部事件（玩家公屏）唤醒 MinecraftAgent 时，Step 3 推理消息中自动拼入 [直播间刚说过]
+        # 3) 等下一次真实外部事件（身边同伴玩家公屏）唤醒 MinecraftAgent 时，Step 3 推理消息中自动拼入 [直播间刚说过]
         await rig.bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -483,6 +493,7 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
                 sender="ChangingSelf",
                 sender_id="uuid-cs",
                 sender_online=True,
+                sender_distance=6.0,
                 content="箱子已经整理好啦",
                 timestamp_ms=fake_clock.now_ms(),
             ),
@@ -671,7 +682,7 @@ async def test_e2e_game_player_chat_wakes_minecraft_without_waking_streamer_plan
         await _wait_until(lambda: len(rig.minecraft_llm.seen) == 1 and not rig.minecraft.batch_active)
         assert rig.coordinator.mode == "game"
 
-        # 游戏内玩家公屏消息到达
+        # 游戏内身边同伴玩家公屏消息到达
         await rig.bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -680,6 +691,7 @@ async def test_e2e_game_player_chat_wakes_minecraft_without_waking_streamer_plan
                 sender="同伴乙",
                 sender_id="uuid-p2",
                 sender_online=True,
+                sender_distance=8.0,
                 content="红石门修好了吗",
                 timestamp_ms=fake_clock.now_ms(),
             ),
@@ -689,8 +701,10 @@ async def test_e2e_game_player_chat_wakes_minecraft_without_waking_streamer_plan
         await _wait_until(lambda: replied_in_game[0] and not rig.minecraft.batch_active)
         await _settle_loop(rig.bus)
 
-        # MinecraftAgent 直接读取并公屏回话；StreamerAgent Planner 零触发
-        assert "[公屏] 玩家 同伴乙：红石门修好了吗" in _texts(rig.minecraft_llm.seen[1])
+        # MinecraftAgent 直接经公屏合批读取并公屏回话；StreamerAgent Planner 零触发
+        mc_step2 = _texts(rig.minecraft_llm.seen[1])
+        assert "[公屏合批]" in mc_step2
+        assert "[公屏·身边8格] 同伴乙：红石门修好了吗" in mc_step2
         chat_execs = [
             args for args in rig.server.calls_to("execute") if (args.get("goal") or {}).get("ability") == "chat"
         ]
@@ -981,3 +995,384 @@ async def test_e2e_silence_nudge_wakes_minecraft_commentary_with_zero_planner_wa
         assert rig.server.goals[goal_id]["state"] == "running"
     finally:
         await rig.stop()
+
+
+# ---------------------------------------------------------------------------
+# 链路 8：游戏主控态 [脑中闪过] 自动浮现跨场与本场同义记忆，附尾保前缀且主播 Planner 0 唤醒
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_game_lead_passive_flash_surfaces_cross_session_and_short_term_synonym_without_waking_planner(
+    prompts: Any,
+    fake_clock: Any,
+    tmp_path: Any,
+) -> None:
+    """真实双代理 + SQLite + FakeEmbedding：主控态公屏合批自动附尾 [脑中闪过]（跨场 + 本场同义），主播 Planner 0 唤醒。"""
+    from src.modules.llm.embedding import EmbeddingSetup
+    from src.modules.storage.database import SQLiteDatabase
+    from tests.modules.llm.fakes import FakeEmbeddingServer
+
+    db = SQLiteDatabase(tmp_path / "e2e_flash.db")
+    await db.initialize()
+    try:
+        emb_server = FakeEmbeddingServer()
+        emb_client = emb_server.client(clock=fake_clock.now_ms)
+        emb_setup = EmbeddingSetup(client=emb_client, note="")
+
+        # 1) 播种跨场档案行（带触发词“主齿轮”，归属当前存档 save_e2e_1）
+        old_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms() - 86_400_000)
+        await db.sessions.close_live_session(live_session_id=old_sid, ended_at_ms=fake_clock.now_ms() - 80_000_000)
+        await db.archive.insert_line(
+            live_session_id=old_sid,
+            text="Minecraft：北岸水车房主齿轮不能拆",
+            quote="上次拆了主齿轮整条水车线直接停转",
+            evidence_chat_id=1,
+            game="minecraft",
+            save_id="save_e2e_1",
+            save_name="联机冒险二周目",
+            keywords=["主齿轮"],
+        )
+        live_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms())
+
+        rule_added = [False]
+
+        def _mc_script(messages: List[Dict[str, Any]]) -> Response:
+            if not rule_added[0]:
+                rule_added[0] = True
+                # 本场钉住一条关于“小猫”的临时规矩（同义测试：后续公屏提“橘猫”，字面不重叠、靠嵌入余弦命中）
+                return _resp(
+                    "先把本场小猫约定钉住",
+                    calls=[
+                        _call(
+                            "minecraft_rules",
+                            {"action": "add", "rule": "仓库门口的猫窝绝对不能挡路", "durable": False},
+                            "c_rule_cat",
+                        )
+                    ],
+                )
+            return _resp("明白，记在心里了")
+
+        async def _no_real_sleep(_delay_ms: int) -> None:
+            return None
+
+        rig = await _start_dual_agent_rig(
+            prompts=prompts,
+            fake_clock=fake_clock,
+            mc_script=_mc_script,
+            embedding_setup=emb_setup,
+            work_docs_repo=db.game_work_docs,
+            chat_batch_window_ms=2_000,
+            chat_flush_wait=_no_real_sleep,
+            streamer_extra_kwargs={
+                "chat_repo": db.chat,
+                "sessions_repo": db.sessions,
+                "commitments_repo": db.commitments,
+                "archive_repo": db.archive,
+                "memory_index_repo": db.memory_index,
+                "memory_cue_log_repo": db.memory_cue_log,
+                "game_player_repo": db.game_players,
+                "work_docs_repo": db.game_work_docs,
+                "embedding_setup": emb_setup,
+                "session_manager": ActiveSessionStub(live_sid),
+            },
+        )
+        try:
+            await rig.bus.emit(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(live_session_id=live_sid, kind="live", started_at_ms=fake_clock.now_ms()),
+                source="e2e_test",
+            )
+            await rig.bus.wait_until_drained()
+            await _wait_until(lambda: rule_added[0] and not rig.minecraft.batch_active)
+            # 让后台非阻塞短期嵌入任务完成（纯进程内假嵌入，仅需让出事件循环拍）
+            await _settle_loop(rig.bus, turns=12)
+
+            turns_before = len(rig.minecraft_llm.seen)
+            fixed_sys_before = dict(rig.minecraft_llm.seen[-1][0])
+            fixed_brief_before = dict(rig.minecraft_llm.seen[-1][1])
+
+            # 2) 身边同伴发公屏同时提到“主齿轮”（跨场规则触发）与“橘猫”（本场“猫窝”同义向量命中）；
+            # 2 秒合批窗口期间后台预取查询向量完成，窗口到期后 wait_vector_ms=0 即时融合余弦返回
+            await rig.bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender="同伴丙",
+                    sender_id="uuid-p3",
+                    sender_online=True,
+                    sender_distance=5.0,
+                    content="我去看看主齿轮顺便喂下橘猫",
+                    timestamp_ms=fake_clock.now_ms(),
+                ),
+                source="e2e_test",
+            )
+            await _settle_loop(rig.bus, turns=12)
+            fake_clock.tick(2_000)
+            assert await rig.minecraft.flush_pending_chat() is True
+            await _wait_until(lambda: len(rig.minecraft_llm.seen) > turns_before and not rig.minecraft.batch_active)
+            await _settle_loop(rig.bus)
+
+            # 3) 校验尾部 [脑中闪过] 同时浮现跨场线索与本场同义记忆；头部固定层原封不动；主播 Planner 0 唤醒
+            latest_messages = rig.minecraft_llm.seen[-1]
+            assert latest_messages[0] == fixed_sys_before
+            assert latest_messages[1] == fixed_brief_before
+            tail_text = str(latest_messages[-1].get("content") or "")
+            assert "[公屏合批]" in tail_text
+            assert "[脑中闪过]" in tail_text
+            assert "北岸水车房主齿轮不能拆" in tail_text
+            assert "仓库门口的猫窝绝对不能挡路" in tail_text
+            assert len(rig.streamer_llm.planner_calls) == 0
+        finally:
+            await rig.stop()
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# 链路 9：memory_recall 查到当前存档 pinned_rules 与游戏侧本场短期记忆，且私聊跨场不外泄
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_memory_recall_finds_pinned_rules_and_short_term_memory_while_isolating_private_chat(
+    prompts: Any,
+    fake_clock: Any,
+    tmp_path: Any,
+) -> None:
+    """真实双代理装配：memory_recall 检索到持久 pinned_rules 与游戏侧本场公屏/临时规矩，且私聊在 scope=all 不外泄。"""
+    from src.modules.storage.database import SQLiteDatabase
+
+    db = SQLiteDatabase(tmp_path / "e2e_recall.db")
+    await db.initialize()
+    try:
+        live_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms())
+        # 预置当前存档 save_e2e_1 的持久 pinned_rules
+        await db.game_work_docs.save_work_docs(
+            game="minecraft",
+            save_id="save_e2e_1",
+            save_name="联机冒险二周目",
+            notebook="北岸水车房已经通电",
+            todos=[],
+            pinned_rules=["严禁在公共仓库用连锁镐挖地板"],
+            updated_session_id=live_sid,
+        )
+
+        rig = await _start_dual_agent_rig(
+            prompts=prompts,
+            fake_clock=fake_clock,
+            mc_script=lambda _messages: _resp("明白，先看看周边"),
+            work_docs_repo=db.game_work_docs,
+            chat_batch_window_ms=0,
+            streamer_extra_kwargs={
+                "chat_repo": db.chat,
+                "sessions_repo": db.sessions,
+                "commitments_repo": db.commitments,
+                "archive_repo": db.archive,
+                "memory_index_repo": db.memory_index,
+                "work_docs_repo": db.game_work_docs,
+                "session_manager": ActiveSessionStub(live_sid),
+            },
+        )
+        try:
+            await rig.bus.emit(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(live_session_id=live_sid, kind="live", started_at_ms=fake_clock.now_ms()),
+                source="e2e_test",
+            )
+            await rig.bus.wait_until_drained()
+            await _wait_until(lambda: len(rig.minecraft_llm.seen) >= 1 and not rig.minecraft.batch_active)
+
+            # 游戏内分别收到一条公开公屏与一条私聊（均收录进 MinecraftAgent 本场短期记忆）
+            await rig.bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender="同伴丁",
+                    sender_id="uuid-p4",
+                    sender_online=True,
+                    sender_distance=8.0,
+                    content="铁矿熔炉在二楼楼梯口右侧",
+                    timestamp_ms=fake_clock.now_ms(),
+                ),
+                source="e2e_test",
+            )
+            await rig.bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender="同伴丁",
+                    sender_id="uuid-p4",
+                    sender_online=True,
+                    private=True,
+                    content="悄悄告诉你密室暗门坐标在床底下",
+                    timestamp_ms=fake_clock.now_ms(),
+                ),
+                source="e2e_test",
+            )
+            await rig.bus.wait_until_drained()
+            await _wait_until(lambda: len(rig.minecraft_llm.seen) >= 2 and not rig.minecraft.batch_active)
+
+            # 切回主播主控（talk 模式）刷新存档视角，验证主播侧 memory_recall 既能查到 pinned_rules，也能查到本场短期记忆
+            ok, _, _ = await rig.streamer.rundown_control("next", now_ms=fake_clock.now_ms())
+            assert ok is True
+            await rig.bus.wait_until_drained()
+            # 触发一轮主播轻查询确保 _current_saves 已就绪
+            await rig.streamer.debug_test_decision(batch=[{"nickname": "小星", "text": "刚才有什么规矩呀？"}])
+
+            # 1) 查长期钉住规矩 pinned_rules
+            res_rule = await rig.registry.invoke(
+                ToolInvocation(
+                    tool_name="memory_recall",
+                    arguments={"query": "连锁镐 地板", "scope": "all"},
+                    source="planner-react",
+                    invoking_agent="streamer",
+                )
+            )
+            assert res_rule.success is True
+            assert "当前存档长期规矩" in (res_rule.content or "")
+            assert "严禁在公共仓库用连锁镐挖地板" in (res_rule.content or "")
+
+            # 2) 查本场游戏公屏短期记忆（scope=this_stream 与 scope=all 均可见公开公屏）
+            res_chat = await rig.registry.invoke(
+                ToolInvocation(
+                    tool_name="memory_recall",
+                    arguments={"query": "铁矿熔炉 二楼", "scope": "this_stream"},
+                    source="planner-react",
+                    invoking_agent="streamer",
+                )
+            )
+            assert res_chat.success is True
+            assert "铁矿熔炉在二楼楼梯口右侧" in (res_chat.content or "")
+
+            # 3) 私聊在 scope="all" 跨场口径检索时绝不外泄
+            res_private_all = await rig.registry.invoke(
+                ToolInvocation(
+                    tool_name="memory_recall",
+                    arguments={"query": "密室暗门 床底下", "scope": "all"},
+                    source="planner-react",
+                    invoking_agent="streamer",
+                )
+            )
+            assert res_private_all.success is True
+            assert "密室暗门坐标在床底下" not in (res_private_all.content or "")
+        finally:
+            await rig.stop()
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# 链路 10：游戏主控态到达记住地标经真实 MemoryCueProvider 触发跨场地点卡 [脑中闪过]（且本场每地点只推一次）
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_game_lead_landmark_arrival_triggers_real_memory_cue_provider_once(
+    prompts: Any,
+    fake_clock: Any,
+    tmp_path: Any,
+) -> None:
+    """真实双代理 + 真实 MemoryCueProvider（非桩）：主控期 Planner 0 唤醒、_arrivals 从未见过远距读数时，
+    角色首次走近记住地标仍经显式 arrived_places 触发跨场地点卡 [脑中闪过]，同场离开再返回不重复推。
+    """
+    from src.modules.storage.database import SQLiteDatabase
+
+    db = SQLiteDatabase(tmp_path / "e2e_landmark.db")
+    await db.initialize()
+    try:
+        old_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms() - 86_400_000)
+        await db.sessions.close_live_session(live_session_id=old_sid, ended_at_ms=fake_clock.now_ms() - 80_000_000)
+        await db.archive.insert_line(
+            live_session_id=old_sid,
+            text="Minecraft：北岸水车房下面藏着备用齿轮箱",
+            quote="上次把备用齿轮箱埋在北岸水车房地板下面了",
+            evidence_chat_id=1,
+            game="minecraft",
+            save_id="save_e2e_1",
+            save_name="联机冒险二周目",
+            place="北岸水车房",
+            keywords=["备用齿轮箱"],
+        )
+        live_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms())
+
+        step = {"n": 0}
+        rig_ref: Dict[str, _DualAgentRig] = {}
+
+        def _mc_script(messages: List[Dict[str, Any]]) -> Response:
+            step["n"] += 1
+            srv = rig_ref["rig"].server
+            if step["n"] == 1:
+                # 首次从远处 (0,64,0) 移动到北岸水车房跟前 (92,64,0) 并观测自身位置 -> 触发首次到达
+                srv.self_view["position"] = {"x": 92.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+                return _resp("走近北岸水车房看看", calls=[_call("maicraft_observe", {"what": "self"}, "obs_arrive_1")])
+            if step["n"] == 2:
+                # 退回 100 格外再观测一次，让 NearPlaceTracker 记下离开
+                srv.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+                return _resp("先回营地拿材料", calls=[_call("maicraft_observe", {"what": "self"}, "obs_leave_1")])
+            if step["n"] == 3:
+                # 再次走近同一地标并观测自身位置 -> 本场已触发过该地点，不应重复推 [脑中闪过]
+                srv.self_view["position"] = {"x": 92.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+                return _resp("再次回到水车房", calls=[_call("maicraft_observe", {"what": "self"}, "obs_arrive_2")])
+            return _resp("巡检完毕")
+
+        rig = await _start_dual_agent_rig(
+            prompts=prompts,
+            fake_clock=fake_clock,
+            mc_script=_mc_script,
+            work_docs_repo=db.game_work_docs,
+            streamer_extra_kwargs={
+                "chat_repo": db.chat,
+                "sessions_repo": db.sessions,
+                "commitments_repo": db.commitments,
+                "archive_repo": db.archive,
+                "memory_cue_log_repo": db.memory_cue_log,
+                "game_player_repo": db.game_players,
+                "work_docs_repo": db.game_work_docs,
+                "session_manager": ActiveSessionStub(live_sid),
+            },
+        )
+        rig_ref["rig"] = rig
+        rig.server.world_memory_view = {
+            "places": [
+                {
+                    "name": "北岸水车房",
+                    "position": {"dimension": "minecraft:overworld", "x": 100.0, "y": 64.0, "z": 0.0},
+                }
+            ],
+            "regions": [],
+            "records": [],
+        }
+        rig.server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+        try:
+            # 仅预热 MinecraftAgent 本地 remembered_places 缓存（不调用主播 Planner，也不预喂 MemoryCueProvider._arrivals）
+            glance_res = await rig.registry.invoke(
+                ToolInvocation(tool_name="minecraft_glance", arguments={}, source="streamer", invoking_agent="streamer")
+            )
+            assert glance_res.success is True
+
+            await rig.bus.emit(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(live_session_id=live_sid, kind="live", started_at_ms=fake_clock.now_ms()),
+                source="e2e_test",
+            )
+            await rig.bus.wait_until_drained()
+            await _wait_until(lambda: len(rig.minecraft_llm.seen) >= 4 and not rig.minecraft.batch_active)
+            await _settle_loop(rig.bus)
+
+            # 首次到达后的第 2 步尾部出现真实 MemoryCueProvider 产出的跨场地点卡 [脑中闪过]
+            step2_tail = str(rig.minecraft_llm.seen[1][-1].get("content") or "")
+            assert "[脑中闪过]" in step2_tail
+            assert "北岸水车房下面藏着备用齿轮箱" in step2_tail
+            # 头部系统提示词与交接简报全程未被改写
+            assert rig.minecraft_llm.seen[0][0] == rig.minecraft_llm.seen[1][0]
+            assert rig.minecraft_llm.seen[0][1] == rig.minecraft_llm.seen[1][1]
+            # 同场第二次离开再到达同一地标：第 4 步尾部不重复弹出该地点卡
+            step4_tail = str(rig.minecraft_llm.seen[3][-1].get("content") or "")
+            assert "北岸水车房下面藏着备用齿轮箱" not in step4_tail
+            # 全程主播 Planner 零唤醒
+            assert len(rig.streamer_llm.planner_calls) == 0
+        finally:
+            await rig.stop()
+    finally:
+        await db.close()
