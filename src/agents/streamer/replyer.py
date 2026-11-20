@@ -249,6 +249,7 @@ class Replyer:
         reply_to: str = "",
         speech_mode: str = "play",
         target_familiarity: str = "",
+        keep_names: Sequence[str] = (),
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
@@ -273,7 +274,9 @@ class Replyer:
             return None
 
         mode = "talk" if speech_mode == "talk" else "play"
-        has_target = bool(plan.target or reply_to)
+        # 汇总本轮必须硬保的观众/玩家称呼（支持多位进房观众合并称呼如 "A、B" 与显式 keep_names）
+        required_names = _collect_keep_names(reply_to, keep_names)
+        has_target = bool(plan.target or reply_to or required_names)
         budget = self._budget_for(mode, has_target=has_target)
         system_prompt = self._render_system_prompt(mode)
         turn_input = self._render_turn_input(
@@ -319,10 +322,15 @@ class Replyer:
             return None
         request_id = response.request_id or None
 
-        # 超出长度预算：先让模型重说成一句，仍超就截到预算内最后一个完整句子
+        # 超出长度预算：先让模型重说成一句（同时硬保必须保留的称呼），仍超就截到预算内最后一个完整句子
         if budget > 0 and len(speech) > budget:
             speech, request_id = await self._shorten(
-                system_prompt, speech, request_id, budget=budget, keep_hook=has_target
+                system_prompt,
+                speech,
+                request_id,
+                budget=budget,
+                keep_hook=has_target,
+                keep_names=required_names,
             )
 
         # 近逐字复读机械兜底：初稿把更早某句话几乎原样又说了一遍时，打回让表达层换个说法重说一次，
@@ -338,6 +346,7 @@ class Replyer:
                 earlier_lines=earlier_lines,
                 request_id=request_id,
                 budget=budget,
+                keep_names=required_names,
             )
             if not rephrased:
                 return None
@@ -365,34 +374,49 @@ class Replyer:
         *,
         budget: int,
         keep_hook: bool = False,
+        keep_names: Sequence[str] = (),
     ) -> Tuple[str, Optional[str]]:
         """把超出长度预算的台词说短些：重说一次，仍超或重说失败就按完整句子截短。
 
         重说只带人设（system 稳定段，前缀缓存可命中）和原台词，不重发整段上下文——
         要的只是"同一个人把这句话说短"，事实都在原台词里。接观众或玩家的话时（``keep_hook``）
-        明确要求保留开头顺口带出的问题由头、称呼或接话钩子，删后面的枝节：转场锚点被削掉，
-        直播间就听不出她在回应哪件事、接谁的话。
+        明确要求保留开头顺口带出的问题由头、称呼或接话钩子，删后面的枝节；若给了 ``keep_names``
+        （含多位进房观众合并称呼），重说指令显式点名必须保留，并在裁剪回退后校验与补回，
+        杜绝压短后把观众/玩家昵称挤没只剩泛称。
         """
+        names = _collect_keep_names("", keep_names)
         hook_note = "开头顺口带出的问题由头、称呼或接住对方的词要留着，删后面的枝节；" if keep_hook else ""
+        names_note = f"以下称呼必须完整保留在台词里，不得删成泛称：{'、'.join(names)}；" if names else ""
         instruction = (
             f"你刚想说的这段话有 {len(speech)} 字，太长了，像在写稿：\n{speech}\n\n"
-            f"说短一点，像口头说话那样，不超过 {budget} 字，不分段。{hook_note}"
+            f"说短一点，像口头说话那样，不超过 {budget} 字，不分段。{hook_note}{names_note}"
             "不要加原话里没有的事。只输出台词。"
         )
         shortened = ""
+        shortened_request_id: Optional[str] = None
         try:
             response = await self._llm_service.generate(
                 [{"role": "user", "content": instruction}], system=system_prompt, profile=self.profile
             )
             if response.ok:
                 shortened = _plain_text_speech(response.content)
-                request_id = response.request_id or request_id
+                shortened_request_id = response.request_id or None
             else:
                 self.logger.warning(f"台词重说失败，改为直接截短: {response.error or 'unknown'}")
         except Exception as exc:
             self.logger.warning(f"台词重说异常，改为直接截短: {exc}", exc=True)
-        candidate = shortened or speech
-        fitted = fit_to_budget(candidate, budget)
+        # 校验重说与裁剪结果是否丢失必须保留的称呼：重说丢名而原台词裁剪保留更多称呼时优先采用原台词裁剪，
+        # 若仍缺称呼则把缺失称呼补回句首，避免新观众/同伴昵称被压没
+        fitted, used_shortened = _pick_fitted_with_names(
+            original=speech,
+            shortened=shortened,
+            budget=budget,
+            keep_names=names,
+        )
+        if used_shortened and shortened_request_id:
+            request_id = shortened_request_id
+        elif shortened and not used_shortened and names:
+            self.logger.info("台词重说删掉了必须保留的称呼，优先改用保留称呼的原台词裁剪")
         self.logger.info(
             f"台词超出长度预算（{len(speech)} 字 > {budget}）：重说后 {len(shortened) or '失败'}，最终 {len(fitted)} 字"
         )
@@ -408,14 +432,17 @@ class Replyer:
         earlier_lines: Sequence[str],
         request_id: Optional[str],
         budget: int,
+        keep_names: Sequence[str] = (),
     ) -> Tuple[str, Optional[str]]:
         """初稿命中近逐字复读时，带着本轮输入与撞车初稿让表达模型换个说法重说一次。"""
         self.logger.info(f"Replyer 初稿命中近逐字复读（重合度 {repeat.ratio:.2f}），打回重说: {repeat.sentence!r}")
+        names = _collect_keep_names("", keep_names)
         budget_note = f"，不超过 {budget} 字" if budget > 0 else ""
+        names_note = f"以下称呼必须完整保留：{'、'.join(names)}。" if names else ""
         retry_prompt = (
             f"刚才这句「{repeat.sentence}」你前面已经几乎一字不差地说过了（前面说的是「{repeat.earlier}」）。"
             f"顺着上面的本次回复要求，换一个不一样的切入点和措辞重新说{budget_note}，不要加交接稿里没有的事。"
-            "只输出台词。"
+            f"{names_note}只输出台词。"
         )
         retry_messages = [
             {"role": "user", "content": turn_input},
@@ -437,6 +464,10 @@ class Replyer:
             return "", request_id
         if budget > 0 and len(rephrased) > budget:
             rephrased = fit_to_budget(rephrased, budget)
+        if names:
+            missing = _missing_keep_names(rephrased, names)
+            if missing:
+                rephrased = _restore_names_budget_safe(rephrased, missing, budget=budget, keep_names=names)
         still_repeat = find_verbatim_repeat(rephrased, earlier_lines)
         if still_repeat is not None:
             self.logger.info(
@@ -681,6 +712,101 @@ _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 
 #: 口吻示例每行开头的列表记号：运营者写成列表时去掉，渲染时统一加
 _EXAMPLE_MARKS = "-*•· \t"
+#: 合并称呼分隔符（如多位进房观众 "A、B" 或逗号分隔名单）
+_NAME_SPLIT_RE = re.compile(r"[、，,]+")
+
+
+def _collect_keep_names(reply_to: str, keep_names: Sequence[str] = ()) -> List[str]:
+    """从 ``reply_to``（支持多位观众合并称呼如 ``A、B``）与 ``keep_names`` 提取保序去重的必填称呼名单。"""
+    raw_items: List[str] = []
+    if isinstance(reply_to, str) and reply_to.strip():
+        raw_items.extend(_NAME_SPLIT_RE.split(reply_to))
+    for item in keep_names:
+        if isinstance(item, str) and item.strip():
+            raw_items.extend(_NAME_SPLIT_RE.split(item))
+    result: List[str] = []
+    seen: set[str] = set()
+    for part in raw_items:
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result
+
+
+def _missing_keep_names(text: str, keep_names: Sequence[str]) -> List[str]:
+    """返回 ``keep_names`` 中未出现在 ``text``（忽略大小写）里的称呼列表。"""
+    lowered = (text or "").lower()
+    return [name for name in keep_names if name.lower() not in lowered]
+
+
+def _restore_missing_names(text: str, missing: Sequence[str]) -> str:
+    """将重说或裁剪时丢失的称呼补回句首，避免观众或同伴昵称被压没只剩泛称。"""
+    if not missing:
+        return text
+    body = text.lstrip("，, ")
+    prefix = "、".join(missing)
+    return f"{prefix}，{body}" if body else prefix
+
+
+def _restore_names_budget_safe(
+    base: str,
+    missing: Sequence[str],
+    *,
+    budget: int,
+    keep_names: Sequence[str],
+) -> str:
+    """补回缺失称呼并防止外层 ``fit_to_budget`` 二次裁句误丢后句称呼。
+
+    补回句首后若总长仍在预算内，直接返回；若超出预算，先试跑一次 ``fit_to_budget``：
+    裁掉不含称呼的尾句即可保住全部称呼时采用该结果；若裁尾会丢掉后句里的称呼，则收敛为
+    单句首句并把所有缺失称呼一并归入句首，确保单句结构不再被外层预算守卫二次截断丢名。
+    """
+    restored = _restore_missing_names(base, missing)
+    if budget <= 0 or len(restored) <= budget:
+        return restored
+    refitted = fit_to_budget(restored, budget)
+    if not _missing_keep_names(refitted, keep_names):
+        return refitted
+    first_sentence = fit_to_budget(base, 1)
+    return _restore_missing_names(first_sentence, _missing_keep_names(first_sentence, keep_names))
+
+
+def _pick_fitted_with_names(
+    *,
+    original: str,
+    shortened: str,
+    budget: int,
+    keep_names: Sequence[str],
+) -> Tuple[str, bool]:
+    """结合预算裁剪与称呼完整性校验选出最终台词，返回（台词, 是否采用了重说结果）。
+
+    无必填称呼时保持原有回退顺序（优先重说，失败再裁原台词）；有必填称呼时：
+    1. 重说裁剪完整保留全部称呼 → 直接采用重说裁剪；
+    2. 重说删掉了称呼而原台词裁剪保留了更多称呼 → 优先改用原台词裁剪，再补回仍缺失的称呼；
+    3. 其余情况以较短候选为底，把缺失称呼补回句首并防范外层二次截句丢名。
+    """
+    if not keep_names:
+        candidate = shortened or original
+        return fit_to_budget(candidate, budget), bool(shortened)
+
+    original_fitted = fit_to_budget(original, budget)
+    orig_missing = _missing_keep_names(original_fitted, keep_names)
+
+    if not shortened:
+        return _restore_names_budget_safe(original_fitted, orig_missing, budget=budget, keep_names=keep_names), False
+
+    shortened_fitted = fit_to_budget(shortened, budget)
+    short_missing = _missing_keep_names(shortened_fitted, keep_names)
+    if not short_missing:
+        return shortened_fitted, True
+    if len(orig_missing) < len(short_missing):
+        return _restore_names_budget_safe(original_fitted, orig_missing, budget=budget, keep_names=keep_names), False
+    return _restore_names_budget_safe(shortened_fitted, short_missing, budget=budget, keep_names=keep_names), True
 
 
 def _length_rule(budget: int, mode: str, *, has_target: bool = False) -> str:

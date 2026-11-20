@@ -121,6 +121,8 @@ AVATAR_ACT_TOOL_NAME: str = "avatar_act"
 GAME_CHAT_SEND_TOOL_NAME: str = "minecraft_chat_send"
 #: 游戏主控态下向主控游戏转达观众建议的工具全名（调用时随宿主 attachment 透传本窗观众原话）
 FRAMEWORK_SUGGEST_TOOL_NAME: str = "framework_suggest"
+#: 自备话题匣主动抽卡工具全名（卡池可用卡为 0 时动态从工具表隐藏，避免反复空抽）
+TALK_DRAW_CARDS_TOOL_NAME: str = "talk_draw_cards"
 #: canonical 观众弹幕行尾的消息 ID 标签（透传给游戏侧原话时剥离内部 ID 噪声，保留昵称、坐标与物品名）
 _ID_TAG_TAIL_RE = re.compile(r"\s*\[id:[^\]]+\]\s*$")
 #: 游戏主控态下对主播侧隐藏的委派与强干预工具（轻从轮保留 framework_suggest 与只读查询）
@@ -297,6 +299,8 @@ class RoundContext:
     in_game_lead: bool = False
     lead_agent: str = ""
     game_lead_idle_fallback: bool = False
+    # 本窗话题匣是否有可用卡片（为 False 时从工具列表动态隐藏 talk_draw_cards，避免反复空抽）
+    has_talk_cards: bool = True
 
 
 @dataclass(frozen=True)
@@ -356,6 +360,8 @@ class PlannerEnv:
     talk_workbench_provider: Optional[Callable[..., str]] = None
     # 自备话题匣本窗刷新并渲染（入参 has_viewer_batch；异步返回【可抽的话题卡 / 提问箱】或空串）
     talk_cards_provider: Optional[Callable[[bool], Awaitable[str]]] = None
+    # 自备话题匣余量探测（异步返回是否还有可用卡；None 时按预摆文本或绑定宿主公开的 topic_deck 判定）
+    talk_cards_available_provider: Optional[Callable[[], Awaitable[bool]]] = None
     # 上一轮主动决策窗是否以沉默收场（play 档游戏平静时解开 45 秒冷场死锁）
     proactive_silent_provider: Optional[Callable[[], bool]] = None
     # 单槽跨轮工作便签渲染来源（未过期且非空时渲染在参考段尾部紧邻【游戏那边此刻】）
@@ -577,6 +583,7 @@ class Planner:
         self._speech_mode_provider = env.speech_mode_provider if env else None
         self._talk_workbench_provider = env.talk_workbench_provider if env else None
         self._talk_cards_provider = env.talk_cards_provider if env else None
+        self._talk_cards_available_provider = env.talk_cards_available_provider if env else None
         self._proactive_silent_provider = env.proactive_silent_provider if env else None
         self._working_note_provider = env.working_note_provider if env else None
         self._game_lead_agent_provider = env.game_lead_agent_provider if env else None
@@ -771,6 +778,8 @@ class Planner:
         )
         talk_workbench_text = self._read_talk_workbench(bool(batch), urgent_game=urgent_game)
         talk_cards_text = await self._read_talk_cards(bool(batch))
+        # 先核对话题匣当前是否还有可用卡，空池时在构造工具列表阶段隐藏 talk_draw_cards，避免反复空抽
+        ctx.has_talk_cards = await self._has_available_talk_cards(talk_cards_text)
         # 游戏主控态下进入轻从模式：不再每轮前自动拉取沉重速览（仅保留只读查询工具按需查，避免上下文滚雪球）
         overview = "" if ctx.in_game_lead else await self._read_reference_tools(round_id)
         self._last_overview_text = overview
@@ -1300,6 +1309,34 @@ class Planner:
             self.logger.warning(f"刷新话题匣失败（本窗不预摆话题卡）: {exc}", exc=True)
             return ""
 
+    async def _has_available_talk_cards(self, talk_cards_text: str) -> bool:
+        """核对本窗话题匣是否存在可用卡片，用于决定是否暴露 ``talk_draw_cards`` 工具。
+
+        判定顺序：显式余量回调 → 本窗已预摆非空文本 → 通过 ``talk_cards_provider``
+        绑定宿主公开的 ``topic_deck.available_cards(limit=1)`` 查余量 → 纯文本回调空串按无卡处理；
+        未注入任何话题卡提供者时返回 True，不干扰独立工具桩场景。
+        """
+        if self._talk_cards_available_provider is not None:
+            try:
+                return bool(await self._talk_cards_available_provider())
+            except Exception as exc:  # noqa: BLE001 - 探测异常时退回预摆文本判定，不挡决策
+                self.logger.warning(f"查询话题匣可用状态失败（按预摆文本判定）: {exc}", exc=True)
+                return bool(talk_cards_text)
+        if talk_cards_text:
+            return True
+        if self._talk_cards_provider is None:
+            return True
+        owner = getattr(self._talk_cards_provider, "__self__", None)
+        deck = getattr(owner, "topic_deck", None) if owner is not None else None
+        available_fn = getattr(deck, "available_cards", None) if deck is not None else None
+        if callable(available_fn):
+            try:
+                return bool(await available_fn(limit=1))
+            except Exception as exc:  # noqa: BLE001 - 查卡池异常时保守隐藏，避免空抽循环
+                self.logger.warning(f"检查话题匣余量失败（本窗按无可用卡处理）: {exc}", exc=True)
+                return False
+        return False
+
     def _was_proactive_silent(self) -> bool:
         """上一轮主动决策窗是否以沉默收场（play 档游戏平静时免等满 45 秒即可聊周边素材）。"""
         if self._proactive_silent_provider is None:
@@ -1378,9 +1415,13 @@ class Planner:
                 "也不必对中断过度道歉，按对话历史里刚才聊到的地方顺下去。"
             )
         elif idle_fallback_window:
+            # 游戏主控低频冷场兜底：仅在确有值得分享的近期变化、未接过的房间动态或新话头时暖一句；
+            # 无弹幕、无新进房、无可用话题卡且游戏常规推进时允许自然沉默，不强推展开人设或抽卡
             lines.append(
                 "【情境】当前处于游戏自主推进期间，直播间已连续静默一段时间（低频冷场兜底）："
-                "顺着近况、话题卡或个人喜好和观众轻松暖一句闲话即可，不要干预或指挥游戏行动。"
+                "仅当存在值得分享的近期变化、未接过的房间动态或确有新话头时才和观众轻松暖一句，"
+                "不干预或指挥游戏行动；若本窗无弹幕、无新进房、无可用话题卡且游戏处于常规推进，"
+                "保持沉默完全合适，不必硬聊或反复展开静态背景设定。"
             )
         elif proactive:
             # 主动窗按当前实际装配说明触发来源与可选行动：没接委派游戏时不提派单与游戏工作日志，
@@ -1418,7 +1459,9 @@ class Planner:
         silence = render_silence(self._room_state.last_speech_ms, self._cold_silence_ms, current_ms)
         if not silence and idle_fallback_window:
             silence = (
-                "【冷场】游戏主控推进期间全场已连续静默一段时间：顺着近况、话题卡或个人喜好和观众轻松暖一句闲话即可"
+                "【冷场】游戏主控推进期间全场已连续静默一段时间："
+                "有近期新变化、未接过的房间动态或确有新话头时再暖一句；"
+                "若无弹幕、无新进房、无可用话题卡且游戏平稳推进，本轮保持沉默同样合适。"
             )
         if not silence and proactive and not batch:
             # 解开 rundown_ready（15~30s）与【冷场】（45s）的死锁：
@@ -1762,6 +1805,9 @@ class Planner:
                 for spec in specs
                 if not self._is_tool_hidden_in_game_lead(spec, lead_agent=lead_agent, idle_fallback=idle_fallback)
             ]
+        # 话题匣无可用卡时动态过滤掉 talk_draw_cards，避免模型在空池下反复空抽
+        if ctx is not None and not ctx.has_talk_cards:
+            specs = [spec for spec in specs if str(getattr(spec, "full_name", "") or "") != TALK_DRAW_CARDS_TOOL_NAME]
         # 定义附上下文计量归属（MCP / 内置工具），上下文面板据此分段；
         # 定义形状由工具域的 LLM 转换层统一生成（llm_defs）
         return [function_definition(spec, self._tool_registry.category_of(spec.full_name)) for spec in specs]

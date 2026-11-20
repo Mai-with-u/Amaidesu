@@ -412,10 +412,15 @@ class ReplyToolProvider(BaseToolProvider):
         # 本窗弹幕批随 attachment 传入；主动发言或脱离 Planner 调用时为空列表
         batch: List[Any] = list(materials.round_batch)
 
-        # 情绪值先收敛到枚举：名单外的近义词就近映射，不为一个情绪词打回整轮
-        emotion, emotion_note = coerce_emotion(args.get("emotion", "neutral"))
+        # 情绪值先收敛到枚举：名单外的已知中英文近义词就近映射属正常归一化（记 debug），
+        # 只有不在词表而退回 neutral 的未知词才记 warning，避免常规近义词刷屏告警
+        raw_emotion = args.get("emotion", "neutral")
+        emotion, emotion_note = coerce_emotion(raw_emotion)
         if emotion_note:
-            self._logger.warning(f"reply_tool: {emotion_note}")
+            if known_emotion_label(raw_emotion):
+                self._logger.debug(f"reply_tool: {emotion_note}")
+            else:
+                self._logger.warning(f"reply_tool: {emotion_note}")
 
         # 构造 plan（must should_reply=true）
         try:

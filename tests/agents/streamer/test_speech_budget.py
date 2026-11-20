@@ -13,7 +13,7 @@ import pytest
 
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.replyer import Replyer
-from src.agents.streamer.speech_guard import fit_to_budget
+from src.agents.streamer.speech_guard import fit_to_budget, guard
 
 
 # 登记（只读穿透，合并时进底账）：接线断言读取内建 Replyer 的台词长度预算
@@ -191,3 +191,103 @@ async def test_persona_profile_is_appended_with_usage_note() -> None:
     await replyer.generate(_plan(), [])
     section = _rendered(prompt, "amaidesu_replyer_system")["persona_profile_section"]
     assert section.startswith("\n\n身份与来历：测试设定\n") and "聊别的事时不硬扯" in section
+
+
+async def test_shorten_falls_back_to_original_cut_when_retell_drops_merged_reply_to_names() -> None:
+    """多位进房观众合并称呼超长重说时：指令明确点名保名，若模型仍删成泛称则优先采用保留称呼的原台词裁剪。"""
+    long_welcome = (
+        "欢迎星辰和小橘来到直播间呀！"
+        "今天咱们在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮，"
+        "大家快坐下来一起看看这台机器能不能顺利转起来吧！"
+    )
+    replyer, llm, _ = _modal_replyer(
+        Response(success=True, content=long_welcome, request_id="req_orig"),
+        Response(success=True, content="欢迎新来的朋友来玩呀，今天在折腾机械动力！", request_id="req_dropped"),
+        speech_max_chars=30,
+    )
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="欢迎新进房观众星辰、小橘"),
+        [],
+        reply_to="星辰、小橘",
+    )
+    assert result is not None
+    instruction = llm.generate.await_args_list[1].args[0][0]["content"]
+    assert "星辰、小橘" in instruction
+    assert "星辰" in result["speech"] and "小橘" in result["speech"]
+    assert result["speech"] == "欢迎星辰和小橘来到直播间呀！"
+    assert result["llm_request_id"] == "req_orig"
+
+
+async def test_shorten_restores_missing_keep_names_when_both_cuts_lose_them() -> None:
+    """原台词前句和重说裁剪都丢掉必填称呼时，把缺失称呼补回句首，绝不把名字挤没。"""
+    long_welcome = (
+        "今天咱们在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮呢！"
+        "欢迎阿杰和小夏来到直播间一起玩呀！"
+    )
+    replyer, llm, _ = _modal_replyer(
+        Response(success=True, content=long_welcome, request_id="req_orig"),
+        Response(success=True, content="欢迎新来的小伙伴们一起看折腾水车呀！", request_id="req_short"),
+        speech_max_chars=25,
+    )
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="欢迎新观众"),
+        [],
+        keep_names=("阿杰", "小夏"),
+    )
+    assert result is not None
+    instruction = llm.generate.await_args_list[1].args[0][0]["content"]
+    assert "阿杰、小夏" in instruction
+    assert "阿杰" in result["speech"] and "小夏" in result["speech"]
+    assert result["speech"].startswith("阿杰、小夏，")
+
+
+async def test_shorten_uses_retell_directly_when_all_keep_names_are_preserved() -> None:
+    """重说结果完整保留全部必填称呼且在预算内时，直接采用重说台词与它的请求号。"""
+    long_welcome = (
+        "欢迎星辰和小橘来到直播间呀！"
+        "今天咱们正在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮，"
+        "大家快坐下来一起看看吧！"
+    )
+    replyer, _, _ = _modal_replyer(
+        Response(success=True, content=long_welcome, request_id="req_orig"),
+        Response(success=True, content="欢迎星辰、小橘来玩呀，今天在折腾水车呢！", request_id="req_kept"),
+        speech_max_chars=30,
+    )
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="欢迎新观众星辰、小橘"),
+        [],
+        reply_to="星辰、小橘",
+    )
+    assert result == {
+        "speech": "欢迎星辰、小橘来玩呀，今天在折腾水车呢！",
+        "llm_request_id": "req_kept",
+    }
+
+
+async def test_shorten_restored_names_survive_outer_fit_to_budget_guard() -> None:
+    """补回缺失称呼后若原本两句贴近预算会超限，须收敛为单句归拢称呼，确保外层 fit_to_budget 不二次截断丢名。"""
+    # speech_max_chars=15 + TARGET_EXTRA_CHARS=40 => budget=55
+    long_orig = (
+        "欢迎星辰来到咱们机械动力二周目直播间玩呀！"
+        "今天小橘也正好赶上咱们调试水车和矿道齿轮，待会儿还要看看矿车轨道怎么接上去，大家快一起看看吧！"
+    )
+    # 重说正好贴近 55 字预算（两句），含星辰（首句）和小橘（次句），漏了阿杰；
+    # 若仅把“阿杰，”拼到两句开头会超 55 字，导致外层 fit_to_budget 切掉次句把小橘丢掉
+    retell_near_budget = "欢迎星辰来到咱们机械动力二周目直播间玩呀！今天小橘也正好赶上咱们调试水车和矿道齿轮机器呢！"
+    replyer, _, _ = _modal_replyer(
+        Response(success=True, content=long_orig, request_id="req_orig"),
+        Response(success=True, content=retell_near_budget, request_id="req_retell"),
+        speech_max_chars=15,
+    )
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="欢迎星辰、小橘、阿杰进房"),
+        [],
+        reply_to="星辰、小橘、阿杰",
+    )
+    assert result is not None
+    verdict = guard(result["speech"], speech_max_chars=55, word_filter=None)
+    assert verdict.reason == "passed" and verdict.text is not None
+    assert len(result["speech"]) <= 55
+    for name in ("星辰", "小橘", "阿杰"):
+        assert name in result["speech"]
+        assert name in verdict.text

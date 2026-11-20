@@ -52,3 +52,29 @@ async def test_invalid_intensity_still_rejected() -> None:
     """强度越界仍然打回：它是数值约束，不是措辞近义词。"""
     result = await _reply("happy", intensity=1.5)
     assert result.success is False and "情绪强度无效" in (result.error_message or "")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_emotion", "expected_level"),
+    [
+        ("curious", "surprised", "DEBUG"),  # 已知英文近义词映射：正常归一化记 debug，不刷 warning
+        ("Cheerful", "happy", "DEBUG"),
+        ("害羞", "shy", "DEBUG"),  # 已知中文别名映射：同样记 debug
+        ("一脸懵", "neutral", "WARNING"),  # 不在词表退回 neutral 的未知词才记 warning
+    ],
+    ids=["en-alias-curious", "en-alias-cheerful", "cn-alias", "unknown-fallback"],
+)
+async def test_known_emotion_alias_logs_debug_while_unknown_logs_warning(
+    loguru_capture: Any,
+    raw: str,
+    expected_emotion: str,
+    expected_level: str,
+) -> None:
+    """已知近义词归一化降为 debug，仅未知词退回 neutral 时记 warning。"""
+    result = await _reply(raw)
+    assert result.success is True
+    assert result.structured_content["emotion"]["name"] == expected_emotion
+
+    matched = [r for r in loguru_capture.records if "reply_tool:" in r["message"] and "处理" in r["message"]]
+    assert len(matched) == 1
+    assert matched[0]["level"] == expected_level

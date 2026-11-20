@@ -15,6 +15,7 @@ from src.agents.streamer.planner_render import online_players_from_overview, ren
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.agents.streamer.tools.social_fact import SocialFactToolProvider
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
@@ -701,3 +702,112 @@ def test_delegate_rules_check_online_players_and_click_commands(prompts: Any) ->
     assert "不在列表里的已下线玩家不往公屏空喊" in rules_text
     assert "（可点击执行: /...）" in rules_text
     assert "委派游戏里按该命令执行" in rules_text
+
+
+async def test_empty_talk_deck_hides_talk_draw_cards_and_recovers_when_cards_exist(prompts: Any) -> None:
+    """话题匣可用卡为 0 时动态隐藏 talk_draw_cards，卡池有可用卡时重新暴露。"""
+
+    async def _noop(inv: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=inv.tool_name, success=True, structured_content={"ok": True, "cards": []})
+
+    registry = ToolRegistry()
+    registry.register_provider(
+        make_provider_from_specs(
+            "talk",
+            [(ToolSpec(name="draw_cards", description="抽话题卡", kind="sync", provider="talk"), _noop)],
+        )
+    )
+    registry.register_provider(
+        make_provider_from_specs(
+            "streamer",
+            [(ToolSpec(name="reply", description="发言", kind="sync", provider="streamer"), _noop)],
+        )
+    )
+
+    class _FakeDeck:
+        def __init__(self, cards: list[str]) -> None:
+            self.cards = cards
+
+        async def available_cards(self, *, kind: str | None = None, limit: int | None = None) -> list[str]:
+            del kind
+            return self.cards[:limit] if limit is not None else list(self.cards)
+
+    class _FakeOwner:
+        def __init__(self, deck: _FakeDeck) -> None:
+            self.topic_deck = deck
+
+        async def refresh_cards(self, has_viewer_batch: bool) -> str:
+            # 模拟边玩边说档或有弹幕时不预摆文本，仅依赖 deck 余量判断
+            del has_viewer_batch
+            return ""
+
+    # 宿主公开 topic_deck 余量为 0：隐藏 talk_draw_cards
+    deck = _FakeDeck([])
+    owner = _FakeOwner(deck)
+    llm_empty = FakeLLMManager()
+    planner = Planner(
+        config=PlannerConfig(),
+        llm_service=llm_empty,
+        prompt_service=prompts,
+        room_state=RoomState(),
+        tool_registry=registry,
+        env=PlannerEnv(talk_cards_provider=owner.refresh_cards),
+    )
+    await planner.plan([], proactive=True)
+    tools_empty = {t["name"] for t in (llm_empty.calls[0]["tools"] or [])}
+    assert "talk_draw_cards" not in tools_empty
+    assert "streamer_reply" in tools_empty
+
+    # 卡池补进卡片后：即使当前窗未预摆文本，仍恢复暴露 talk_draw_cards
+    deck.cards.append("card-1")
+    await planner.plan([], proactive=True)
+    tools_ready = {t["name"] for t in (llm_empty.calls[1]["tools"] or [])}
+    assert "talk_draw_cards" in tools_ready
+
+    # 显式 talk_cards_available_provider 返回 False 时隐藏
+    async def _no_cards() -> bool:
+        return False
+
+    llm_explicit = FakeLLMManager()
+    planner_explicit = Planner(
+        config=PlannerConfig(),
+        llm_service=llm_explicit,
+        prompt_service=prompts,
+        room_state=RoomState(),
+        tool_registry=registry,
+        env=PlannerEnv(talk_cards_available_provider=_no_cards),
+    )
+    await planner_explicit.plan([], proactive=True)
+    tools_explicit = {t["name"] for t in (llm_explicit.calls[0]["tools"] or [])}
+    assert "talk_draw_cards" not in tools_explicit
+
+
+async def test_idle_fallback_window_allows_silence_and_drops_forced_persona_or_card_prompt(prompts: Any) -> None:
+    """轻从冷场兜底轮去除强推人设/抽卡措辞，明确无新变化且游戏平稳时保持沉默完全合适。"""
+    llm = FakeLLMManager()
+    planner = Planner(
+        config=PlannerConfig(),
+        llm_service=llm,
+        prompt_service=prompts,
+        room_state=RoomState(),
+        env=PlannerEnv(game_lead_agent_provider=lambda: "minecraft"),
+    )
+    await planner.plan(
+        [],
+        proactive=True,
+        trigger_cause=TriggerCause(kind=TriggerKind.GAME_LEAD_IDLE_FALLBACK),
+    )
+    ref_text = [m["content"] for m in llm.calls[0]["input"] if m["role"] == "user"][-1]
+    assert "低频冷场兜底" in ref_text
+    assert "【冷场】" in ref_text
+    assert "顺着近况、话题卡或个人喜好" not in ref_text
+    assert "保持沉默完全合适" in ref_text
+    assert "不必硬聊或反复展开静态背景设定" in ref_text
+
+
+def test_planner_prompt_requires_glance_before_claiming_missing_item_in_game_lead(prompts: Any) -> None:
+    """轻从模式下未见最新背包快照且仅见失败记录时，断言缺少物品前须先调用游戏状态查询工具核实。"""
+    prompt = _render_bare(prompts)
+    assert "游戏自主主控（轻从）模式下" in prompt
+    assert "先调用游戏状态查询工具核对当下持有状态再开口" in prompt
+    assert "不凭单条失败记录断定背包为空" in prompt
