@@ -55,10 +55,11 @@ from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
-from src.modules.storage.models.rundown import GAME_OPENING_TALK_RUNDOWN, Rundown
+from src.modules.storage.models.rundown import GAME_OPENING_TALK_RUNDOWN, Rundown, RundownSegment
 from src.modules.storage.models.social_facts import SocialFact
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
@@ -96,6 +97,8 @@ class _FakeAutonomousGameAgent(BaseAgent):
         self.enter_contexts: List[LeadHandoverContext] = []
         self.yield_reasons: List[str] = []
         self.spoken_echoes: List[Tuple[str, str, int]] = []
+        self.rundown_updates: List[Tuple[str, str, str, int]] = []
+        self.silence_nudges: List[int] = []
         self.suggestions: List[Tuple[str, str, Optional[List[str]]]] = []
         self.woken_by_echo: bool = False
 
@@ -123,6 +126,19 @@ class _FakeAutonomousGameAgent(BaseAgent):
 
     def receive_spoken_echo(self, text: str, *, source: str = "", timestamp_ms: int = 0) -> None:
         self.spoken_echoes.append((text, source, timestamp_ms))
+
+    def receive_rundown_update(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        segment_goal: str = "",
+        expected_ms: int = 0,
+    ) -> None:
+        self.rundown_updates.append((segment_id, segment_title, segment_goal, expected_ms))
+
+    def receive_silence_nudge(self, *, silent_ms: int) -> None:
+        self.silence_nudges.append(silent_ms)
 
     async def receive_suggestion(
         self,
@@ -1581,6 +1597,732 @@ async def test_lead_ready_listener_respects_all_streamer_gates(prompts: Any) -> 
         assert lead_coord.mode == "game"
         assert lead_coord.active_lead_agent == "adventure"
         assert lead_coord.snapshot().reason == "mcp_reconnected"
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+# ---------------------------------------------------------------------------
+# 游戏主控态独立轻量进房秒迎通道（合批、零 Planner、精准核销、取消保护）
+# ---------------------------------------------------------------------------
+
+
+async def test_game_lead_enter_welcome_batches_unwelcomed_viewers_via_replyer_without_planner(prompts: Any) -> None:
+    """game_lead 下多位未欢迎观众进房经短合并窗直通 Replyer 合为一句欢迎，不受解说刷新计时饿死且精准核销。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_events: List[StreamerSpeechPayload] = []
+    speech_emitted = asyncio.Event()
+
+    async def _capture_speech(_name: str, payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_events.append(payload)
+        speech_emitted.set()
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _capture_speech, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    # 假 Replyer 记录入参：只点名“小明”和“小红”，故意漏掉“小蓝”以验证不会误标未点名者为已欢迎
+    replyer_calls: List[Dict[str, Any]] = []
+
+    class _RecordingReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode
+            return 70 if has_target else 30
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            replyer_calls.append(dict(kwargs))
+            return {"speech": "欢迎小明和小红来直播间坐坐呀！", "llm_request_id": "req_welcome_1"}
+
+    planner_stub = MagicMock()
+    planner_stub.plan = AsyncMock(side_effect=AssertionError("游戏主控轻量进房欢迎绝不能唤醒重型 Planner"))
+    planner_stub.workbench = MagicMock()
+    planner_stub.workbench.reset = MagicMock()
+    planner_stub.workbench.current_goals = MagicMock(return_value=[])
+    planner_stub.reset_player_notes = MagicMock()
+
+    wait_started = asyncio.Event()
+    release_wait = asyncio.Event()
+    wait_delays: List[int] = []
+
+    async def _controlled_wait(delay_ms: int) -> None:
+        wait_delays.append(delay_ms)
+        wait_started.set()
+        await release_wait.wait()
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "proactive": {"enabled": True}},
+        prompt=prompts,
+        planner=planner_stub,
+        replyer=_RecordingReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        enter_welcome_debounce_ms=7_000,
+        enter_welcome_wait=_controlled_wait,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=801, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 刚发生过实况解说刷新 last_speech_ms，也不得饿死独立进房欢迎通道
+        agent._room_state.record_speech(clock())
+
+        # 短合并窗内连续进入三位新观众
+        for uid, uname in (("u1", "小明"), ("u2", "小红"), ("u3", "小蓝")):
+            await bus.emit(
+                CoreEvents.ROOM_MESSAGE_ENTER,
+                RoomMessagePayload(
+                    message_type="enter",
+                    message_id=f"enter_{uid}",
+                    content="",
+                    user=RoomMessageUser(id=uid, name=uname),
+                    timestamp_ms=clock(),
+                ),
+                source="test",
+            )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(wait_started.wait(), timeout=2.0)
+        assert wait_delays == [7_000]
+
+        # 放行短合并窗，三位观众合为一次轻量 Replyer 调用
+        release_wait.set()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        assert planner_stub.plan.await_count == 0
+        assert len(replyer_calls) == 1
+        assert replyer_calls[0]["reply_to"] == "小明、小红、小蓝"
+        assert "小明、小红、小蓝" in replyer_calls[0]["state_facts"]
+        assert len(speech_events) == 1
+        assert speech_events[0].text == "欢迎小明和小红来直播间坐坐呀！"
+
+        # 精准核销：点出名字的小明、小红记入已欢迎表，未点出名字的小蓝不得误标已欢迎
+        assert agent._room_state.is_welcomed(user_id="u1", user_name="小明") is True
+        assert agent._room_state.is_welcomed(user_id="u2", user_name="小红") is True
+        assert agent._room_state.is_welcomed(user_id="u3", user_name="小蓝") is False
+        # spoken echo 标记来源为 enter_welcome
+        assert game.spoken_echoes[-1][1] == "enter_welcome"
+
+        # 取消保护：新进房排入等待窗后立刻下播，未跑完的欢迎任务必须被取消不再出声
+        wait_started.clear()
+        release_wait.clear()
+        speech_emitted.clear()
+        await bus.emit(
+            CoreEvents.ROOM_MESSAGE_ENTER,
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="enter_u4",
+                content="",
+                user=RoomMessageUser(id="u4", name="小紫"),
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(wait_started.wait(), timeout=2.0)
+
+        await bus.emit(
+            CoreEvents.LIVE_ENDED,
+            LiveEndedPayload(live_session_id=801, kind="live", ended_at_ms=clock(), duration_ms=60_000),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert len(replyer_calls) == 1
+    finally:
+        release_wait.set()
+        await agent.stop()
+        await game.stop()
+
+
+# ---------------------------------------------------------------------------
+# 开播主控双竞态 + 流程单切段同步 + 消除 game_lead 冗余 proactive:rundown
+# ---------------------------------------------------------------------------
+
+
+async def test_periodic_lead_sync_waits_for_live_start_and_preserves_game_lead_entered_ms(prompts: Any) -> None:
+    """开播回调等待常驻简报刷新期间，周期巡检绝不抢跑交权；且若已处合法主控则不清空进入锚点。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    brief_entered = asyncio.Event()
+    release_brief = asyncio.Event()
+
+    class _GatedArchiveRepo:
+        async def get_last_archived_session_id(self, **_kwargs: Any) -> Optional[int]:
+            return None
+
+        async def list_latest_snapshot(self, **_kwargs: Any) -> List[Any]:
+            return []
+
+    class _EmptyCommitmentsRepo:
+        async def list_commitments(self, **_kwargs: Any) -> List[Any]:
+            brief_entered.set()
+            await release_brief.wait()
+            return []
+
+    play_first_rundown = Rundown(
+        rundown_id="play_first",
+        title="直接开玩流程单",
+        segments=[
+            RundownSegment(
+                id="play_1",
+                title="第一段游玩",
+                task_description="直接进世界建营地",
+                expected_ms=1_800_000,
+                mode="play",
+            )
+        ],
+    )
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": play_first_rundown.rundown_id, "lead_mode": "dynamic"},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(play_first_rundown),
+        archive_repo=_GatedArchiveRepo(),
+        commitments_repo=_EmptyCommitmentsRepo(),
+        round_executor=FakeRoundExecutor(),
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        live_task = asyncio.create_task(
+            agent._on_live_started(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(live_session_id=802, kind="live", started_at_ms=clock()),
+                "test",
+            )
+        )
+        await asyncio.wait_for(brief_entered.wait(), timeout=2.0)
+
+        # 开播初始化仍卡在 _refresh_memory_brief 期间：周期巡检必须早退，绝不抢跑交权
+        await agent._maybe_periodic_lead_sync()
+        assert lead_coord.mode == "streamer"
+        assert game.enter_contexts == []
+
+        # 放行简报刷新后，由 _on_live_started 末尾统一完成首次交权并记录进入锚点
+        release_brief.set()
+        await live_task
+        await bus.wait_until_drained()
+        assert lead_coord.is_game_lead is True
+        assert agent._game_lead_entered_ms == clock()
+
+        # 若已在合法游戏主控下再次经历开播续播回调，不得把有效进入锚点抹为 None
+        anchor_before = agent._game_lead_entered_ms
+        await agent._on_live_started(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=802, kind="live", started_at_ms=clock(), resumed=True),
+            "test",
+        )
+        assert agent._game_lead_entered_ms == anchor_before
+    finally:
+        release_brief.set()
+        await agent.stop()
+        await game.stop()
+
+
+async def test_rundown_change_in_game_lead_publishes_update_and_skips_redundant_proactive_wake(prompts: Any) -> None:
+    """game_lead 下切到非 talk 环节或续时，向主控游戏同步最新环节且不再置位 rundown_pending 唤醒 Planner；切 talk 照常收权唤醒。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    multi_play_rundown = Rundown(
+        rundown_id="multi_play",
+        title="多游玩段流程单",
+        segments=[
+            RundownSegment(
+                id="play_1", title="建营地", task_description="搭好木屋与仓库", expected_ms=1_800_000, mode="play"
+            ),
+            RundownSegment(
+                id="play_2", title="下矿探险", task_description="采铁矿并找钻石", expected_ms=2_400_000, mode="play"
+            ),
+            RundownSegment(
+                id="closing_talk",
+                title="收尾闲聊",
+                task_description="总结今天进展并道别",
+                expected_ms=600_000,
+                mode="talk",
+            ),
+        ],
+    )
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {"rundown_id": multi_play_rundown.rundown_id, "lead_mode": "dynamic", "proactive": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(multi_play_rundown),
+        round_executor=round_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=803, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert lead_coord.is_game_lead is True
+        assert agent._proactive_signals.rundown_pending is False
+
+        # 在 game_lead 下从 play_1 切到 play_2：同步新环节给主控游戏侧，且绝不置位 rundown_pending 触发冗余唤醒
+        ok, _, _ = await agent.rundown_control("next", now_ms=clock())
+        assert ok is True
+        assert lead_coord.is_game_lead is True
+        assert agent._proactive_signals.rundown_pending is False
+        assert game.rundown_updates[-1] == ("play_2", "下矿探险", "采铁矿并找钻石", 2_400_000)
+
+        # 在 game_lead 下续时（renew）：同样同步环节且不触发冗余 rundown_pending
+        ok_renew, _, _ = await agent.rundown_control("renew", payload={"extra_ms": 600_000}, now_ms=clock())
+        assert ok_renew is True
+        assert agent._proactive_signals.rundown_pending is False
+        assert game.rundown_updates[-1][0] == "play_2"
+
+        # 切入 closing_talk（talk 模式）：收回主控并照常置位 rundown_pending 触发杂谈开场白
+        ok_talk, _, _ = await agent.rundown_control("next", now_ms=clock())
+        assert ok_talk is True
+        assert lead_coord.mode == "streamer"
+        # 切回主播态后，要么信号仍在待消费队列，要么后台 flush 已立即消费并触发 RUNDOWN 决策轮
+        await bus.wait_until_drained()
+        assert agent._proactive_signals.rundown_pending or any(
+            call["trigger_cause"].kind is TriggerKind.RUNDOWN for call in round_exec.calls
+        )
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+# ---------------------------------------------------------------------------
+# 实况解说自纠（correction=True）穿透 8s 防抖立即播报
+# ---------------------------------------------------------------------------
+
+
+async def test_game_commentary_correction_bypasses_min_interval_debounce(prompts: Any) -> None:
+    """刚播报过解说不足 8s 时，带 correction=True 的普通 urgency 纠偏解说仍直接穿透防抖立即播报。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_events: List[StreamerSpeechPayload] = []
+
+    async def _capture(_name: str, payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_events.append(payload)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    lines = iter(["刚才看到一块亮晶晶的钻石矿！", "哎呀看花眼啦，凑近一看其实是铁矿石！"])
+
+    class _SeqReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode, has_target
+            return 60
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            del kwargs
+            return {"speech": next(lines), "llm_request_id": "req_corr"}
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "game_lead_commentary_min_interval_ms": 8_000,
+        },
+        prompt=prompts,
+        replyer=_SeqReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=804, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        ack1 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="洞口看到疑似钻石矿", urgency="normal"),
+        )
+        await bus.wait_until_drained()
+        assert ack1.spoken is True
+
+        # 仅过 2 秒（< 8s）：普通解说应被防抖压下，但 correction=True 必须立刻穿透播报
+        clock.advance(2_000)
+        ack_normal = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="顺手补一根火把", urgency="normal", correction=False),
+        )
+        assert ack_normal.spoken is False and ack_normal.reason == "throttled_recorded"
+
+        ack_correction = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure",
+                summary="刚才看错了，其实是铁矿不是钻石",
+                mood="embarrassed",
+                urgency="normal",
+                correction=True,
+            ),
+        )
+        await bus.wait_until_drained()
+        assert ack_correction.accepted is True and ack_correction.spoken is True
+        assert len(speech_events) == 2
+        assert "铁矿石" in speech_events[1].text
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+# ---------------------------------------------------------------------------
+# memory_recall 注册时按能力动态注入自主游戏可见名单回调（零游戏名硬编码）
+# ---------------------------------------------------------------------------
+
+
+async def test_memory_recall_registration_passes_lead_capable_agents_when_supported() -> None:
+    """StreamerAgent 注册真实 memory_recall Provider 时动态传入 lead_capable_agents，向自主游戏暴露回想工具（零硬编码游戏名）。"""
+    clock = _FakeClock()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    lead_coord = LeadCoordinator(manager, clock=clock)
+    registry = ToolRegistry()
+
+    class _DummyRepo:
+        pass
+
+    agent = make_streamer_agent(
+        {},
+        tool_registry=registry,
+        lead_coordinator=lead_coord,
+        chat_repo=_DummyRepo(),
+        commitments_repo=_DummyRepo(),
+        archive_repo=_DummyRepo(),
+        round_executor=FakeRoundExecutor(),
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        adventure_tools = {spec.full_name for spec in registry.list_tools(for_agent="adventure")}
+        streamer_tools = {spec.full_name for spec in registry.list_tools(for_agent="streamer")}
+        other_tools = {spec.full_name for spec in registry.list_tools(for_agent="other_plain_game")}
+        assert "memory_recall" in adventure_tools
+        assert "memory_recall" in streamer_tools
+        assert "memory_recall" not in other_tools
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_enter_welcome_skips_duplicate_when_concurrent_round_welcomed_during_generation(prompts: Any) -> None:
+    """enter_welcome 在 Replyer 生成飞行期间若并发轮次已欢迎同批观众，播报前须剥除重复欢迎避免双迎。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_events: List[StreamerSpeechPayload] = []
+
+    async def _capture(_name: str, payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_events.append(payload)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    gen_started = asyncio.Event()
+    release_gen = asyncio.Event()
+
+    class _GatedWelcomeReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode
+            return 70 if has_target else 30
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            del kwargs
+            gen_started.set()
+            await release_gen.wait()
+            return {"speech": "欢迎小明进来坐呀！", "llm_request_id": "req_flight"}
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id},
+        prompt=prompts,
+        replyer=_GatedWelcomeReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        enter_welcome_debounce_ms=0,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=805, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        await bus.emit(
+            CoreEvents.ROOM_MESSAGE_ENTER,
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="enter_flight",
+                content="",
+                user=RoomMessageUser(id="u_xm", name="小明"),
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(gen_started.wait(), timeout=2.0)
+
+        # 生成飞行期间并发路径已经欢迎过小明并核销已欢迎表
+        agent._room_state.note_spoken("欢迎小明来直播间呀！")
+        release_gen.set()
+        if agent._enter_welcome_task is not None:
+            await agent._enter_welcome_task
+        await bus.wait_until_drained()
+
+        # 飞行期间已被覆盖，不再重复播报第二句欢迎
+        assert speech_events == []
+    finally:
+        release_gen.set()
+        await agent.stop()
+        await game.stop()
+
+
+async def test_outer_guard_preserves_real_replyer_names_without_secondary_truncation(prompts: Any) -> None:
+    """真实 Replyer 补名后若总长略超外层预算，外层兜底不得二次切句把第二句里的观众称呼切丢。"""
+    clock = _FakeClock()
+    # 构造真实 Replyer 实例（budget_for("play", has_target=True) == 30 + 40 == 70）
+    agent = make_streamer_agent(
+        {"speech_max_chars": 30},
+        prompt=prompts,
+        clock=clock,
+    )
+    assert isinstance(agent._replyer, Replyer)
+
+    # 模拟真实 Replyer 补名后总长超过 70 字（两句分别含“小明”与“小红”，若外层按 70 字二次截句会切掉第二句导致丢掉“小红”）
+    restored_speech = (
+        "欢迎小明来到直播间一起看咱们慢慢玩呀，今天正在河边把营地外墙、储物仓库、工作台和照明火把一并收拾整齐顺便再看看附近有没有新矿脉！"
+        "也欢迎小红进来坐坐呀！"
+    )
+    assert len(restored_speech) > 70
+
+    guarded = agent._guard_replyer_speech(
+        restored_speech,
+        reply_to="小明、小红",
+        required_names=["小明", "小红"],
+        log_label="轻量进房欢迎",
+    )
+    assert guarded == restored_speech
+    assert "小明" in guarded and "小红" in guarded
+
+
+# ---------------------------------------------------------------------------
+# 游戏主控静默暖场提醒 + 封堵游戏主控期误唤醒信号 + 运营递话转发主控游戏
+# ---------------------------------------------------------------------------
+
+
+async def test_game_lead_silence_nudge_triggers_after_threshold_respects_cooldown_and_resets_on_speech(
+    prompts: Any,
+) -> None:
+    """game_lead 连续无声满 game_lead_silence_nudge_ms 且过冷却时通知主控游戏，主播 Planner 零唤醒，新发言清冷却。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "proactive": {"enabled": True},
+            "game_lead_idle_fallback_ms": 0,
+            "game_lead_silence_nudge_ms": 75_000,
+        },
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        round_executor=round_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=806, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+        round_exec.calls.clear()
+
+        # 未满 75 秒不发送静默提醒
+        clock.advance(74_999)
+        await agent._maybe_flush()
+        assert game.silence_nudges == []
+        assert round_exec.calls == []
+
+        # 满 75 秒触发首次静默提醒，且不唤醒主播 Planner
+        clock.advance(1)
+        await agent._maybe_flush()
+        assert game.silence_nudges == [75_000]
+        assert round_exec.calls == []
+
+        # 冷却期内（再过 30 秒）不重复发送提醒
+        clock.advance(30_000)
+        await agent._maybe_flush()
+        assert game.silence_nudges == [75_000]
+
+        # 满第二个冷却周期（距上次提醒满 75 秒）再次发送提醒
+        clock.advance(45_000)
+        await agent._maybe_flush()
+        assert game.silence_nudges == [75_000, 150_000]
+
+        # 任一出口新发言（如游戏解说/快嘴/欢迎）刷新 last_speech_ms 并清零静默提醒冷却
+        await agent._speech.dispatch(
+            {"speech": "这边刚把仓库屋顶补好啦！", "emotion": {"name": "happy", "intensity": 0.5}}
+        )
+        agent._room_state.record_speech(clock())
+        await bus.wait_until_drained()
+        clock.advance(74_999)
+        await agent._maybe_flush()
+        assert len(game.silence_nudges) == 2
+
+        clock.advance(1)
+        await agent._maybe_flush()
+        assert game.silence_nudges == [75_000, 150_000, 75_000]
+        assert round_exec.calls == []
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_game_lead_blocks_set_game_leaks_and_forwards_operator_prompt_as_suggestion(prompts: Any) -> None:
+    """game_lead 下封堵 _on_mouth_superseded / on_task_notification 置位 game_pending，且运营递话异步转发主控游戏。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "proactive": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        round_executor=round_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=807, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 嘴覆盖撤回路径：game_lead 下即使账本有新事件也不置位 game_pending
+        agent._game_ledger.record_event("adventure", "milestone", "刚到达东岸码头", clock())
+        agent._on_mouth_superseded()
+        assert agent._proactive_signals.game_pending is False
+
+        # 任务停滞告警路径：game_lead 下记账但不置位 game_pending 唤醒 Planner
+        alert_payload = TaskChangedPayload(
+            task_id="deleg_test_1",
+            source="agent",
+            provider="framework",
+            tool="framework_delegate",
+            initiator="streamer",
+            executor="adventure",
+            status="running",
+            alert=True,
+            summary="委派长时间无活动",
+            snapshot={"own_words": "去采木头"},
+            timestamp_ms=clock(),
+        )
+        agent.on_task_notification(alert_payload)
+        assert agent._proactive_signals.game_pending is False
+
+        # 运营/控制台递话在 game_lead 下额外异步转发非强杀建议给主控游戏侧
+        assert agent.receive_prompt(content="先优先把仓库灯插满再探索", source="operator") is True
+        assert agent.receive_prompt(content="别跑太远，十分钟后准备收尾", source="dashboard") is True
+        if agent._memory_tasks:
+            await asyncio.gather(*list(agent._memory_tasks), return_exceptions=True)
+        assert ("先优先把仓库灯插满再探索", "operator", None) in game.suggestions
+        assert ("别跑太远，十分钟后准备收尾", "operator", None) in game.suggestions
     finally:
         await agent.stop()
         await game.stop()
