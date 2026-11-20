@@ -452,3 +452,47 @@ async def test_each_forwarded_line_gets_its_own_message_id() -> None:
     await collector._drain()
     ids = [payload.message_id for _, payload in bus.events]
     assert len(ids) == 2 and all(ids) and ids[0] != ids[1]
+
+
+async def test_sender_distance_forwarded_for_players_and_none_for_system_or_invalid() -> None:
+    """玩家消息有效非负 sender_distance 原样透传；系统消息、缺失或非法数值恒为 None。"""
+    collector, client, bus = await _primed()
+    lines = [
+        {
+            "cursor": 4,
+            "kind": "player",
+            "sender": "Steve",
+            "sender_id": _STEVE_ID,
+            "text": "在身边",
+            "sender_distance": 12.5,
+        },
+        {"cursor": 5, "kind": "player", "sender": "Steve", "sender_id": _STEVE_ID, "text": "旧版无距离"},
+        {
+            "cursor": 6,
+            "kind": "player",
+            "sender": "Steve",
+            "sender_id": _STEVE_ID,
+            "text": "负数距离",
+            "sender_distance": -3.0,
+        },
+        {
+            "cursor": 7,
+            "kind": "player",
+            "sender": "Steve",
+            "sender_id": _STEVE_ID,
+            "text": "布尔非法",
+            "sender_distance": True,
+        },
+        {"cursor": 8, "kind": "system", "text": "服务器即将重启", "sender_distance": 4.0},
+    ]
+    client.pages.append(events_page(lines, cursor=8))
+    await collector._drain()
+
+    got = [(payload.kind, payload.content, payload.sender_distance) for _, payload in bus.events]
+    assert got == [
+        ("player", "在身边", 12.5),
+        ("player", "旧版无距离", None),
+        ("player", "负数距离", None),
+        ("player", "布尔非法", None),
+        ("system", "服务器即将重启", None),
+    ]

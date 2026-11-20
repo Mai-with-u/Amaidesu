@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import pytest
 
@@ -1060,3 +1060,112 @@ async def test_commentary_spec_aligns_mood_vocab_and_passes_correction_flag(fake
 
     await mgr.stop_all()
     await bus.cleanup()
+
+
+async def test_short_term_memory_and_passive_cue_bridges_isolate_errors(fake_clock: Any) -> None:
+    """LeadCoordinator 短期记忆聚合与跨场被动线索桥接：零硬编码游戏名、支持多 Agent 聚合与异常隔离。"""
+    plain = _PlainAgent("plain_stm")
+    assert await plain.query_short_term_memory("水车") == ()
+
+    class _MemoryGameAgent(_AutonomousGameAgent):
+        def __init__(self, name: str, entries: List[Dict[str, Any]], *, boom: bool = False) -> None:
+            super().__init__(name)
+            self._entries = entries
+            self._boom = boom
+            self.queries: List[tuple[str, str, int]] = []
+
+        async def query_short_term_memory(
+            self, query: str, *, scope: str = "all", limit: int = 6
+        ) -> List[Dict[str, Any]]:
+            self.queries.append((query, scope, limit))
+            if self._boom:
+                raise RuntimeError("short term boom")
+            return list(self._entries[:limit])
+
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    broken_game = _MemoryGameAgent("alpha_game", [], boom=True)
+    active_game = _MemoryGameAgent(
+        "beta_game",
+        [{"text": "同伴说别动熔炉", "timestamp_ms": 12345, "source_label": "游戏公屏", "private": False}],
+    )
+    mgr.register(broken_game)
+    mgr.register(active_game)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, clock=fake_clock.now_ms)
+    # 即使尚未切入游戏主控态，也能按领航候选名册聚合短期记忆并隔离单个 Agent 异常
+    items_before = await coord.query_active_short_term_memory("熔炉", scope="this_stream", limit=4)
+    assert len(items_before) == 1
+    assert items_before[0]["text"] == "同伴说别动熔炉"
+
+    # 切入 beta_game 主控后优先查询主控 Agent
+    assert await coord.request_game_lead(LeadHandoverContext(segment_id="s1"), target="beta_game") == "beta_game"
+    items_lead = await coord.query_active_short_term_memory("熔炉", scope="all", limit=1)
+    assert len(items_lead) == 1
+    assert active_game.queries[-1] == ("熔炉", "all", 1)
+
+    # 被动线索未注册回调时安全返回空列表
+    assert await coord.fetch_passive_cues(game="beta_game", texts=("熔炉",)) == []
+
+    # 注册回调后透传参数、去重并遵守 limit 上限
+    seen_calls: List[Dict[str, Any]] = []
+
+    async def _cue_cb(
+        *,
+        game: str,
+        texts: Any = (),
+        players: Any = (),
+        situation: Any = None,
+        arrived_places: Any = (),
+        limit: int = 2,
+    ) -> List[str]:
+        seen_calls.append(
+            {
+                "game": game,
+                "texts": texts,
+                "players": players,
+                "situation": situation,
+                "arrived_places": arrived_places,
+                "limit": limit,
+            }
+        )
+        return ["线索甲", "线索甲", "线索乙", "线索丙"]
+
+    coord.set_passive_cue_provider(_cue_cb)
+    cues = await coord.fetch_passive_cues(
+        game="beta_game",
+        texts=("提到水车",),
+        players=[("beta_game", "u1")],
+        arrived_places=("北岸水车房",),
+        limit=2,
+    )
+    assert cues == ["线索甲", "线索乙"]
+    assert seen_calls[-1]["game"] == "beta_game"
+    assert seen_calls[-1]["players"] == (("beta_game", "u1"),)
+    assert seen_calls[-1]["arrived_places"] == ("北岸水车房",)
+
+    # 回调抛异常被安全隔离返回空列表
+    async def _boom_cb(**_kwargs: Any) -> List[str]:
+        raise RuntimeError("cue boom")
+
+    coord.set_passive_cue_provider(_boom_cb)
+    assert await coord.fetch_passive_cues(game="beta_game", texts=("提到水车",)) == []
+
+    await mgr.stop_all()
+
+
+async def test_factory_injects_embedding_setup_into_minecraft_agent() -> None:
+    """instantiate_agent('minecraft') 将可选 embedding_setup 透传给 MinecraftAgent，缺失时安全降级。"""
+    from src.modules.agents.factory import instantiate_agent
+    from src.modules.llm.embedding import EmbeddingSetup
+
+    fake_setup = EmbeddingSetup(client=None, note="test-fallback")
+    agent = instantiate_agent(
+        "minecraft",
+        {"mcp": {"enabled": False}},
+        deps=AgentDeps(embedding_setup=fake_setup),
+    )
+    assert agent is not None
+    assert agent.name == "minecraft"
+    assert list(await agent.query_short_term_memory("水车")) == []

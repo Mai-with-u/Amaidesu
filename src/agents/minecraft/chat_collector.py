@@ -19,6 +19,7 @@ MaicraftChatCollector —— 游戏内聊天采集器
 
 from __future__ import annotations
 
+import math
 import secrets
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
@@ -135,6 +136,8 @@ class MaicraftChatCollector(MaicraftEventsCollector):
             sender_id=attributed.sender_id,
             # 游戏收到时核对过的"发言人此刻在线"：存储只为核对过的玩家建档，控制台、命令方块借名发的不认
             sender_online=not system and event.get("sender_online") is True,
+            # 玩家消息透传上游报出的距离格数（用于主控态 24 格分级唤醒），系统消息与旧版 Mod 恒为 None
+            sender_distance=None if system else _extract_sender_distance(event),
             content=attributed.content,
             truncated=event.get("truncated") is True,
             # 私聊只有玩家发得出来：系统消息即使带了标记也不算
@@ -150,6 +153,18 @@ class MaicraftChatCollector(MaicraftEventsCollector):
         )
         await self.emit_event(CoreEvents.GAME_CHAT_RECEIVED, payload, source=self.name)
         return True
+
+
+def _extract_sender_distance(event: Dict[str, Any]) -> Optional[float]:
+    """从上游聊天事件提取有效非负距离格数；缺失、布尔值、负数或非有限数时返回 None。"""
+    raw = event.get("sender_distance")
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+        if math.isfinite(value) and value >= 0.0:
+            return value
+    return None
 
 
 def new_message_id() -> str:

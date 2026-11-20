@@ -15,7 +15,7 @@
   这条消息是哪个模板。订阅方据此认出"死的是哪一只"，不从文字里反推名字。
 """
 
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,6 +51,7 @@ class GameChatPayload(BasePayload):
         sender: 发言人名字（系统消息或名字未知时为空串）
         sender_id: 发言人稳定标识（如玩家 UUID；未知时为空串）
         sender_online: 发言人是不是此刻在线玩家里的那个玩家（游戏核对过；控制台、命令方块借名发的为 False）
+        sender_distance: 发言玩家此刻距角色的格数（系统消息、旧版 Mod 或发言人不在线/不在同维度时为 None）
         content: 对方原话（不可信的外部文字）
         private: 私聊——对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）
         truncated: 上游是否截断了过长的原话
@@ -78,6 +79,11 @@ class GameChatPayload(BasePayload):
     sender_online: bool = Field(
         default=False,
         description="发言人是不是此刻在线玩家里的那个玩家（游戏收到时核对过）；借名发的、系统消息为 False",
+    )
+    sender_distance: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="发言玩家此刻距角色的格数（系统消息、旧版 Mod 或发言人不在线/不在同维度时为 None）",
     )
     content: str = Field(..., description="对方原话（不可信的外部文字）")
     private: bool = Field(default=False, description="私聊：对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）")

@@ -17,7 +17,21 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from pydantic import BaseModel, Field
 
@@ -92,6 +106,21 @@ LeadChangedListener = Callable[[AgentLeadChangedPayload], Union[Awaitable[None],
 AgentReadyListener = Callable[[str, str], Union[Awaitable[None], None]]
 
 
+class PassiveCueProvider(Protocol):
+    """跨场被动记忆线索提供回调协议（由记忆持有方注册，供主控游戏按需只读拉取）。"""
+
+    def __call__(
+        self,
+        *,
+        game: str,
+        texts: Sequence[str] = (),
+        players: Sequence[Tuple[str, str]] = (),
+        situation: Optional[Any] = None,
+        arrived_places: Sequence[str] = (),
+        limit: int = 2,
+    ) -> Union[Awaitable[Sequence[str]], Sequence[str]]: ...
+
+
 class LeadCoordinator:
     """动态主从协调器（组合根单例）。
 
@@ -128,6 +157,7 @@ class LeadCoordinator:
         # 跨 Agent 零耦合回调槽（由主播等参与方在启动期绑定）
         self._commentary_handler: Optional[CommentaryHandler] = None
         self._handover_builder: Optional[HandoverBuilder] = None
+        self._passive_cue_provider: Optional[PassiveCueProvider] = None
         self._lead_changed_listeners: List[LeadChangedListener] = []
         self._ready_listeners: List[AgentReadyListener] = []
 
@@ -219,6 +249,10 @@ class LeadCoordinator:
     def bind_handover_builder(self, builder: Optional[HandoverBuilder]) -> None:
         """绑定交权简报构建器（手动切到游戏主控且未显式传入构建器时调用；传 None 解绑）。"""
         self._handover_builder = builder
+
+    def set_passive_cue_provider(self, callback: Optional[PassiveCueProvider]) -> None:
+        """绑定跨场被动记忆线索提供回调（供自主游戏 Agent 在主控态按需只读拉取；传 None 解绑）。"""
+        self._passive_cue_provider = callback
 
     def bind_lead_changed_listener(self, listener: LeadChangedListener) -> None:
         """注册主控切换监听器（重复注册自动去重）。"""
@@ -719,6 +753,96 @@ class LeadCoordinator:
             "reason": "" if accepted else "refused",
         }
 
+    async def query_active_short_term_memory(
+        self,
+        query: str,
+        *,
+        scope: str = "all",
+        limit: int = 6,
+    ) -> List[Mapping[str, Any]]:
+        """向当前主控或已注册具备自主领航能力的 Agent 聚合本场短期记忆条目（异常隔离、零游戏名硬编码）。
+
+        查询顺序：若此刻存在主控游戏 Agent 则优先查它，随后补充其余在册且未停机的自主领航候选，
+        单个 Agent 抛异常仅记告警并继续，不阻断上层记忆回想。
+        """
+        clean_query = (query or "").strip()
+        if not clean_query or limit <= 0:
+            return []
+        ordered_names: List[str] = []
+        if self.is_game_lead and self._active_lead_agent:
+            ordered_names.append(self._active_lead_agent)
+        for name in self.lead_capable_agents():
+            if name not in ordered_names:
+                ordered_names.append(name)
+
+        aggregated: List[Mapping[str, Any]] = []
+        for name in ordered_names:
+            agent = self._agent_manager.get_agent_by_name(name)
+            if agent is None or agent.state == AgentState.STOPPED:
+                continue
+            try:
+                entries = await agent.query_short_term_memory(clean_query, scope=scope, limit=limit)
+            except Exception as exc:  # noqa: BLE001 - 单个 Agent 短期记忆查询异常隔离
+                logger.warning(f"查询 Agent '{name}' 本场短期记忆失败（已忽略）: {exc}", exc=True)
+                continue
+            for entry in entries or ():
+                if isinstance(entry, Mapping):
+                    aggregated.append(dict(entry))
+                    if len(aggregated) >= limit:
+                        return aggregated
+        return aggregated
+
+    async def fetch_passive_cues(
+        self,
+        *,
+        game: str,
+        texts: Sequence[str] = (),
+        players: Sequence[Tuple[str, str]] = (),
+        situation: Optional[Any] = None,
+        arrived_places: Sequence[str] = (),
+        limit: int = 2,
+    ) -> List[str]:
+        """供主控游戏 Agent 在收到公屏合批或到达地标时拉取跨场被动记忆线索卡（异常隔离、零游戏名硬编码）。"""
+        provider = self._passive_cue_provider
+        normalized_game = (game or "").strip()
+        if provider is None or not normalized_game or limit <= 0:
+            return []
+        clean_places = tuple(p for raw in (arrived_places or ()) if (p := str(raw or "").strip()))
+        kwargs: Dict[str, Any] = {
+            "game": normalized_game,
+            "texts": tuple(texts or ()),
+            "players": tuple(players or ()),
+            "situation": situation,
+            "limit": int(limit),
+        }
+        try:
+            params = inspect.signature(provider).parameters
+            accepts_arrived = "arrived_places" in params or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+            )
+        except (TypeError, ValueError):
+            accepts_arrived = True
+        if accepts_arrived:
+            kwargs["arrived_places"] = clean_places
+        try:
+            raw = provider(**kwargs)
+            if inspect.isawaitable(raw):
+                raw = await raw
+        except Exception as exc:  # noqa: BLE001 - 被动线索属旁路增强，异常隔离不阻断游戏决策
+            logger.warning(f"拉取跨场被动记忆线索失败（game={normalized_game}，已忽略）: {exc}", exc=True)
+            return []
+        result: List[str] = []
+        seen: set[str] = set()
+        for item in raw or ():
+            line = str(item or "").strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            result.append(line)
+            if len(result) >= limit:
+                break
+        return result
+
 
 __all__ = [
     "STREAMER_AGENT_NAME",
@@ -732,5 +856,6 @@ __all__ = [
     "HandoverBuilder",
     "LeadChangedListener",
     "AgentReadyListener",
+    "PassiveCueProvider",
     "LeadCoordinator",
 ]

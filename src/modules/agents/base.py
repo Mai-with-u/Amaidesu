@@ -33,7 +33,7 @@ import abc
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
@@ -382,6 +382,21 @@ class BaseAgent(abc.ABC):
         """
         del source_dialogue
         return self.receive_prompt(content=content, source=source)
+
+    async def query_short_term_memory(
+        self,
+        query: str,
+        *,
+        scope: str = "all",
+        limit: int = 6,
+    ) -> Sequence[Mapping[str, Any]]:
+        """查询本 Agent 持有的本场短期记忆只读条目（默认空实现，供跨 Agent 记忆回想聚合）。
+
+        返回只读字典序列，约定包含 ``text`` / ``timestamp_ms`` / ``source_label`` / ``private``
+        等结构化字段；未实现或无记忆时返回空元组，框架层不耦合任何具体游戏实现。
+        """
+        del query, scope, limit
+        return ()
 
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。
