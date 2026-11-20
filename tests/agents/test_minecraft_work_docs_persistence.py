@@ -156,3 +156,59 @@ async def test_notebook_write_enforces_max_length_without_overwriting_existing_n
         assert agent.memo_snapshot()["notebook"] == "原笔记：东侧矿洞入口 (-120, 64, 30)"
     finally:
         await agent.stop()
+
+
+async def test_pinned_rules_persist_per_save_across_restart_while_session_rules_do_not(db_path: Path) -> None:
+    """长期钉住规矩（durable=True）按存档跨重启保留，本场临时规矩（durable=False）不落库、重启自动清空。"""
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    try:
+        server1 = FakeMaicraft()
+        server1.enter_world("save-alpha", "联机主服")
+        rounds1 = iter(
+            [
+                _resp(
+                    calls=[
+                        _call(
+                            "minecraft_rules",
+                            {"action": "add", "rule": "公共仓库箱子不可拆改", "durable": True},
+                            call_id="r-1",
+                        ),
+                        _call(
+                            "minecraft_rules",
+                            {"action": "add", "rule": "同伴本场拒绝交换钻石稿", "durable": False},
+                            call_id="r-2",
+                        ),
+                        _call(
+                            "minecraft_report",
+                            {"kind": "delivery", "content": "已记下规矩"},
+                            call_id="r-rep",
+                        ),
+                    ]
+                )
+            ]
+        )
+        agent1, _llm1, bus1 = await make_minecraft_agent(
+            server1, lambda _m: next(rounds1), work_docs_repo=db.game_work_docs
+        )
+        agent1.receive_delegation(instruction="记下本服规矩", task_id="d-rules-1")
+        await _wait_until(lambda: len(_reports(bus1)) == 1 and not agent1.batch_active)
+        snap1 = agent1.get_state_snapshot()
+        assert snap1["pinned_rules"] == ["公共仓库箱子不可拆改"]
+        assert snap1["session_rules"] == ["同伴本场拒绝交换钻石稿"]
+        await agent1.stop()
+
+        # 进程重启进入同一存档：仅长期规矩恢复，临时规矩清空；换到另一存档互不串味
+        server2 = FakeMaicraft()
+        server2.enter_world("save-alpha", "联机主服")
+        agent2, _llm2, _bus2 = await make_minecraft_agent(server2, lambda _m: _resp(), work_docs_repo=db.game_work_docs)
+        try:
+            await _wait_until(lambda: agent2.get_state_snapshot()["pinned_rules"] == ["公共仓库箱子不可拆改"])
+            assert agent2.get_state_snapshot()["session_rules"] == []
+
+            server2.enter_world("save-beta", "单人新服")
+            await _wait_until(lambda: agent2.get_state_snapshot()["pinned_rules"] == [])
+        finally:
+            await agent2.stop()
+    finally:
+        await db.close()

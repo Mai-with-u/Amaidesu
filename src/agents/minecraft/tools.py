@@ -47,7 +47,7 @@ from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
 
 from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
-from .state import MAX_NOTEBOOK_CHARS, MinecraftAgentState
+from .state import MAX_NOTEBOOK_CHARS, MAX_PINNED_RULES, MAX_RULE_CHARS, MinecraftAgentState
 from .work_log_snapshot import unavailable_snapshot
 
 logger = get_logger("MinecraftTools")
@@ -134,6 +134,7 @@ ReportCallback = Callable[[str, str, str], Awaitable[Optional[str]]]
 _LOCAL_VISIBLE_TO: Dict[str, List[str]] = {
     "todo": ["minecraft"],
     "notebook": ["minecraft"],
+    "rules": ["minecraft"],
     "report": ["minecraft"],
     "get_work_log": ["streamer"],
     "glance": ["streamer"],
@@ -246,6 +247,56 @@ def build_notebook_spec() -> ToolSpec:
     )
 
 
+def build_rules_spec() -> ToolSpec:
+    """``minecraft_rules`` 工具规格——独立于工作笔记的抗折叠钉住规矩槽（按条增量管理）。"""
+    return ToolSpec(
+        name="rules",
+        description=(
+            f"独立于工作笔记的抗折叠钉住规矩槽（按条增量增删，合计上限 {MAX_PINNED_RULES} 条，单条上限 {MAX_RULE_CHARS} 字）。"
+            "记在这里的条目会常驻固定层，不会被 2000 字笔记覆写或多次后台历史折叠覆盖稀释。"
+            "用于登记同伴交代的共用设施流程、领地边界、工具使用禁忌（默认 durable=true，按当前存档跨场次持久化）"
+            "以及同伴本场当面明确拒绝的临时事项（durable=false，仅本场有效，新场次自动清空）。"
+            "action=list 查看当前编号与条目；add 增量添加并自动去重；remove 按短编号（如 P1/S1）或内容删除。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "add", "remove"],
+                    "description": "list=列出当前钉住规矩；add=新增一条；remove=删除一条",
+                },
+                "rule": {
+                    "type": "string",
+                    "description": f"add 时要钉住的规矩内容（≤{MAX_RULE_CHARS} 字）；remove 时也可传要删除的规矩正文",
+                },
+                "id": {
+                    "type": "string",
+                    "description": "remove 时可选传入的短编号（如 P1、S1）",
+                },
+                "durable": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "add 时有效：true 记入当前存档长期持久保留；false 仅本场临时有效，新场次自动清空",
+                },
+            },
+            "required": ["action"],
+        },
+        kind="sync",
+        provider=PROVIDER_NAME,
+        output_schema={
+            "type": "object",
+            "properties": {
+                "rules": {"type": "array"},
+                "pinned_rules": {"type": "array"},
+                "session_rules": {"type": "array"},
+                "count": {"type": "integer"},
+                "limit": {"type": "integer"},
+            },
+        },
+    )
+
+
 def build_report_spec() -> ToolSpec:
     """``minecraft_report`` 工具规格——上报通道（玩家→主播，交付/升级）"""
     return ToolSpec(
@@ -301,6 +352,7 @@ def build_get_work_log_spec() -> ToolSpec:
         description=(
             "只读查询 Minecraft 玩家的工作文档："
             "todo（待办与进度）/ notebook（工作笔记）/ "
+            "pinned_rules（当前存档长期钉住规矩）/ session_rules（本场临时钉住规矩与硬拒绝）/ "
             "recent_reports（近期上报：交付与升级记录）。"
             "面向直播叙事——主播不需要自己记录游戏细节，按需查询即可。"
             "笔记正文后面附着一段现查的当前状态快照（位置/装备/背包/血量）："
@@ -315,6 +367,8 @@ def build_get_work_log_spec() -> ToolSpec:
             "properties": {
                 "todo": {"type": "array"},
                 "notebook": {"type": "string"},
+                "pinned_rules": {"type": "array"},
+                "session_rules": {"type": "array"},
                 "recent_reports": {"type": "array"},
             },
         },
@@ -564,6 +618,8 @@ class MinecraftToolProvider(GameToolProvider):
     drawing_starter: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
     # 待办或工作笔记写入后的持久化回调（按游戏与当前存档落库）
     on_work_docs_changed: Optional[Callable[[], Awaitable[None]]] = None
+    # 钉住规矩增删后的通知回调（参数 durable_changed=True 表示持久规矩变动需落库；同时刷新推理固定层）
+    on_rules_changed: Optional[Callable[[bool], Awaitable[None]]] = None
     # 当前是否处于游戏自主主控态的只读回调（由 Agent 注入；主控态下切换主播说明并拒绝主播代发公屏）
     is_in_lead_mode: Optional[Callable[[], bool]] = None
 
@@ -587,6 +643,7 @@ class MinecraftToolProvider(GameToolProvider):
         specs = [
             build_todo_spec(),
             build_notebook_spec(),
+            build_rules_spec(),
             build_get_work_log_spec(),
             build_report_spec(),
         ]
@@ -615,13 +672,14 @@ class MinecraftToolProvider(GameToolProvider):
 
     def unknown_tool_reason(self, tool_name: str) -> str:
         """未知工具的回执：点名本 provider 的名册，给调用方出路提示。"""
-        return f"未知工具: '{tool_name}'（MinecraftProvider 只提供 todo/notebook/get_work_log/report）"
+        return f"未知工具: '{tool_name}'（MinecraftProvider 只提供 todo/notebook/rules/get_work_log/report）"
 
     def tool_handlers(self) -> Dict[str, Any]:
         """对外全名 → 处理器（随 list_tools 的条件清单走，dict 经 run_dict_tool 包装）。"""
         handlers: Dict[str, Any] = {
             build_todo_spec().full_name: self._dict_handler(build_todo_spec(), self._invoke_todo),
             build_notebook_spec().full_name: self._dict_handler(build_notebook_spec(), self._invoke_notebook),
+            build_rules_spec().full_name: self._dict_handler(build_rules_spec(), self._invoke_rules),
             build_get_work_log_spec().full_name: self._dict_handler(
                 build_get_work_log_spec(), self._invoke_get_work_log
             ),
@@ -740,6 +798,38 @@ class MinecraftToolProvider(GameToolProvider):
             return {"success": True, "content": self.state.notebook}
         return {"success": False, "error": f"未知 action: {action!r}"}
 
+    async def _invoke_rules(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """增量管理独立钉住规矩槽：支持 list / add / remove，变动后同步刷新固定层并按需落库。"""
+        action = str(args.get("action", "")).strip()
+        if action == "list":
+            return {"tool": "rules", **self.state.rules_doc()}
+        if action == "add":
+            rule_text = str(args.get("rule") or args.get("content") or "")
+            raw_durable = args.get("durable", True)
+            durable = (
+                bool(raw_durable) if isinstance(raw_durable, bool) else str(raw_durable).strip().lower() != "false"
+            )
+            ok, detail, durable_changed = self.state.add_rule(rule_text, durable=durable)
+            if not ok:
+                return {"success": False, "error": detail, **self.state.rules_doc()}
+            if self.on_rules_changed is not None:
+                await self.on_rules_changed(durable_changed)
+            elif durable_changed and self.on_work_docs_changed is not None:
+                await self.on_work_docs_changed()
+            return {"success": True, "id": detail, "durable": durable, **self.state.rules_doc()}
+        if action == "remove":
+            rule_id = str(args.get("id") or "")
+            rule_text = str(args.get("rule") or args.get("content") or "")
+            ok, detail, durable_changed = self.state.remove_rule(rule_id=rule_id, rule=rule_text)
+            if not ok:
+                return {"success": False, "error": detail, **self.state.rules_doc()}
+            if self.on_rules_changed is not None:
+                await self.on_rules_changed(durable_changed)
+            elif durable_changed and self.on_work_docs_changed is not None:
+                await self.on_work_docs_changed()
+            return {"success": True, "removed": detail, **self.state.rules_doc()}
+        return {"success": False, "error": f"未知 action: {action!r}"}
+
     async def _invoke_get_work_log(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """工作文档 + 现查的当前状态快照。
 
@@ -785,6 +875,7 @@ __all__ = [
     "MaicraftMcpProvider",
     "build_todo_spec",
     "build_notebook_spec",
+    "build_rules_spec",
     "build_get_work_log_spec",
     "build_glance_spec",
     "build_chat_send_spec",

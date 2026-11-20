@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from collections import deque
@@ -79,6 +80,8 @@ from src.agents.minecraft.lead_mode import (
     LEAD_MODE_PROMPT_SECTION,
     SpokenEchoBuffer,
     format_lead_handover_brief,
+    format_rundown_update_notice,
+    format_silence_nudge_notice,
     format_suggestion_message,
 )
 from src.agents.minecraft.maicraft import (
@@ -125,7 +128,7 @@ from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents,
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.social_rules import SOCIAL_RULES_MSG_KEY, WORLD_SOCIAL_RULES_KEY, WorldSocialRulesCache
 from src.agents.minecraft.sparring import spar_outcome_line
-from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
+from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
 from src.agents.minecraft.stop_receipt import GoalStopOutcome, cancel_receipt, stop_goal_label, stop_receipt
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
@@ -213,6 +216,38 @@ DELIVERY_REMINDER_WHILE_WAITING = (
 )
 # 活跃任务旁听公屏通知的短时间去重窗（毫秒）：仅抑制几秒内的重复回声，超时或换新任务后允许玩家再喊同一指令
 _CHAT_NOTICE_DEDUP_WINDOW_MS = 5_000
+# 非死亡服务器系统提示的去重节流窗口（秒）：首次立即入队，同前缀/同内容在窗口内合并计数，避免插件刷屏撑爆上下文
+_SYSTEM_CHAT_THROTTLE_WINDOW_S = 15.0
+_SYSTEM_CHAT_PREFIX_LEN = 40
+# 纯进退服系统消息键前缀与常见中英文纯进退服文本正则（仅过滤进退服噪声，不拦截权限/领地/插件反馈）
+_SYSTEM_JOIN_LEAVE_KEY_PREFIXES = ("multiplayer.player.joined", "multiplayer.player.left")
+_SYSTEM_JOIN_LEAVE_TEXT_RE = re.compile(
+    r"^(?:[\[\(]?[+-][\]\)]?\s*\S+|\S+(?:\s*\([^)]+\))?\s*(?:joined the game|left the game|加入了游戏|退出了游戏|离开了游戏)\s*[.。!！]?)$",
+    re.IGNORECASE,
+)
+_SYSTEM_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+# 抗折叠钉住规矩固定层消息标记：挂在固定层（带 FACTS_KEY），随 minecraft_rules 变动原地刷新
+PINNED_RULES_MSG_KEY = "_minecraft_pinned_rules"
+
+
+def _is_system_join_leave_noise(content: str, message_key: str) -> bool:
+    """判断一条系统消息是否为纯玩家进退服提示噪声。"""
+    if message_key and message_key.startswith(_SYSTEM_JOIN_LEAVE_KEY_PREFIXES):
+        return True
+    cleaned = " ".join((content or "").split())
+    if not cleaned:
+        return True
+    return bool(_SYSTEM_JOIN_LEAVE_TEXT_RE.match(cleaned))
+
+
+def _system_chat_throttle_key(content: str, message_key: str) -> str:
+    """为服务器系统提示生成节流归并键：把坐标/数字归一化并取稳定前缀，让同类连续刷屏归为一组。"""
+    normalized = _SYSTEM_NUMBER_RE.sub("#", " ".join((content or "").split()))
+    prefix = normalized[:_SYSTEM_CHAT_PREFIX_LEN]
+    if message_key:
+        return f"{message_key}|{prefix}"
+    return prefix
+
 
 # 对话发不出去、按任务事实重开时给模型的说明
 _RESTART_NOTICE = (
@@ -420,6 +455,7 @@ class MinecraftAgent(BaseAgent):
             snapshot_reader=self._state_snapshot,
             context_recall=self._recall_context if config.context.active_fold else None,
             on_work_docs_changed=self._save_work_docs,
+            on_rules_changed=self._on_rules_changed,
             drawing_starter=self._drawing_builder.start if config.drawing_builder.enabled else None,
             is_in_lead_mode=lambda: self._in_lead_mode,
         )
@@ -514,6 +550,8 @@ class MinecraftAgent(BaseAgent):
         self._own_emitted_chats: Deque[str] = deque(maxlen=16)
         # 近期已注入上下文的公屏通知去重表：(来源键, 正文) → 注入时的单调时钟秒值（5 秒短窗 + 新任务清空）
         self._recent_chat_notices: Dict[Tuple[str, str], float] = {}
+        # 非死亡服务器系统提示的 15 秒节流合并表：归并键 → [窗口起始单调秒, 窗口内已合并次数, 最新原文]
+        self._system_chat_throttle: Dict[str, List[Any]] = {}
 
         # Agent 私有 MCP（_on_start 装配；构造注入实例或工厂时按注入装配）
         self._mcp_client: Optional[Any] = mcp_client
@@ -593,10 +631,13 @@ class MinecraftAgent(BaseAgent):
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令；当前收工态，开播后接受委派）")
 
     async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
-        """live.started 回调：开播，恢复接受委派并在具备自主领航条件时通知主从协调器重评交权。"""
+        """live.started 回调：开播，清空上场临时规矩、恢复接受委派并在具备自主领航条件时通知主从协调器重评交权。"""
         del event_name, source
         self._live_active = True
         self._current_session_id = payload.live_session_id
+        # 新场次开播自动清空仅本场有效的临时钉住规矩（长期持久规矩不受影响）
+        if self._mc_state.clear_session_rules():
+            self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
         # 名册按场次决定已死的还提不提：死在上一场的，这一场是最后一次提起
         self._creatures.start_session(payload.live_session_id)
         await self._save_creatures()
@@ -619,6 +660,9 @@ class MinecraftAgent(BaseAgent):
             if self._in_lead_mode:
                 await self.yield_lead(reason="live_ended")
         await self._save_work_docs()
+        # 下播清空仅本场有效的临时钉住规矩与系统提示节流状态，不带入下一场
+        if self._mc_state.clear_session_rules():
+            self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
         self._current_session_id = None
         self._creatures.end_session()
         dropped = len(self._message_queue)
@@ -632,6 +676,7 @@ class MinecraftAgent(BaseAgent):
         self._pending_handover_summary = ""
         self._own_emitted_chats.clear()
         self._recent_chat_notices.clear()
+        self._system_chat_throttle.clear()
         settled = self._delegations.settle_on_live_end()
         self._logger.info(
             f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
@@ -1027,6 +1072,116 @@ class MinecraftAgent(BaseAgent):
         if not self._in_lead_mode:
             return
         self._spoken_echo_buffer.push(text, source=source, timestamp_ms=timestamp_ms)
+
+    def receive_rundown_update(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        segment_goal: str = "",
+        expected_ms: int = 0,
+    ) -> None:
+        """接收流程单切段更新：同步刷新主控持有的环节信息、原地更新固定层交接简报并按需追加紧凑切换通知。
+
+        确保长场次切入后续环节后，固定层简报、任务事实与后台折叠都不再沿用开场旧环节描述。
+        """
+        if not self._in_lead_mode:
+            return
+        seg_id = (segment_id or "").strip()
+        title = (segment_title or "").strip()
+        goal = (segment_goal or "").strip()
+        exp_ms = max(0, int(expected_ms or 0))
+        if not (seg_id or title or goal or exp_ms):
+            return
+        prev = self._lead_handover_context
+        if prev is not None and (prev.segment_id, prev.segment_title, prev.segment_goal, prev.expected_ms) == (
+            seg_id,
+            title,
+            goal,
+            exp_ms,
+        ):
+            return
+        if prev is not None:
+            self._lead_handover_context = prev.model_copy(
+                update={
+                    "segment_id": seg_id,
+                    "segment_title": title,
+                    "segment_goal": goal,
+                    "expected_ms": exp_ms,
+                }
+            )
+        else:
+            self._lead_handover_context = LeadHandoverContext(
+                segment_id=seg_id,
+                segment_title=title,
+                segment_goal=goal,
+                expected_ms=exp_ms,
+            )
+
+        fallback_save = self._world.save_fields()[1]
+        updated_brief = format_lead_handover_brief(self._lead_handover_context, fallback_save_name=fallback_save)
+
+        # 若初始交接简报仍停在待消费队列中，直接原地替换该入队简报，避免重复推送过时开场信息
+        replaced_in_queue = False
+        queue_items = self._wake_queue.items
+        for idx, item in enumerate(queue_items):
+            if isinstance(item, MinecraftInstruction) and str(item.content).startswith("[主控交接简报]"):
+                queue_items[idx] = MinecraftInstruction(item.task_id, updated_brief)
+                replaced_in_queue = True
+                break
+
+        # 刷新固定层与任务指令列表里的主控交接简报，防止后台折叠与集中整理沿用旧环节描述
+        if self._task_instructions and self._task_instructions[0].startswith("[主控交接简报]"):
+            self._task_instructions[0] = updated_brief
+        refreshed_fixed = False
+        for msg in self._messages:
+            if msg.get(INSTRUCTION_KEY) and isinstance(msg.get("content"), str):
+                if msg["content"].startswith("[主控交接简报]"):
+                    msg["content"] = updated_brief
+                    refreshed_fixed = True
+                    break
+        if refreshed_fixed:
+            self._prefix_guard.expect_rewrite("流程单切段刷新交接简报")
+
+        # 初始简报已进入对话历史后，再追加一条紧凑 [流程单切换] 通知提醒模型转向最新环节目标
+        if not replaced_in_queue:
+            notice = format_rundown_update_notice(
+                segment_title=title,
+                segment_goal=goal,
+                expected_ms=exp_ms,
+            )
+            self._wake_queue.push_notice(notice)
+            if self._live_active and not self._task_suspended:
+                self._reset_lead_idle_state()
+                self._wake_event.set()
+        self._logger.info(
+            f"MinecraftAgent 收到流程单切段更新（segment_id={seg_id or '未标'}, title={title or '未命名'}）"
+        )
+
+    def receive_silence_nudge(self, *, silent_ms: int) -> None:
+        """接收直播间连续静默提醒：主控态下以不堆积方式入队 ``[直播间静默提醒]`` 并按需唤醒等待中的循环。
+
+        触发条件：游戏自主主控期直播间长时间无人发声时由主从协调器转达；
+        动作与边界：若队列中已有未读静默提醒则原地替换为最新静默时长（防止堆积刷屏），
+        并唤醒长后台施工挂起中的推理循环，让游戏侧可顺手提交一句 ``framework_commentary``
+        进展要点而不打断在跑 Mod 目标；非主控或收工态直接忽略。
+        """
+        if not (self._in_lead_mode and self._live_active):
+            return
+        notice = format_silence_nudge_notice(silent_ms=max(0, int(silent_ms or 0)))
+        queue_items = self._wake_queue.items
+        replaced = False
+        for idx, item in enumerate(queue_items):
+            if isinstance(item, tuple) and len(item) == 2 and str(item[1]).startswith("[直播间静默提醒]"):
+                queue_items[idx] = ("", notice)
+                replaced = True
+                break
+        if not replaced:
+            self._wake_queue.push_notice(notice)
+        self._reset_lead_idle_state()
+        if not self._task_suspended:
+            self._wake_event.set()
+        self._logger.debug(f"MinecraftAgent 收到直播间静默提醒（silent_ms={max(0, int(silent_ms or 0))}）")
 
     def _schedule_lead_unavailable(self, reason: str) -> None:
         """从同步回调（如 MCP 断连）异步调度主控不可用上报，避免阻塞回调线程。"""
@@ -1494,6 +1649,8 @@ class MinecraftAgent(BaseAgent):
                     self._wake_event.set()
                 return
             step_start_len = len(messages)
+            # 消费队列前先排空已满 15 秒窗口的系统提示合并计数，让模型在本步即可读到聚合后的服务器反馈
+            self._flush_throttled_system_chats()
             if self._message_queue:
                 action_reminded = False
                 if self._in_lead_mode:
@@ -1560,6 +1717,8 @@ class MinecraftAgent(BaseAgent):
             if not self._interaction_only:
                 # 只回应互动的一批不碰委派账：等主播定夺的委派要一直显示在等定夺，不能被一次蹲起改回进行中
                 self._delegations.mark_running()
+            # 推理前确保抗折叠钉住规矩固定层与当前状态同步（无规矩时不占槽位，有规矩时紧跟固定前缀）
+            self._sync_pinned_rules_message(messages, expect_rewrite=False)
             # 主控态正常推理步前拼入未读的 [直播间刚说过] 只读回执（零唤醒、不破坏既有历史前缀）
             self._append_unread_spoken_echoes(messages, step_start_len=step_start_len)
             steps += 1
@@ -1772,6 +1931,7 @@ class MinecraftAgent(BaseAgent):
             {"role": "user", "content": "[原任务事实与已有证据]\n" + json_text(facts), FACTS_KEY: True},
             {"role": "user", "content": _RESTART_NOTICE},
         ]
+        self._sync_pinned_rules_message(messages, expect_rewrite=False)
         self._shown_context = deepcopy(facts)
         # 丢掉的那段对话里看过的截图也一并作废；在写的折叠提议与集中整理对应的历史已经没了，
         # 当场作废：集中整理写完会就地改写历史，晚一步就把旧摘要写进重开后的对话
@@ -1805,6 +1965,7 @@ class MinecraftAgent(BaseAgent):
         self._goal_ledger.clear_finished()
         self._furnace_waits.clear()
         self._recent_chat_notices.clear()
+        self._system_chat_throttle.clear()
         self._wait_progress.reset()
         # 新任务只带系统说明和新指令：若是 replace 替换上一件未完成任务，先附上紧凑 [交接摘要] 保留近期动作记忆；
         # 另附这个世界里拿过别人家的吃的、动过别人放的东西，主人来问时一开工就认得出
@@ -2511,6 +2672,7 @@ class MinecraftAgent(BaseAgent):
             return
         await self._apply_world_change(self._world.absorb(page.world_fields))
         self._flush_due_interactions()
+        self._flush_throttled_system_chats()
         self._wake_for_overdue_furnaces()
         self._check_lead_idle_wakeup()
         # 本页自带新事件时紧接着就会逐条消费目标与身体变化，不在消费前抢跑无进展看门狗
@@ -2614,6 +2776,8 @@ class MinecraftAgent(BaseAgent):
         self._mc_state.switch_world(change.after.id)
         await self._ensure_world_work_docs_loaded(change.after.id, change.after.name)
         await self._refresh_world_social_rules(change.after.id)
+        # 认出或切换存档后立即同步固定层钉住规矩，防止旧存档规矩残留或新存档规矩延迟生效
+        self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
         # 认出了（另一个）存档：手上记住的地点清单可能是别的存档的，整份丢掉，下一次速览按这个存档重读
         self._remembered_places.forget()
         if not change.switched or change.before is None:
@@ -2671,6 +2835,7 @@ class MinecraftAgent(BaseAgent):
                 self._mc_state.apply_persisted_docs(
                     notebook=record.notebook,
                     todos=record.todos,
+                    pinned_rules=record.pinned_rules,
                     from_last_session=from_last_session,
                     keep_active_todos=not self._task_finished,
                 )
@@ -2678,6 +2843,54 @@ class MinecraftAgent(BaseAgent):
                 self._mc_state.loaded_from_repo = True
         if self._mc_state.dirty:
             await self._save_work_docs_for(save_id, save_name)
+
+    def _format_pinned_rules_message(self) -> Optional[Dict[str, Any]]:
+        """构造抗折叠钉住规矩固定层消息（长期规矩 + 本场临时硬拒绝）；双空时返回 None 不占槽位。"""
+        lines: List[str] = [f"- [P{idx}·长期] {text}" for idx, text in enumerate(self._mc_state.pinned_rules, start=1)]
+        lines.extend(f"- [S{idx}·本场] {text}" for idx, text in enumerate(self._mc_state.session_rules, start=1))
+        if not lines:
+            return None
+        return {
+            "role": "user",
+            "content": (
+                "[钉住规矩与硬拒绝]（独立于工作笔记、抗历史折叠固定保留；行动与沟通须优先遵守；"
+                "可用 minecraft_rules 增量增删）\n" + "\n".join(lines)
+            ),
+            FACTS_KEY: True,
+            PINNED_RULES_MSG_KEY: True,
+        }
+
+    def _sync_pinned_rules_message(self, messages: List[Dict[str, Any]], *, expect_rewrite: bool = False) -> None:
+        """在推理消息流的固定层前缀原地同步钉住规矩消息，保证不被后台折叠或笔记覆写冲淡。"""
+        if not messages:
+            return
+        new_msg = self._format_pinned_rules_message()
+        existing_idx = next((idx for idx, msg in enumerate(messages) if msg.get(PINNED_RULES_MSG_KEY)), None)
+        if new_msg is None:
+            if existing_idx is not None:
+                messages.pop(existing_idx)
+                if expect_rewrite:
+                    self._prefix_guard.expect_rewrite("清空钉住规矩固定层")
+            return
+        if existing_idx is not None:
+            if messages[existing_idx].get("content") != new_msg["content"]:
+                messages[existing_idx]["content"] = new_msg["content"]
+                if expect_rewrite:
+                    self._prefix_guard.expect_rewrite("刷新钉住规矩固定层")
+            return
+        # 插在头部固定层（系统说明、指令、既有固定事实与摘要）末尾，既不切碎可折叠区间也不改动固定层前序位置
+        insert_at = 0
+        while insert_at < len(messages) and is_pinned_message(messages[insert_at]):
+            insert_at += 1
+        messages.insert(insert_at, new_msg)
+        if expect_rewrite and insert_at < len(messages) - 1:
+            self._prefix_guard.expect_rewrite("插入钉住规矩固定层")
+
+    async def _on_rules_changed(self, durable_changed: bool) -> None:
+        """minecraft_rules 增删后的统一回调：立即原地刷新固定层，并在长期规矩变化时落库当前存档。"""
+        self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
+        if durable_changed:
+            await self._save_work_docs()
 
     async def _refresh_world_social_rules(self, save_id: str) -> None:
         """按已认出的存档编号从仓储异步刷新公共规矩缓存；未认出存档或未装配仓储时保持空缓存。"""
@@ -2703,6 +2916,7 @@ class MinecraftAgent(BaseAgent):
                 save_name=save_name,
                 notebook=self._mc_state.notebook,
                 todos=self._mc_state.todo_doc()["todos"],
+                pinned_rules=list(self._mc_state.pinned_rules),
                 updated_session_id=self._current_session_id,
             )
             self._mc_state.dirty = False
@@ -2770,6 +2984,11 @@ class MinecraftAgent(BaseAgent):
         social_rules = self._social_rules.view(self._world.save_fields()[0])
         if social_rules:
             context[WORLD_SOCIAL_RULES_KEY] = social_rules
+        # 独立抗折叠钉住规矩（长期 + 本场临时；为空时不占键）
+        if self._mc_state.pinned_rules:
+            context["pinned_rules"] = list(self._mc_state.pinned_rules)
+        if self._mc_state.session_rules:
+            context["session_rules"] = list(self._mc_state.session_rules)
         # 当前世界已观测到的模组能力、最近一次连锁挖矿统计与取材留坑记录（未报过的键不出现）
         context.update(self._mining_facts.view(self._mining_world_key()))
         return context
@@ -2782,9 +3001,10 @@ class MinecraftAgent(BaseAgent):
         if not shown:
             return current
         delta = {key: value for key, value in current.items() if shown.get(key) != value}
-        if WORLD_SOCIAL_RULES_KEY in shown and WORLD_SOCIAL_RULES_KEY not in current:
-            # 角色切入无公共规矩的新存档时，显式交付空列表告知前文公共规矩已失效，后续续做不再重复出现
-            delta[WORLD_SOCIAL_RULES_KEY] = []
+        for clearable_key in (WORLD_SOCIAL_RULES_KEY, "pinned_rules", "session_rules"):
+            if clearable_key in shown and clearable_key not in current:
+                # 切入新存档或清空规矩时显式交付空列表告知前文规矩已失效，后续续做不再重复出现
+                delta[clearable_key] = []
         delta["unchanged_since_earlier_task_state"] = sorted(key for key in current if key not in delta)
         return delta
 
@@ -2817,6 +3037,7 @@ class MinecraftAgent(BaseAgent):
     ) -> None:
         try:
             if await self._context_compactor.compact(messages, tools, facts, trigger_tokens=trigger, world_id=world_id):
+                self._sync_pinned_rules_message(messages, expect_rewrite=False)
                 self._shown_context = deepcopy(facts)
                 # 整理就地改写了历史前段，之后的第一次请求重算前缀是预期内的
                 self._prefix_guard.expect_rewrite("后台集中整理")
@@ -2861,6 +3082,7 @@ class MinecraftAgent(BaseAgent):
         world_id = self._world.save_fields()[0]
         try:
             if await self._context_compactor.compact(messages, tools, facts, world_id=world_id):
+                self._sync_pinned_rules_message(messages, expect_rewrite=False)
                 self._shown_context = deepcopy(facts)
                 self._prefix_guard.expect_rewrite("集中整理")
         except asyncio.CancelledError:
@@ -3211,11 +3433,68 @@ class MinecraftAgent(BaseAgent):
         if wake_if_waiting and not self._task_suspended:
             self._wake_event.set()
 
+    def _enqueue_system_chat_notice(
+        self,
+        content: str,
+        *,
+        message_key: str = "",
+        upstream_suppressed: int = 0,
+    ) -> None:
+        """对非死亡服务器系统提示执行 15 秒短窗去重节流：首次立即入队，同前缀重复刷屏合并计数。"""
+        now_s = float(self._clock())
+        throttle_key = _system_chat_throttle_key(content, message_key)
+        # 顺手排空其他已到期的合并窗口；跳过当前键，避免刚到期又重发时连续产出两条消息
+        self._flush_throttled_system_chats(now_s=now_s, skip_key=throttle_key)
+
+        entry = self._system_chat_throttle.get(throttle_key)
+        if entry is not None and (now_s - float(entry[0])) < _SYSTEM_CHAT_THROTTLE_WINDOW_S:
+            # 15 秒窗口内相同前缀/内容重复刷屏：仅累加次数与最新原文，不刷爆模型上下文
+            entry[1] = int(entry[1]) + 1 + max(0, upstream_suppressed)
+            entry[2] = content
+            return
+
+        notice = f"[系统提示] {content}"
+        if entry is not None and int(entry[1]) > 0:
+            total_merged = int(entry[1]) + max(0, upstream_suppressed)
+            notice += f"（前 15 秒内已重复合并 {total_merged} 次）"
+        elif upstream_suppressed > 0:
+            notice += f"（上游已合并 {upstream_suppressed} 条）"
+
+        self._system_chat_throttle[throttle_key] = [now_s, 0, content]
+        if self._in_lead_mode:
+            self._reset_lead_idle_state()
+        self._enqueue_chat_notice(f"system:{throttle_key}", notice, wake_if_waiting=True)
+
+    def _flush_throttled_system_chats(
+        self,
+        *,
+        now_s: Optional[float] = None,
+        skip_key: Optional[str] = None,
+    ) -> None:
+        """排空已超过 15 秒节流窗且累计了重复次数的服务器系统提示，每个归并键仅发一条汇总通知。"""
+        if not self._system_chat_throttle:
+            return
+        current_s = float(self._clock()) if now_s is None else float(now_s)
+        active = bool(self._live_active and (self._in_lead_mode or not self._task_finished))
+        for key, entry in list(self._system_chat_throttle.items()):
+            if key == skip_key:
+                continue
+            window_start_s, suppressed_count, latest_content = float(entry[0]), int(entry[1]), str(entry[2])
+            if (current_s - window_start_s) < _SYSTEM_CHAT_THROTTLE_WINDOW_S:
+                continue
+            self._system_chat_throttle.pop(key, None)
+            if suppressed_count > 0 and active:
+                summary = f"[系统提示] {latest_content}（15 秒内重复 {suppressed_count} 次）"
+                if self._in_lead_mode:
+                    self._reset_lead_idle_state()
+                self._enqueue_chat_notice(f"system:{key}:merged", summary, wake_if_waiting=True)
+
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
         """``game.chat.received`` 回调：
-        1. 系统死亡播报：认出生物名册里的个体并上报主播（不唤醒模型，保持空闲零消耗）；
-        2. 玩家公屏聊天：空闲时直接忽略（严格空闲零消耗）；执行委派任务期间以 ``[公屏]`` 只读
-           现场通知注入上下文，点名她或出现喊停/喊过去信号时及时唤醒等待中的任务循环。
+        1. 玩家公屏聊天：主控态立即唤醒直答，非主控委派态仅活跃任务期间旁听（严格空闲零消耗）；
+        2. 系统死亡播报：认出生物名册里的个体并上报主播（不唤醒模型，保持空闲零消耗）；
+        3. 非死亡系统提示：在主控态或活跃委派任务期间放行服务器权限/领地/插件等反馈，过滤空白与
+           纯进退服噪声并经 15 秒节流合并计数后以 ``[系统提示]`` 入队，空闲时严格零消耗忽略。
         """
         del event_name, source
         if payload.game != "minecraft":
@@ -3252,26 +3531,42 @@ class MinecraftAgent(BaseAgent):
             return
         if payload.kind != "system":
             return
-        if payload.message_key and not payload.message_key.startswith("death."):
-            return
-        victim = next(
-            (m for m in payload.mentions if m.name and payload.content.strip().startswith(m.name)),
-            None,
-        )
-        try:
-            creature = self._creatures.note_death(
-                payload.content,
-                now_ms(),
-                victim_uuid=victim.id if victim is not None else "",
-                victim_name=victim.name if victim is not None else "",
+
+        # 先尝试生物名册死讯识别（死亡翻译键或无键系统播报均参与匹配）
+        is_death_key = bool(payload.message_key and payload.message_key.startswith("death."))
+        if not payload.message_key or is_death_key:
+            victim = next(
+                (m for m in payload.mentions if m.name and payload.content.strip().startswith(m.name)),
+                None,
             )
-            if creature is None:
-                return
-            self._logger.info(f"生物名册认出死讯：{creature.label()}（原话：{payload.content}）")
-            await self._save_creatures()
-            await self._emit_game_event("milestone", f"{creature.label()}{creature.death_note}")
-        except Exception as exc:  # noqa: BLE001 - 认不出死讯不影响聊天流本身
-            self._logger.warning(f"按名册认死讯失败（原话：{payload.content}）", exc=exc)
+            try:
+                creature = self._creatures.note_death(
+                    payload.content,
+                    now_ms(),
+                    victim_uuid=victim.id if victim is not None else "",
+                    victim_name=victim.name if victim is not None else "",
+                )
+                if creature is not None:
+                    self._logger.info(f"生物名册认出死讯：{creature.label()}（原话：{payload.content}）")
+                    await self._save_creatures()
+                    await self._emit_game_event("milestone", f"{creature.label()}{creature.death_note}")
+                    return
+            except Exception as exc:  # noqa: BLE001 - 认不出死讯不影响聊天流本身
+                self._logger.warning(f"按名册认死讯失败（原话：{payload.content}）", exc=exc)
+        if is_death_key:
+            return
+
+        # 非死亡服务器反馈：仅在开播且处于游戏主控态或活跃委派任务期间放行，空闲严格零消耗
+        if not (self._live_active and (self._in_lead_mode or not self._task_finished)):
+            return
+        content = " ".join((payload.content or "").split())
+        if not content or _is_system_join_leave_noise(content, payload.message_key):
+            return
+        self._enqueue_system_chat_notice(
+            content,
+            message_key=payload.message_key,
+            upstream_suppressed=int(payload.suppressed or 0),
+        )
 
     async def _on_self_chatted(self, event_name: str, payload: GameSelfChattedPayload, source: str) -> None:
         """``game.self.chatted`` 回调：任务中旁听主播替角色发出的公屏话（排除游戏 Agent 自己发的重复）。"""
