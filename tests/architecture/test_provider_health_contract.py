@@ -28,6 +28,7 @@ PENDING_HEALTH_CHECK_PROVIDERS: dict[str, str] = {
     "LookAtScreenProvider": "屏幕采集 / 文本读取后端经构造器注入，Provider 本体无连接生命周期，基类默认探活语义成立",
     "ExpressionSheetProvider": "静态差分图资源，无外部连接，基类默认探活语义成立",
     "ReplyToolProvider": "主播 Agent 域内部调用面，不维护外部连接，基类默认探活语义成立",
+    "RundownControlToolProvider": "流程单状态机内部调用面，不维护外部连接，基类默认探活语义成立",
     "WorkingNoteToolProvider": "主播 Agent 域内部单槽便签调用面，不维护外部连接，基类默认探活语义成立",
     "SocialFactToolProvider": "主播 Agent 域内部调用面，不维护外部连接，基类默认探活语义成立",
     "MemoryCorrectionToolProvider": "主播 Agent 域内部调用面，不维护外部连接，基类默认探活语义成立",
