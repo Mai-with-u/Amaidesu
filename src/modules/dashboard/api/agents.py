@@ -4,6 +4,7 @@ Agent 控制面 API（运行态观测 + 框架级控制端点）
 - GET  /api/v1/agents                  -> 已注册 Agent 列表（运行态 + enabled 配置态）
 - GET  /api/v1/agents/lead             -> 动态主从当前状态快照
 - POST /api/v1/agents/lead             -> 动态主从人工切换（auto / streamer / 候选游戏名）
+- POST /api/v1/agents/lead/suggest     -> 建议通道（向主控方转达非强杀建议，不建账本不打断）
 - GET  /api/v1/agents/{name}/state     -> 单个 Agent 运行状态
 - GET  /api/v1/agents/{name}/memo      -> Agent 备忘录/待办快照（纯只读观测）
 - POST /api/v1/agents/{name}/control   -> 框架级控制（pause/resume/shutdown/restart）
@@ -45,6 +46,8 @@ from src.modules.dashboard.schemas.agent import (
     AgentStopResponse,
     AgentSummary,
     LeadStateResponse,
+    LeadSuggestRequest,
+    LeadSuggestResponse,
     LeadSwitchRequest,
     MemoTodoItem,
 )
@@ -139,6 +142,28 @@ async def switch_lead_state(request: LeadSwitchRequest, coordinator: LeadCoordin
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return LeadStateResponse(**snap.model_dump())
+
+
+@router.post("/lead/suggest", response_model=LeadSuggestResponse, summary="建议通道：向主控方转达一条非强杀建议")
+async def suggest_to_lead(request: LeadSuggestRequest, coordinator: LeadCoordinatorDep) -> LeadSuggestResponse:
+    """转达一条非强杀建议给当前主控方（不建委派账本、不打断在跑目标）。
+
+    与 ``POST /{name}/delegate`` 的区别：委派是派新任务并登记账本；建议只把内容
+    转达给当前主控方自行取舍，不强杀、不干预其执行。``target`` 缺省时转给当前
+    主控游戏 Agent。业务结果（含 accepted=false 的拒收）一律 200 返回，由前端
+    拿回执渲染；LeadCoordinator 未注入 503。
+    """
+    result = await coordinator.send_suggestion(
+        request.content,
+        target=request.target or None,
+        source="operator",
+    )
+    return LeadSuggestResponse(
+        accepted=bool(result.get("accepted", False)),
+        target=str(result.get("target", "")),
+        lead_agent=str(result.get("lead_agent", "")),
+        reason=str(result.get("reason", "")),
+    )
 
 
 @router.get("/{name}/state", response_model=AgentStateResponse, summary="查询单个 Agent 运行状态")
@@ -339,7 +364,7 @@ async def delegate_to_agent(
     """
     result = await control.delegate(name, request.instruction)
     if not result["ok"]:
-        code = {"not_found": 404, "refused": 409, "no_ledger": 503}.get(result["error"], 500)
+        code = {"not_found": 404, "refused": 409, "no_ledger": 503, "game_in_lead": 409}.get(result["error"], 500)
         raise HTTPException(status_code=code, detail=result["message"])
     return AgentDelegateResponse(
         accepted=bool(result["accepted"]),

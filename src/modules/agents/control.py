@@ -1418,7 +1418,22 @@ class AgentControl:
         current: str = "",
         progress: str = "",
     ) -> dict:
-        """运营直派任务（控制面直调，供 REST）：与主播委派共用同一个 ``DelegationCore``。"""
+        """运营直派任务（控制面直调，供 REST）：与主播委派共用同一个 ``DelegationCore``。
+
+        门禁：目标正处于游戏自主主控态时返回 ``game_in_lead`` 业务拒绝（口径与工具路径
+        门禁 ``_guard_target_in_game_lead`` 一致）——不接受直派强杀，请走建议通道。
+        """
+        lead_coordinator = self._lead_coordinator
+        if lead_coordinator is not None and lead_coordinator.is_agent_leading(name):
+            logger.info(f"delegate: 目标 '{name}' 正在游戏自主主控态，拒绝运营直派（game_in_lead）")
+            return {
+                "ok": False,
+                "error": "game_in_lead",
+                "message": (
+                    f"当前由游戏 Agent '{name}' 自主主控游戏节奏，暂不接受运营直派委派或强杀操作；"
+                    "请改用建议通道（POST /api/v1/agents/lead/suggest）转达建议，不要干预或强杀它的执行。"
+                ),
+            }
         outcome = await self._delegation.delegate(
             target_name=name,
             instruction=instruction,

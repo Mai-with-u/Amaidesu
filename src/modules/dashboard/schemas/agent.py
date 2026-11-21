@@ -7,7 +7,7 @@ Agent 控制面 Schema
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AgentSummary(BaseModel):
@@ -160,3 +160,23 @@ class LeadSwitchRequest(BaseModel):
 
     target: str
     reason: str = ""
+
+
+class LeadSuggestRequest(BaseModel):
+    """建议通道请求体（POST /api/v1/agents/lead/suggest）。
+
+    非强杀转达：建议不打断在跑目标、不建委派账本。``content`` 非空（空串
+    由 pydantic 校验拒绝，422）；``target`` 缺省时转达给当前主控游戏 Agent。
+    """
+
+    content: str = Field(..., min_length=1, description="建议内容全文（非空）")
+    target: Optional[str] = Field(default=None, description="建议指向的目标 Agent 注册名；缺省转给当前主控")
+
+
+class LeadSuggestResponse(BaseModel):
+    """建议通道回执（业务结果一律 200，含 accepted=false 的拒收，由前端渲染）。"""
+
+    accepted: bool = Field(..., description="是否受理成功（已转达给主控方）")
+    target: str = Field(..., description="建议最终指向的目标 Agent 注册名")
+    lead_agent: str = Field(default="", description="转达时的当前主控 Agent 注册名；未知为空串")
+    reason: str = Field(default="", description="拒收时的失败码说明；受理成功为空串")
