@@ -18,7 +18,7 @@
 | omni_tts | 全模态大模型（经 LLM profile 调音频端点） | model.toml 档位指向的端点 | 否（全量收齐后播放） | 无 |
 | minimax_tts | MiniMax 云端合成（T2A 接口，密钥段内自持） | `base_url`（默认国内站，国际站账号改官方域名同路径） | 是（SSE 分块 hex 音频，`bytes.fromhex` 解码即裸 PCM） | 无（云服务无冷启动惩罚） |
 | openai_tts | OpenAI 官方语音合成（`/v1/audio/speech`，密钥段内自持） | `base_url`（默认官方端点，可整体替换为兼容网关） | 是（默认 `stream_format=sse` 事件流：每块 PCM 经 base64 装在 `speech.audio.delta` 事件里，逐块解码投递；响应非事件流时退化为裸 PCM 24kHz 字节流透传） | 无（云服务无冷启动惩罚） |
-| index_tts | IndexTTS 本地服务（自建 FastAPI 常驻包装官方 Python API，脚本不入库；音色 = 服务端参考音频） | `host:port`（默认 127.0.0.1:9888） | 是（按文本切段逐段推 PCM，`seg_tokens` 调小可提前首包；响应 = 44 字节 WAV 占位头 + 裸 PCM） | 有（合成一句"预热。"触发服务端说话人条件缓存，日志「IndexTTS 预热完成，首句合成已是热态」） |
+| index_tts | IndexTTS 本地服务（自建 FastAPI 常驻包装官方 Python API，脚本入库 `scripts/indextts_serve.py`；音色 = 服务端参考音频；情绪 = 主播情绪标签映射 8 维向量随句注入） | `host:port`（默认 127.0.0.1:9888） | 是（按文本切段逐段推 PCM，`seg_tokens` 调小可提前首包；响应 = 44 字节 WAV 占位头 + 裸 PCM） | 有（合成一句"预热。"触发服务端说话人条件缓存，日志「IndexTTS 预热完成，首句合成已是热态」） |
 
 > omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。openai_tts 与 omni_tts 同属"云端语音模型"但走不同端点：omni_tts 经 LLM 的 chat 模态音频输出（复用 model.toml 的 profile 与密钥），openai_tts 走专用 speech 端点，模型 / 音色 / 风格提示都是该端点自己的词表。openai_tts 的验证分两级：链路级用本地 aiohttp 服务冒充 speech 端点，跑通了真实 HTTP 请求、chunked 流式读取、SSE 事件切分、样本拼接、事件派发全链路（`tests/modules/tts/test_openai_client_http.py`）；真机级经自建 GPT-SoVITS 网关 + new-api 中转真实合成多次，两条通道对比过首字节：`stream_format=audio` 时中转站把二进制 body 整体缓冲、首字节 15.7s（等于整句合成耗时），`stream_format=sse` 时逐行透传、首字节 1.9~2.6s，这也是引擎默认改走 sse 的原因。仍未验证的部分：官方 api.openai.com 本身（没拿官方密钥冒烟）、音色听感、云端首块延迟——2s 级首块是后端本地 GPT-SoVITS 推理耗时，不代表云端表现。
 >
