@@ -84,6 +84,11 @@ class TtsTestRequest(BaseModel):
     play_on_device: bool = True
     # 前端指定的 utterance_id（整场回放用它关联 WS 实时进度事件）；缺省按调试前缀现场生成
     utterance_id: Optional[str] = None
+    # 这句话的情绪提示（Emotion 枚举值）与强度；随句透传给引擎（支持动态
+    # 情感的引擎如 index_tts 据此调整合成，其余引擎忽略）。整场回放按句
+    # 回传落库的历史情绪，缺省 = 中性。
+    emotion: Optional[str] = None
+    emotion_intensity: Optional[float] = None
     temperature: Optional[float] = None
     speed_factor: Optional[float] = None
     sample_steps: Optional[int] = None
@@ -113,10 +118,13 @@ class TtsSayRequest(BaseModel):
 
     重播语义 = 同文本重合成：utterance 生命周期事件不留档文本与
     utterance_id 的映射，但事件载荷与发言卡都持有原文本，前端把原文本
-    原样传回即可，无需服务端按 ID 反查。
+    原样传回即可，无需服务端按 ID 反查。情绪随句透传给引擎（发言卡
+    持有该句落库的情绪，原样传回）。
     """
 
     text: str
+    emotion: Optional[str] = None
+    emotion_intensity: Optional[float] = None
 
 
 class TtsSayResponse(BaseModel):

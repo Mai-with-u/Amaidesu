@@ -58,6 +58,10 @@ class ReviewSpeechItem(BaseModel):
     """播放队列确知没送到观众面前（仍算发过，但不该当众承担）；删句同样可删。"""
     memory_refs: List[str] = Field(default_factory=list)
     """这句点名用上的记忆：``约#7`` 是承诺，``档#41`` 是档案行。"""
+    emotion: Optional[str] = None
+    """这句的情绪标签（Emotion 枚举值）；v49 落库前的旧数据为 None。"""
+    emotion_intensity: Optional[float] = None
+    """这句的情绪强度 0.0~1.0；旧数据为 None。"""
 
 
 class ReviewCueItem(BaseModel):

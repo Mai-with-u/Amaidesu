@@ -251,16 +251,28 @@ class _UtteranceTimeline:
         return (first_audio_ms, playback_ms)
 
 
-async def _play_utterance(engine: Any, text: str, utterance_id: str) -> tuple[str, Optional[str]]:
+async def _play_utterance(
+    engine: Any,
+    text: str,
+    utterance_id: str,
+    emotion: Optional[str] = None,
+    emotion_intensity: Optional[float] = None,
+) -> tuple[str, Optional[str]]:
     """驱动 TTS 引擎试说一句（合成 + 声卡播放 + utterance 事件 + 字幕联动）。
 
     返回 ``(utterance_id, error)``：成功时 error 为 None；失败时引擎协议
     约定已主动发 ``tts.utterance.failed``，此处只回传 HTTP 面的失败原因。
     utterance_id 由调用方生成（调试前缀现场生成，或回放透传前端指定值以
     关联 WS 实时进度事件）；test（试说）与 say（台前重播）共用本调用路径。
+    情绪随句透传给引擎（整场回放按句回传落库的历史情绪）。
     """
     try:
-        await engine.handle_speech(text, utterance_id=utterance_id)
+        await engine.handle_speech(
+            text,
+            utterance_id=utterance_id,
+            emotion=emotion,
+            emotion_intensity=emotion_intensity,
+        )
     except Exception as e:
         logger.exception(f"TTS 试说失败: {e}")
         return utterance_id, str(e)
@@ -322,7 +334,13 @@ async def test_tts(
     timeline.start()
     utterance_id = (request.utterance_id or "").strip() or f"debug-test-{now_ms()}"
     try:
-        utterance_id, error = await _play_utterance(engine, request.text, utterance_id)
+        utterance_id, error = await _play_utterance(
+            engine,
+            request.text,
+            utterance_id,
+            emotion=request.emotion,
+            emotion_intensity=request.emotion_intensity,
+        )
     finally:
         timeline.stop()
     first_audio_ms, playback_ms = timeline.spans_for(utterance_id)
@@ -356,7 +374,13 @@ async def say_tts(
     ``handle_speech`` 完整生产链路（utterance 事件 + 字幕联动）。同步长
     请求，前端需放宽超时并做 loading 防连点。
     """
-    utterance_id, error = await _play_utterance(engine, request.text, f"debug-say-{now_ms()}")
+    utterance_id, error = await _play_utterance(
+        engine,
+        request.text,
+        f"debug-say-{now_ms()}",
+        emotion=request.emotion,
+        emotion_intensity=request.emotion_intensity,
+    )
     if error is not None:
         return TtsSayResponse(success=False, utterance_id=utterance_id, error=error)
     return TtsSayResponse(success=True, utterance_id=utterance_id)

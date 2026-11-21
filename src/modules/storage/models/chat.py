@@ -66,6 +66,10 @@ class LiveChatMessage(BaseModel):
     utterance_id: Optional[str] = Field(default=None, description="主播发言全链路关联键（与 tts.utterance.* 共用）")
     dropped_at_ms: Optional[int] = Field(default=None, description="播放队列确知未送达观众面前的时刻；None 表示已送达")
     memory_refs: Optional[str] = Field(default=None, description="本句点名引用的记忆编号列表 JSON（如 ['约#7']）")
+    emotion: Optional[str] = Field(default=None, description="主播发言行的情绪标签（Emotion 枚举值）；观众行与旧数据为 None")
+    emotion_intensity: Optional[float] = Field(
+        default=None, description="主播发言行的情绪强度 0.0~1.0；观众行与旧数据为 None"
+    )
     reply_player_id: Optional[int] = Field(
         default=None, description="主播行在回应哪位游戏玩家（这一窗只有一位玩家开过口时才记）；玩家被删时为 None"
     )
@@ -207,6 +211,8 @@ class SettleSpeechLine(BaseModel):
     dropped_at_ms: Optional[int] = Field(default=None, description="没送达标记时刻；None 即送到了观众面前")
     reply_to_message_id: Optional[str] = Field(default=None, description="这条台词回应了哪条弹幕的消息 ID")
     memory_refs: Optional[str] = Field(default=None, description="这句用了哪条记忆（JSON 数组文本）；None 即没用")
+    emotion: Optional[str] = Field(default=None, description="这句的情绪标签（Emotion 枚举值）；v49 前的旧数据为 None")
+    emotion_intensity: Optional[float] = Field(default=None, description="这句的情绪强度 0.0~1.0；旧数据为 None")
     reply_content: Optional[str] = Field(default=None, description="被回应那条弹幕的原文")
     reply_viewer_id: Optional[int] = Field(default=None, description="被回应弹幕的发言人（内部观众 ID）")
     reply_simulated: Optional[bool] = Field(default=None, description="被回应弹幕是否模拟观众发的")

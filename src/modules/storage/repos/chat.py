@@ -59,6 +59,8 @@ class ChatRepo(BaseRepo):
         utterance_id: Optional[str] = None,
         dropped_at_ms: Optional[int] = None,
         memory_refs: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
         reply_player_id: Optional[int] = None,
     ) -> int:
         """插入一条 live_chat 行，返回 lastrowid。
@@ -66,6 +68,8 @@ class ChatRepo(BaseRepo):
         ``message_id``（观众行）/ ``reply_to_message_id``（主播行）构成
         "主播发言回复了哪条弹幕"的关联键（互动分析数据面）。观众行带
         ``viewer_id``（内部观众 ID）与 ``id_kind``（``sender_id`` 的 ID 种类）。
+        ``emotion`` / ``emotion_intensity`` 仅主播发言行写入（回放按句复现
+        情绪合成的数据面），观众行保持默认 NULL。
         """
 
         def _exec() -> int:
@@ -74,8 +78,8 @@ class ChatRepo(BaseRepo):
                     "INSERT INTO live_chat ("
                     "live_session_id, timestamp_ms, platform, sender_role, sender_id, sender_name,"
                     " content, message_type, message_id, reply_to_message_id, simulated, viewer_id, id_kind,"
-                    " utterance_id, dropped_at_ms, memory_refs, reply_player_id"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " utterance_id, dropped_at_ms, memory_refs, emotion, emotion_intensity, reply_player_id"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -93,6 +97,8 @@ class ChatRepo(BaseRepo):
                         utterance_id,
                         dropped_at_ms,
                         memory_refs,
+                        emotion,
+                        emotion_intensity,
                         reply_player_id,
                     ),
                 )
@@ -582,7 +588,8 @@ class ChatRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT c.id, c.timestamp_ms, c.content, c.dropped_at_ms, c.reply_to_message_id,"
-                    " c.memory_refs, v.content AS reply_content, v.viewer_id AS reply_viewer_id,"
+                    " c.memory_refs, c.emotion, c.emotion_intensity,"
+                    " v.content AS reply_content, v.viewer_id AS reply_viewer_id,"
                     " v.simulated AS reply_simulated, v.id AS reply_chat_id, c.reply_player_id"
                     " FROM live_chat c"
                     " LEFT JOIN live_chat v ON v.id = ("

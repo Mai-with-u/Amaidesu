@@ -189,6 +189,8 @@ async def session_speech(
                 content=row.content,
                 dropped=row.dropped_at_ms is not None,
                 memory_refs=_parse_memory_refs(row.memory_refs),
+                emotion=row.emotion,
+                emotion_intensity=row.emotion_intensity,
             )
             for row in rows
         ]

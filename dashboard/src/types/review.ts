@@ -124,6 +124,10 @@ export interface ReviewSpeechLine {
   dropped: boolean;
   /** 这句点名用上的记忆：约#7 是承诺，档#41 是档案行 */
   memory_refs: string[];
+  /** 这句的情绪标签（Emotion 枚举值）；旧场次数据为 null */
+  emotion?: string | null;
+  /** 这句的情绪强度 0~1；旧场次数据为 null */
+  emotion_intensity?: number | null;
 }
 
 /** 某一场的台词列表 */

@@ -189,6 +189,9 @@ export function useTtsReplay(deps: TtsReplayDeps) {
               play_on_device: mode.value === 'play',
               // 透传自定 utterance_id：WS 实时进度事件按它对上"正在回放的那句"
               utterance_id: liveUtteranceId.value,
+              // 按句回传落库的历史情绪（旧场次数据为 null → 缺省中性）
+              emotion: line.emotion ?? undefined,
+              emotion_intensity: line.emotion_intensity ?? undefined,
             },
             REPLAY_TIMEOUT_MS,
           );

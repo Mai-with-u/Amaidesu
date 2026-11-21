@@ -72,6 +72,7 @@ from src.modules.storage.migrations import (
     v46_migration_ledger_content_hash,
     v47_viewer_self_candidates,
     v48_game_work_docs_pinned_rules,
+    v49_live_chat_emotion,
 )
 
 _MIGRATION_MODULES: Dict[int, ModuleType] = {
@@ -123,6 +124,7 @@ _MIGRATION_MODULES: Dict[int, ModuleType] = {
     46: v46_migration_ledger_content_hash,
     47: v47_viewer_self_candidates,
     48: v48_game_work_docs_pinned_rules,
+    49: v49_live_chat_emotion,
 }
 
 

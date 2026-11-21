@@ -64,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 48
+SCHEMA_VERSION: int = 49
 
 
 # =============================================================================
@@ -325,6 +325,8 @@ CREATE TABLE IF NOT EXISTS live_chat (
     utterance_id     TEXT,
     dropped_at_ms    INTEGER,
     memory_refs      TEXT,
+    emotion          TEXT,
+    emotion_intensity REAL,
     reply_player_id  INTEGER REFERENCES game_players(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_live_chat_session_ts ON live_chat(live_session_id, timestamp_ms);

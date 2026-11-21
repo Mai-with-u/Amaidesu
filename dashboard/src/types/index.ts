@@ -355,6 +355,10 @@ export interface TtsTestRequest {
   play_on_device?: boolean;
   /** 前端指定 utterance_id（整场回放按它关联 WS 实时进度事件）；缺省服务端按调试前缀生成 */
   utterance_id?: string;
+  /** 这句的情绪提示（Emotion 枚举值）；整场回放按句回传落库的历史情绪，缺省中性 */
+  emotion?: string;
+  /** 情绪强度 0~1；与 emotion 成对出现 */
+  emotion_intensity?: number;
   /** 覆盖参数：仅生成试听模式生效，缺省用引擎配置值 */
   temperature?: number;
   speed_factor?: number;
@@ -381,6 +385,10 @@ export interface TtsTestResponse {
 /** 台前重播请求：同文本重合成（utterance 事件无服务端留档，前端回传原文本） */
 export interface TtsSayRequest {
   text: string;
+  /** 这句的情绪提示（Emotion 枚举值）；发言卡持有该句落库的情绪，原样回传 */
+  emotion?: string;
+  /** 情绪强度 0~1 */
+  emotion_intensity?: number;
 }
 
 /** 台前重播响应（同步长请求；合成失败时引擎已发 tts.utterance.failed） */

@@ -574,6 +574,8 @@ class StorageLedger:
                 simulated=False,
                 utterance_id=payload.utterance_id or None,
                 memory_refs=memory_refs_json,
+                emotion=payload.emotion or None,
+                emotion_intensity=payload.emotion_intensity,
                 reply_player_id=reply_player_id,
             )
             if payload.target_user_id:
