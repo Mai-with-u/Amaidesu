@@ -144,6 +144,13 @@
           <el-table-column label="字数" width="60">
             <template #default="{ row }">{{ row.content.length }}</template>
           </el-table-column>
+          <el-table-column label="情绪" width="96">
+            <template #default="{ row }">
+              <span :class="{ 'is-unrecorded': !row.emotion }" :title="row.emotion ? `${row.emotion} × ${row.emotion_intensity ?? '—'}` : 'v49 前旧场次未落库情绪'">{{
+                emotionText(row)
+              }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="耗时" width="100">
             <template #default="{ row }">
               <span :class="{ 'is-failed': isFailedRow(row.chat_id) }" :title="errorOf(row.chat_id)">{{
@@ -177,7 +184,7 @@ import { ElMessage } from 'element-plus';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { debugApi } from '@/api';
 import { DEFAULT_DEBUG_TEXT } from '@/components/debug/debugDefaults';
-import type { TtsDebugParamInfo, TtsStatusResponse, LiveSessionItem } from '@/types';
+import type { TtsDebugParamInfo, TtsStatusResponse, LiveSessionItem, ReviewSpeechLine } from '@/types';
 import { formatDateTimeCn, formatSeconds } from '@/utils/format';
 import { useTtsReplay, type ReplayLineResult } from '@/composables/useTtsReplay';
 import TtsReplayChart from '@/components/debug/TtsReplayChart.vue';
@@ -247,6 +254,34 @@ const modeHint = computed(() =>
     ? '逐句合成并在扬声器播放，播完一句才发下一句；耗时 = 服务端处理时长（含播放）'
     : '只合成不播放，跑完全场更快；耗时 = 纯合成时间（引擎不支持合成接口时逐句报错）',
 );
+
+// Emotion 枚举值 → 回放表展示用中文；与后端 Emotion 枚举 17 值一一对应
+const EMOTION_LABELS: Record<string, string> = {
+  neutral: '平静',
+  happy: '开心',
+  sad: '难过',
+  angry: '生气',
+  surprised: '惊讶',
+  scared: '害怕',
+  disgusted: '讨厌',
+  shy: '害羞',
+  embarrassed: '尴尬',
+  confused: '困惑',
+  love: '喜欢',
+  excited: '兴奋',
+  smug: '得意',
+  serious: '认真',
+  tired: '疲惫',
+  crying: '哭',
+  speechless: '无语',
+};
+
+function emotionText(row: ReviewSpeechLine): string {
+  if (!row.emotion) return '—'; // v49 落库前的旧场次没有情绪数据
+  const label = EMOTION_LABELS[row.emotion] ?? row.emotion;
+  const intensity = row.emotion_intensity;
+  return intensity != null ? `${label} ${Math.round(intensity * 100)}%` : label;
+}
 
 function sessionLabel(session: LiveSessionItem): string {
   const kindLabel = session.kind === 'rehearsal' ? '彩排 · ' : '';
@@ -560,6 +595,10 @@ onBeforeUnmount(() => {
 
 .replay-table :deep(.is-dropped) {
   color: var(--text-secondary);
+}
+
+.replay-table .is-unrecorded {
+  color: var(--text-secondary, #909399);
 }
 
 .replay-dropped-tag {
