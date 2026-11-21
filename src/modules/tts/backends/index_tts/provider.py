@@ -67,6 +67,13 @@ _EMOTION_VECTORS: Dict[str, tuple] = {
 # emotion_intensity 缺省强度：与表达侧（mouth 解析情绪前缀）的缺省一致
 _DEFAULT_EMOTION_INTENSITY = 0.7
 
+# 官方 WebUI 的维度偏置（normalize_emo_vec 同源）：压低易出怪声的惊喜/平静
+_EMO_BIAS = (0.9375, 0.875, 1.0, 1.0, 0.9375, 0.9375, 0.6875, 0.5625)
+
+# 向量总和上限：混合公式为 vec + (1-sum(vec))×参考情绪锚，总和超 1 时锚贡献
+# 变负数（扭曲出怪声）；官方 WebUI 归一化把总和压到 ≤0.8，本引擎对齐该行为
+_EMO_SUM_CAP = 0.8
+
 
 class IndexTTSProvider:
     """IndexTTS 本地语音合成引擎。
@@ -194,8 +201,10 @@ class IndexTTSProvider:
     def _emotion_vector(self, emotion: Optional[str], intensity: Optional[float]) -> Optional[list[float]]:
         """情绪词 → 本请求的 8 维向量；neutral 与词表外的值返回 None。
 
-        强度直接缩放向量（0.5 = 中等强度把满档情感减半）；None 按 0.7 处理
-        （与表达侧的缺省强度一致）。本请求向量优先于配置的静态 ``emo_vector``。
+        流程：词表基准向量 × 强度 → 官方 WebUI 同款归一化（维度偏置 +
+        总和压到 ≤0.8）。混合公式 ``vec + (1-sum(vec))×参考情绪锚`` 里总和
+        即注入占比——强度小则偏向锚点（参考音频情绪），强度 1.0 时注入到
+        官方上限。本请求向量优先于配置的静态 ``emo_vector``。
         """
         if not emotion:
             return None
@@ -203,7 +212,12 @@ class IndexTTSProvider:
         if base is None:
             return None
         scale = intensity if intensity is not None else _DEFAULT_EMOTION_INTENSITY
-        return [round(value * scale, 3) for value in base]
+        vec = [value * scale for value in base]
+        vec = [value * bias for value, bias in zip(vec, _EMO_BIAS, strict=False)]
+        total = sum(vec)
+        if total > _EMO_SUM_CAP:
+            vec = [value * (_EMO_SUM_CAP / total) for value in vec]
+        return [round(value, 4) for value in vec]
 
     async def handle_speech(
         self,
