@@ -18,3 +18,6 @@ npm-debug.log*
 
 # Vite dev server 输出（dev_mode）
 .vite-dev.log
+
+# unplugin-vue-components 生成物（起 dev/build 时自动重写，不入库）
+components.d.ts
