@@ -371,8 +371,8 @@ async def test_index_tts_emotion_maps_to_per_request_vector(event_bus: EventBus)
 
     await provider.handle_speech("兴奋一句", utterance_id="u2", emotion="excited", emotion_intensity=1.0)
     full = calls[-1]["emo_vector"]
-    assert full[0] == pytest.approx(0.75, abs=1e-3)  # 偏置 0.9375 后 0.75（≤ 0.8 不触发上限）
-    assert sum(full) == pytest.approx(0.75, abs=1e-3)
+    assert full[0] == pytest.approx(0.6, abs=1e-3)  # 偏置 0.9375 后 0.75 → 0.6 上限压平（音色优先）
+    assert sum(full) == pytest.approx(0.6, abs=1e-3)
 
     await provider.handle_speech("害羞一句", utterance_id="u3", emotion="shy")
     assert calls[-1]["emo_vector"] is None  # 无直接对应维度 → 不携带（回退参考音频情绪锚）
