@@ -38,6 +38,8 @@ from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE, ROOM_STATE_TYPE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     AgentLeadChangedPayload,
+    AgentLeadCommentaryPayload,
+    AgentLeadSuggestionPayload,
     AgentPromptedPayload,
     BackgroundTaskChangedPayload,
     AgentRepliedPayload,
@@ -58,6 +60,7 @@ from src.modules.events.payloads import (
     StreamerStagePayload,
     TaskChangedPayload,
     ToolHealthPayload,
+    UtteranceDroppedPayload,
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
     UtterancePlaybackStartedPayload,
@@ -175,6 +178,14 @@ class EventBroadcaster:
         CoreEvents.AGENT_REPLIED: (None, AgentRepliedPayload),
         # 动态主从切换事实（主播与自主游戏 Agent 主控权交接/收回实时推送）
         CoreEvents.AGENT_LEAD_CHANGED: (None, AgentLeadChangedPayload),
+        # 游戏侧实况解说提交事实（直播控制台解说卡：内容、情绪、受理状态实时推送）
+        CoreEvents.AGENT_LEAD_COMMENTARY: (None, AgentLeadCommentaryPayload),
+        # 非强杀建议转达事实（直播控制台建议卡：内容、来源、受理结果实时推送，含拒收）
+        CoreEvents.AGENT_LEAD_SUGGESTION: (None, AgentLeadSuggestionPayload),
+        # 两级语音打断的观测面：hard_interrupted（二级硬打断掐断在播句）与
+        # priority_preempted（跨来源低优句被高优抢占）要在控制台可见，
+        # 否则运营者看不到"这句话为什么没播出来"
+        CoreEvents.TTS_UTTERANCE_DROPPED: (None, UtteranceDroppedPayload),
         # TTS 发声失败（冷启动服务不可用等）：运营者要在时间线看到"静默跳句"的原因
         CoreEvents.TTS_UTTERANCE_FAILED: (None, UtteranceFailedPayload),
         # TTS 播报态两端点：前端按 utterance_id 关联到既有发言行打"播报中/已播完"标记

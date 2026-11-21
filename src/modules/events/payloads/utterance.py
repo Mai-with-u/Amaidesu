@@ -151,14 +151,20 @@ class UtteranceFailedPayload(BasePayload):
 class UtteranceDroppedPayload(BasePayload):
     """一次发声被播放队列丢弃（确知未送到观众面前）事件 Payload。
 
-    事件名：``tts.utterance.dropped`` —— 仅由播放队列在四条确知未出屏、未出声的路径发布：
-    关停时清掉未轮到的队列条目、停机中拒绝入队、段落被更高优先级插断后丢掉剩余句、过期作废。
+    事件名：``tts.utterance.dropped`` —— 仅由播放队列在六条确知未出屏、未出声的路径发布：
+    关停时清掉未轮到的队列条目（queue_stopped）、停机中拒绝入队（stopping_rejected）、
+    段落被更高优先级插断后丢掉剩余句（segment_interrupted）、过期作废（expired）、
+    跨来源低优句被高优抢占（priority_preempted）、二级硬打断掐断在播句（hard_interrupted）。
     存储记账器据此在对应台词行写上 ``dropped_at_ms``（没送达标记），排除出"主播说过的话"。
     """
 
     utterance_id: str = Field(..., description="一次发声实例的唯一 ID（与 streamer.speech 对应）")
     reason: str = Field(
-        ..., description="丢弃原因（queue_stopped / stopping_rejected / segment_interrupted / expired）"
+        ...,
+        description=(
+            "丢弃原因（queue_stopped / stopping_rejected / segment_interrupted / expired / "
+            "priority_preempted / hard_interrupted）"
+        ),
     )
     live_session_id: int = Field(
         default=0,

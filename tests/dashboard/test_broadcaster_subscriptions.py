@@ -10,6 +10,8 @@ import pytest
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
+    AgentLeadCommentaryPayload,
+    AgentLeadSuggestionPayload,
     BodyEventPayload,
     GameChatPayload,
     GamePayload,
@@ -20,6 +22,7 @@ from src.modules.events.payloads import (
     StreamerSpeechPayload,
     TaskChangedPayload,
     ToolResultPayload,
+    UtteranceDroppedPayload,
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
@@ -87,6 +90,9 @@ async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_a
         CoreEvents.GAME_CHAT_WILDCARD,
         CoreEvents.TTS_UTTERANCE_STARTED,
         CoreEvents.TTS_UTTERANCE_FINISHED,
+        CoreEvents.AGENT_LEAD_COMMENTARY,
+        CoreEvents.AGENT_LEAD_SUGGESTION,
+        CoreEvents.TTS_UTTERANCE_DROPPED,
         CoreEvents.TASK_CHANGED,
     }
     assert expected <= set(bus.subscribed)
@@ -250,3 +256,31 @@ async def test_tts_utterance_failed_passes_through(started) -> None:
     call = await deliver(CoreEvents.TTS_UTTERANCE_FAILED, payload)
     assert call.args[0] == CoreEvents.TTS_UTTERANCE_FAILED
     assert call.args[1]["error_message"] == "connection refused"
+
+
+async def test_lead_commentary_and_suggestion_pass_through(started) -> None:
+    """游戏侧解说提交与建议转达事实直通转发（控制台解说卡/建议卡数据源）。"""
+    _bus, _ws, deliver = started
+    commentary = AgentLeadCommentaryPayload(
+        game="minecraft", summary="刚打完末影龙", accepted=True, spoken=True, urgency="high"
+    )
+    call = await deliver(CoreEvents.AGENT_LEAD_COMMENTARY, commentary)
+    assert call.args[0] == CoreEvents.AGENT_LEAD_COMMENTARY
+    assert (call.args[1]["game"], call.args[1]["accepted"], call.args[1]["spoken"]) == ("minecraft", True, True)
+
+    suggestion = AgentLeadSuggestionPayload(content="去搭个桥", source="operator", accepted=False, reason="refused")
+    call = await deliver(CoreEvents.AGENT_LEAD_SUGGESTION, suggestion)
+    assert call.args[0] == CoreEvents.AGENT_LEAD_SUGGESTION
+    assert (call.args[1]["content"], call.args[1]["accepted"], call.args[1]["reason"]) == ("去搭个桥", False, "refused")
+
+
+async def test_tts_utterance_dropped_passes_through(started) -> None:
+    """两级语音打断观测面直通转发：hard_interrupted / priority_preempted 控制台可见。"""
+    bus, _ws, deliver = started
+    _handler, model_cls = bus.subscribed[CoreEvents.TTS_UTTERANCE_DROPPED]
+    assert model_cls is UtteranceDroppedPayload, "模型类必须是 UtteranceDroppedPayload"
+
+    payload = UtteranceDroppedPayload(utterance_id="utt_1", reason="hard_interrupted")
+    call = await deliver(CoreEvents.TTS_UTTERANCE_DROPPED, payload)
+    assert call.args[0] == CoreEvents.TTS_UTTERANCE_DROPPED
+    assert call.args[1]["reason"] == "hard_interrupted"

@@ -87,6 +87,11 @@ def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> Non
             "tts.utterance.sentence_boundary",
             # 任务区间数据源（不出卡，供游戏侧记录分组）
             "task.changed",
+            # 游戏侧解说提交与建议转达事实（控制台解说卡/建议卡）
+            "agent.lead.commentary",
+            "agent.lead.suggestion",
+            # 两级语音打断观测面（台词未送达标记）
+            "tts.utterance.dropped",
         }
     )
     expected_prefixes = ("game.body.", "game.chat.", "tool.health.", "tool.result.")
