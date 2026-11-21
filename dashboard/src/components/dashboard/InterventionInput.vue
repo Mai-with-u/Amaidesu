@@ -128,18 +128,20 @@ function historyNav(step: number): void {
   text.value = list[historyIdx.value];
 }
 
-function onKeydown(event: KeyboardEvent): void {
-  if (event.isComposing) return; // IME 组字中不劫持按键
-  if (event.key === 'Tab') {
+function onKeydown(event: Event | KeyboardEvent): void {
+  // 挂载源只产生键盘事件；签名按 el-input keydown 回调的联合形态放宽，体内按键盘事件收窄
+  const keyEvent = event as KeyboardEvent;
+  if (keyEvent.isComposing) return; // IME 组字中不劫持按键
+  if (keyEvent.key === 'Tab') {
     event.preventDefault();
-    cycleMode(event.shiftKey ? -1 : 1);
-  } else if (event.key === 'Enter' && !event.shiftKey) {
+    cycleMode(keyEvent.shiftKey ? -1 : 1);
+  } else if (keyEvent.key === 'Enter' && !keyEvent.shiftKey) {
     event.preventDefault();
     emitSend();
-  } else if (event.key === 'ArrowUp') {
+  } else if (keyEvent.key === 'ArrowUp') {
     event.preventDefault();
     historyNav(-1);
-  } else if (event.key === 'ArrowDown') {
+  } else if (keyEvent.key === 'ArrowDown') {
     event.preventDefault();
     historyNav(1);
   }

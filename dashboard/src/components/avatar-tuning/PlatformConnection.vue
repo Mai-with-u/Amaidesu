@@ -99,6 +99,7 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
+import type { CollapseModelValue } from 'element-plus';
 import { avatarApi } from '@/api';
 import type { AvatarDebugPlatformStatus } from '@/types';
 import { getApiErrorMessage } from '@/utils/apiError';
@@ -168,7 +169,7 @@ async function refresh(): Promise<void> {
 }
 
 /** 首次展开时拉取一次状态；之后不再自动刷新，靠面板内"刷新"按钮 */
-async function onExpanded(names: string | string[]): Promise<void> {
+async function onExpanded(names: CollapseModelValue): Promise<void> {
   const list = Array.isArray(names) ? names : [names];
   if (list.includes('diagnosis') && platforms.value.length === 0) {
     await refresh();

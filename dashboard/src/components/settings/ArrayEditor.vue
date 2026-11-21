@@ -79,20 +79,23 @@
             </div>
           </template>
 
+          <!-- 标量项控件：items 是 unknown[]，模板分支守卫 TS 推导不了元素类型，
+               按分支断言收窄（:model-value + @update:model-value 与 v-model 等价） -->
           <template v-else-if="itemSchema?.type === 'integer'">
             <el-input-number
-              v-model="items[index]"
+              :model-value="items[index] as number | undefined"
               size="small"
               :min="itemSchema.validation?.min"
               :max="itemSchema.validation?.max"
               controls-position="right"
+              @update:model-value="items[index] = $event"
               @change="handleUpdate"
             />
           </template>
 
           <template v-else-if="itemSchema?.type === 'float'">
             <el-input-number
-              v-model="items[index]"
+              :model-value="items[index] as number | undefined"
               size="small"
               :min="itemSchema.validation?.min"
               :max="itemSchema.validation?.max"
@@ -104,7 +107,7 @@
           </template>
 
           <template v-else-if="itemSchema?.type === 'boolean'">
-            <el-switch v-model="items[index]" @change="handleUpdate" />
+            <el-switch :model-value="items[index] as boolean" @update:model-value="items[index] = $event" @change="handleUpdate" />
           </template>
 
           <template v-else-if="isJsonItemType(itemSchema?.type)">
@@ -124,9 +127,10 @@
           <!-- 未知类型 -->
           <template v-else>
             <el-input
-              v-model="items[index]"
+              :model-value="items[index] as string | undefined"
               size="small"
               :placeholder="`类型: ${itemSchema?.type}`"
+              @update:model-value="items[index] = $event"
               @input="handleUpdate"
             />
           </template>

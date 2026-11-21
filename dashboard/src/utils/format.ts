@@ -143,8 +143,11 @@ export function getLatencyClass(ms: number): string {
 }
 
 /** LLM 用途 profile 名 → el-tag 类型色。映射之外的 profile 原样回退 info */
-export function getProfileNameTag(profileName: string): string {
-  const tagMap: Record<string, string> = {
+/** el-tag type 属性接受的字面量联合（官方 TagProps['type'] 的取值集合） */
+export type ElTagType = 'primary' | 'success' | 'warning' | 'info' | 'danger';
+
+export function getProfileNameTag(profileName: string): ElTagType {
+  const tagMap: Record<string, ElTagType> = {
     planner: 'primary',
     replyer: 'success',
     summary: 'warning',
@@ -152,7 +155,7 @@ export function getProfileNameTag(profileName: string): string {
     minecraft: 'info',
     simulator: 'info',
   };
-  return tagMap[profileName] || 'info';
+  return tagMap[profileName] ?? 'info';
 }
 
 /**

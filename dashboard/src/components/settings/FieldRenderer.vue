@@ -58,7 +58,7 @@
       <template v-else-if="field.type === 'string'">
         <el-input
           v-if="field.sensitive"
-          v-model="localValue"
+          v-model="textModel"
           type="password"
           show-password
           :placeholder="defaultPlaceholder"
@@ -67,7 +67,7 @@
         />
         <el-input
           v-else-if="isLongText"
-          v-model="localValue"
+          v-model="textModel"
           type="textarea"
           :rows="3"
           :placeholder="defaultPlaceholder"
@@ -76,7 +76,7 @@
         />
         <el-input
           v-else
-          v-model="localValue"
+          v-model="textModel"
           :placeholder="defaultPlaceholder"
           :disabled="field.readonly"
           @input="handleChange"
@@ -86,7 +86,7 @@
       <!-- 整数类型 -->
       <template v-else-if="field.type === 'integer'">
         <el-input-number
-          v-model="localValue"
+          v-model="numberModel"
           :min="field.validation?.min"
           :max="field.validation?.max"
           :step="1"
@@ -117,7 +117,7 @@
       <!-- 浮点数类型 -->
       <template v-else-if="field.type === 'float'">
         <el-input-number
-          v-model="localValue"
+          v-model="numberModel"
           :min="field.validation?.min"
           :max="field.validation?.max"
           :step="0.1"
@@ -131,13 +131,13 @@
 
       <!-- 布尔类型 -->
       <template v-else-if="field.type === 'boolean'">
-        <el-switch v-model="localValue" :disabled="field.readonly" @change="handleChange" />
+        <el-switch v-model="boolModel" :disabled="field.readonly" @change="handleChange" />
       </template>
 
       <!-- 选择类型 -->
       <template v-else-if="field.type === 'select'">
         <el-select
-          v-model="localValue"
+          v-model="selectModel"
           :placeholder="'请选择'"
           :disabled="field.readonly"
           @change="handleChange"
@@ -191,7 +191,7 @@
       <!-- 未知类型 -->
       <template v-else>
         <el-input
-          v-model="localValue"
+          v-model="textModel"
           :placeholder="`未知类型: ${field.type}`"
           @input="handleChange"
         />
@@ -262,6 +262,34 @@ const isHorizontal = computed(() => props.horizontal === true && !isWideField.va
 const showDescriptionIcon = computed(
   () => props.descriptionAsIcon === true || (props.field.descriptionDisplay ?? 'inline') === 'icon',
 );
+
+// 各控件分支的取值视图：模板按 field.type 分支渲染，分支守卫 TS 推导不了，
+// 视图 get/set 只对 localValue 做类型收窄与原样透传，不做任何值转换。
+// 断言成立依据：每个视图只挂在对应 field.type 的分支控件上，值形态由该分支保证。
+const textModel = computed<string>({
+  get: () => localValue.value as string,
+  set: v => {
+    localValue.value = v;
+  },
+});
+const numberModel = computed<number | undefined>({
+  get: () => localValue.value as number | undefined,
+  set: v => {
+    localValue.value = v;
+  },
+});
+const boolModel = computed<boolean>({
+  get: () => localValue.value as boolean,
+  set: v => {
+    localValue.value = v;
+  },
+});
+const selectModel = computed<string | number | boolean>({
+  get: () => localValue.value as string | number | boolean,
+  set: v => {
+    localValue.value = v;
+  },
+});
 
 // 滑条 + 数字框共用的数值视图：localValue 缺失时回退字段默认值，非数值输入不驱动控件
 const sliderModel = computed<number>({

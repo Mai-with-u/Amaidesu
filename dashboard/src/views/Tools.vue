@@ -350,10 +350,15 @@
                   {{ entry.spec.description }}
                 </p>
                 <div class="param-input">
-                  <el-switch v-if="entry.spec.type === 'boolean'" v-model="formModel[entry.key]" />
+                  <el-switch
+                    v-if="entry.spec.type === 'boolean'"
+                    :model-value="formModel[entry.key] as boolean"
+                    @update:model-value="formModel[entry.key] = $event"
+                  />
                   <el-input-number
                     v-else-if="entry.spec.type === 'integer' || entry.spec.type === 'number'"
-                    v-model="formModel[entry.key]"
+                    :model-value="formModel[entry.key] as number | undefined"
+                    @update:model-value="formModel[entry.key] = $event"
                     class="param-number"
                     :step="entry.spec.type === 'integer' ? 1 : 0.1"
                     :precision="entry.spec.type === 'integer' ? 0 : undefined"
@@ -362,7 +367,8 @@
                   />
                   <el-input
                     v-else
-                    v-model="formModel[entry.key]"
+                    :model-value="formModel[entry.key] as string | undefined"
+                    @update:model-value="formModel[entry.key] = $event"
                     type="textarea"
                     :autosize="{ minRows: 1, maxRows: 6 }"
                     :placeholder="

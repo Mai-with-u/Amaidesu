@@ -19,7 +19,7 @@
               :model-value="getValue(enabledLeaf(unit.container)!.key) === true"
               size="small"
               @click.stop
-              @change="(v: boolean) => unit.container && toggleSubEnabled(unit.container, v)"
+              @change="(v: string | number | boolean) => unit.container && toggleSubEnabled(unit.container, v)"
             />
             <el-badge
               v-if="getChildrenChangeCount(unit.container) > 0"
@@ -205,7 +205,7 @@ function bodyFields(field: ConfigFieldSchema): ConfigFieldSchema[] {
   return leaf ? children.filter(c => c !== leaf) : children;
 }
 
-function toggleSubEnabled(field: ConfigFieldSchema, val: boolean) {
+function toggleSubEnabled(field: ConfigFieldSchema, val: string | number | boolean) {
   const leaf = enabledLeaf(field);
   if (leaf) props.updateValue(leaf, val);
 }

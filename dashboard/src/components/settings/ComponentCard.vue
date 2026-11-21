@@ -143,13 +143,14 @@ function toggleExpand() {
   expanded.value = !expanded.value;
 }
 
-function toggleEnabled(val: boolean) {
+// el-switch 未配 true-value/false-value 时只发 boolean；签名按 change 回调的联合形态放宽
+function toggleEnabled(val: string | number | boolean) {
   if (props.booleanEnabledKey) {
     // 合成最小字段对象：写路径只消费 key 与 label
     props.updateValue({ key: props.booleanEnabledKey, label: 'enabled' } as ConfigFieldSchema, val);
     return;
   }
-  props.onToggle(props.componentKey, val);
+  props.onToggle(props.componentKey, val as boolean);
 }
 </script>
 
