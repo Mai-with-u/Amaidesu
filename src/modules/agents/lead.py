@@ -37,7 +37,11 @@ from pydantic import BaseModel, Field
 
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.agents import AgentLeadChangedPayload
+from src.modules.events.payloads.agents import (
+    AgentLeadChangedPayload,
+    AgentLeadCommentaryPayload,
+    AgentLeadSuggestionPayload,
+)
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -615,31 +619,94 @@ class LeadCoordinator:
 
     # -------------------- 跨 Agent 业务桥接 --------------------
 
+    async def _emit_commentary_event(
+        self,
+        game: str,
+        request: CommentaryRequest,
+        ack: CommentaryAck,
+    ) -> None:
+        """发布 ``agent.lead.commentary`` 观测事件（提交即发，成功与每种失败都算事实）。
+
+        event_bus 未注入时跳过；广播失败只记日志，不影响受理回执。
+        """
+        if self._event_bus is None:
+            return
+        payload = AgentLeadCommentaryPayload(
+            game=game,
+            summary=request.summary,
+            mood=request.mood,
+            urgency=request.urgency,
+            about_player=request.about_player,
+            correction=request.correction,
+            accepted=ack.accepted,
+            spoken=ack.spoken,
+            reason=ack.reason,
+        )
+        try:
+            await self._event_bus.emit(CoreEvents.AGENT_LEAD_COMMENTARY, payload, source="LeadCoordinator")
+        except Exception as exc:  # noqa: BLE001 - 观测事件失败不影响受理主链
+            logger.warning(f"广播 {CoreEvents.AGENT_LEAD_COMMENTARY} 失败: {exc}", exc=True)
+
+    async def _emit_suggestion_event(
+        self,
+        *,
+        content: str,
+        source: str,
+        target: str,
+        lead_agent: str,
+        accepted: bool,
+        reason: str,
+    ) -> None:
+        """发布 ``agent.lead.suggestion`` 观测事件（content 非空的每条退出路径都发，含拒收）。
+
+        event_bus 未注入时跳过；广播失败只记日志，不影响转达主链。
+        """
+        if self._event_bus is None:
+            return
+        payload = AgentLeadSuggestionPayload(
+            content=content,
+            source=source,
+            target=target,
+            lead_agent=lead_agent,
+            accepted=accepted,
+            reason=reason,
+        )
+        try:
+            await self._event_bus.emit(CoreEvents.AGENT_LEAD_SUGGESTION, payload, source="LeadCoordinator")
+        except Exception as exc:  # noqa: BLE001 - 观测事件失败不影响转达主链
+            logger.warning(f"广播 {CoreEvents.AGENT_LEAD_SUGGESTION} 失败: {exc}", exc=True)
+
     async def submit_commentary(self, caller: str, request: CommentaryRequest) -> CommentaryAck:
         """受理主控游戏 Agent 的解说素材并转发给主播侧处理器。
 
         门禁：只有此刻处于主控态的 ``caller`` 才允许提交；非主控调用或未绑定处理器时
-        返回清晰拒绝回执，不抛异常。
+        返回清晰拒绝回执，不抛异常。每条退出路径都发布 ``agent.lead.commentary``
+        观测事件（成功与每种失败都算事实）。
         """
         caller_name = (caller or "").strip()
         if not caller_name or not self.is_agent_leading(caller_name):
             logger.debug(f"拒绝非主控方 '{caller_name}' 提交解说（当前 lead={self.lead_agent}）")
-            return CommentaryAck(accepted=False, spoken=False, reason="not_in_lead")
+            ack = CommentaryAck(accepted=False, spoken=False, reason="not_in_lead")
+            await self._emit_commentary_event(caller_name, request, ack)
+            return ack
 
         handler = self._commentary_handler
         if handler is None:
             logger.warning(f"游戏 '{caller_name}' 提交解说但未绑定主播解说处理器")
-            return CommentaryAck(accepted=False, spoken=False, reason="no_commentary_handler")
+            ack = CommentaryAck(accepted=False, spoken=False, reason="no_commentary_handler")
+            await self._emit_commentary_event(caller_name, request, ack)
+            return ack
 
         req = request if request.timestamp_ms > 0 else request.model_copy(update={"timestamp_ms": self._clock()})
         try:
             ack = await handler(req)
-            if isinstance(ack, CommentaryAck):
-                return ack
-            return CommentaryAck(accepted=bool(ack), spoken=False)
+            if not isinstance(ack, CommentaryAck):
+                ack = CommentaryAck(accepted=bool(ack), spoken=False)
         except Exception as exc:  # noqa: BLE001 - 解说处理器异常隔离
             logger.exception(f"解说处理器执行异常（game={caller_name}）: {exc}")
-            return CommentaryAck(accepted=False, spoken=False, reason=f"handler_error: {type(exc).__name__}")
+            ack = CommentaryAck(accepted=False, spoken=False, reason=f"handler_error: {type(exc).__name__}")
+        await self._emit_commentary_event(caller_name, req, ack)
+        return ack
 
     def publish_spoken_echo(self, text: str, *, source: str = "", timestamp_ms: int = 0) -> None:
         """把主播刚说出口的话同步转发给当前主控游戏 Agent（零唤醒、异常隔离）。"""
@@ -715,42 +782,84 @@ class LeadCoordinator:
         source: str = STREAMER_AGENT_NAME,
         source_dialogue: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """向当前主控游戏 Agent 转达观众建议或提醒（非强杀、不建委派账本）。"""
+        """向当前主控游戏 Agent 转达观众建议或提醒（非强杀、不建委派账本）。
+
+        content 非空时每条退出路径都发布 ``agent.lead.suggestion`` 观测事件（含拒收）；
+        content 为空直接返回、不发事件。
+        """
         text = (content or "").strip()
         if not text:
             return {"accepted": False, "target": (target or "").strip(), "reason": "empty_content"}
 
         if not self.is_game_lead or self._active_lead_agent is None:
-            return {
+            result = {
                 "accepted": False,
                 "target": (target or "").strip(),
                 "reason": "not_in_game_lead",
             }
+            await self._emit_suggestion_event(
+                content=text,
+                source=source,
+                target=result["target"],
+                lead_agent="",
+                accepted=False,
+                reason=result["reason"],
+            )
+            return result
 
         lead_name = self._active_lead_agent
         requested = (target or "").strip()
         if requested and requested != lead_name:
-            return {
+            result = {
                 "accepted": False,
                 "target": requested,
                 "lead_agent": lead_name,
                 "reason": "target_not_leading",
             }
+            await self._emit_suggestion_event(
+                content=text,
+                source=source,
+                target=requested,
+                lead_agent=lead_name,
+                accepted=False,
+                reason=result["reason"],
+            )
+            return result
 
         agent = self._agent_manager.get_agent_by_name(lead_name)
         if agent is None:
-            return {"accepted": False, "target": lead_name, "reason": "agent_not_found"}
+            result = {"accepted": False, "target": lead_name, "reason": "agent_not_found"}
+            await self._emit_suggestion_event(
+                content=text,
+                source=source,
+                target=lead_name,
+                lead_agent=lead_name,
+                accepted=False,
+                reason=result["reason"],
+            )
+            return result
 
         try:
             accepted = bool(await agent.receive_suggestion(text, source=source, source_dialogue=source_dialogue))
+            reason = "" if accepted else "refused"
         except Exception as exc:  # noqa: BLE001 - 建议投递异常转结构化失败
             logger.exception(f"向主控游戏 '{lead_name}' 投递建议异常: {exc}")
-            return {"accepted": False, "target": lead_name, "reason": f"error: {type(exc).__name__}"}
+            accepted = False
+            reason = f"error: {type(exc).__name__}"
 
+        await self._emit_suggestion_event(
+            content=text,
+            source=source,
+            target=lead_name,
+            lead_agent=lead_name,
+            accepted=accepted,
+            reason=reason,
+        )
         return {
             "accepted": accepted,
             "target": lead_name,
-            "reason": "" if accepted else "refused",
+            "lead_agent": lead_name,
+            "reason": reason,
         }
 
     async def query_active_short_term_memory(

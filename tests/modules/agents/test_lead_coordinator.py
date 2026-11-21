@@ -456,7 +456,7 @@ async def test_cross_agent_bridges_commentary_echo_and_suggestion(fake_clock: An
 
     # 非强杀建议送达主控游戏
     sug_ok = await coord.send_suggestion("观众想看搭个小桥", source="streamer", source_dialogue=["弹幕: 搭桥"])
-    assert sug_ok == {"accepted": True, "target": "block_game", "reason": ""}
+    assert sug_ok == {"accepted": True, "target": "block_game", "lead_agent": "block_game", "reason": ""}
     assert game.suggestions == [("观众想看搭个小桥", "streamer", ["弹幕: 搭桥"])]
 
     # 指定错误目标被拒
@@ -571,7 +571,12 @@ async def test_framework_tools_visibility_guide_and_delegation_guard(fake_clock:
         )
     )
     assert ok_sug.success is True
-    assert ok_sug.structured_content == {"accepted": True, "target": "solo_game", "reason": ""}
+    assert ok_sug.structured_content == {
+        "accepted": True,
+        "target": "solo_game",
+        "lead_agent": "solo_game",
+        "reason": "",
+    }
     assert len(ledger) == 0 and game.delegations == []
     assert game.suggestions[-1][0] == "观众说可以跟村民换点面包"
 

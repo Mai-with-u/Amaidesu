@@ -735,7 +735,7 @@ async def test_receive_suggestion_is_non_destructive_and_preserves_running_goal(
             source="streamer",
             source_dialogue=["观众想看去河边钓鱼", "水友1：去钓鱼吧", "水友1：去钓鱼吧"],
         )
-        assert result == {"accepted": True, "target": "minecraft", "reason": ""}
+        assert result == {"accepted": True, "target": "minecraft", "lead_agent": "minecraft", "reason": ""}
 
         await _wait_until(lambda: len(llm.seen) > calls_before and not agent.batch_active)
         # 在跑目标完好无损，绝不被强杀

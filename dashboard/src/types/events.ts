@@ -45,9 +45,15 @@ const EVENT = {
   agentPrompted: 'agent.prompted',
   agentReplied: 'agent.replied',
   agentLeadChanged: 'agent.lead.changed',
+  /** 非强杀建议转达回执：运营提醒转给自主主控的游戏 Agent，由其自行决定是否采纳 */
+  agentLeadSuggestion: 'agent.lead.suggestion',
+  /** 主控游戏 Agent 的自主解说/复盘行（非观众回复） */
+  agentLeadCommentary: 'agent.lead.commentary',
   ttsUtteranceStarted: 'tts.utterance.started',
   ttsUtteranceFinished: 'tts.utterance.finished',
   ttsUtteranceFailed: 'tts.utterance.failed',
+  /** 语句被丢弃（被高优打断/过期作废等，未播出）：属于终态，但不是合成失败 */
+  ttsUtteranceDropped: 'tts.utterance.dropped',
   ttsUtterancePlaybackStarted: 'tts.utterance.playback_started',
   ttsUtteranceSentenceBoundary: 'tts.utterance.sentence_boundary',
 

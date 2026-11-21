@@ -235,6 +235,15 @@ class CoreEvents:
     # 收回时发一条。由 LeadCoordinator 唯一发布，供观察面（Dashboard 时间线 / 状态栏）
     # 与复盘记录消费；不作为跨 Agent 决策唤醒总线（跨 Agent 联动走 LeadCoordinator 回调）。
     AGENT_LEAD_CHANGED = "agent.lead.changed"
+    # 游戏侧实况解说提交事实：游戏 Agent 向 LeadCoordinator 提交一条实况解说并得到
+    # 受理结果时发一条（受理成功与每种失败都算事实）。由 LeadCoordinator 唯一发布，
+    # 供直播控制台观测游戏侧解说了什么、是否被转给主播发言管线；只做观测，
+    # 不承载唤醒语义。
+    AGENT_LEAD_COMMENTARY = "agent.lead.commentary"
+    # 非强杀建议转达事实：一条建议经 LeadCoordinator 转达并得到受理结果时发一条
+    # （含拒收）。发起方可为游戏 Agent 或运营（REST 建议通道），供直播控制台观测
+    # 建议内容与受理结果；建议不打断在跑目标、不建委派账本，只做观测。
+    AGENT_LEAD_SUGGESTION = "agent.lead.suggestion"
 
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
