@@ -1,13 +1,24 @@
 <!--
   动态主从状态徽章与导演切权浮层（主播主控 / 游戏主控）。
 
-  常态以单枚胶囊徽章呈现当前主控角色与调度模式（自动跟随 / 手动锁定 / 固定主播主控），
-  点击展开浮层即可一键切换（自动跟随 / 切回主播主控 / 交给就绪游戏主控），不喧宾夺主。
-  后端未注入 LeadCoordinator 时（available=false）自动隐藏，不占空间。
+  常态以单枚胶囊徽章呈现当前主控角色、调度模式与已主控时长，点击展开浮层可一键切换
+  （自动跟随 / 切回主播主控 / 交给就绪游戏主控）并切换动态主从开关，不喧宾夺主。
+  后端未注入 LeadCoordinator 时（available=false）退化为中性灰只读胶囊，占位说明原因。
 -->
 <template>
-  <div v-if="available" class="lead-control" :class="{ 'is-block': block }">
+  <div class="lead-control" :class="{ 'is-block': block }">
+    <!-- 后端未装配：中性灰只读占位，非按钮、无浮层 -->
+    <span
+      v-if="!available"
+      class="lead-chip is-unavailable"
+      :class="{ 'is-block': block }"
+      title="后端未装配主控协调器，动态主从控制面不可用"
+    >
+      主控 · 不可用
+    </span>
+
     <el-popover
+      v-else
       placement="bottom-end"
       :width="320"
       trigger="click"
@@ -62,6 +73,10 @@
             <dt>当前模式</dt>
             <dd :class="{ 'is-locked': isManualLocked }">{{ modeDetail }}</dd>
           </div>
+          <div v-if="leadDurationLabel" class="lead-meta-row">
+            <dt>持续时长</dt>
+            <dd>{{ leadDurationLabel }}</dd>
+          </div>
           <div v-if="reasonLabel" class="lead-meta-row">
             <dt>最近原因</dt>
             <dd :title="leadState?.reason">{{ reasonLabel }}</dd>
@@ -70,6 +85,23 @@
 
         <div v-if="!enabled" class="lead-readonly-notice" role="status">
           动态主从未启用，当前保持固定主播主控（<code>streamer_only</code>）。
+        </div>
+
+        <!-- 动态主从开关：写配置 agents.agents.streamer.lead_mode（dynamic / streamer_only），保存即触发热重建生效 -->
+        <div class="lead-mode-toggle">
+          <el-switch
+            :model-value="leadModeEnabled"
+            :loading="savingLeadMode"
+            size="small"
+            aria-label="动态主从开关"
+            @change="onLeadModeChange"
+          />
+          <div class="lead-mode-toggle-text">
+            <span class="lead-mode-toggle-cap">动态主从</span>
+            <span class="lead-mode-toggle-note">
+              关闭后固定主播主控（streamer_only），全部场景由主播决策
+            </span>
+          </div>
         </div>
 
         <div class="lead-actions" role="group" aria-label="导演切权控制">
@@ -114,8 +146,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { configApi } from '@/api';
 import { useAgentLead } from '@/composables/useAgentLead';
+import { useNowTick } from '@/composables/useNowTick';
+import { getApiErrorMessage } from '@/utils/apiError';
+import { formatElapsedMs } from '@/utils/format';
 
 withDefaults(
   defineProps<{
@@ -143,14 +180,60 @@ const {
   switchLead,
 } = useAgentLead();
 
+// 主控已持续时长：since_ms 起算，1s 共享时钟驱动重算（keep-alive 隐藏即停走）
+const nowMs = useNowTick();
+
+const leadDurationLabel = computed<string>(() => {
+  const sinceMs = leadState.value?.since_ms ?? 0;
+  if (!sinceMs) return '';
+  const diffSec = Math.max(0, Math.floor((nowMs.value - sinceMs) / 1000));
+  if (diffSec < 5) return '刚切换';
+  if (diffSec < 60) return `${diffSec} 秒`;
+  return formatElapsedMs(diffSec * 1000);
+});
+
 const hasGameCandidates = computed(() => switchOptions.value.some(opt => opt.kind === 'game'));
 
 const chipTooltip = computed<string>(() => {
   const parts = [`${badgeLabel.value} · ${modeDetail.value}`];
+  if (leadDurationLabel.value) parts.push(`主控已 ${leadDurationLabel.value}`);
   if (reasonLabel.value) parts.push(`原因：${reasonLabel.value}`);
   parts.push('点击切换主控权');
   return parts.join('\n');
 });
+
+// ==================== 动态主从开关（agents.agents.streamer.lead_mode） ====================
+
+const leadModeEnabled = ref(leadState.value?.enabled ?? false);
+// 快照刷新（WS 补拉 / 轮询）后同步开关初始态；保存进行中不回写，避免覆盖用户操作
+watch(
+  () => leadState.value?.enabled,
+  value => {
+    if (value !== undefined && !savingLeadMode.value) leadModeEnabled.value = value;
+  },
+);
+
+const savingLeadMode = ref(false);
+
+/** 保存 lead_mode：开=dynamic、关=streamer_only；配置键是三段复合形态
+ *  （域 agents + 文件内段 agents + 键 streamer.lead_mode）。保存会触发主播侧
+ *  按新配置重建，热生效即回 */
+async function onLeadModeChange(value: string | number | boolean): Promise<void> {
+  savingLeadMode.value = true;
+  try {
+    const response = await configApi.saveBatch([
+      { key: 'agents.agents.streamer.lead_mode', value: value ? 'dynamic' : 'streamer_only' },
+    ]);
+    if (response.data.requires_restart) ElMessage.info('重启后生效');
+    else ElMessage.info('已保存，主播侧即时生效（按新配置重建）');
+    leadModeEnabled.value = Boolean(value);
+    await refresh({ silent: true });
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, '保存主控模式失败'));
+  } finally {
+    savingLeadMode.value = false;
+  }
+}
 
 function onRefresh(): void {
   void refresh({ silent: false });
@@ -217,6 +300,18 @@ function onSwitch(target: string): void {
   border-color: var(--border-color-dark);
   background: var(--bg-card);
   color: var(--text-secondary);
+}
+
+/* 后端未装配（available=false）：中性灰只读占位，非按钮不可点 */
+.lead-chip.is-unavailable {
+  border-color: var(--border-color-dark);
+  background: var(--bg-hover);
+  color: var(--text-placeholder);
+  cursor: default;
+}
+
+.lead-chip.is-unavailable:hover {
+  filter: none;
 }
 
 .lead-dot {
@@ -349,6 +444,41 @@ function onSwitch(target: string): void {
 .lead-readonly-notice code {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
+}
+
+/* 动态主从开关行：开关 + 名称与说明小字，紧贴只读提示下方 */
+.lead-mode-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+
+.lead-mode-toggle :deep(.el-switch) {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.lead-mode-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lead-mode-toggle-cap {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lead-mode-toggle-note {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .lead-actions {

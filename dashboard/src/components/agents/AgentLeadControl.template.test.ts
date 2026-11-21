@@ -46,9 +46,17 @@ describe('AgentLeadControl 契约守护', () => {
   });
 
   it('包含状态徽章、streamer_only 固定态提示与一键切权按钮渲染', () => {
-    expect(sfcSource).toContain('v-if="available"');
+    // 可用态走 popover（v-else），不可用态退化为只读占位胶囊而非整块消失
+    expect(sfcSource).toContain('v-if="!available"');
+    expect(sfcSource).toContain('主控 · 不可用');
+    expect(sfcSource).toContain('后端未装配主控协调器');
     expect(sfcSource).toContain('streamer_only');
     expect(sfcSource).toContain('v-for="opt in switchOptions"');
     expect(sfcSource).toContain('@click="onSwitch(opt.target)"');
+  });
+
+  it('包含主控持续时长与动态主从开关（lead_mode 配置写入）', () => {
+    expect(sfcSource).toContain('leadDurationLabel');
+    expect(sfcSource).toContain('agents.agents.streamer.lead_mode');
   });
 });
