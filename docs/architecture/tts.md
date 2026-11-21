@@ -26,7 +26,7 @@
 >
 > 该端点自身有生命周期风险：OpenAI 已把 tts-1 / tts-1-hd / gpt-4o-mini-tts 系列标记为弃用并于 2027-01-06 关停，官方引导新集成改走 Realtime API（不支持 `/v1/audio/speech`）。关停前本引擎照常可用，届时需要换端点或换引擎。另注意 tts-1 / tts-1-hd 不支持 `stream_format=sse`，用它们必须把 `stream_format` 改回 `audio`。
 
-GSV 的服务部署、参考音频与多音字维护见 [GPT-SoVITS 语音服务部署](../guides/gptsovits.md)。
+GSV 的服务部署、参考音频与多音字维护见 [GPT-SoVITS 语音服务部署](../guides/gptsovits.md)。IndexTTS 的服务部署、显存与速度预期见 [IndexTTS 语音服务部署](../guides/indextts.md)。
 
 ## 播放链
 
