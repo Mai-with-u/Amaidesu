@@ -914,6 +914,45 @@ def test_glance_self_surfaces_damaged_inventory_durability_and_low_gear_bars() -
     assert "low_durability" not in legacy_view["body"]
 
 
+def test_glance_self_distinguishes_powered_gear_from_durability_gear() -> None:
+    """速览低比例进度条：AE2 / 应用机械带电装备报低电量，石英切割刀与原版工具报低耐久。"""
+    powered_view = glance_self(
+        MaicraftReply(
+            ok=True,
+            data={
+                "held": "ae2:portable_item_cell_4k",
+                "gear_bars": [
+                    {"slot": "mainhand", "item": "ae2:portable_item_cell_4k", "bar_percent": 15},
+                    {"slot": "offhand", "item": "ae2:matter_cannon", "bar_percent": 15},
+                    {"slot": "head", "item": "appmek:portable_chemical_cell_1k", "bar_percent": 15},
+                ],
+            },
+        )
+    )
+    low_powered = powered_view["body"]["low_durability"]
+    assert "主手ae2:portable_item_cell_4k（低电量，剩 15%）" in low_powered
+    assert "副手ae2:matter_cannon（低电量，剩 15%）" in low_powered
+    assert "头部appmek:portable_chemical_cell_1k（低电量，剩 15%）" in low_powered
+    assert "低耐久" not in low_powered
+
+    durability_view = glance_self(
+        MaicraftReply(
+            ok=True,
+            data={
+                "held": "ae2:certus_quartz_cutting_knife",
+                "gear_bars": [
+                    {"slot": "mainhand", "item": "ae2:certus_quartz_cutting_knife", "bar_percent": 15},
+                    {"slot": "offhand", "item": "minecraft:iron_pickaxe", "bar_percent": 15},
+                ],
+            },
+        )
+    )
+    low_durability = durability_view["body"]["low_durability"]
+    assert "主手ae2:certus_quartz_cutting_knife（低耐久，剩 15%）" in low_durability
+    assert "副手铁镐（低耐久，剩 15%）" in low_durability
+    assert "低电量" not in low_durability
+
+
 async def test_glance_scene_and_nearby_player_names_merge_online_players_and_keep_empty_list() -> None:
     """全服在线玩家感知与脱敏覆盖：合并视野内玩家实体与视野外在线玩家名单（去重保序），无其他玩家时保留空列表区分读取失败。"""
     populated = MaicraftReply(

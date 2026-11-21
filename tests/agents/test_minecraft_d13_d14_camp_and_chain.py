@@ -10,6 +10,8 @@ from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.agents.minecraft.mod_facts import (
     WorldMiningFacts,
     chain_mining_text,
+    is_powered_gear,
+    low_gear_bar_note,
     mod_features_text,
     pits_text,
 )
@@ -53,6 +55,7 @@ def test_mod_features_and_chain_mining_compact_formatting_and_do_not_crowd_brief
         {
             "mod_features": [
                 "ae2",
+                "appmek",
                 "chain_mining",
                 "create",
                 "ftb_quests",
@@ -66,7 +69,7 @@ def test_mod_features_and_chain_mining_compact_formatting_and_do_not_crowd_brief
         }
     )
     assert features == (
-        "应用能源2、连锁破坏、机械动力、FTB任务书、独立战利品箱、"
+        "应用能源2、应用机械、连锁破坏、机械动力、FTB任务书、独立战利品箱、"
         "通用机械、Sable载具、精妙背包、车万女仆、custom_future_mod"
     )
 
@@ -299,3 +302,35 @@ def test_prompts_and_streamer_guide_cover_d13_camp_rules_and_d14_chain_mining() 
     assert "last_chain_mining" in STREAMER_GUIDE
     assert "recent_pits" in STREAMER_GUIDE
     assert "登记" not in STREAMER_GUIDE
+
+
+def test_mod_features_maps_appmek_and_identifies_powered_gear() -> None:
+    """应用机械能力代号映射为中文，且 AE2 / 应用机械带电装备与消耗耐久工具的进度条提醒区分准确。"""
+    assert mod_features_text({"mod_features": ["ae2", "appmek", "mekanism"]}) == "应用能源2、应用机械、通用机械"
+
+    powered_items = (
+        "ae2:portable_item_cell_4k",
+        "ae2:portable_fluid_cell_1k",
+        "ae2:wireless_terminal",
+        "ae2:wireless_crafting_terminal",
+        "ae2:matter_cannon",
+        "ae2:entropy_manipulator",
+        "ae2:color_applicator",
+        "ae2:charged_staff",
+        "ae2:energy_cell",
+        "ae2:dense_energy_cell",
+        "appmek:portable_chemical_cell_1k",
+    )
+    for item_id in powered_items:
+        assert is_powered_gear(item_id) is True
+        assert low_gear_bar_note(item_id, 15) == "（低电量，剩 15%）"
+
+    durability_items = (
+        "ae2:certus_quartz_cutting_knife",
+        "ae2:nether_quartz_cutting_knife",
+        "ae2:certus_quartz_pickaxe",
+        "minecraft:iron_pickaxe",
+    )
+    for item_id in durability_items:
+        assert is_powered_gear(item_id) is False
+        assert low_gear_bar_note(item_id, 15) == "（低耐久，剩 15%）"

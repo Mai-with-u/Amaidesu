@@ -1,7 +1,7 @@
-"""实例已接入的模组能力、连锁挖矿统计与取材留坑回填事实。
+"""实例已接入的模组能力、带电装备进度条识别、连锁挖矿统计与取材留坑回填事实。
 
 解析 ``observe(what=self)`` 可选的 ``mod_features``、``last_chain_mining``，以及 ``obtain`` / ``gather``
-目标结果 ``details`` 里的 ``chain_mining`` 与 ``pits``：
+目标结果 ``details`` 里的 ``chain_mining`` 与 ``pits``，并提供带电装备低电量提醒判定：
 - Mod 还没报对应字段时一律返回 ``None``，调用方不输出空键、不报错；
 - 格式化结果控制在单行短句，只放进结构化速览字段、工作文档快照与任务事实，不进一句话现场（``brief``），
   避免挤占血量、敌情与身边同伴的核心空间。
@@ -17,6 +17,8 @@ __all__ = [
     "WorldMiningFacts",
     "chain_mining_text",
     "goal_mining_and_pits_notes",
+    "is_powered_gear",
+    "low_gear_bar_note",
     "mod_features_text",
     "pits_text",
 ]
@@ -27,12 +29,29 @@ _MOD_FEATURE_NAMES: Dict[str, str] = {
     "lootr": "独立战利品箱",
     "create": "机械动力",
     "ae2": "应用能源2",
+    "appmek": "应用机械",
     "mekanism": "通用机械",
     "sophisticated_backpacks": "精妙背包",
     "touhou_little_maid": "车万女仆",
     "ftb_quests": "FTB任务书",
     "sable": "Sable载具",
 }
+
+#: AE2 里用进度条显示剩余电量而非耐久的固定物品路径（不含消耗耐久的石英切割刀与石英工具）
+_AE2_POWERED_ITEM_PATHS: frozenset[str] = frozenset(
+    {
+        "matter_cannon",
+        "entropy_manipulator",
+        "color_applicator",
+        "charged_staff",
+        "energy_cell",
+        "dense_energy_cell",
+    }
+)
+#: AE2 带电便携存储元件与无线终端路径前缀
+_AE2_POWERED_ITEM_PREFIXES: tuple[str, ...] = ("portable_", "wireless_")
+#: 应用机械（Applied Mekanistics）带电便携化学品元件路径前缀
+_APPMEK_POWERED_ITEM_PREFIXES: tuple[str, ...] = ("portable_chemical_cell_",)
 
 #: 备注里可能带的括号坐标，进速览与委派摘要前剥掉以免主播照念坐标数字
 _PARENTHESIZED_COORDINATES = re.compile(
@@ -54,6 +73,32 @@ def _clean_note(raw: Any) -> str:
     if len(stripped) <= _NOTE_MAX_CHARS:
         return stripped
     return f"{stripped[:_NOTE_MAX_CHARS]}…"
+
+
+def is_powered_gear(raw_item: str) -> bool:
+    """判断物品的进度条是否表示模组电量（而非原版物品耐久）。
+
+    AE2 便携元件、无线终端与带电工具及应用机械便携化学品元件都借物品进度条显示剩余能量，
+    而同属 AE2 的石英切割刀（``*_quartz_cutting_knife``）与石英工具仍消耗普通耐久，不归入此类。
+    """
+    text = raw_item.strip().lower()
+    namespace, sep, path = text.partition(":")
+    if not sep or not path:
+        return False
+    # 命中已知带电模组命名空间与物品族时按电量处理，其余（含石英切割刀与原版工具）默认按耐久处理
+    if namespace == "ae2":
+        if path.endswith("_quartz_cutting_knife"):
+            return False
+        return path in _AE2_POWERED_ITEM_PATHS or path.startswith(_AE2_POWERED_ITEM_PREFIXES)
+    if namespace == "appmek":
+        return path.startswith(_APPMEK_POWERED_ITEM_PREFIXES)
+    return False
+
+
+def low_gear_bar_note(raw_item: str, percent: int) -> str:
+    """将手持或护甲栏位低比例进度条格式化为中文提醒（带电装备报低电量，其余报低耐久）。"""
+    label = "低电量" if is_powered_gear(raw_item) else "低耐久"
+    return f"（{label}，剩 {percent}%）"
 
 
 def mod_features_text(data: Dict[str, Any]) -> Optional[str]:

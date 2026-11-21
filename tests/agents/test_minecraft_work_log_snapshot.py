@@ -149,3 +149,39 @@ def test_snapshot_annotates_damaged_inventory_and_low_durability_equipment() -> 
         in text
     )
     assert "背包：铁镐 ×1（耐久 3/250）、铁镐 ×1、oak_planks ×16" in text
+
+
+def test_snapshot_distinguishes_powered_gear_from_durability_gear() -> None:
+    """工作文档快照：AE2 / 应用机械带电装备报低电量，石英切割刀与原版工具报低耐久。"""
+    powered_snapshot = build_snapshot(
+        _ok(
+            {
+                "held": "ae2:portable_item_cell_4k",
+                "gear_bars": [
+                    {"slot": "mainhand", "item": "ae2:portable_item_cell_4k", "bar_percent": 15},
+                    {"slot": "offhand", "item": "ae2:matter_cannon", "bar_percent": 15},
+                    {"slot": "head", "item": "appmek:portable_chemical_cell_1k", "bar_percent": 15},
+                ],
+            }
+        )
+    )
+    assert (
+        "装备：手上拿着ae2:portable_item_cell_4k（低电量，剩 15%）、"
+        "副手拿着ae2:matter_cannon（低电量，剩 15%）、"
+        "appmek:portable_chemical_cell_1k（低电量，剩 15%）"
+    ) in powered_snapshot
+
+    durability_snapshot = build_snapshot(
+        _ok(
+            {
+                "held": "ae2:certus_quartz_cutting_knife",
+                "gear_bars": [
+                    {"slot": "mainhand", "item": "ae2:certus_quartz_cutting_knife", "bar_percent": 15},
+                    {"slot": "offhand", "item": "minecraft:iron_pickaxe", "bar_percent": 15},
+                ],
+            }
+        )
+    )
+    assert (
+        "装备：手上拿着ae2:certus_quartz_cutting_knife（低耐久，剩 15%）、副手拿着铁镐（低耐久，剩 15%）"
+    ) in durability_snapshot

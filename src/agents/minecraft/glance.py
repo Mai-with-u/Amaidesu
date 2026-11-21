@@ -24,7 +24,7 @@ from src.modules.types.game_situation import NearbyPlace
 
 from .attention_matrix import biome_name, item_name
 from .maicraft import MaicraftReply
-from .mod_facts import chain_mining_text, mod_features_text
+from .mod_facts import chain_mining_text, low_gear_bar_note, mod_features_text
 
 __all__ = [
     "HOSTILE_KINDS",
@@ -541,7 +541,7 @@ def _creature_sentences(creatures: Any) -> List[str]:
     return sentences
 
 
-# 手持与护甲栏位名称映射及低耐久告警百分比阈值（bar_percent <= 20 时提醒即将用坏）
+# 手持与护甲栏位名称映射及低比例进度条告警百分比阈值（bar_percent <= 20 时提醒即将耗尽）
 _GEAR_SLOT_LABELS: Dict[str, str] = {
     "mainhand": "主手",
     "offhand": "副手",
@@ -574,7 +574,7 @@ def _damaged_durability_suffix(entry: Dict[str, Any]) -> str:
 
 
 def _low_durability_gear_text(gear_bars: Any) -> Optional[str]:
-    """检查手持与护甲栏位的耐久条百分比，将不高于 20% 的装备整理成低耐久提醒文本。"""
+    """检查手持与护甲栏位的进度条百分比，将不高于 20% 的装备整理成低耐久或低电量提醒文本。"""
     if not isinstance(gear_bars, list):
         return None
     warnings: List[str] = []
@@ -593,8 +593,8 @@ def _low_durability_gear_text(gear_bars: Any) -> Optional[str]:
             or not (0 <= percent <= _LOW_GEAR_BAR_PERCENT)
         ):
             continue
-        pct_text = str(int(round(percent)))
-        warnings.append(f"{slot_label}{_item_label(raw_item)}（低耐久，剩 {pct_text}%）")
+        # 带电装备报「低电量」，其余消耗耐久的工具与护甲报「低耐久」
+        warnings.append(f"{slot_label}{_item_label(raw_item)}{low_gear_bar_note(raw_item, int(round(percent)))}")
     return "、".join(warnings) if warnings else None
 
 
@@ -616,7 +616,7 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
             body[key] = data[key]
     low_gear = _low_durability_gear_text(data.get("gear_bars"))
     if low_gear is not None:
-        # 手持工具或身上护甲耐久不足两成时挂进身体标量，供决策层与表达回执同步感知快坏了的装备
+        # 手持工具或身上护甲耐久/电量不足两成时挂进身体标量（沿用 low_durability 键名保持兼容），供决策层与表达回执同步感知
         body["low_durability"] = low_gear
     air, max_air = data.get("air"), data.get("max_air")
     if isinstance(air, int) and isinstance(max_air, int) and air < max_air:

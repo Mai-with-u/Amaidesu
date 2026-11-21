@@ -14,14 +14,14 @@ from typing import Any, Dict, List, Optional
 
 from .attention_matrix import dimension_name, item_name
 from .maicraft import MaicraftReply
-from .mod_facts import chain_mining_text, mod_features_text
+from .mod_facts import chain_mining_text, low_gear_bar_note, mod_features_text
 
 __all__ = ["SNAPSHOT_TITLE", "build_snapshot", "unavailable_snapshot"]
 
 #: 快照段的抬头
 SNAPSHOT_TITLE = "【当前状态快照】"
 
-#: 装备与手持栏位低耐久提醒阈值（bar_percent <= 20 时附低耐久提醒）
+#: 装备与手持栏位低比例进度条提醒阈值（bar_percent <= 20 时附低耐久或低电量提醒）
 _LOW_GEAR_BAR_PERCENT = 20
 _ARMOR_SLOTS = frozenset({"head", "chest", "legs", "feet"})
 _SLOT_PREFIXES: Dict[str, str] = {
@@ -90,7 +90,7 @@ def _damaged_durability_suffix(entry: Dict[str, Any]) -> str:
 
 
 def _low_gear_bars(data: Dict[str, Any]) -> List[tuple[str, str, int]]:
-    """提取手持与护甲栏位中 bar_percent <= 20 的低耐久条目（栏位名、物品 ID、整数百分比）。"""
+    """提取手持与护甲栏位中 bar_percent <= 20 的低比例进度条条目（栏位名、物品 ID、整数百分比）。"""
     raw_bars = data.get("gear_bars")
     if not isinstance(raw_bars, list):
         return []
@@ -114,7 +114,7 @@ def _low_gear_bars(data: Dict[str, Any]) -> List[tuple[str, str, int]]:
 
 
 def _equipment_text(data: Dict[str, Any]) -> Optional[str]:
-    """身上的装备：护甲与手上拿的东西；对应手持或护甲格耐久条 ≤20% 时一并附低耐久提醒。"""
+    """身上的装备：护甲与手上拿的东西；对应手持或护甲格进度条 ≤20% 时按装备类型附低耐久或低电量提醒。"""
     low_bars = _low_gear_bars(data)
     consumed_indices: set[int] = set()
     parts: List[str] = []
@@ -131,7 +131,7 @@ def _equipment_text(data: Dict[str, Any]) -> Optional[str]:
         )
         if matched is not None:
             consumed_indices.add(matched)
-            parts.append(f"{item_name(item)}（低耐久，剩 {low_bars[matched][2]}%）")
+            parts.append(f"{item_name(item)}{low_gear_bar_note(item, low_bars[matched][2])}")
         else:
             parts.append(item_name(item))
     held = data.get("held")
@@ -146,14 +146,16 @@ def _equipment_text(data: Dict[str, Any]) -> Optional[str]:
         )
         if matched is not None:
             consumed_indices.add(matched)
-            parts.append(f"手上拿着{item_name(held)}（低耐久，剩 {low_bars[matched][2]}%）")
+            # 依进度条所属物品区分低电量与低耐久，避免带电装备在快照里被写成低耐久
+            bar_item, pct = low_bars[matched][1], low_bars[matched][2]
+            parts.append(f"手上拿着{item_name(held)}{low_gear_bar_note(bar_item, pct)}")
         else:
             parts.append(f"手上拿着{item_name(held)}")
     for idx, (slot, bar_item, pct) in enumerate(low_bars):
         if idx in consumed_indices:
             continue
         prefix = _SLOT_PREFIXES[slot]
-        parts.append(f"{prefix}{item_name(bar_item)}（低耐久，剩 {pct}%）")
+        parts.append(f"{prefix}{item_name(bar_item)}{low_gear_bar_note(bar_item, pct)}")
     return "、".join(parts) if parts else None
 
 
