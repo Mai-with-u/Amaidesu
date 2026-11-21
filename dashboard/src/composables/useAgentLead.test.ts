@@ -19,20 +19,25 @@ import {
   leadBadgeLabelOf,
   leadModeDetailOf,
   leadModeLabelOf,
+  switchConfirmMessageOf,
   useAgentLead,
 } from '@/composables/useAgentLead';
 import { useWebSocketStore } from '@/stores';
 import type { LeadStateResponse, WebSocketMessage, WsMessageType } from '@/types';
 
-const { elMessageSuccess, elMessageError } = vi.hoisted(() => ({
+const { elMessageSuccess, elMessageError, elMessageBoxConfirm } = vi.hoisted(() => ({
   elMessageSuccess: vi.fn(),
   elMessageError: vi.fn(),
+  elMessageBoxConfirm: vi.fn(),
 }));
 
 vi.mock('element-plus', () => ({
   ElMessage: {
     success: elMessageSuccess,
     error: elMessageError,
+  },
+  ElMessageBox: {
+    confirm: elMessageBoxConfirm,
   },
 }));
 
@@ -122,6 +127,19 @@ describe('useAgentLead 纯函数', () => {
     expect(disabledOpts.every(o => o.disabled && !o.active)).toBe(true);
   });
 
+  it('switchConfirmMessageOf：按目标区分打断语义，主播→主播免确认', () => {
+    const gameLead = leadSnapshot({ mode: 'game', lead_agent: 'minecraft' });
+    expect(switchConfirmMessageOf('factorio', gameLead)).toBe(
+      '切换到 factorio 主控将打断它当前的自主执行，确认？',
+    );
+    expect(switchConfirmMessageOf('streamer', gameLead)).toBe(
+      '收回 minecraft 的主控权将打断其当前执行，确认？',
+    );
+    // 当前已是主播主控：切向主播不打断任何执行，免确认
+    expect(switchConfirmMessageOf('streamer', leadSnapshot())).toBeNull();
+    expect(switchConfirmMessageOf('auto', gameLead)).toBe('恢复自动跟随，确认？');
+  });
+
   it('applyLeadChangedPayload：就地更新 mode/lead_agent/override/reason/since_ms 并保留候选名单', () => {
     const base = leadSnapshot({ candidates: ['minecraft'], ready_candidates: ['minecraft'] });
     const updated = applyLeadChangedPayload(
@@ -171,6 +189,8 @@ describe('useAgentLead 组合式与 KeepAlive 生命周期', () => {
     switchLeadMock.mockReset();
     elMessageSuccess.mockReset();
     elMessageError.mockReset();
+    // 默认确认框都点确定；单测里再按需改写为拒绝
+    elMessageBoxConfirm.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -250,6 +270,54 @@ describe('useAgentLead 组合式与 KeepAlive 生命周期', () => {
     await getApi().switchLead('minecraft');
     expect(getApi().errorMessage.value).toBe('目标游戏 minecraft 当前未就绪');
     expect(elMessageError).toHaveBeenCalledWith('目标游戏 minecraft 当前未就绪');
+  });
+
+  it('switchLead 前弹二次确认：取消即中止（不发请求、不弹错误），确认后正常执行', async () => {
+    getLeadMock.mockResolvedValueOnce({ data: leadSnapshot() } as never);
+    const { getApi } = mountLeadInKeepAlive();
+    await vi.waitFor(() => expect(getApi().available.value).toBe(true));
+
+    // 取消：ElMessageBox 以 reject 表达取消（confirmAction 捕获后回 false），中止且不算错误
+    elMessageBoxConfirm.mockRejectedValueOnce(new Error('cancel'));
+    const result = await getApi().switchLead('minecraft');
+    expect(result).toBeNull();
+    expect(switchLeadMock).not.toHaveBeenCalled();
+    expect(elMessageError).not.toHaveBeenCalled();
+    expect(getApi().switchingTarget.value).toBeNull();
+
+    // 确认：文案带目标名，请求正常发出
+    const gameSnap = leadSnapshot({ mode: 'game', lead_agent: 'minecraft', override: 'minecraft' });
+    switchLeadMock.mockResolvedValueOnce({ data: gameSnap } as never);
+    await getApi().switchLead('minecraft');
+    expect(elMessageBoxConfirm).toHaveBeenCalledWith(
+      '切换到 minecraft 主控将打断它当前的自主执行，确认？',
+      '切换主控权',
+      expect.objectContaining({ type: 'warning' }),
+    );
+    expect(switchLeadMock).toHaveBeenCalledWith({ target: 'minecraft', reason: 'manual_override' });
+  });
+
+  it('激活态每 20 秒静默轮询兜底刷新快照，失活停止轮询', async () => {
+    getLeadMock.mockResolvedValue({ data: leadSnapshot() } as never);
+    const { wrapper: host } = mountLeadInKeepAlive();
+    await vi.waitFor(() => expect(getLeadMock).toHaveBeenCalledTimes(1));
+
+    // 轮询触发静默 refresh（激活态 20s 周期）
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(getLeadMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(getLeadMock).toHaveBeenCalledTimes(3);
+
+    // 失活：不再轮询
+    await host.setProps({ show: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getLeadMock).toHaveBeenCalledTimes(3);
+
+    // 再激活：恢复轮询；onActivated 的静默补拉先走一次，20 秒后轮询再走
+    await host.setProps({ show: true });
+    await vi.waitFor(() => expect(getLeadMock).toHaveBeenCalledTimes(4));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(getLeadMock).toHaveBeenCalledTimes(5);
   });
 
   it('enabled=false（streamer_only）时不发起切换请求', async () => {

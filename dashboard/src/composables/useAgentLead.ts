@@ -9,10 +9,16 @@
  *
  * keep-alive 生命周期语义：
  * 本组合式常挂在 keep-alive 缓存页（直播控制台 LiveObserver / Agent 页 Agents）内，
- * 页面隐藏不触发 unmount。WS 订阅与防抖定时器严格随激活态启停：
- * - `onMounted` 建立 WS 订阅并拉取首屏状态；
- * - `onActivated`（非首次）恢复 WS 订阅并静默重拉（补齐隐藏期间错过的切权事件）；
- * - `onDeactivated` 与 `onScopeDispose` 解除 WS 订阅并清理防抖定时器，避免后台驻留与泄漏。
+ * 页面隐藏不触发 unmount。WS 订阅、防抖定时器与静默轮询严格随激活态启停：
+ * - `onMounted` 建立 WS 订阅并拉取首屏状态（轮询由 useKeepAlivePolling 在激活时启动）；
+ * - `onActivated`（非首次）恢复 WS 订阅并静默重拉（补齐隐藏期间错过的切权事件），
+ *   轮询恢复运行；
+ * - `onDeactivated` 与 `onScopeDispose` 解除 WS 订阅、清理防抖定时器并停止轮询，
+ *   避免后台驻留与泄漏。
+ *
+ * 轮询兜底的理由：候选就绪态变化（ready_candidates）不发事件，仅靠切权事件补拉
+ * 会在"就绪变化但未引发切权"的窗口内陈旧（导演看到过期的就绪/未就绪标记），
+ * 因此激活态每 20 秒静默重拉一次快照。
  */
 
 import { computed, onActivated, onDeactivated, onMounted, onScopeDispose, ref } from 'vue';
@@ -24,9 +30,14 @@ import type { LeadStateResponse, WebSocketMessage } from '@/types';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { isRecord, str } from '@/utils/guards';
 import { formatLeadReasonLabel, formatLeadRoleLabel } from '@/utils/liveFeed';
+import { useKeepAlivePolling } from './useKeepAlivePolling';
+import { confirmAction } from '@/utils/confirmAction';
 
 /** 收到 agent.lead.changed 后补拉全量快照的防抖窗口（毫秒） */
 const RELOAD_DEBOUNCE_MS = 200;
+
+/** 激活态静默轮询周期（毫秒）：兜底同步不发事件的候选就绪态变化 */
+const LEAD_POLL_INTERVAL_MS = 20_000;
 
 /** 导演一键切权按钮项 */
 export interface LeadSwitchOption {
@@ -171,6 +182,27 @@ function switchSuccessMessage(target: string, next: LeadStateResponse): string {
   return `已切换为${leadBadgeLabelOf(next)}`;
 }
 
+/**
+ * 切权二次确认文案：按目标区分打断语义（null = 该操作不打断任何执行，免确认）。
+ * - 切向游戏候选 N：N 将自主控场，打断主播当前节奏（原文即「它当前的自主执行」口径）；
+ * - 切向主播且当前是游戏主控：收回游戏主控权，打断其当前执行；
+ * - auto：恢复自动跟随。
+ */
+export function switchConfirmMessageOf(
+  target: string,
+  state: LeadStateResponse | null,
+): string | null {
+  if (target === 'auto') return '恢复自动跟随，确认？';
+  if (target === 'streamer') {
+    const current = state?.lead_agent ?? '';
+    if (current && current !== 'streamer') {
+      return `收回 ${current} 的主控权将打断其当前执行，确认？`;
+    }
+    return null;
+  }
+  return `切换到 ${target} 主控将打断它当前的自主执行，确认？`;
+}
+
 export function useAgentLead() {
   const wsStore = useWebSocketStore();
   const leadState = ref<LeadStateResponse | null>(null);
@@ -215,13 +247,17 @@ export function useAgentLead() {
     }
   }
 
-  /** 导演一键切换主控权：先防连点，成功后即时更新状态并弹窗反馈，失败提取后端 detail 提示 */
+  /** 导演一键切换主控权：二次确认（取消不算错误）→ 防连点 → 成功后即时更新状态并弹窗反馈 */
   async function switchLead(
     target: string,
     reason = 'manual_override',
   ): Promise<LeadStateResponse | null> {
     if (switchingTarget.value !== null) return null;
     if (leadState.value && !leadState.value.enabled) return null;
+    const confirmMessage = switchConfirmMessageOf(target, leadState.value);
+    if (confirmMessage !== null && !(await confirmAction(confirmMessage, '切换主控权'))) {
+      return null;
+    }
     switchingTarget.value = target;
     errorMessage.value = null;
     try {
@@ -291,6 +327,10 @@ export function useAgentLead() {
 
   onDeactivated(stopWs);
   onScopeDispose(stopWs);
+
+  // 激活态静默轮询兜底（随激活态启停，见 useKeepAlivePolling）：候选就绪态变化
+  // 不发事件，仅靠切权事件补拉会在"就绪变化但未引发切权"的窗口内陈旧
+  useKeepAlivePolling(() => refresh({ silent: true }), LEAD_POLL_INTERVAL_MS);
 
   return {
     leadState,
