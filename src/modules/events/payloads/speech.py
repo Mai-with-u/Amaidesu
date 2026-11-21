@@ -74,6 +74,10 @@ class StreamerSpeechPayload(BasePayload):
             ``replied_count`` 写穿。
         timestamp_ms: 事件发布时间戳（Unix 毫秒），用于日志/排序，
             与回复生成时刻解耦（防止事件总线异步分发时与实际发言时刻混用）。
+        priority: 发言管线优先级（0=P0 常规…3=P3 极急，常量见
+            ``SPEECH_PRIORITY_*``）；控制台据此排序与标色，payload 只存数值。
+        source: 发言来源标识（游戏解说路径 ``game_commentary``、主播常规路径
+            ``planner``、突发反应路径 ``mouth``）；空字符串表示未知来源。
     """
 
     utterance_id: str = Field(..., description="一次发言实例的唯一 ID（编排层生成，全链路关联键）")
@@ -141,6 +145,14 @@ class StreamerSpeechPayload(BasePayload):
         description=(
             "这条发言在回应的游戏玩家的 UUID；本窗没人开口、两位以上开口、有认不出的人插话，或这句在回一条弹幕时为空"
         ),
+    )
+    priority: int = Field(
+        default=0,
+        description="发言管线优先级（0=P0 常规…3=P3 极急，常量见 SPEECH_PRIORITY_*）；控制台据此排序与标色",
+    )
+    source: str = Field(
+        default="",
+        description="发言来源标识（游戏解说路径 game_commentary、主播常规路径 planner、突发反应路径 mouth）；空=未知",
     )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),

@@ -1154,3 +1154,35 @@ async def test_dispatch_supports_game_commentary_source_and_explicit_priority(st
 
     assert spoken_sources == [("前面好像有钻石矿！", "game_commentary")]
     assert engine.calls == [("前面好像有钻石矿！", result[2])]
+
+
+async def test_dispatch_carries_priority_and_source_to_speech_payload(started) -> None:
+    """dispatch / dispatch_reaction 把优先级与来源标识透传进 streamer.speech payload。"""
+    bus = EventBus()
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus)
+
+    # 游戏解说路径：显式 priority + source
+    await dispatcher.dispatch(
+        {"speech": "这波团战打得好", "emotion": {"name": "excited", "intensity": 0.9}},
+        priority=SPEECH_PRIORITY_HIGHLIGHT,
+        source="game_commentary",
+    )
+    await _until(lambda: len(captured) >= 1)
+    assert (captured[0][1].priority, captured[0][1].source) == (SPEECH_PRIORITY_HIGHLIGHT, "game_commentary")
+
+    # 主播常规路径：默认值
+    await dispatcher.dispatch({"speech": "大家好", "emotion": {"name": "neutral", "intensity": 0.5}})
+    await _until(lambda: len(captured) >= 2)
+    assert (captured[1][1].priority, captured[1][1].source) == (SPEECH_PRIORITY_NORMAL, "planner")
+
+    # 嘴的突发反应：source 固定 mouth，priority 取调用值
+    await dispatcher.dispatch_reaction(
+        "哇！",
+        emotion="surprised",
+        emotion_intensity=0.9,
+        wait_ms=10,
+        priority=SPEECH_PRIORITY_EMERGENCY,
+    )
+    await _until(lambda: len(captured) >= 3)
+    assert (captured[2][1].priority, captured[2][1].source) == (SPEECH_PRIORITY_EMERGENCY, "mouth")

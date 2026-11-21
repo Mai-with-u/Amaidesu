@@ -489,6 +489,8 @@ class SpeechDispatcher:
                     live_session_id=live_session_id,
                     memory_refs=list(memory_refs or ()),
                     reply_player=reply_player,
+                    priority=priority,
+                    source=source,
                 )
                 self._schedule_subtitle_show(cleaned_speech, utterance_id, reply_quote=reply_quote)
                 self._notify_spoken(cleaned_speech, source=source)
@@ -579,6 +581,8 @@ class SpeechDispatcher:
                 emotion_intensity,
                 round_id=round_id,
                 llm_request_id=llm_request_id,
+                priority=priority,
+                source="mouth",
             )
             # 字幕直出模式下整段一次显示（跟随播放模式由 tts 事件逐句驱动，这里不出字）
             self._schedule_subtitle_show(text + "".join(line for line, _ in follow), utterance_id)
@@ -598,6 +602,8 @@ class SpeechDispatcher:
                         round_id=round_id,
                         llm_request_id=llm_request_id,
                         emotion_at_playback=True,
+                        priority=priority,
+                        source="mouth",
                     )
                     self._notify_spoken(line, source="mouth")
                     await queue.enqueue(follow_id, line, priority=priority, segment=segment)
@@ -712,10 +718,13 @@ class SpeechDispatcher:
         live_session_id: int = 0,
         memory_refs: Optional[List[str]] = None,
         reply_player: Tuple[str, str] = ("", ""),
+        priority: int = 0,
+        source: str = "",
     ) -> None:
         """发布 ``streamer.speech`` 业务事件（同步 await 发出，保证先于轮末决策记录与空闲状态；失败不反噬决策循环）。
 
         ``live_session_id`` 非 0 时随事件带出（道别句归刚结束的那一场），0 由场次盖章拦截器补。
+        ``priority`` / ``source`` 随事件带出发言管线优先级与来源标识，供控制台观测排序。
         """
         event_bus = self._event_bus
         if event_bus is None:
@@ -736,6 +745,8 @@ class SpeechDispatcher:
             memory_refs=list(memory_refs or ()),
             reply_player_game=reply_player[0],
             reply_player_uuid=reply_player[1],
+            priority=priority,
+            source=source,
         )
 
         try:
