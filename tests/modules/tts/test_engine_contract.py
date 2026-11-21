@@ -1,4 +1,4 @@
-"""六个 TTS 引擎的共同契约：utterance 生命周期事件、失败上抛、TTSProvider 协议、已退役的工具化入口"""
+"""七个 TTS 引擎的共同契约：utterance 生命周期事件、失败上抛、TTSProvider 协议、已退役的工具化入口"""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from src.modules.events.payloads.utterance import (
 from src.modules.tts import TTSProvider
 from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 from src.modules.tts.backends.gptsovits.provider import DTYPE, GPTSoVITSProvider
+from src.modules.tts.backends.index_tts.provider import IndexTTSProvider
 from src.modules.tts.backends.minimax.provider import MiniMaxTTSProvider
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
 from src.modules.tts.backends.openai.provider import OpenAITTSProvider
@@ -169,7 +170,32 @@ class _OpenAI(_Engine):
         self.sent_text = lambda: client.stream_synthesize.call_args.args[0]
 
 
-ENGINES = [_Edge(), _Voicebox(), _GptSovits(), _Omni(), _Minimax(), _OpenAI()]
+class _IndexTTS(_Engine):
+    name, duration_ms = "index_tts", None  # 流式引擎：合成未完，started 时长为 None
+    finished_ms = 64  # 两块各 1024 样本 @ 32kHz，finished 按写往声卡的样本数精确计算
+
+    def build(self, bus, fail):
+        return IndexTTSProvider(config={"type": "index_tts", "sample_rate": 32000}, event_bus=bus)
+
+    async def prepare(self, provider):
+        provider.client = MagicMock()  # 预热任务走替身客户端，不连真实服务
+        if provider._warmup_task is not None:  # setup 调度的预热任务要收尾，避免测试 loop 关闭时残留
+            await asyncio.gather(provider._warmup_task, return_exceptions=True)
+
+    def synth_patches(self, provider, stack, fail):
+        async def _gen(_text: str):
+            if fail:
+                raise RuntimeError("boom")
+            yield b"\x00\x00" * 1024
+            yield b"\x00\x00" * 1024
+
+        client = MagicMock()
+        client.stream_synthesize = MagicMock(side_effect=lambda text: _gen(text))
+        stack.enter_context(patch.object(provider, "client", new=client))
+        self.sent_text = lambda: client.stream_synthesize.call_args.args[0]
+
+
+ENGINES = [_Edge(), _Voicebox(), _GptSovits(), _Omni(), _Minimax(), _OpenAI(), _IndexTTS()]
 
 
 async def _speak(
@@ -248,6 +274,7 @@ def _instances() -> list[Any]:
         OmniTTSProvider(config={}, llm_service=object()),  # llm_service 是 Omni 的构造硬前置
         MiniMaxTTSProvider(config={}),
         OpenAITTSProvider(config={}),
+        IndexTTSProvider(config={}),
     ]
 
 

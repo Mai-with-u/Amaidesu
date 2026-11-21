@@ -1,4 +1,4 @@
-"""build_tts_infrastructure 装配入口：enabled 门控、五个引擎构造、未知引擎回退、构造失败与契约不符的 fail-soft"""
+"""build_tts_infrastructure 装配入口：enabled 门控、七个引擎构造、未知引擎回退、构造失败与契约不符的 fail-soft"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.tts import TTSProvider, assembly, build_tts_infrastructure
 from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 from src.modules.tts.backends.gptsovits.provider import GPTSoVITSProvider
+from src.modules.tts.backends.index_tts.provider import IndexTTSProvider
 from src.modules.tts.backends.minimax.provider import MiniMaxTTSProvider
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
 from src.modules.tts.backends.openai.provider import OpenAITTSProvider
@@ -61,9 +62,14 @@ def test_known_providers_construct_with_sub_config() -> None:
     )
     assert isinstance(openai, OpenAITTSProvider) and (openai.api_key, openai.voice) == ("sk", "nova")
 
-    assert all(isinstance(p, TTSProvider) for p in (edge, gsv, vb, omni, minimax, openai))
+    index = build_tts_infrastructure(
+        {"enabled": True, "provider": "index_tts", "index_tts": {"host": "10.0.0.1", "port": 9889}}
+    )
+    assert isinstance(index, IndexTTSProvider) and (index.host, index.port) == ("10.0.0.1", 9889)
+
+    assert all(isinstance(p, TTSProvider) for p in (edge, gsv, vb, omni, minimax, openai, index))
     assert assembly._KNOWN_PROVIDERS == frozenset(
-        {"edge_tts", "gptsovits", "voicebox", "omni_tts", "minimax_tts", "openai_tts"}
+        {"edge_tts", "gptsovits", "voicebox", "omni_tts", "minimax_tts", "openai_tts", "index_tts"}
     )
 
 
