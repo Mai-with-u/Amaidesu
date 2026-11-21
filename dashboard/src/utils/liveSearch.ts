@@ -77,6 +77,7 @@ const KIND_SHORT_LABEL: Record<string, string> = {
   milestone: '里程碑',
   rundown: '环节',
   lead_change: '主控',
+  lead_suggestion: '建议',
   boundary: '边界',
   stage: '阶段',
   tts: '播报',
@@ -115,6 +116,7 @@ export function entryCategoryOf(entry: ShowEntry): LiveHitCategory {
       return 'game';
     case 'rundown':
     case 'lead_change':
+    case 'lead_suggestion':
     case 'boundary':
     case 'stage':
     case 'tts':

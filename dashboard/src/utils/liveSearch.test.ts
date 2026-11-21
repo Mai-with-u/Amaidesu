@@ -179,6 +179,7 @@ describe('entryCategoryOf（本地条目 → 五桶，走 hitFromEntry 的 categ
     ['agent_reply', 'game'],
     ['delegate_receipt', 'game'],
     ['rundown', 'system'],
+    ['lead_suggestion', 'system'],
     ['stage', 'system'],
     ['tts', 'system'],
     ['tool_health', 'system'],

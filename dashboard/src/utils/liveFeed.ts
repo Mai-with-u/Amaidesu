@@ -82,6 +82,9 @@ export type EntryKind =
   | 'thinking'
   /** 主控权切换（agent.lead.changed）：主播主控与游戏主控之间的交接分隔行 */
   | 'lead_change'
+  /** 非强杀建议转达回执（agent.lead.suggestion）：运营提醒转给自主主控的游戏
+   *  Agent 的送达结果行（后台事实，不进观众视角） */
+  | 'lead_suggestion'
   /** 系统事件行（core.error / core.startup / core.shutdown）：运营必看，两个视图档位都显示 */
   | 'system';
 
@@ -126,9 +129,16 @@ export interface ShowEntry {
   argPills: ToolArgPill[];
   /** TTS 全链路关联键（streamer.speech.utterance_id）；tts.utterance.* 经它回填播报态 */
   utteranceId: string;
-  /** TTS 播报态：speaking=开始出声 / done=播放完成；空串=无信号（未启用 TTS 等）。
+  /** TTS 播报态：speaking=开始出声 / done=播放完成 / failed=发声失败 /
+   *  skipped=未播出（被丢弃/打断）；空串=无信号（未启用 TTS 等）。
    *  由 buildLiveEntries 按 utteranceId 就地回填，不新增时间线行 */
-  ttsState: '' | 'speaking' | 'done';
+  ttsState: '' | 'speaking' | 'done' | 'failed' | 'skipped';
+  /** TTS 未播出的原因（tts.utterance.dropped 的 reason），仅 ttsState=skipped 时带，tooltip 用 */
+  ttsReason?: string;
+  /** 表达优先级（streamer.speech.priority，0-3；缺省视为常态，不标徽标） */
+  priority?: number;
+  /** 表达来源标签（streamer.speech.source，如 game_commentary=主控游戏自主解说） */
+  speechSource?: string;
   /** 游戏侧任务终态：maicraft_execute 卡与 task.changed 任务窗口按 goal_id 配对后
    *  回填（statusLabel=终态中文短名，durationMs=受理到终态耗时，failed=失败类终态）。
    *  未配对为 null；由 liveLanes.annotateTaskEnds 写入，通用时间线不依赖此字段 */
@@ -554,6 +564,8 @@ export function makeEntry(base: {
   simulated?: boolean;
   argPills?: ToolArgPill[];
   utteranceId?: string;
+  priority?: number;
+  speechSource?: string;
 }): ShowEntry {
   const actor = base.actor ?? '';
   return {
@@ -577,6 +589,8 @@ export function makeEntry(base: {
     simulated: base.simulated ?? false,
     argPills: base.argPills ?? [],
     utteranceId: base.utteranceId ?? '',
+    priority: base.priority,
+    speechSource: base.speechSource,
     ttsState: '',
   };
 }
@@ -735,6 +749,9 @@ function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry 
     llmRequestId: str(data.llm_request_id),
     // TTS 全链路关联键：tts.utterance.started/finished 据此回填播报态
     utteranceId: str(data.utterance_id),
+    // 表达优先级/来源：发言卡据此标非常态徽标（游戏解说/紧急/高光）
+    priority: typeof data.priority === 'number' ? data.priority : undefined,
+    speechSource: str(data.source) || undefined,
   });
 }
 
@@ -1172,12 +1189,37 @@ function fromLeadChanged(event: FeedEvent, data: Record<string, unknown>): ShowE
   });
 }
 
+/** 非强杀建议转达回执：agent.lead.suggestion（运营提醒转给自主主控的游戏
+ *  Agent 的送达结果）。安静单行：正文=建议原文，actor=送达对象，徽标注明
+ *  送达与否，note 带受理原因与来源（operator=运营转达） */
+function fromLeadSuggestion(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const accepted = bool(data.accepted);
+  const target = str(data.target) || str(data.lead_agent) || '游戏 Agent';
+  const reason = str(data.reason);
+  const from = str(data.source);
+  const noteParts = [
+    reason,
+    from === 'operator' ? '运营转达' : from,
+  ].filter(Boolean);
+  return makeEntry({
+    id: event.id,
+    kind: 'lead_suggestion',
+    tsMs: event.timestamp_ms,
+    actor: target,
+    text: str(data.content),
+    badge: accepted ? '已转达' : '未送达',
+    note: noteParts.join(' · '),
+    detail: data,
+  });
+}
+
 /** 非控制台事件（未知 type 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
   if (event.type === EVENT.agentPrompted) return fromPrompt(event, data);
   if (event.type === EVENT.agentReplied) return fromAgentReply(event, data);
   if (event.type === EVENT.agentLeadChanged) return fromLeadChanged(event, data);
+  if (event.type === EVENT.agentLeadSuggestion) return fromLeadSuggestion(event, data);
   // room.message.* 族折叠广播，成员由 payload.message_type 判别
   if (event.type === EVENT.roomMessage) return fromRoomMessage(event, data);
   if (event.type === EVENT.streamerSpeech) return fromSpeech(event, data);
@@ -1192,6 +1234,8 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   // TTS 播报态两端点不新增行：buildLiveEntries 按 utterance_id 回填到既有发言行
   if (event.type === EVENT.ttsUtteranceStarted || event.type === EVENT.ttsUtteranceFinished)
     return null;
+  // 丢弃（被高优打断/过期作废等）也不新增行：同样由 buildLiveEntries 回填到既有发言行
+  if (event.type === EVENT.ttsUtteranceDropped) return null;
   if (isToolHealthEvent(event.type)) return fromToolHealth(event, data);
   if (isGameBodyEvent(event.type)) return fromBodyEvent(event, data);
   if (event.type === EVENT.gameChatReceived) return fromGameChat(event, data);
@@ -1270,6 +1314,20 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
       const speech = utteranceId ? speechByUtterance.get(utteranceId) : undefined;
       if (speech) speech.ttsState = event.type === EVENT.ttsUtteranceStarted ? 'speaking' : 'done';
       continue;
+    }
+    // failed/dropped 同样回填播报态：failed 落到下方 toEntry 另出独立失败卡；
+    // dropped 是"没播出"（被高优打断/过期作废等，不产出新行，只结算发言行状态）
+    if (event.type === EVENT.ttsUtteranceFailed || event.type === EVENT.ttsUtteranceDropped) {
+      const utteranceId = str(isRecord(event.data) ? event.data.utterance_id : '');
+      const speech = utteranceId ? speechByUtterance.get(utteranceId) : undefined;
+      if (speech) {
+        speech.ttsState = event.type === EVENT.ttsUtteranceFailed ? 'failed' : 'skipped';
+        if (event.type === EVENT.ttsUtteranceDropped) {
+          speech.ttsReason =
+            str(isRecord(event.data) ? event.data.reason : '') || '语句被丢弃，未播出';
+        }
+      }
+      if (event.type === EVENT.ttsUtteranceDropped) continue;
     }
     const entry = toEntry(event);
     if (!entry) continue;

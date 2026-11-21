@@ -1,4 +1,5 @@
-<!-- 安静单行卡：阶段状态 / 进场 / 游戏身体事件 / TTS 失败 / 系统事件 / 工具健康六类共用。
+<!-- 安静单行卡：阶段状态 / 进场 / 游戏身体事件 / TTS 失败 / 系统事件 / 工具健康 /
+     非强杀建议转达回执七类共用。
      单行形态一致，行文案拼装与修饰类按 kind 判别（判别知识内聚在此，不进外壳） -->
 <script setup lang="ts">
 import { computed } from 'vue';
@@ -31,6 +32,7 @@ const line = computed<string>(() => {
     case 'game_body':
     case 'system':
     case 'tool_health':
+    case 'lead_suggestion':
       return `${e.badge ? `[${e.badge}]` : ''}${e.text}${e.note ? ` · ${e.note}` : ''}`;
     case 'stage':
       return `${e.text}${e.note ? ` · ${e.note}` : ''}`;

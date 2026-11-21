@@ -44,6 +44,8 @@ export const CARD_REGISTRY: Record<ShowEntry['kind'], Component> = {
   rundown: BeatCard,
   lead_change: BeatCard,
   boundary: BeatCard,
+  // 非强杀建议转达回执：安静单行（后台事实，不进观众视角）
+  lead_suggestion: WhisperCard,
   // 会话模式过程折叠条（合成条目）
   // 里程碑庆祝行
   milestone: MilestoneCard,

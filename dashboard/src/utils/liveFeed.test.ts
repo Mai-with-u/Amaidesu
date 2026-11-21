@@ -336,6 +336,128 @@ describe('streamer.speech → 发言卡', () => {
       llmRequestId: 'req1',
     });
   });
+
+  it('优先级与来源进 ShowEntry（缺省/非数值防御为 undefined）', () => {
+    const flagged = toEntry(evt('streamer.speech', { text: 'x', priority: 3, source: 'game_commentary' }));
+    expect(flagged).toMatchObject({ priority: 3, speechSource: 'game_commentary' });
+
+    const plain = toEntry(evt('streamer.speech', { text: 'y' }));
+    expect(plain).toMatchObject({ priority: undefined, speechSource: undefined });
+
+    const dirty = toEntry(evt('streamer.speech', { text: 'z', priority: '高', source: 42 }));
+    expect(dirty).toMatchObject({ priority: undefined, speechSource: undefined });
+  });
+});
+
+describe('TTS 播报态回填（buildLiveEntries）', () => {
+  function speechThen(type: string, data: Record<string, unknown>) {
+    return buildLiveEntries(
+      [
+        evt('streamer.speech', { text: '这句', utterance_id: 'u1' }, 1000),
+        evt(type, { utterance_id: 'u1', ...data }, 2000),
+      ],
+      new Set(),
+    );
+  }
+
+  it('failed 结算发言行为 failed，同时保留独立失败卡', () => {
+    const entries = speechThen('tts.utterance.failed', { error_message: '服务不可达' });
+    const speech = entries.find(entry => entry.kind === 'speech');
+    expect(speech).toMatchObject({ ttsState: 'failed' });
+    expect(entries.some(entry => entry.kind === 'tts' && entry.failed)).toBe(true);
+  });
+
+  it('dropped 结算发言行为 skipped 并记录原因，不新增时间线行', () => {
+    const entries = speechThen('tts.utterance.dropped', { reason: 'interrupted' });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: 'speech', ttsState: 'skipped', ttsReason: 'interrupted' });
+  });
+
+  it('硬打断序列：started 之后 dropped，不再显示播报中', () => {
+    const entries = buildLiveEntries(
+      [
+        evt('streamer.speech', { text: '这句', utterance_id: 'u1' }, 1000),
+        evt('tts.utterance.started', { utterance_id: 'u1' }, 1500),
+        evt('tts.utterance.dropped', { utterance_id: 'u1', reason: '' }, 2000),
+      ],
+      new Set(),
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ ttsState: 'skipped', ttsReason: '语句被丢弃，未播出' });
+  });
+
+  it('dropped 无匹配发言行时安全丢弃', () => {
+    const entries = buildLiveEntries(
+      [evt('tts.utterance.dropped', { utterance_id: 'gone' }, 1000)],
+      new Set(),
+    );
+    expect(entries).toHaveLength(0);
+  });
+});
+
+describe('agent.lead.suggestion → 非强杀建议转达回执行', () => {
+  it('已转达：actor 取目标游戏名，徽标已转达，note 带原因与运营来源', () => {
+    const entry = toEntry(
+      evt(
+        'agent.lead.suggestion',
+        {
+          accepted: true,
+          target: 'minecraft',
+          lead_agent: 'minecraft',
+          reason: '观众提醒注意血量',
+          source: 'operator',
+          content: '小心点，快没血了',
+        },
+        2000,
+      ),
+    );
+    expect(entry).toMatchObject({
+      kind: 'lead_suggestion',
+      tsMs: 2000,
+      actor: 'minecraft',
+      text: '小心点，快没血了',
+      badge: '已转达',
+      note: '观众提醒注意血量 · 运营转达',
+    });
+    // 后台事实：不进观众视角
+    expect(isAudienceEntry(entry!)).toBe(false);
+  });
+
+  it('拒收：徽标未送达，actor 回退 lead_agent', () => {
+    const entry = toEntry(
+      evt('agent.lead.suggestion', {
+        accepted: false,
+        target: '',
+        lead_agent: 'streamer',
+        reason: 'manual_streamer',
+        content: '别去矿洞',
+      }),
+    );
+    expect(entry).toMatchObject({
+      actor: 'streamer',
+      badge: '未送达',
+      note: 'manual_streamer',
+    });
+  });
+
+  it('字段缺省防御：actor 回游戏 Agent，reason/source 缺省 note 为空', () => {
+    const entry = toEntry(evt('agent.lead.suggestion', { accepted: true, content: '去钓鱼' }));
+    expect(entry).toMatchObject({
+      actor: '游戏 Agent',
+      badge: '已转达',
+      text: '去钓鱼',
+      note: '',
+    });
+  });
+
+  it('经 buildLiveEntries 正常产出并可被搜索分类归 system 桶', () => {
+    const events = [
+      evt('agent.lead.suggestion', { accepted: true, target: 'minecraft', content: '补给一下', reason: 'r' }),
+    ];
+    const built = buildLiveEntries(events, new Set());
+    expect(built).toHaveLength(1);
+    expect(built[0].kind).toBe('lead_suggestion');
+  });
 });
 
 describe('planner.decision → 决策卡四态', () => {
