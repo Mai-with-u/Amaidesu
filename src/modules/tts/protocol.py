@@ -2,7 +2,8 @@
 
 各 TTS 引擎 Provider（``EdgeTTSProvider`` / ``GPTSoVITSProvider`` /
 ``VoiceboxProvider`` / ``OmniTTSProvider`` / ``MiniMaxTTSProvider`` /
-``OpenAITTSProvider``，完整名单见 ``assembly.py`` 装配表）由装配层单选构造，
+``OpenAITTSProvider`` / ``IndexTTSProvider``，完整名单见 ``assembly.py``
+装配表）由装配层单选构造，
 注入 ``StreamerAgent`` 后由编排队列持有并直接调用其 ``handle_speech``。本
 ``Protocol`` 把这条 duck-typed 契约显式化（structural typing，**非
 ABC**），用于：

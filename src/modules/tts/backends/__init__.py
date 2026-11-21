@@ -12,10 +12,12 @@
 - ``omni``：Omni TTS
 - ``minimax``：MiniMax 云端合成（T2A 接口流式）
 - ``openai``：OpenAI 语音合成（``/v1/audio/speech`` 端点）
+- ``index_tts``：IndexTTS 本地服务（自建 HTTP 包装，流式）
 """
 
 from .edge.provider import EdgeTTSProvider, create_edge_tts_provider
 from .gptsovits.provider import GPTSoVITSProvider, create_gptsovits_provider
+from .index_tts.provider import IndexTTSProvider, create_index_tts_provider
 from .minimax.provider import MiniMaxTTSProvider, create_minimax_tts_provider
 from .omni.provider import OmniTTSProvider, create_omni_tts_provider
 from .openai.provider import OpenAITTSProvider, create_openai_tts_provider
@@ -24,12 +26,14 @@ from .voicebox.provider import VoiceboxProvider, create_voicebox_provider
 __all__ = [
     "EdgeTTSProvider",
     "GPTSoVITSProvider",
+    "IndexTTSProvider",
     "MiniMaxTTSProvider",
     "OmniTTSProvider",
     "OpenAITTSProvider",
     "VoiceboxProvider",
     "create_edge_tts_provider",
     "create_gptsovits_provider",
+    "create_index_tts_provider",
     "create_minimax_tts_provider",
     "create_omni_tts_provider",
     "create_openai_tts_provider",

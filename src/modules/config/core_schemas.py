@@ -526,6 +526,46 @@ class OpenAITTSParams(BaseConfig):
     )
 
 
+class IndexTTSParams(BaseConfig):
+    """IndexTTS 引擎参数（``[tts.index_tts]`` 段；对接自建本地常驻 HTTP 服务）"""
+
+    host: str = Field(
+        default="127.0.0.1",
+        title="服务主机地址",
+        description="IndexTTS 本地服务主机地址",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    port: int = Field(
+        default=9888,
+        ge=1,
+        le=65535,
+        title="服务端口",
+        description="IndexTTS 本地服务端口",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    seg_tokens: int = Field(
+        default=25,
+        ge=10,
+        le=200,
+        title="切段 token 上限",
+        description="长句切段的 token 上限：调小可提前首包（120=整段无流式收益；实测 25/15 首包约 4.8s/2.8s），"
+        "代价是总合成时长变长且段间插入 200ms 静音",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    emo_vector: List[float] = Field(
+        default_factory=lambda: [0.0] * 8,
+        title="情感向量",
+        description="8 维情感向量 [喜,怒,哀,惧,厌恶,低落,惊喜,平静]，各 0.0~1.0；全 0 = 不使用（中性合成）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    sample_rate: int = Field(
+        default=22050,
+        title="采样率",
+        description="服务端输出采样率（Hz），须与服务端实际输出一致（自建服务固定 22050）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+
 class TTSConfig(BaseConfig):
     """TTS 基础设施配置（``[tts]`` 段）
 
@@ -546,6 +586,8 @@ class TTSConfig(BaseConfig):
             仅 provider=minimax_tts 时生效）。
         openai_tts: OpenAI 语音合成引擎参数（``/v1/audio/speech`` 端点，密钥段内
             自持；仅 provider=openai_tts 时生效）。
+        index_tts: IndexTTS 引擎参数（自建本地常驻 HTTP 服务，音色由服务端
+            参考音频持有；仅 provider=index_tts 时生效）。
     """
 
     enabled: bool = Field(
@@ -628,6 +670,11 @@ class TTSConfig(BaseConfig):
         default_factory=OpenAITTSParams,
         title="OpenAI TTS 参数",
         description="OpenAI 语音合成引擎参数（/v1/audio/speech 端点；仅 provider=openai_tts 时生效）",
+    )
+    index_tts: IndexTTSParams = Field(
+        default_factory=IndexTTSParams,
+        title="IndexTTS 参数",
+        description="IndexTTS 引擎参数（自建本地常驻 HTTP 服务；仅 provider=index_tts 时生效）",
     )
 
 
