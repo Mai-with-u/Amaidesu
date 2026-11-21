@@ -1,7 +1,8 @@
 // useTtsWaterLevel.ts 的事件聚合与空窗警戒判定测试
 //
-// 覆盖：started/finished/failed 聚合（在途配对、失败计数）、空窗口径
-// （在途=0 / 无 settled=null / 距最近 settled）、2.5s 正常与 3s 警戒线判定。
+// 覆盖：started/finished/failed/dropped 聚合（在途配对、失败计数、打断不计
+// 失败）、空窗口径（在途=0 / 无 settled=null / 距最近 settled）、2.5s 正常
+// 与 3s 警戒线判定。
 
 import { effectScope, type EffectScope } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
@@ -67,6 +68,18 @@ describe('aggregateTtsWaterLevel', () => {
     expect(aggregateTtsWaterLevel(events, 10_000)).toEqual({
       inFlightCount: 0,
       failureCount: 1,
+      gapMs: 1_500,
+    });
+  });
+
+  it('dropped 同样使在途出清并刷新空窗起点，但不计入失败（被打断≠合成失败）', () => {
+    const events = [
+      event('1', 'tts.utterance.started', 8_000, { utterance_id: 'utt_a' }),
+      event('2', 'tts.utterance.dropped', 8_500, { utterance_id: 'utt_a', reason: 'interrupted' }),
+    ];
+    expect(aggregateTtsWaterLevel(events, 10_000)).toEqual({
+      inFlightCount: 0,
+      failureCount: 0,
       gapMs: 1_500,
     });
   });

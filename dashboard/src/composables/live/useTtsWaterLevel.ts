@@ -1,12 +1,12 @@
 /**
- * TTS 台前水位：聚合 tts.utterance.started/finished/failed 三事件，回答
- * "引擎此刻出声了吗、等了多久、坏了几句"。
+ * TTS 台前水位：聚合 tts.utterance.started/finished/failed/dropped 四事件，
+ * 回答"引擎此刻出声了吗、等了多久、坏了几句"。
  *
  * 欠载判读口径（历史实测沉淀）：每句约 2.5s 空窗属正常冲入动作（上一句
  * 播完到下一句开始出声的编排间隔）；空窗超过 3s 过警戒线，提示引擎可能
- * 欠载（合成排队/服务不可达）。空窗 = 距最近一句 settled（finished 或
- * failed）经过的毫秒数；在途句存在（已 started 未 settled）视为正在出
- * 声，空窗记 0。
+ * 欠载（合成排队/服务不可达）。空窗 = 距最近一句 settled（finished、
+ * failed 或 dropped——被丢弃/打断的语句同样结束了发声占用）经过的毫秒数；
+ * 在途句存在（已 started 未 settled）视为正在出声，空窗记 0。
  *
  * 生命周期：本组合式无自有定时器与订阅——事件序列读全局 events store
  * （WS 连接与缓冲归 store），逐秒刷新读共享 useNowTick 时钟（引用计数
@@ -30,9 +30,10 @@ export const WARN_GAP_MS = 3000;
 
 /** TTS 台前水位快照（纯派生，无副作用） */
 export interface TtsWaterLevel {
-  /** 在途句数：已 started 且未 finished/failed 的发声实例 */
+  /** 在途句数：已 started 且未 settled（finished/failed/dropped）的发声实例 */
   inFlightCount: number;
-  /** 失败句数（近期事件窗口内 tts.utterance.failed 计数） */
+  /** 失败句数（近期事件窗口内 tts.utterance.failed 计数；dropped 是被打断，
+   *  不算合成失败，不计入） */
   failureCount: number;
   /** 最近空窗毫秒：距最近一句 settled 的时间；正在出声时为 0；窗口内尚无 settled 事件为 null */
   gapMs: number | null;
@@ -62,6 +63,9 @@ export function aggregateTtsWaterLevel(events: WebSocketMessage[], nowMs: number
     } else if (message.type === EVENT.ttsUtteranceFailed) {
       settled(state, message);
       state.failureCount += 1;
+    } else if (message.type === EVENT.ttsUtteranceDropped) {
+      // 被丢弃（被高优打断/过期作废等，见 UtteranceDroppedPayload.reason）：同样结束了发声占用，但不是合成失败
+      settled(state, message);
     }
   }
   const gapMs =
