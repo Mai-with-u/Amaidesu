@@ -24,7 +24,9 @@ import {
   annotateTaskEnds,
   buildDelegateReceipts,
   buildLaneSections,
+  buildLeadSpans,
   collapseGoalPolls,
+  leadActorAt,
   type LaneId,
   type LaneSection,
   type SegmentBoundary,
@@ -68,6 +70,33 @@ const annotated = computed(() => annotateTaskEnds(withReceipts.value, props.task
 const sections = computed<LaneSection[]>(() =>
   buildLaneSections(annotated.value, props.boundaries),
 );
+
+// ---------------------------------------------------------------------------
+// 列级主控标记：分节按「节尾时刻生效的主控方」标注谁在主控（节尾=下一节头
+// rundown 条目时刻，最后一节到流末尾）。主控时段纯由条目流的 lead_change
+// 条目推导（回看窗口没有实时快照可用），不引 useAgentLead。
+// ---------------------------------------------------------------------------
+
+const leadSpans = computed(() => buildLeadSpans(annotated.value));
+
+/** 第 index 节按节尾时刻判定的主控方（streamer 或游戏 Agent 名） */
+function leadActorOfSection(index: number): string {
+  const all = sections.value;
+  const streamEndMs = annotated.value[annotated.value.length - 1]?.tsMs ?? 0;
+  const boundary = index + 1 < all.length ? all[index + 1]!.startMs : streamEndMs;
+  return leadActorAt(leadSpans.value, boundary);
+}
+
+/** 主播列的节头是否标主控（该节内由主播主控） */
+function isStreamerLeadSection(index: number): boolean {
+  return leadActorOfSection(index) === 'streamer';
+}
+
+/** 游戏列的节头主控文案：游戏主控时给「<游戏名> 主控中」，主播主控时不标 */
+function gameLeadLabelOf(index: number): string {
+  const actor = leadActorOfSection(index);
+  return actor === 'streamer' ? '' : `${actor} 主控中`;
+}
 
 // 相对时间标签（"12s 前"）每秒刷新；卡片 props 恒为 entry + nowMs
 const nowMs = useNowTick();
@@ -230,7 +259,11 @@ function revealNearest(tsMs: number): void {
         <p class="lane-hint">
           主播 Agent 看到的<span class="lane-tip">点卡片 → 对侧跳到同一刻</span>
         </p>
-        <section v-for="section in sections" :key="`stage-${section.key}`" class="lane-section">
+        <section
+          v-for="(section, si) in sections"
+          :key="`stage-${section.key}`"
+          class="lane-section"
+        >
           <button
             type="button"
             class="section-head"
@@ -239,6 +272,13 @@ function revealNearest(tsMs: number): void {
           >
             <span class="section-caret" :class="{ 'is-collapsed': isCollapsed(section) }">▸</span>
             <span class="section-title">{{ section.title }}</span>
+            <span
+              v-if="isStreamerLeadSection(si)"
+              class="section-lead-flag is-streamer"
+              title="该节内主播主控"
+            >
+              主播主控中
+            </span>
             <span v-if="section.note" class="section-note">{{ section.note }}</span>
             <span class="section-range mono">{{ rangeLabel(section) }}</span>
             <span class="section-count">
@@ -276,7 +316,11 @@ function revealNearest(tsMs: number): void {
         <p class="lane-hint">
           游戏 Agent 看到的<span class="lane-tip">点卡片 → 对侧跳到同一刻</span>
         </p>
-        <section v-for="section in sections" :key="`game-${section.key}`" class="lane-section">
+        <section
+          v-for="(section, gi) in sections"
+          :key="`game-${section.key}`"
+          class="lane-section"
+        >
           <button
             type="button"
             class="section-head"
@@ -285,6 +329,13 @@ function revealNearest(tsMs: number): void {
           >
             <span class="section-caret" :class="{ 'is-collapsed': isCollapsed(section) }">▸</span>
             <span class="section-title">{{ section.title }}</span>
+            <span
+              v-if="gameLeadLabelOf(gi)"
+              class="section-lead-flag is-game"
+              :title="`该节内由 ${gameLeadLabelOf(gi).replace(' 主控中', '')} 主控`"
+            >
+              {{ gameLeadLabelOf(gi) }}
+            </span>
             <span v-if="section.note" class="section-note">{{ section.note }}</span>
             <span class="section-range mono">{{ rangeLabel(section) }}</span>
             <span class="section-count">
@@ -438,6 +489,38 @@ function revealNearest(tsMs: number): void {
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   font-size: 10px;
+}
+
+/* 列级主控标记：小色带角标 + 角色短文案，只标正在主控的那一列，密度克制 */
+.section-lead-flag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+/* 小色带：复用列语义色（主播=agent 紫、游戏=game 粉） */
+.section-lead-flag::before {
+  content: '';
+  width: 3px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.section-lead-flag.is-streamer {
+  background: var(--color-agent-bg);
+  color: var(--color-agent);
+}
+
+.section-lead-flag.is-game {
+  background: var(--color-game-bg);
+  color: var(--color-game);
 }
 
 .section-range {

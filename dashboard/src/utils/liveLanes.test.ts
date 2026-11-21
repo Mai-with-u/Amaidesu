@@ -10,9 +10,11 @@ import {
   annotateTaskEnds,
   buildDelegateReceipts,
   buildLaneSections,
+  buildLeadSpans,
   buildTaskWindows,
   collapseGoalPolls,
   laneOf,
+  leadActorAt,
   type TaskFact,
 } from '@/utils/liveLanes';
 import { makeEntry, type ShowEntry } from '@/utils/liveFeed';
@@ -32,9 +34,9 @@ describe('laneOf', () => {
     expect(laneOf(entryOf({ id: 'a', tsMs: 1, kind: 'agent_reply', actor: '游戏 Agent' }))).toBe(
       'game',
     );
-    expect(laneOf(entryOf({ id: 'rc', tsMs: 1, kind: 'delegate_receipt', actor: '游戏 Agent' }))).toBe(
-      'game',
-    );
+    expect(
+      laneOf(entryOf({ id: 'rc', tsMs: 1, kind: 'delegate_receipt', actor: '游戏 Agent' })),
+    ).toBe('game');
   });
 
   it('工具按调用来源分轨：游戏 Agent 命名下调用的进游戏轨，主播侧调用留在现场轨', () => {
@@ -139,14 +141,22 @@ describe('buildLaneSections', () => {
 });
 
 /** framework_delegate 派活卡条目：detail 里带线上形状的入参/结果（result.task_id 是收活配对键） */
-function delegateEntry(id: string, tsMs: number, taskId: string, instruction = '去村里买面包'): ShowEntry {
+function delegateEntry(
+  id: string,
+  tsMs: number,
+  taskId: string,
+  instruction = '去村里买面包',
+): ShowEntry {
   return makeEntry({
     id,
     kind: 'tool',
     tsMs,
     actor: 'framework_delegate',
     text: '',
-    detail: { args: { agent: 'minecraft', instruction }, result: { accepted: true, task_id: taskId } },
+    detail: {
+      args: { agent: 'minecraft', instruction },
+      result: { accepted: true, task_id: taskId },
+    },
   });
 }
 
@@ -174,9 +184,10 @@ describe('收活卡配对（buildDelegateReceipts）', () => {
 
   it('指令摘要超过 20 字截断', () => {
     const long = '这是一条非常长的派活指令，需要被截断以保持收活卡的轻量形态';
-    const merged = buildDelegateReceipts([delegateEntry('dele', 1_000, 'deleg_2', long)], [
-      accepted('deleg_2', 2_000),
-    ]);
+    const merged = buildDelegateReceipts(
+      [delegateEntry('dele', 1_000, 'deleg_2', long)],
+      [accepted('deleg_2', 2_000)],
+    );
     expect(merged[1]!.text).toBe(`${long.slice(0, 20)}…`);
   });
 
@@ -209,7 +220,9 @@ describe('收活卡配对（buildDelegateReceipts）', () => {
     const receipts = merged.filter(entry => entry.kind === 'delegate_receipt');
     expect(receipts.map(entry => entry.delegateEntryId)).toEqual(['dele_b', 'dele_a']);
     expect(receipts.map(entry => entry.text)).toEqual(['任务乙', '任务甲']);
-    expect(merged.map(entry => entry.tsMs)).toEqual(merged.map(entry => entry.tsMs).sort((a, b) => a - b));
+    expect(merged.map(entry => entry.tsMs)).toEqual(
+      merged.map(entry => entry.tsMs).sort((a, b) => a - b),
+    );
   });
 
   it('同一任务号的重复受理只出一张收活卡', () => {
@@ -266,7 +279,10 @@ function executeEntry(id: string, tsMs: number, goalId: number): ShowEntry {
     text: '',
     detail: {
       args: { goal: { ability: 'maicraft:travel', purpose: '去村庄' } },
-      result: { ok: true, data: { goal_id: goalId, state: 'finished', result: { summary: '到了' } } },
+      result: {
+        ok: true,
+        data: { goal_id: goalId, state: 'finished', result: { summary: '到了' } },
+      },
     },
   });
 }
@@ -313,7 +329,11 @@ describe('任务终态回填到 execute 卡（annotateTaskEnds）', () => {
       { taskId: 'maicraft-goal-3', status: 'failed', tsMs: 4_000 },
     ]);
     const [annotated] = annotateTaskEnds([executeEntry('exec', 1_100, 3)], failWindows);
-    expect(annotated!.taskEnd).toMatchObject({ statusLabel: '失败', durationMs: 3_000, failed: true });
+    expect(annotated!.taskEnd).toMatchObject({
+      statusLabel: '失败',
+      durationMs: 3_000,
+      failed: true,
+    });
   });
 
   it('非 execute 条目不参与配对', () => {
@@ -351,5 +371,36 @@ describe('进度查询收拢（collapseGoalPolls）', () => {
     const result = collapseGoalPolls(entries);
     expect(result.map(entry => entry.id)).toEqual(['exec', 'answer', 'cancel']);
     expect(result[0]!.polls).toHaveLength(0);
+  });
+});
+
+describe('主控时段（buildLeadSpans / leadActorAt）', () => {
+  it('每条 lead_change 开启一段（actor=切权后主控方），同主控方连续切权并入同段', () => {
+    const entries = [
+      entryOf({ id: 'a', tsMs: 1_000, kind: 'danmaku' }),
+      entryOf({ id: 'l1', tsMs: 2_000, kind: 'lead_change', actor: 'minecraft' }),
+      entryOf({ id: 'l2', tsMs: 3_000, kind: 'lead_change', actor: 'minecraft' }),
+      entryOf({ id: 'l3', tsMs: 4_000, kind: 'lead_change', actor: 'streamer' }),
+    ];
+    expect(buildLeadSpans(entries)).toEqual([
+      { actor: 'minecraft', startMs: 2_000, endMs: 3_000 },
+      { actor: 'streamer', startMs: 4_000, endMs: 4_000 },
+    ]);
+  });
+
+  it('流里没有切权条目时返回空数组', () => {
+    expect(buildLeadSpans([entryOf({ id: 'a', tsMs: 1, kind: 'speech' })])).toEqual([]);
+  });
+
+  it('leadActorAt：时刻之前最近一段的主控方，无切权信息回退主播', () => {
+    const spans = buildLeadSpans([
+      entryOf({ id: 'l1', tsMs: 2_000, kind: 'lead_change', actor: 'minecraft' }),
+      entryOf({ id: 'l2', tsMs: 5_000, kind: 'lead_change', actor: 'streamer' }),
+    ]);
+    expect(leadActorAt([], 10_000)).toBe('streamer');
+    expect(leadActorAt(spans, 1_000)).toBe('streamer');
+    expect(leadActorAt(spans, 2_000)).toBe('minecraft');
+    expect(leadActorAt(spans, 4_999)).toBe('minecraft');
+    expect(leadActorAt(spans, 5_000)).toBe('streamer');
   });
 });

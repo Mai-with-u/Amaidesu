@@ -352,3 +352,47 @@ export function taskFactOf(data: Record<string, unknown>, tsMs: number): TaskFac
     tsMs,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 主控时段：纯由条目流推导的「谁在主控」区间（不依赖 useAgentLead——双轨的
+// 回看窗口里没有实时快照，切权事实只在 lead_change 条目上）
+// ---------------------------------------------------------------------------
+
+/** 一段主控时段：lead_change 条目开启（actor=切权后的主控方），下一条切换 */
+export interface LeadSpan {
+  /** 主控方：streamer 或游戏 Agent 名 */
+  actor: string;
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * 从条目流推导主控时段：每条 lead_change 开启一段（actor 即切权后的主控方），
+ * 同主控方的连续切权并入同段；流里没有切权条目时返回空数组（调用方回退主播）。
+ * 入参需按时间升序（调用方已排序）。
+ */
+export function buildLeadSpans(entries: ShowEntry[]): LeadSpan[] {
+  const spans: LeadSpan[] = [];
+  let current: LeadSpan | null = null;
+  for (const entry of entries) {
+    if (entry.kind !== 'lead_change' || !entry.actor) continue;
+    if (current && current.actor === entry.actor) {
+      current.endMs = entry.tsMs;
+      continue;
+    }
+    if (current) spans.push(current);
+    current = { actor: entry.actor, startMs: entry.tsMs, endMs: entry.tsMs };
+  }
+  if (current) spans.push(current);
+  return spans;
+}
+
+/** 时刻生效的主控方：该时刻之前最近一段的主控方；没有任何切权信息时回退主播 */
+export function leadActorAt(spans: LeadSpan[], tsMs: number): string {
+  let actor = 'streamer';
+  for (const span of spans) {
+    if (span.startMs > tsMs) break;
+    actor = span.actor;
+  }
+  return actor;
+}
