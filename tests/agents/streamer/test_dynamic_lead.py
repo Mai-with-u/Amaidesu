@@ -1931,6 +1931,79 @@ async def test_rundown_change_in_game_lead_publishes_update_and_skips_redundant_
         await game.stop()
 
 
+async def test_rundown_change_to_game_segment_without_game_lead_does_not_wake_streamer(prompts: Any) -> None:
+    """开播竞态回归：运行时主控仍为主播（主控切换未完成）而流程单停在游戏段时，环节变更不置位主播发言信号（杜绝与游戏侧开场白同秒双白）。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    play_first_rundown = Rundown(
+        rundown_id="play_first",
+        title="游戏先行流程单",
+        segments=[
+            RundownSegment(
+                id="play_1", title="建营地", task_description="搭好木屋与仓库", expected_ms=1_800_000, mode="play"
+            ),
+            RundownSegment(
+                id="closing_talk",
+                title="收尾闲聊",
+                task_description="总结今天进展并道别",
+                expected_ms=600_000,
+                mode="talk",
+            ),
+        ],
+    )
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {"rundown_id": play_first_rundown.rundown_id, "lead_mode": "dynamic", "proactive": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(play_first_rundown),
+        round_executor=round_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=804, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert lead_coord.is_game_lead is True
+
+        # 人为收回主控制造竞态窗口形态：运行时主控为主播、流程单停在游戏段
+        # （等价于开播瞬间 rundown_changed 先于主控切换完成到达）
+        await lead_coord.reclaim_streamer_lead(reason="manual")
+        await bus.wait_until_drained()
+        assert lead_coord.is_game_lead is False
+
+        # 游戏段续时：不置位 rundown_pending（修复前该场景会置位并唤醒主播产开场白）
+        ok, _, _ = await agent.rundown_control("renew", payload={"extra_ms": 600_000}, now_ms=clock())
+        assert ok is True
+        await bus.wait_until_drained()
+        assert agent._proactive_signals.rundown_pending is False
+
+        # 切到杂谈段：照常置位主播发言信号（或后台 flush 已直接消费触发 RUNDOWN 决策轮）
+        ok_talk, _, _ = await agent.rundown_control("next", now_ms=clock())
+        assert ok_talk is True
+        await bus.wait_until_drained()
+        assert agent._proactive_signals.rundown_pending or any(
+            call["trigger_cause"].kind is TriggerKind.RUNDOWN for call in round_exec.calls
+        )
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
 # ---------------------------------------------------------------------------
 # 实况解说自纠（correction=True）穿透 8s 防抖立即播报
 # ---------------------------------------------------------------------------

@@ -275,23 +275,56 @@ def test_rundown_ready_yields_to_waiting_viewer_batch_up_to_a_cap() -> None:
     )
 
 
-def test_game_lead_rundown_pending_skips_redundant_wake_unless_entering_talk() -> None:
-    """游戏主控态下非杂谈环节的 rundown_pending 不再无意义唤醒主播；切入杂谈态或主播主控态照常立即触发。"""
+def test_rundown_pending_follows_segment_type_not_runtime_lead() -> None:
+    """rundown_pending 按段类型归当场主控：游戏段不唤醒主播（含主控切换未完成的竞态窗口），杂谈段照常立即触发。"""
     trigger = _trigger()
     room = _Room(last_speech_ms=1_000_000)
 
-    # 游戏主控态（非杂谈）：忽略 rundown_pending，避免 Planner 刚调 next/renew 立刻又连跑一轮
+    # 游戏段：无论运行时主控是否已切到游戏侧（开播瞬间主控切换未完成的竞态窗口同样适用），都不唤醒主播
     assert (
-        trigger.should_trigger(room, now_ms=1_010_000, rundown_pending=True, in_game_lead=True, talk_mode=False) is None
+        trigger.should_trigger(
+            room, now_ms=1_010_000, rundown_pending=True, rundown_segment_talk=False, in_game_lead=False
+        )
+        is None
     )
-    # 切入杂谈模式：必须立即唤醒主播说杂谈开场白
     assert (
-        trigger.should_trigger(room, now_ms=1_010_000, rundown_pending=True, in_game_lead=True, talk_mode=True)
+        trigger.should_trigger(
+            room, now_ms=1_010_000, rundown_pending=True, rundown_segment_talk=False, in_game_lead=True
+        )
+        is None
+    )
+    # 杂谈段：立即唤醒主播说杂谈开场白
+    assert (
+        trigger.should_trigger(
+            room, now_ms=1_010_000, rundown_pending=True, rundown_segment_talk=True, in_game_lead=True, talk_mode=True
+        )
         is TriggerKind.RUNDOWN
     )
-    # 主播主控态：保持原行为立即触发
+    # 主播主控态 + 杂谈段：保持原行为立即触发
     assert (
-        trigger.should_trigger(room, now_ms=1_010_000, rundown_pending=True, in_game_lead=False, talk_mode=False)
+        trigger.should_trigger(
+            room, now_ms=1_010_000, rundown_pending=True, rundown_segment_talk=True, in_game_lead=False
+        )
+        is TriggerKind.RUNDOWN
+    )
+
+
+def test_overdue_alarm_does_not_wake_streamer_in_game_lead_non_talk() -> None:
+    """环节超时闹钟归当场主控：游戏主控态非杂谈段不唤醒主播 Planner，杂谈段与主播主控态照常触发。"""
+    trigger = _trigger()
+    room = _Room(last_speech_ms=1_000_000)
+    # 游戏主控态（非杂谈段）：闹钟不唤醒主播，环节推进归游戏侧；被拦下的 tick 不消耗冷却时刻
+    assert (
+        trigger.should_trigger(room, now_ms=1_010_000, rundown_overdue=True, in_game_lead=True, talk_mode=False) is None
+    )
+    # 收回主控后同一时刻闹钟照常生效（证明冷却未被游戏主控态的拦截消耗）
+    assert (
+        trigger.should_trigger(room, now_ms=1_010_000, rundown_overdue=True, in_game_lead=False, talk_mode=False)
+        is TriggerKind.RUNDOWN
+    )
+    # 游戏主控态但处于杂谈段：杂谈归主播，照常触发（独立实例避免前一步的冷却时刻干扰）
+    assert (
+        _trigger().should_trigger(room, now_ms=1_010_000, rundown_overdue=True, in_game_lead=True, talk_mode=True)
         is TriggerKind.RUNDOWN
     )
 

@@ -125,6 +125,7 @@ class ProactiveSignals:
         viewer_waiting_since_ms: Optional[int] = None,
         in_game_lead: bool = False,
         lead_since_ms: Optional[int] = None,
+        rundown_segment_talk: bool = True,
     ) -> Optional[TriggerKind]:
         """执行一个 tick 的完整主动发言判定序列，返回触发原因（None = 不触发）。
 
@@ -144,7 +145,9 @@ class ProactiveSignals:
         进入本判定的前置闸（递话必达优先于开播闸），不在本方法内。
 
         ``talk_mode`` 与 ``viewer_waiting_since_ms`` 原样转给触发器，只影响
-        ``rundown_ready`` 的沉默冷却档位与给攒批弹幕让路。
+        ``rundown_ready`` 的沉默冷却档位与给攒批弹幕让路；
+        ``rundown_segment_talk`` 原样转给触发器，只影响 ``rundown_pending``
+        即时信号与 ``rundown_overdue`` 超时闹钟的主控归属判定。
         """
         tick = self.read_for_tick(live=live)
         kind = trigger.should_trigger(
@@ -160,6 +163,7 @@ class ProactiveSignals:
             viewer_waiting_since_ms=viewer_waiting_since_ms if live else None,
             in_game_lead=in_game_lead if live else False,
             lead_since_ms=lead_since_ms if live else None,
+            rundown_segment_talk=rundown_segment_talk,
         )
         self.confirm(kind, tick)
         return kind

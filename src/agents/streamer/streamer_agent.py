@@ -3499,13 +3499,14 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     def _on_rundown_changed_proactive(self) -> None:
-        """流程单环节变更通知（协调器回调）：同步游戏侧环节信息，并按主控与环节模式决定是否置位主动发言信号。"""
+        """流程单环节变更通知（协调器回调）：按环节类型分流——游戏段同步游戏侧、杂谈段置位主播发言信号。"""
         next_segment_mode = self._rundown_coord.current_segment_mode()
-        staying_in_game_lead = self._is_game_lead_active() and next_segment_mode != "talk"
+        is_talk_segment = next_segment_mode == "talk"
 
-        # 游戏主控态下推进或续时到非杂谈环节时：将新环节同步给当前主控游戏侧防止其交接简报整场冻结，
-        # 同时不再置位 rundown_pending 避免把主播 Planner 立刻无意义唤醒连跑一轮
-        if staying_in_game_lead and self._lead_coordinator is not None:
+        # 环节推进归当场主控：流程单段类型为游戏段时不置位 rundown_pending（无论主控切换是否完成——
+        # 开播瞬间主控切换尚未完成时运行时主控判据会落空，改按段类型判据杜绝竞态窗口的双开场白），
+        # 改为将新环节同步给游戏侧（未进入游戏主控时 publish 内部为空操作，交接简报会带环节信息）
+        if not is_talk_segment and self._lead_coordinator is not None:
             segment = self._rundown_coord.current_segment()
             if segment is not None:
                 self._lead_coordinator.publish_rundown_update(
@@ -3514,9 +3515,12 @@ class StreamerAgent(BaseAgent):
                     segment_goal=segment.task_description,
                     expected_ms=int(segment.expected_ms),
                 )
-        else:
+        elif is_talk_segment:
             self._proactive_signals.set_rundown()
             self._notify_fresh_input()
+        else:
+            # 游戏段但未装配游戏协调器：无主控方承接推进，只记日志不置位主播信号
+            self._logger.warning("流程单切到游戏段但未装配游戏协调器，环节推进无人承接")
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -3822,6 +3826,7 @@ class StreamerAgent(BaseAgent):
             viewer_waiting_since_ms=None if self._buffer.is_empty else self._buffer.first_arrival_ms,
             in_game_lead=self._is_game_lead_active(),
             lead_since_ms=self._game_lead_entered_ms,
+            rundown_segment_talk=self._rundown_coord.current_segment_mode() == "talk",
         )
         if reason is None:
             return False

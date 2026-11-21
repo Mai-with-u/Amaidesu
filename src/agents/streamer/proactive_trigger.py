@@ -190,6 +190,7 @@ class ProactiveTrigger:
         viewer_waiting_since_ms: int | None = None,
         in_game_lead: bool = False,
         lead_since_ms: int | None = None,
+        rundown_segment_talk: bool = True,
     ) -> TriggerKind | None:
         """判定当前 tick 是否应触发主动发言。
 
@@ -253,6 +254,12 @@ class ProactiveTrigger:
             ``rundown_ready`` 用哪一档主动沉默冷却。
         viewer_waiting_since_ms: 观众弹幕正在攒批等放行时，最早一条的到达时刻；
             非空且未超过让路上限时 ``rundown_ready`` 让路。
+        rundown_segment_talk: 流程单当前环节段类型是否为杂谈段（talk）。
+            仅影响 ``rundown_pending`` 与 ``rundown_overdue``：环节推进归当场
+            主控，游戏段（非 talk）的环节切换即时信号与超时闹钟都不唤醒
+            主播 Planner——游戏段的开场白、过程解说与环节推进由游戏侧
+            承担；杂谈段照常触发。按段类型而非运行时主控态判定，避免
+            开播瞬间主控切换尚未完成时判据落空。
 
         Returns:
             ``TriggerKind`` 成员（``EXTERNAL`` / ``REMINDER`` / ``RUNDOWN`` /
@@ -271,10 +278,10 @@ class ProactiveTrigger:
         if not self._enabled:
             return None
 
-        # rundown_pending：环节切换即时信号——主播主控态或切入杂谈模式时立即触发新环节开场白；
-        # 处于游戏主控且仍非杂谈模式时（如 Planner 自身刚调 next/renew 推进或续时游玩环节），
-        # 由游戏侧承接新环节目标，不再立刻无意义唤醒主播 Planner 连跑一轮
-        if rundown_pending and not (in_game_lead and not talk_mode):
+        # rundown_pending：环节切换即时信号——按段类型判据归当场主控：杂谈段立即触发主播新环节开场白；
+        # 游戏段（非 talk）由游戏侧承接新环节目标（开场白、过程解说与环节推进归游戏 Agent），
+        # 不再唤醒主播 Planner——判据看段类型而非运行时主控态，主控切换未完成的竞态窗口同样不触发
+        if rundown_pending and rundown_segment_talk:
             self._last_rundown_immediate = True
             return TriggerKind.RUNDOWN
 
@@ -297,9 +304,10 @@ class ProactiveTrigger:
             return TriggerKind.EXTERNAL
 
         # rundown_overdue：环节超时提醒——内容推进信号，绕过公共三道前置；
+        # 游戏主控态且非杂谈段时游戏 Agent 自主推进（环节推进归当场主控），闹钟不唤醒主播 Planner；
         # 双重冷却：overdue_interval_ms（内部状态）+ speech_interval_ms 防抖
         # （对照 last_speech_ms，刚发过言不立即提醒）。触发即记冷却时刻。
-        if rundown_overdue:
+        if rundown_overdue and not (in_game_lead and not talk_mode):
             overdue_cooled = (
                 self._last_overdue_ms is None or (now_ms - self._last_overdue_ms) >= self._rundown_overdue_interval_ms
             )
