@@ -11,7 +11,7 @@
 
 import { summarizeEvent } from './eventSummary';
 import { bool, isRecord, num, str } from './guards';
-import type { WebSocketMessage } from '@/types';
+import type { LeadHandoverBrief, WebSocketMessage } from '@/types';
 import {
   EVENT,
   EVENT_FAMILY,
@@ -85,6 +85,9 @@ export type EntryKind =
   /** 非强杀建议转达回执（agent.lead.suggestion）：运营提醒转给自主主控的游戏
    *  Agent 的送达结果行（后台事实，不进观众视角） */
   | 'lead_suggestion'
+  /** 主控方自主解说事实（agent.lead.commentary）：游戏主控向观众解说的受理/播出回执
+   *  （后台事实，不进观众视角——观众视角已有润色后的台词行） */
+  | 'lead_commentary'
   /** 系统事件行（core.error / core.startup / core.shutdown）：运营必看，两个视图档位都显示 */
   | 'system';
 
@@ -151,6 +154,9 @@ export interface ShowEntry {
   delegateEntryId?: string;
   /** 收活卡标注的派活时刻（配对到的 framework_delegate 条目时间，Unix 毫秒） */
   delegateTsMs?: number;
+  /** 交接简报（agent.lead.changed 的 handover_brief 防御解析产物）。收回方向
+   *  （brief 为 null）与旧事件（字段缺失）不带此字段，切换卡据此省略展开入口 */
+  brief?: LeadHandoverBrief | null;
 }
 
 /** maicraft_execute 卡上的任务终态徽标取值 */
@@ -566,6 +572,8 @@ export function makeEntry(base: {
   utteranceId?: string;
   priority?: number;
   speechSource?: string;
+  /** 交接简报（仅 lead_change 交权方向携带，见 ShowEntry.brief） */
+  brief?: LeadHandoverBrief | null;
 }): ShowEntry {
   const actor = base.actor ?? '';
   return {
@@ -591,6 +599,7 @@ export function makeEntry(base: {
     utteranceId: base.utteranceId ?? '',
     priority: base.priority,
     speechSource: base.speechSource,
+    brief: base.brief,
     ttsState: '',
   };
 }
@@ -1186,7 +1195,37 @@ function fromLeadChanged(event: FeedEvent, data: Record<string, unknown>): ShowE
     note: noteParts.join(' · '),
     badge,
     detail: data,
+    brief: handoverBriefOf(data.handover_brief),
   });
+}
+
+/** agent.lead.changed 载荷的 handover_brief → 交接简报对象（契约字段全部防御解析：
+ *  字符串守卫去空白、数组守卫逐项过滤、数字守卫兜 null）。null 或全空字段返回
+ *  null——切换卡据此不渲染展开入口 */
+export function handoverBriefOf(raw: unknown): LeadHandoverBrief | null {
+  if (!isRecord(raw)) return null;
+  const stringList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map(item => str(item)).filter(item => item.length > 0) : [];
+  const brief: LeadHandoverBrief = {
+    segment_id: str(raw.segment_id),
+    segment_title: str(raw.segment_title),
+    segment_goal: str(raw.segment_goal),
+    expected_ms: num(raw.expected_ms) ?? 0,
+    save_name: str(raw.save_name),
+    memory_brief: str(raw.memory_brief),
+    operator_notes: stringList(raw.operator_notes),
+    recent_speech: stringList(raw.recent_speech),
+  };
+  const allEmpty =
+    !brief.segment_id &&
+    !brief.segment_title &&
+    !brief.segment_goal &&
+    brief.expected_ms === 0 &&
+    !brief.save_name &&
+    !brief.memory_brief &&
+    brief.operator_notes.length === 0 &&
+    brief.recent_speech.length === 0;
+  return allEmpty ? null : brief;
 }
 
 /** 非强杀建议转达回执：agent.lead.suggestion（运营提醒转给自主主控的游戏
@@ -1197,10 +1236,7 @@ function fromLeadSuggestion(event: FeedEvent, data: Record<string, unknown>): Sh
   const target = str(data.target) || str(data.lead_agent) || '游戏 Agent';
   const reason = str(data.reason);
   const from = str(data.source);
-  const noteParts = [
-    reason,
-    from === 'operator' ? '运营转达' : from,
-  ].filter(Boolean);
+  const noteParts = [reason, from === 'operator' ? '运营转达' : from].filter(Boolean);
   return makeEntry({
     id: event.id,
     kind: 'lead_suggestion',
@@ -1213,6 +1249,37 @@ function fromLeadSuggestion(event: FeedEvent, data: Record<string, unknown>): Sh
   });
 }
 
+/** 主控方自主解说回执的受理徽标：accepted+spoken=已播出 / accepted=已受理 /
+ *  节流=已记录·节流 / 其余=未受理 */
+export function leadCommentaryBadge(data: Record<string, unknown>): string {
+  if (bool(data.accepted)) return bool(data.spoken) ? '已播出' : '已受理';
+  if (str(data.reason) === 'throttled_recorded') return '已记录·节流';
+  return '未受理';
+}
+
+/** 主控方自主解说事实：agent.lead.commentary（游戏主控向观众解说的受理/播出回执）。
+ *  安静单行（后台事实，不进观众视角——观众看到的是润色后的台词行）：
+ *  正文=解说摘要，actor=游戏名实名，徽标注明受理结果，note 带紧急度与原因 */
+function fromLeadCommentary(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const urgency = str(data.urgency);
+  const reason = str(data.reason);
+  const correction = bool(data.correction);
+  const noteParts = [urgency === 'high' ? '急' : '', reason, correction ? '纠偏' : ''].filter(
+    Boolean,
+  );
+  return makeEntry({
+    id: event.id,
+    kind: 'lead_commentary',
+    tsMs: event.timestamp_ms,
+    actor: str(data.game) || '游戏',
+    text: str(data.summary) || summarizeEvent(event.type, data),
+    badge: leadCommentaryBadge(data),
+    note: noteParts.join(' · '),
+    detail: data,
+    source: '游戏 Agent',
+  });
+}
+
 /** 非控制台事件（未知 type 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
@@ -1220,6 +1287,7 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   if (event.type === EVENT.agentReplied) return fromAgentReply(event, data);
   if (event.type === EVENT.agentLeadChanged) return fromLeadChanged(event, data);
   if (event.type === EVENT.agentLeadSuggestion) return fromLeadSuggestion(event, data);
+  if (event.type === EVENT.agentLeadCommentary) return fromLeadCommentary(event, data);
   // room.message.* 族折叠广播，成员由 payload.message_type 判别
   if (event.type === EVENT.roomMessage) return fromRoomMessage(event, data);
   if (event.type === EVENT.streamerSpeech) return fromSpeech(event, data);

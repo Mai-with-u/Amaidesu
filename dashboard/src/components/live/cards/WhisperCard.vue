@@ -33,6 +33,7 @@ const line = computed<string>(() => {
     case 'system':
     case 'tool_health':
     case 'lead_suggestion':
+    case 'lead_commentary':
       return `${e.badge ? `[${e.badge}]` : ''}${e.text}${e.note ? ` · ${e.note}` : ''}`;
     case 'stage':
       return `${e.text}${e.note ? ` · ${e.note}` : ''}`;

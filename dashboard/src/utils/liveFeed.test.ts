@@ -24,6 +24,7 @@ import {
   frameworkDelegateSummary,
   fromDecision,
   guidanceOf,
+  handoverBriefOf,
   isAudienceEntry,
   isConversationEntry,
   isFrameworkDelegateCard,
@@ -338,7 +339,9 @@ describe('streamer.speech → 发言卡', () => {
   });
 
   it('优先级与来源进 ShowEntry（缺省/非数值防御为 undefined）', () => {
-    const flagged = toEntry(evt('streamer.speech', { text: 'x', priority: 3, source: 'game_commentary' }));
+    const flagged = toEntry(
+      evt('streamer.speech', { text: 'x', priority: 3, source: 'game_commentary' }),
+    );
     expect(flagged).toMatchObject({ priority: 3, speechSource: 'game_commentary' });
 
     const plain = toEntry(evt('streamer.speech', { text: 'y' }));
@@ -370,7 +373,11 @@ describe('TTS 播报态回填（buildLiveEntries）', () => {
   it('dropped 结算发言行为 skipped 并记录原因，不新增时间线行', () => {
     const entries = speechThen('tts.utterance.dropped', { reason: 'interrupted' });
     expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ kind: 'speech', ttsState: 'skipped', ttsReason: 'interrupted' });
+    expect(entries[0]).toMatchObject({
+      kind: 'speech',
+      ttsState: 'skipped',
+      ttsReason: 'interrupted',
+    });
   });
 
   it('硬打断序列：started 之后 dropped，不再显示播报中', () => {
@@ -452,7 +459,12 @@ describe('agent.lead.suggestion → 非强杀建议转达回执行', () => {
 
   it('经 buildLiveEntries 正常产出并可被搜索分类归 system 桶', () => {
     const events = [
-      evt('agent.lead.suggestion', { accepted: true, target: 'minecraft', content: '补给一下', reason: 'r' }),
+      evt('agent.lead.suggestion', {
+        accepted: true,
+        target: 'minecraft',
+        content: '补给一下',
+        reason: 'r',
+      }),
     ];
     const built = buildLiveEntries(events, new Set());
     expect(built).toHaveLength(1);
@@ -1571,5 +1583,124 @@ describe('agent.lead.changed（动态主从切权事件）', () => {
       badge: '自动',
       note: '自定义理由',
     });
+  });
+});
+
+describe('agent.lead.changed 交接简报（handover_brief）', () => {
+  const fullBrief = {
+    segment_id: 'seg-2',
+    segment_title: '建房环游',
+    segment_goal: '进入存档 #7 继续盖房',
+    expected_ms: 600_000,
+    save_name: '存档 #7',
+    memory_brief: '上一节承诺了观众\n要带大家看水下基地',
+    operator_notes: ['别再挖到岩浆', '观众期待水下基地'],
+    recent_speech: ['我们回家吧', '水下基地见'],
+  };
+
+  it('交权方向：handover_brief 挂到条目 brief 字段，字段逐项解析', () => {
+    const entry = toEntry(
+      evt('agent.lead.changed', {
+        lead_agent: 'minecraft',
+        previous_lead: 'streamer',
+        mode: 'game',
+        handover_brief: fullBrief,
+      }),
+    );
+    expect(entry!.brief).toEqual(fullBrief);
+  });
+
+  it('收回方向：handover_brief 为 null 时 brief 也为 null', () => {
+    const entry = toEntry(
+      evt('agent.lead.changed', {
+        lead_agent: 'streamer',
+        previous_lead: 'minecraft',
+        mode: 'streamer',
+        handover_brief: null,
+      }),
+    );
+    expect(entry!.brief).toBeNull();
+  });
+
+  it('缺省防御：字段缺失 / 脏形状 / 全空简报都安全回退 null，不炸', () => {
+    // 旧事件没有 handover_brief
+    expect(toEntry(evt('agent.lead.changed', { lead_agent: 'streamer' }))!.brief).toBeNull();
+    // 非对象简报
+    expect(handoverBriefOf('oops')).toBeNull();
+    expect(handoverBriefOf([1, 2])).toBeNull();
+    // 脏字段：数字变字符串、数组混脏项
+    expect(
+      handoverBriefOf({
+        segment_title: '  建房  ',
+        expected_ms: 'not-a-number',
+        operator_notes: ['ok', 42, null, '   '],
+        recent_speech: 'not-an-array',
+      }),
+    ).toEqual({
+      segment_id: '',
+      segment_title: '建房',
+      segment_goal: '',
+      expected_ms: 0,
+      save_name: '',
+      memory_brief: '',
+      operator_notes: ['ok'],
+      recent_speech: [],
+    });
+    // 全空简报按无简报处理（segment_id 只有机器标识、无可读内容时不弹展开入口）
+    expect(handoverBriefOf({ operator_notes: [] })).toBeNull();
+    expect(handoverBriefOf({})).toBeNull();
+  });
+});
+
+describe('agent.lead.commentary → 主控方自主解说回执行', () => {
+  it('受理并播出：徽标「已播出」，actor=游戏名，正文=summary', () => {
+    const entry = toEntry(
+      evt('agent.lead.commentary', {
+        game: 'minecraft',
+        summary: '这波挖到了钻石',
+        accepted: true,
+        spoken: true,
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'lead_commentary',
+      actor: 'minecraft',
+      text: '这波挖到了钻石',
+      badge: '已播出',
+      note: '',
+    });
+    // 后台事实：不进观众视角
+    expect(isAudienceEntry(entry!)).toBe(false);
+    expect(isConversationEntry(entry!)).toBe(false);
+  });
+
+  it('受理未播出 → 已受理；节流 → 已记录·节流；拒收 → 未受理', () => {
+    expect(toEntry(evt('agent.lead.commentary', { accepted: true, spoken: false }))!.badge).toBe(
+      '已受理',
+    );
+    expect(
+      toEntry(evt('agent.lead.commentary', { accepted: false, reason: 'throttled_recorded' }))!
+        .badge,
+    ).toBe('已记录·节流');
+    expect(toEntry(evt('agent.lead.commentary', { accepted: false }))!.badge).toBe('未受理');
+  });
+
+  it('note 拼 urgency（high 标急）、reason 与纠偏标记', () => {
+    const entry = toEntry(
+      evt('agent.lead.commentary', {
+        summary: '先救火',
+        urgency: 'high',
+        reason: '观众追问',
+        correction: true,
+        accepted: false,
+      }),
+    );
+    expect(entry!.note).toBe('急 · 观众追问 · 纠偏');
+  });
+
+  it('缺省防御：summary/game/urgency 缺失时回退安全默认', () => {
+    const entry = toEntry(evt('agent.lead.commentary', {}));
+    expect(entry).toMatchObject({ kind: 'lead_commentary', actor: '游戏', badge: '未受理' });
+    expect(entry!.text).not.toBe('');
   });
 });

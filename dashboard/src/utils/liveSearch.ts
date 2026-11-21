@@ -20,9 +20,9 @@ export interface SnippetPart {
   hit: boolean;
 }
 
-/** 命中分类：按"你在找什么"归的五桶（不按条目种类细分——kind 有 20+ 种、
+/** 命中分类：按"你在找什么"归的六桶（不按条目种类细分——kind 有 20+ 种、
  *  事件名近 60 种，直接展示或按它们过滤都会碎成一排杂名） */
-export type LiveHitCategory = 'audience' | 'speech' | 'agent' | 'game' | 'system';
+export type LiveHitCategory = 'audience' | 'speech' | 'agent' | 'game' | 'lead' | 'system';
 
 /** 分类的中文短名（清单 tag 列与过滤 chips 共用） */
 export const HIT_CATEGORY_LABEL: Record<LiveHitCategory, string> = {
@@ -30,6 +30,7 @@ export const HIT_CATEGORY_LABEL: Record<LiveHitCategory, string> = {
   speech: '发言',
   agent: '决策调用',
   game: '游戏',
+  lead: '主控',
   system: '系统',
 };
 
@@ -78,6 +79,7 @@ const KIND_SHORT_LABEL: Record<string, string> = {
   rundown: '环节',
   lead_change: '主控',
   lead_suggestion: '建议',
+  lead_commentary: '主控解说',
   boundary: '边界',
   stage: '阶段',
   tts: '播报',
@@ -115,14 +117,17 @@ export function entryCategoryOf(entry: ShowEntry): LiveHitCategory {
     case 'delegate_receipt':
       return 'game';
     case 'rundown':
-    case 'lead_change':
-    case 'lead_suggestion':
     case 'boundary':
     case 'stage':
     case 'tts':
     case 'tool_health':
     case 'system':
       return 'system';
+    case 'lead_change':
+    case 'lead_suggestion':
+    case 'lead_commentary':
+      // 主控域条目独立成桶：谁在主控是运营者单独会翻的问题，不混进系统流水
+      return 'lead';
     default:
       // tool / thinking / prompt / verdict / decision：工具按来源分侧，其余属决策过程
       return isGameTool(entry) ? 'game' : 'agent';
@@ -140,6 +145,7 @@ export function eventItemCategoryOf(
   if (eventType.startsWith('planner.')) return 'agent';
   if (eventType === 'agent.prompted') return 'agent';
   if (eventType === 'agent.replied') return 'game';
+  if (eventType.startsWith('agent.lead.')) return 'lead';
   if (eventType.startsWith('game.') || eventType.startsWith('task.')) return 'game';
   if (eventType.startsWith('tool.')) {
     const toolName = String(data.tool_name ?? '');
@@ -162,6 +168,8 @@ export function eventTagLabel(eventType: string, category: LiveHitCategory): str
   if (eventType === 'agent.prompted') return '递话';
   if (eventType === 'agent.replied') return 'Agent 步骤';
   if (eventType === 'agent.lead.changed') return '主控';
+  if (eventType === 'agent.lead.suggestion') return '建议';
+  if (eventType === 'agent.lead.commentary') return '主控解说';
   if (eventType === 'task.changed') return '任务';
   if (eventType.startsWith('game.')) return '游戏';
   if (eventType.startsWith('tts.utterance.')) return '播报';
@@ -196,7 +204,7 @@ export function itemCategoryOf(item: SessionTimelineItem): LiveHitCategory {
 export function countByCategory(
   hits: SearchHit[],
 ): Array<{ key: LiveHitCategory; label: string; count: number }> {
-  const order: LiveHitCategory[] = ['audience', 'speech', 'agent', 'game', 'system'];
+  const order: LiveHitCategory[] = ['audience', 'speech', 'agent', 'game', 'lead', 'system'];
   const counts = new Map<LiveHitCategory, number>();
   for (const hit of hits) counts.set(hit.category, (counts.get(hit.category) ?? 0) + 1);
   return order

@@ -245,6 +245,20 @@ export interface LeadStateResponse {
   reason: string;
 }
 
+/** 主控权交接简报（agent.lead.changed 载荷的 handover_brief 字段）。
+ *  交权方向（含目标拒收回滚）非 null；收回方向为 null。字段由后端拼装，
+ *  前端消费时全部防御解析（缺字段跳过不渲染） */
+export interface LeadHandoverBrief {
+  segment_id: string;
+  segment_title: string;
+  segment_goal: string;
+  expected_ms: number;
+  save_name: string;
+  memory_brief: string;
+  operator_notes: string[];
+  recent_speech: string[];
+}
+
 /** 动态主从人工切换请求体（`target`: 'auto' / 'streamer' / 候选游戏 Agent 名） */
 export interface LeadSwitchRequest {
   target: string;

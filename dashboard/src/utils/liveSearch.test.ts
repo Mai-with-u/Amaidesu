@@ -160,7 +160,7 @@ describe('hitFromItem（服务端命中 → 结果行）', () => {
   });
 });
 
-describe('entryCategoryOf（本地条目 → 五桶，走 hitFromEntry 的 category 字段）', () => {
+describe('entryCategoryOf（本地条目 → 六桶，走 hitFromEntry 的 category 字段）', () => {
   it.each([
     ['danmaku', 'audience'],
     ['super_chat', 'audience'],
@@ -179,7 +179,9 @@ describe('entryCategoryOf（本地条目 → 五桶，走 hitFromEntry 的 categ
     ['agent_reply', 'game'],
     ['delegate_receipt', 'game'],
     ['rundown', 'system'],
-    ['lead_suggestion', 'system'],
+    ['lead_change', 'lead'],
+    ['lead_suggestion', 'lead'],
+    ['lead_commentary', 'lead'],
     ['stage', 'system'],
     ['tts', 'system'],
     ['tool_health', 'system'],
@@ -213,6 +215,9 @@ describe('eventItemCategoryOf / eventTagLabel（服务端事件 → 分类与中
     ['planner.verdict', {}, 'agent'],
     ['agent.prompted', {}, 'agent'],
     ['agent.replied', {}, 'game'],
+    ['agent.lead.changed', {}, 'lead'],
+    ['agent.lead.suggestion', {}, 'lead'],
+    ['agent.lead.commentary', {}, 'lead'],
     ['game.body.hit', {}, 'game'],
     ['task.changed', {}, 'game'],
     ['tool.result.minecraft_glance', { tool_name: 'minecraft_glance' }, 'game'],
@@ -232,6 +237,9 @@ describe('eventItemCategoryOf / eventTagLabel（服务端事件 → 分类与中
     expect(eventTagLabel('planner.verdict', 'agent')).toBe('裁决');
     expect(eventTagLabel('tool.result.maicraft_observe', 'game')).toBe('工具');
     expect(eventTagLabel('tts.utterance.started', 'system')).toBe('播报');
+    expect(eventTagLabel('agent.lead.changed', 'lead')).toBe('主控');
+    expect(eventTagLabel('agent.lead.suggestion', 'lead')).toBe('建议');
+    expect(eventTagLabel('agent.lead.commentary', 'lead')).toBe('主控解说');
     expect(eventTagLabel('brand.new.event', 'system')).toBe('系统');
   });
 });
