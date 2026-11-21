@@ -2,18 +2,19 @@
 
 字幕"一源 → 三面"的播放对齐模式：TTS 引擎在位时，字幕跟随
 ``tts.utterance.*`` 生命周期——``started`` 把 speech_text 按停顿标点
-（逗号/分号/句末标点，顿号与冒号不切、引号内不切）切段、
-先显示第一段，出声后再把上屏文本切到下一段；``failed`` 照常显示该句全文
+（逗号/分号/句末标点，顿号与冒号不切、引号内不切）切段建会话但**不出字**；
+``tts.utterance.playback_started``（首个音频块写进声卡，播放路径分接发布）
+到达才显示第一段，其后把上屏文本切到下一段；``failed`` 照常显示该句全文
 （无声音也要给文本，原文由 ``speech_text`` 必选字段承载，不分段）；
-``finished`` 清空。与实际播放对齐：队列丢最旧的台词自然不显示。
+``finished`` 清空。字幕与声音同锚：出声前字幕保持空窗，不领先语音。
 
-估算时钟的零点锚在"真正出声"：``started`` 只切段并显示第一段，估算兜底
-定时**不起跑**——``tts.utterance.playback_started``（首个音频块写进声卡，
-播放路径分接发布）到达才把零点锚到该时刻并起跑估算。流式引擎的 started
-在合成前发布，从 started 到真正出声隔着整段合成首块延迟，先行起跑会让
-估算跑在出声之前（字幕播完声音才响）；等出声再起跑则任何延迟下估算都与
-听感对齐。播放路径未挂分接（或整句无声）时该事件缺席，估算不起跑、字幕
-停在第一段，由 ``failed``（显全文）与 ``finished``（清空）兜底收尾。
+首段显示与估算时钟同锚"真正出声"：流式引擎的 started 在合成前发布，从
+started 到真正出声隔着合成首块延迟加声卡预缓冲（量级可达数秒），首段若
+在 started 就上屏会领先语音、观众先看字后听声。playback_started 到达时
+才显示第一段并把估算零点锚到该时刻起跑。出声信号缺席（播放分接未挂/
+整句无声）时首段由兜底定时显示（``_FIRST_SHOW_FALLBACK_MS``）：超时出字
+但不锚估算时钟（没有出声事实就没有可信零点），字幕停在第一段，由
+``failed``（显全文）与 ``finished``（清空）兜底收尾。
 
 段切换的信号有两路，但都受两道约束：最短段显示时长（``_MIN_SEGMENT_SHOW_MS``：
 当前段上屏不足该时长不切，防细段闪切）与估算下限闸门（``_BOUNDARY_EARLY_
@@ -83,6 +84,11 @@ _BOUNDARY_EARLY_TOLERANCE_MS = 800
 # 语速校准的起算字数：样本太少（首段常只有两三个字）时单段时长换算的语速
 # 方差过大，攒够字数才开始用实测语速替换兜底值
 _RATE_CALIBRATION_MIN_CHARS = 6
+# 出声等待兜底超时：started 后迟迟等不到 playback_started（播放分接未挂/
+# 整句无声）时按此超时把第一段兜底上屏——正常句出声在数秒内，兜底被出声
+# 事件先行取消；超时值须明显大于正常首声延迟（合成首块+预缓冲），只兜
+# 真正没有出声信号的反常路径
+_FIRST_SHOW_FALLBACK_MS = 12_000
 # 校准语速的上下限：极端样本（异常拖长音的段）不把估算拉到离谱
 _MS_PER_CHAR_MIN = 80
 _MS_PER_CHAR_MAX = 500
@@ -213,7 +219,7 @@ class _LoopScheduler:
 
 
 class _PlaybackSubtitleController:
-    """字幕分段状态的管理面：会话登记、段切换（事件/定时双路）、清理。"""
+    """字幕分段状态的管理面：会话登记、首段出声显示（超时兜底）、段切换（事件/定时双路）、清理。"""
 
     def __init__(
         self,
@@ -232,6 +238,10 @@ class _PlaybackSubtitleController:
         # 当前段上屏时刻：最短段显示时长的计时锚点
         self._last_switch_ms = 0
         self._cancel_timer: Optional[Callable[[], None]] = None
+        # 首段是否已上屏：出声显示与超时兜底两路共用，防迟到出声信号重复显示
+        self._first_segment_shown: bool = False
+        # 出声等待兜底定时（started 起挂，playback_started 或兜底出字时撤）
+        self._cancel_first_show_fallback: Optional[Callable[[], None]] = None
         # utterance_id → 该句回复的观众发言；streamer.speech 订阅登记，
         # 显示每段字幕时反查带上（容量超限挤最早条目）
         self._reply_quotes: Dict[str, ReplyQuote] = {}
@@ -267,13 +277,12 @@ class _PlaybackSubtitleController:
         segments = split_subtitle_segments(payload.speech_text)
         if not segments:
             return
-        await self._show(segments[0], payload.utterance_id, self.quote_for(payload.utterance_id))
-        self._last_switch_ms = self._now_ms()
-        if len(segments) == 1:
-            return
+        # 出声前不出字：started（合成前发布）只切段建会话并挂出声等待兜底，
+        # 首段显示与估算零点都等 playback_started——合成首块延迟+声卡预缓冲
+        # 的时长不可预知，先行上屏必领先语音
         self._session = _SegmentSchedule(payload.utterance_id, segments, payload.duration_ms)
-        # 估算定时此刻不起跑：等 playback_started 把零点锚到真正出声再排
-        self._started_ms = self._now_ms()
+        self._first_segment_shown = False
+        self._arm_first_show_fallback()
 
     async def on_failed(self, payload: UtteranceFailedPayload) -> None:
         # 运行期逐句降级：合成失败该句照常显示全文（无声音也要给文本），不分段
@@ -288,6 +297,8 @@ class _PlaybackSubtitleController:
         session = self._session
         if session is None or payload.utterance_id != session.utterance_id:
             return  # 无会话 / 已结束 utterance 的迟到事件：丢弃
+        if not self._first_segment_shown:
+            return  # 首段尚未显示（出声信号缺席的兜底等待中）：无上屏文本可推进
         if self._now_ms() - self._last_switch_ms < _MIN_SEGMENT_SHOW_MS:
             return  # 当前段上屏不足最短时长：静音检测对逗号停顿也报边界，早到的忽略不耗段
         # 估算下限闸门：早于估算切换时刻超过容差的停顿是合成器分块的碎停顿
@@ -304,12 +315,50 @@ class _PlaybackSubtitleController:
         session = self._session
         if session is None or payload.utterance_id != session.utterance_id:
             return  # 无会话 / 已结束 utterance 的迟到事件：丢弃
-        # 估算时钟零点 = 真正出声时刻：合成首块延迟不计入估算窗口，
-        # 此刻才起跑兜底估算；句边界事件其后仍优先接管
-        self._started_ms = self._now_ms()
-        session.note_segment_started(self._started_ms)
+        self._disarm_first_show_fallback()
+        now = self._now_ms()
+        if not self._first_segment_shown:
+            # 首段此刻才上屏：与声音同锚，出声前字幕空窗
+            self._first_segment_shown = True
+            await self._show(session.segments[0], session.utterance_id, self.quote_for(session.utterance_id))
+            self._last_switch_ms = now
+        # 估算时钟零点 = 真正出声时刻：合成首块延迟不计入估算窗口，此刻才起跑
+        # 兜底估算（兜底已先出字时此处只补锚零点）；句边界事件其后仍优先接管
+        self._started_ms = now
+        session.note_segment_started(now)
         self._disarm_timer()
         self._arm_fallback_timer()
+
+    def _arm_first_show_fallback(self) -> None:
+        """出声等待兜底：playback_started 超时未到就把第一段兜底上屏。
+
+        出声信号缺席（播放分接未挂/整句无声）时观众仍能看到文本；正常句在
+        数秒内出声，兜底被出声事件先行取消。兜底出字不锚估算时钟——没有出声
+        事实就没有可信零点，段切换维持"停在第一段"。
+        """
+
+        def _fire() -> None:
+            if self._session is not None:
+                asyncio.get_running_loop().create_task(self._show_first_segment_now())
+
+        self._cancel_first_show_fallback = self._scheduler.schedule(_FIRST_SHOW_FALLBACK_MS, _fire)
+
+    def _disarm_first_show_fallback(self) -> None:
+        if self._cancel_first_show_fallback is not None:
+            try:
+                self._cancel_first_show_fallback()
+            except Exception as exc:  # noqa: BLE001 - 装饰性路径边界
+                self._logger.debug(f"出声等待兜底定时取消失败（已忽略）: {exc}")
+            self._cancel_first_show_fallback = None
+
+    async def _show_first_segment_now(self) -> None:
+        """兜底出字：显示第一段；迟到的出声信号随后到达时只补锚零点不重复显示。"""
+        session = self._session
+        if session is None or self._first_segment_shown:
+            return
+        self._first_segment_shown = True
+        await self._show(session.segments[0], session.utterance_id, self.quote_for(session.utterance_id))
+        self._last_switch_ms = self._now_ms()
 
     def _arm_fallback_timer(self) -> None:
         """按当前会话重排兜底定时；已耗尽段时不再建。"""
@@ -353,6 +402,7 @@ class _PlaybackSubtitleController:
 
     def _cancel_session(self) -> None:
         self._disarm_timer()
+        self._disarm_first_show_fallback()
         self._session = None
 
     async def _show(self, text: str, utterance_id: str, quote: Optional[ReplyQuote] = None) -> None:
@@ -426,9 +476,9 @@ def bind_playback_subtitle(
     )
     event_bus.on(CoreEvents.STREAMER_SPEECH, on_speech, model_class=StreamerSpeechPayload)
     logger.debug(
-        "已订阅 tts.utterance.* → 字幕跟随播放（started 分段显示第一段，playback_started 锚定出声时刻"
-        "起跑估算，句边界事件与估算定时双路切换，failed 显示全文，finished 清空）；"
-        "streamer.speech → 登记回复目标随字幕显示引用行"
+        "已订阅 tts.utterance.* → 字幕跟随播放（started 建会话不出字，playback_started 出声显示首段"
+        "并锚定估算零点，句边界事件与估算定时双路切换，出声信号超时兜底显示首段，"
+        "failed 显示全文，finished 清空）；streamer.speech → 登记回复目标随字幕显示引用行"
     )
     return (on_started, on_failed, on_finished, on_boundary, on_playback_started, on_speech)
 

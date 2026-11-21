@@ -37,7 +37,11 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
-from src.modules.events.payloads.utterance import UtteranceDroppedPayload, UtteranceStartedPayload
+from src.modules.events.payloads.utterance import (
+    UtteranceDroppedPayload,
+    UtterancePlaybackStartedPayload,
+    UtteranceStartedPayload,
+)
 from src.modules.subtitle.protocol import ReplyQuote
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.streamer.helpers import make_streamer_agent
@@ -267,10 +271,18 @@ async def test_subtitle_modes_are_mutually_exclusive(started) -> None:
     await asyncio.sleep(0.05)
     assert follow_subtitle.show.await_count == 0
 
-    # 播放事件到达时字幕跟随显示
+    # 播放事件到达时字幕跟随显示：started（合成前）不出字，出声才显示首段
     await bus.emit(
         CoreEvents.TTS_UTTERANCE_STARTED,
         UtteranceStartedPayload(utterance_id=engine.calls[0][1], speech_text=engine.calls[0][0], engine="test"),
+        source="test",
+    )
+    await bus.wait_until_drained()
+    assert follow_subtitle.show.await_count == 0  # started 阶段不出字
+
+    await bus.emit(
+        CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED,
+        UtterancePlaybackStartedPayload(utterance_id=engine.calls[0][1]),
         source="test",
     )
     await _until(lambda: follow_subtitle.show.await_count == 1)
@@ -813,7 +825,7 @@ async def test_play_mode_splits_multi_sentence_viewer_reply_and_keeps_quote(star
         ("家里自动门还差两把红石火把呢。", f"{base_uid}_p2"),
         ("挖完这几块咱们就回地面！", f"{base_uid}_p3"),
     ]
-    # 模拟 TTS 引擎播放第 2 段派生编号时发布 started，验证字幕跟随器经回退基编号带上同一 ReplyQuote
+    # 模拟 TTS 引擎播放第 2 段派生编号时发布 started 与出声，验证字幕跟随器经回退基编号带上同一 ReplyQuote
     await bus.emit(
         CoreEvents.TTS_UTTERANCE_STARTED,
         UtteranceStartedPayload(
@@ -821,6 +833,11 @@ async def test_play_mode_splits_multi_sentence_viewer_reply_and_keeps_quote(star
             speech_text="家里自动门还差两把红石火把呢。",
             engine="test",
         ),
+        source="test",
+    )
+    await bus.emit(
+        CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED,
+        UtterancePlaybackStartedPayload(utterance_id=f"{base_uid}_p2"),
         source="test",
     )
     await bus.wait_until_drained()
