@@ -265,6 +265,15 @@ async def test_lead_lifecycle_events_idempotency_and_listeners(fake_clock: Any) 
     assert bus_events[0].previous_lead == "streamer"
     assert bus_events[0].mode == "game"
     assert bus_events[0].timestamp_ms == fake_clock.now_ms()
+    # 交权事件携带简报正文快照，字段与传入的 LeadHandoverContext 对齐
+    brief = bus_events[0].handover_brief
+    assert brief is not None
+    assert brief.segment_id == "seg_1"
+    assert brief.segment_title == "冒险环节"
+    assert brief.segment_goal == "探索山洞"
+    assert brief.expected_ms == 600_000
+    assert brief.save_name == "" and brief.memory_brief == ""
+    assert brief.operator_notes == [] and brief.recent_speech == []
 
     # 同目标重复交权幂等，不重发事件、不重复调 enter_lead
     assert await coordinator.request_game_lead(ctx, target="sandbox_game") == "sandbox_game"
@@ -283,6 +292,8 @@ async def test_lead_lifecycle_events_idempotency_and_listeners(fake_clock: Any) 
     assert bus_events[-1].lead_agent == "streamer"
     assert bus_events[-1].previous_lead == "sandbox_game"
     assert bus_events[-1].handover_summary == "刚把铁矿炼好回基地"
+    # 收回方向不带交权简报（收权摘要只走 handover_summary）
+    assert bus_events[-1].handover_brief is None
 
     # 主播态重复收权幂等
     assert await coordinator.reclaim_streamer_lead(reason="again") == ""
@@ -339,12 +350,15 @@ async def test_candidate_discovery_multigame_and_error_isolation(fake_clock: Any
     assert events[-1].lead_agent == "streamer"
     assert events[-1].previous_lead == "game_a"
     assert events[-1].handover_summary == "A 收尾"
+    # 拒收回落的 fallback 事件带原简报（描述原本要交什么，供复盘）
+    assert events[-1].handover_brief is not None
 
     # 目标 yield_lead 抛异常也不阻断收权
     game_a.raise_on_yield = True
     assert await coord.request_game_lead(LeadHandoverContext(), target="game_a") == "game_a"
     assert await coord.reclaim_streamer_lead(reason="force_back") == ""
     assert coord.mode == "streamer"
+    assert events[-1].handover_brief is None  # 主动收回方向的简报为 None
 
     await mgr.stop_all()
     await bus.cleanup()

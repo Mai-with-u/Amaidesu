@@ -41,6 +41,7 @@ from src.modules.events.payloads.agents import (
     AgentLeadChangedPayload,
     AgentLeadCommentaryPayload,
     AgentLeadSuggestionPayload,
+    LeadHandoverBrief,
 )
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
@@ -513,6 +514,16 @@ class LeadCoordinator:
                         reason=self._reason,
                         manual_override=self._override,
                         handover_summary=rollback_summary,
+                        handover_brief=LeadHandoverBrief(
+                            segment_id=handover_ctx.segment_id,
+                            segment_title=handover_ctx.segment_title,
+                            segment_goal=handover_ctx.segment_goal,
+                            expected_ms=handover_ctx.expected_ms,
+                            save_name=handover_ctx.save_name,
+                            memory_brief=handover_ctx.memory_brief,
+                            operator_notes=handover_ctx.operator_notes,
+                            recent_speech=handover_ctx.recent_speech,
+                        ),
                         timestamp_ms=ts,
                     )
                 )
@@ -532,6 +543,16 @@ class LeadCoordinator:
                 reason=reason,
                 manual_override=self._override,
                 handover_summary=handover_summary,
+                handover_brief=LeadHandoverBrief(
+                    segment_id=handover_ctx.segment_id,
+                    segment_title=handover_ctx.segment_title,
+                    segment_goal=handover_ctx.segment_goal,
+                    expected_ms=handover_ctx.expected_ms,
+                    save_name=handover_ctx.save_name,
+                    memory_brief=handover_ctx.memory_brief,
+                    operator_notes=handover_ctx.operator_notes,
+                    recent_speech=handover_ctx.recent_speech,
+                ),
                 timestamp_ms=ts,
             )
         )
