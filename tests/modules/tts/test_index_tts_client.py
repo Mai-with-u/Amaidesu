@@ -9,14 +9,18 @@ chunked 响应是否真的逐块到达、请求体形状、连接失败是否真
 from __future__ import annotations
 
 import asyncio
-from typing import Any, List
+from typing import Any, AsyncIterator, List
 
 import numpy as np
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from src.modules.tts.backends.index_tts.client import IndexTTSClient, IndexTTSServiceError
+from src.modules.tts.backends.index_tts.client import (
+    IndexTTSClient,
+    IndexTTSServiceError,
+    strip_wav_header_and_align,
+)
 
 # 流式 WAV 头固定 44 字节（与客户端 _WAV_HEADER_BYTES 对应）
 _WAV_HEADER = b"RIFF" + b"\x00" * 40
@@ -76,9 +80,40 @@ async def test_stream_synthesize_strips_wav_header_across_chunk_boundaries() -> 
         joined = b"".join(chunks)
         assert not joined.startswith(b"RIFF")  # 头已剥除
         assert joined == b"\x01\x00" * 1200  # 字节总量精确（含半样本切割的重组）
+        assert all(len(c) % 2 == 0 for c in chunks)  # 每个片段都是整样本，可直接 frombuffer(int16)
     finally:
         await client.close()
         await server.close()
+
+
+async def _byte_stream(pieces: List[bytes]) -> AsyncIterator[bytes]:
+    for piece in pieces:
+        yield piece
+
+
+async def test_header_strip_and_odd_sample_alignment() -> None:
+    """头部拆块 + 半样本跨界（真机首测实锤的失败形态）：产出片段全为偶数
+    字节，拼接后与 PCM 完全一致——奇数尾字节跨块暂存，不丢不重。"""
+    pcm = bytes(range(256)) * 3  # 768 字节任意内容
+    pieces = [
+        _WAV_HEADER[:7],
+        _WAV_HEADER[7:] + pcm[:1],  # 头尾粘 1 个字节
+        pcm[1:100],
+        pcm[100:201],  # 奇数长度块
+        pcm[201:202],  # 单字节块
+        pcm[202:],
+    ]
+    out = [chunk async for chunk in strip_wav_header_and_align(_byte_stream(pieces))]
+    assert b"".join(out) == pcm
+    assert all(len(chunk) % 2 == 0 for chunk in out)
+
+
+async def test_header_entirely_in_separate_small_chunks() -> None:
+    """头部被网络拆到极碎（每次 1 字节）：剥头计数跨块累计，PCM 零丢失。"""
+    pcm = b"\x01\x00" * 100
+    pieces = [bytes([b]) for b in _WAV_HEADER] + [pcm]
+    out = [chunk async for chunk in strip_wav_header_and_align(_byte_stream(pieces))]
+    assert b"".join(out) == pcm
 
 
 async def test_payload_carries_emo_vector_only_when_configured() -> None:

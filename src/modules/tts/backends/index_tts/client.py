@@ -8,8 +8,8 @@ IndexTTS 官方只提供 Python API 与给人用的 WebUI，没有 HTTP 服务�
 合成边推（按文本切段，每段合成完即推送）。
 
 网络分块边界与合成段边界不对齐，本客户端按头部固定长度剥掉 WAV 头后把
-余下字节全部按裸 PCM 片段产出。头部剥离用字节计数而非 RIFF 探测：裸 PCM
-内容里可能偶然出现 "data" 四字节序列，探测法会误判。
+余下字节按整样本（2 字节）对齐产出。头部剥离用字节计数而非 RIFF 探测：
+裸 PCM 内容里可能偶然出现 "data" 四字节序列，探测法会误判。
 """
 
 from __future__ import annotations
@@ -20,9 +20,11 @@ import aiohttp
 
 from src.modules.logging import get_logger
 
-# 连接超时 / 单次读超时（秒）：读超时须覆盖服务端单段合成的最坏耗时
+# 连接超时 / 单次读超时（秒）：读超时须覆盖服务端单段合成的最坏耗时——
+# 显存与桌面负载会把单段拖到分钟级（实测劣化 18 倍），300s 容忍中度劣化，
+# 彻底溢出仍会超时报错而非无限等
 _CONNECT_TIMEOUT_S = 10.0
-_SOCK_READ_TIMEOUT_S = 120.0
+_SOCK_READ_TIMEOUT_S = 300.0
 
 # 流式 WAV 头固定 44 字节（RIFF/fmt/data 三段，总长度字段为占位值）
 _WAV_HEADER_BYTES = 44
@@ -35,6 +37,36 @@ class IndexTTSServiceError(Exception):
     会把日志刷成数百行 traceback；本异常只保留对排查有用的简短信息
     （服务地址 + 失败类别），原始异常经 ``__cause__`` 保留供调试器查看。
     """
+
+
+async def strip_wav_header_and_align(
+    byte_chunks: AsyncIterator[bytes], header_bytes: int = _WAV_HEADER_BYTES
+) -> AsyncIterator[bytes]:
+    """剥掉流式头部的固定字节数，并把余下字节按整样本（2 字节）对齐产出。
+
+    网络分块边界与样本边界不对齐：头部可能被拆到多个读块、半个样本可能
+    落在块边界上（真机首测实锤 ``buffer size must be a multiple of element
+    size``）。头部按字节计数剥除；对齐靠跨块暂存奇数尾字节——产出的每个
+    片段都是偶数字节，可直接 ``np.frombuffer(int16)``。流结束时仍挂着的
+    不足一个样本的尾字节丢弃（无声段）。
+    """
+    header_remaining = header_bytes
+    pending_odd_byte = b""
+    async for chunk in byte_chunks:
+        if header_remaining > 0:
+            if len(chunk) <= header_remaining:
+                header_remaining -= len(chunk)
+                continue
+            chunk = chunk[header_remaining:]
+            header_remaining = 0
+        if pending_odd_byte:
+            chunk = pending_odd_byte + chunk
+            pending_odd_byte = b""
+        if len(chunk) % 2:
+            pending_odd_byte = chunk[-1:]
+            chunk = chunk[:-1]
+        if chunk:
+            yield chunk
 
 
 class IndexTTSClient:
@@ -98,18 +130,10 @@ class IndexTTSClient:
                 if response.status != 200:
                     body = await response.text()
                     raise IndexTTSServiceError(f"接口返回 HTTP {response.status}: {body[:200]}")
-                header_remaining = _WAV_HEADER_BYTES
-                async for chunk in response.content.iter_any():
-                    if header_remaining > 0:
-                        if len(chunk) <= header_remaining:
-                            header_remaining -= len(chunk)
-                            continue
-                        chunk = chunk[header_remaining:]
-                        header_remaining = 0
-                    if chunk:
-                        yield bytes(chunk)
+                async for pcm in strip_wav_header_and_align(response.content.iter_any()):
+                    yield pcm
         except aiohttp.ClientError as e:
             raise IndexTTSServiceError(f"连接 IndexTTS 服务失败（{type(e).__name__}）: {e}") from e
 
 
-__all__ = ["IndexTTSClient", "IndexTTSServiceError"]
+__all__ = ["IndexTTSClient", "IndexTTSServiceError", "strip_wav_header_and_align"]
