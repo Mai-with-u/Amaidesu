@@ -20,6 +20,7 @@ import type {
   AgentCancelTaskResponse,
   AgentStopResponse,
   LeadStateResponse,
+  LeadSuggestResponse,
   LeadSwitchRequest,
   ArchiveLineCreatePayload,
   ArchiveListResponse,
@@ -323,6 +324,9 @@ export const agentsApi = {
   /** 切换动态主从模式（target: 'auto' / 'streamer' / 候选游戏名；无效目标 400，未就绪或禁用 409） */
   switchAgentLead: (payload: LeadSwitchRequest) =>
     api.post<LeadStateResponse>('/agents/lead', payload),
+  /** 非强杀建议转达：把内容转给当前主控 Agent（默认主控游戏），由其自行决定是否采纳（不打断在跑目标） */
+  suggestLead: (content: string, target?: string) =>
+    api.post<LeadSuggestResponse>('/agents/lead/suggest', target ? { content, target } : { content }),
 };
 
 // 任务卡快照（进行中任务列表 + 已完结事件聚合）

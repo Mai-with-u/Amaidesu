@@ -1,9 +1,10 @@
 // useAgentIntervention.ts 干预发话共享组合式的测试
 //
-// 覆盖：三目标的模式映射（主播三模式 / minecraft 两模式 / 其他目标为空）、
-// 传输分派（主播透传 useInterventionBar 既有通道、minecraft 走 agents 域接口）、
-// 在途状态合并与空文本守卫。
+// 覆盖：三目标的模式映射（主播三模式 / minecraft 递话+按主控态二选一 /
+// 其他目标为空）、传输分派（主播透传 useInterventionBar 既有通道、
+// minecraft 走 agents 域接口）、建议转达回执两分支、在途状态合并与空文本守卫。
 
+import { computed } from 'vue';
 import { effectScope, type EffectScope } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,7 +21,7 @@ vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<object>()),
   debugApi: { injectMessage: vi.fn(), getEventBusStats: vi.fn() },
   streamerApi: { testDecision: vi.fn() },
-  agentsApi: { promptAgent: vi.fn(), delegateAgent: vi.fn() },
+  agentsApi: { promptAgent: vi.fn(), delegateAgent: vi.fn(), suggestLead: vi.fn() },
 }));
 
 vi.mock('element-plus', () => ({
@@ -31,6 +32,7 @@ const injectMock = vi.mocked(debugApi.injectMessage);
 const testDecisionMock = vi.mocked(streamerApi.testDecision);
 const promptAgentMock = vi.mocked(agentsApi.promptAgent);
 const delegateAgentMock = vi.mocked(agentsApi.delegateAgent);
+const suggestLeadMock = vi.mocked(agentsApi.suggestLead);
 
 describe('useAgentIntervention', () => {
   let scope: EffectScope;
@@ -51,21 +53,57 @@ describe('useAgentIntervention', () => {
     vi.clearAllMocks();
   });
 
-  function mount() {
-    return scope.run(() => useAgentIntervention({ settle, onDelegated }))!;
+  function mount(gameLead = false) {
+    return scope.run(() =>
+      useAgentIntervention({
+        settle,
+        onDelegated,
+        isGameLead: computed(() => gameLead),
+      }),
+    )!;
   }
 
-  it('模式映射：主播三模式 / minecraft 两模式 / 其他目标为空', () => {
+  it('模式映射：主播三模式 / minecraft 按主控态二选一 / 其他目标为空', () => {
     const composable = mount();
     expect(composable.modesForTarget(STREAMER_AGENT_NAME).map(mode => mode.key)).toEqual([
       'danmaku',
       'force',
       'nudge',
     ]);
-    const minecraftModes = composable.modesForTarget(MINECRAFT_AGENT_NAME);
-    expect(minecraftModes.map(mode => mode.key)).toEqual(['prompt', 'delegate']);
-    expect(minecraftModes.map(mode => mode.label)).toEqual(['递话', '委派']);
+    // 主播主控态：递话 + 委派
+    const delegateModes = composable.modesForTarget(MINECRAFT_AGENT_NAME);
+    expect(delegateModes.map(mode => mode.key)).toEqual(['prompt', 'delegate']);
+    expect(delegateModes.map(mode => mode.label)).toEqual(['递话', '委派']);
     expect(composable.modesForTarget('adv')).toEqual([]);
+  });
+
+  it('游戏主控态：minecraft 模式集合换为递话 + 建议', () => {
+    const composable = mount(true);
+    const modes = composable.modesForTarget(MINECRAFT_AGENT_NAME);
+    expect(modes.map(mode => mode.key)).toEqual(['prompt', 'suggest']);
+    expect(modes.map(mode => mode.label)).toEqual(['递话', '建议']);
+  });
+
+  it('建议模式：受理回执提示送达对象', async () => {
+    const composable = mount(true);
+    suggestLeadMock.mockResolvedValue({
+      data: { accepted: true, target: 'minecraft', lead_agent: 'minecraft', reason: '' },
+    } as never);
+    await composable.sendToTarget(MINECRAFT_AGENT_NAME, 'suggest', '小心苦力怕');
+    expect(suggestLeadMock).toHaveBeenCalledWith('小心苦力怕');
+    expect(ElMessage.success).toHaveBeenCalled();
+    expect(delegateAgentMock).not.toHaveBeenCalled();
+    expect(settle).toHaveBeenCalled();
+  });
+
+  it('建议模式：拒收回执以 warning 提示原因', async () => {
+    const composable = mount(true);
+    suggestLeadMock.mockResolvedValue({
+      data: { accepted: false, target: 'minecraft', lead_agent: 'streamer', reason: 'manual_streamer' },
+    } as never);
+    await composable.sendToTarget(MINECRAFT_AGENT_NAME, 'suggest', '小心苦力怕');
+    expect(ElMessage.warning).toHaveBeenCalled();
+    expect(ElMessage.success).not.toHaveBeenCalled();
   });
 
   it('主播目标：强制回应透传 useInterventionBar 既有通道', async () => {

@@ -251,6 +251,33 @@ export interface LeadSwitchRequest {
   reason?: string;
 }
 
+/** 非强杀建议转达回执（`POST /api/v1/agents/lead/suggest`）。
+ *  accepted=false 表示主控方拒收（如当前非游戏主控），reason 说明原因 */
+export interface LeadSuggestResponse {
+  accepted: boolean;
+  /** 建议送达的目标 Agent 名 */
+  target: string;
+  /** 当前主控 Agent 名 */
+  lead_agent: string;
+  /** 受理/拒收原因 */
+  reason: string;
+}
+
+/** 主播发言载荷（streamer.speech）。priority 为 0-3 的表达优先级
+ *  （0=观众回复 1=高光 2=常规解说 3=紧急）；source 为表达来源标签
+ *  （如 game_commentary=主控游戏自主解说），两者缺省视为常态发言 */
+export interface StreamerSpeechPayload {
+  text: string;
+  /** TTS 全链路关联键 */
+  utterance_id?: string;
+  round_id?: string;
+  reply_to_message_id?: string;
+  llm_request_id?: string;
+  emotion?: string;
+  priority?: number;
+  source?: string;
+}
+
 /** 任务卡（进行中 = 任务列表快照；已完结 = 事件环聚合的终态末次载荷） */
 export interface TaskCard {
   task_id: string;

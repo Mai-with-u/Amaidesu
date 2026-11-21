@@ -376,6 +376,10 @@
                 <el-radio-button :value="STREAMER_AGENT_NAME">主播</el-radio-button>
                 <el-radio-button :value="MINECRAFT_AGENT_NAME">minecraft</el-radio-button>
               </el-radio-group>
+              <!-- 游戏主控态挑明：给主播的递话会被后端同时转一份非强杀建议给主控游戏 -->
+              <span v-if="interventionTarget === STREAMER_AGENT_NAME && streamerNudgeHint" class="input-target-hint">
+                {{ streamerNudgeHint }}
+              </span>
             </div>
             <InterventionInput
               ref="sendBarRef"
@@ -513,6 +517,7 @@ import {
   useAgentIntervention,
 } from '@/composables/useAgentIntervention';
 import { agentRoundLocation } from '@/composables/useAgentDeepLink';
+import { useAgentLead } from '@/composables/useAgentLead';
 import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
 import { useTimelineAnchor } from '@/composables/live/useTimelineAnchor';
@@ -998,10 +1003,13 @@ const searchBarRef = ref<InstanceType<typeof LiveSearchBar> | null>(null);
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
 
 // 干预发话：目标二选一（默认主播），模式集合与传输随目标切换——
-// 单一事实源在 useAgentIntervention，主播目标复用既有行为（昵称插槽、在途 chip）
+// 单一事实源在 useAgentIntervention，主播目标复用既有行为（昵称插槽、在途 chip）。
+// 这里与 AgentLeadControl 面板各持一个 useAgentLead 实例：开销只是单次 GET + 一条
+// WS 订阅，生命周期由组合式自身随激活态启停，互不干扰
 const router = useRouter();
 const route = useRoute();
 const interventionTarget = ref<string>(STREAMER_AGENT_NAME);
+const leadState = useAgentLead();
 const {
   activeMode,
   injectNickname,
@@ -1010,9 +1018,19 @@ const {
   modesForTarget,
   sendToTarget,
   sending,
-} = useAgentIntervention({ settle: async () => sendBarRef.value?.settle() });
+} = useAgentIntervention({
+  settle: async () => sendBarRef.value?.settle(),
+  isGameLead: leadState.isGameLead,
+});
 
 const interventionModes = computed(() => modesForTarget(interventionTarget.value));
+
+/** 游戏主控态下给主播递话的提示：后端会把运营递话静默转发一份非强杀建议给主控游戏 */
+const streamerNudgeHint = computed(() =>
+  leadState.isGameLead.value
+    ? `当前由 ${leadState.leadState.value?.lead_agent || 'minecraft'} 主控，此提醒会同时转达给它`
+    : '',
+);
 
 function onInterventionSend(modeKey: string, text: string): void {
   void sendToTarget(interventionTarget.value, modeKey, text);
@@ -1795,6 +1813,11 @@ onMounted(() => {
 }
 
 .input-target-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+/* 游戏主控态的递话转达提示：跟随目标行的弱化小字（与 label 同层） */
+.input-target-hint {
   font-size: 11px;
   color: var(--text-secondary);
 }
