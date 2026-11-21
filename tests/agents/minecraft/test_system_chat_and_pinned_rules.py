@@ -707,3 +707,4 @@ def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_
     assert "observe(what=self)" in LEAD_MODE_PROMPT_SECTION
     assert "暂停或取消非紧急的移动与施工目标" in LEAD_MODE_PROMPT_SECTION
     assert "合并回应所有未答要点" in LEAD_MODE_PROMPT_SECTION
+    assert "rundown_control" in LEAD_MODE_PROMPT_SECTION

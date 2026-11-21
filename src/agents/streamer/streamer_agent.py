@@ -108,7 +108,7 @@ from src.modules.events.payloads.streamer import StreamerPromptDeliveredPayload,
 from src.modules.vision.image_store import get_image_store
 
 from .rundown.rundown_coordinator import RundownCoordinator
-from .tools.rundown_tool import build_rundown_tool_provider
+from .tools.rundown_tool import RundownControlToolProvider, build_rundown_tool_provider
 from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .session_scope import ClosingSession, SessionScope
@@ -927,6 +927,8 @@ class StreamerAgent(BaseAgent):
 
         # 工具 Provider 实例（用于 invoke）；测试可注入替身，启动注册期复用不重建
         self._reply_provider: Optional[ReplyToolProvider] = reply_provider
+        # rundown_control 注册 Provider 槽位：持有实例以便主控切换回调刷新动态可见名单
+        self._rundown_tool_provider: Optional[RundownControlToolProvider] = None
 
         # ===== 发言管线（speech → TTS / 字幕）=====
         # 队列生命周期由 dispatcher 自持（start/stop）；未启用时决策循环
@@ -1235,9 +1237,10 @@ class StreamerAgent(BaseAgent):
         - ``streamer_reply``：LLM 可调的真工具，注册 + 名单 ``["streamer"]``
           （自己的工具填自己）；Planner 经 registry 统一调用，本窗交接材料
           随 ``ToolInvocation.attachment`` 传入（不经实例槽位）。
-        - ``rundown_control``：注册（provider="rundown"，名单 ``["streamer"]``）
-          进 ToolRegistry，与其他工具同一路径被 Planner 调用；可见性随
-          Provider 注册/摘除进出名单（Agent 启动即注册，无需二次开关）。
+        - ``rundown_control``：注册（provider="rundown"，可见名单动态计算：
+          主播恒可见，游戏主控态并入当前主控游戏 Agent——环节推进归当场主控）
+          进 ToolRegistry，与其他工具同一路径被 Planner 调用；主控切换回调处
+          经 ``refresh_provider_tools`` 刷新名单。
         - ``memory_recall``：回想工具（provider="memory"，名单 ``["streamer"]``），
           台词/承诺/档案三个仓储都注入时才注册；没注册时工具面里没有它，
           提示词里关于回想工具的条款照常渲染。
@@ -1258,18 +1261,19 @@ class StreamerAgent(BaseAgent):
         # 仅供引用/诊断（材料走 attachment）
 
         # proactive tool
-        # 注册：reply 与 rundown_control（可见名单 ["streamer"]）；经基类入口
-        # 登记归属，stop 路径逐一摘除（disable/重建不留残留工具）
+        # 注册：reply 与 rundown_control（可见名单动态计算：主播恒可见，游戏主控态并入当前主控
+        # 游戏 Agent）；经基类入口登记归属，stop 路径逐一摘除（disable/重建不留残留工具）
         if self._tool_registry is not None:
             self.register_tool_provider(self._reply_provider, registry=self._tool_registry)
             self.register_tool_provider(
                 WorkingNoteToolProvider(self._working_note),
                 registry=self._tool_registry,
             )
-            self.register_tool_provider(
-                build_rundown_tool_provider(self._rundown_coord.tool_provider),
-                registry=self._tool_registry,
+            self._rundown_tool_provider = build_rundown_tool_provider(
+                self._rundown_coord.tool_provider,
+                lead_agent_provider=self._active_game_lead_agent,
             )
+            self.register_tool_provider(self._rundown_tool_provider, registry=self._tool_registry)
             registered = "streamer_reply / streamer_note / rundown_control"
             # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕（唯一的记忆工具）
             if self._memory_recall is not None:
@@ -4141,9 +4145,25 @@ class StreamerAgent(BaseAgent):
         if self._mouth is not None:
             self._mouth.note_game(f"游戏收尾：{cleaned}")
 
+    def _refresh_rundown_tool_visibility(self) -> None:
+        """主控切换后刷新 rundown_control 的可见名单（环节推进归当场主控）。
+
+        Provider 的 ``visible_to`` 在 ``list_tools`` 时按当前主控态现算，注册表
+        侧的快照经 ``refresh_provider_tools`` 重算入账；未注册工具面（预启动
+        窗口/未注入注册表）或刷新失败不阻断主控切换主链。
+        """
+        if self._tool_registry is None or self._rundown_tool_provider is None:
+            return
+        try:
+            self._tool_registry.refresh_provider_tools(self._rundown_tool_provider)
+        except Exception as exc:  # noqa: BLE001 - 名单刷新失败不阻断主控切换
+            self._logger.warning(f"刷新 rundown_control 可见名单失败: {exc}", exc=True)
+
     def _on_lead_changed(self, payload: AgentLeadChangedPayload) -> None:
         """动态主从状态变更监听：记录进入时刻、落账收权摘要，并在游戏故障被动降级时唤醒主播圆场。"""
         ts = payload.timestamp_ms or self._clock()
+        # 环节推进工具跟随主控：名单切换（游戏主控态并入主控游戏 Agent、收权后移除）
+        self._refresh_rundown_tool_visibility()
         if payload.mode == "game":
             self._game_lead_entered_ms = ts
             self._last_silence_nudge_ms = None

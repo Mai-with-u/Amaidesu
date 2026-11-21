@@ -111,6 +111,56 @@ def test_tool_is_visible_to_the_planner_with_a_complete_function_shape() -> None
     assert set(seg_schema["required"]) == {"seg_id", "title", "task_description", "expected_ms"}
 
 
+def test_rundown_control_visibility_defaults_to_streamer_only() -> None:
+    """未装配主控回调时 rundown_control 仅主播可见（与注册表 fail-closed 默认一致）。"""
+    provider, _ = _provider()
+    registry = ToolRegistry()
+    registry.register_provider(build_rundown_tool_provider(provider))
+    assert [s.full_name for s in registry.list_tools(for_agent="streamer")] == ["rundown_control"]
+    assert registry.list_tools(for_agent="minecraft") == []
+
+
+def test_rundown_control_visibility_follows_lead_agent_and_refresh() -> None:
+    """可见名单跟随主控：游戏主控态经刷新并入主控游戏 Agent（进其 LLM 工具列表），收权后移除；主播恒可见。"""
+    provider, _ = _provider()
+    lead_agent: Dict[str, str] = {"name": ""}
+    tool_provider = build_rundown_tool_provider(provider, lead_agent_provider=lambda: lead_agent["name"])
+    registry = ToolRegistry()
+    registry.register_provider(tool_provider)
+
+    # 主播主控态：游戏侧不可见
+    assert registry.list_tools(for_agent="minecraft") == []
+    assert [s.full_name for s in registry.list_tools(for_agent="streamer")] == ["rundown_control"]
+
+    # 进入游戏主控态：刷新后并入主控游戏 Agent 名单
+    lead_agent["name"] = "minecraft"
+    result = registry.refresh_provider_tools(tool_provider)
+    assert result["ok"] is True
+    assert [s.full_name for s in registry.list_tools(for_agent="minecraft")] == ["rundown_control"]
+    assert [s.full_name for s in registry.list_tools(for_agent="streamer")] == ["rundown_control"]
+    assert registry.list_tools(for_agent="other_agent") == []
+
+    # 收回主控：刷新后游戏侧名单移除
+    lead_agent["name"] = ""
+    registry.refresh_provider_tools(tool_provider)
+    assert registry.list_tools(for_agent="minecraft") == []
+    assert [s.full_name for s in registry.list_tools(for_agent="streamer")] == ["rundown_control"]
+
+
+def test_rundown_control_visibility_degrades_to_streamer_on_callback_error() -> None:
+    """主控回调异常时降级为仅主播可见，不抛出阻断工具列举。"""
+    provider, _ = _provider()
+
+    def _broken() -> str:
+        raise RuntimeError("coordinator unavailable")
+
+    tool_provider = build_rundown_tool_provider(provider, lead_agent_provider=_broken)
+    registry = ToolRegistry()
+    registry.register_provider(tool_provider)
+    assert [s.full_name for s in registry.list_tools(for_agent="streamer")] == ["rundown_control"]
+    assert registry.list_tools(for_agent="minecraft") == []
+
+
 async def test_registry_invoke_and_planner_dispatch_share_one_state_machine() -> None:
     provider, _ = _provider()
     registry = _registry_with(provider)

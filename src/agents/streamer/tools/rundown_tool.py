@@ -21,12 +21,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from dataclasses import replace
+from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
-from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
+from src.modules.tools.provider import BaseToolProvider, as_tool_impl
 
 from ..rundown.dispatch import APPEND_MIN_EXPECTED_MS, dispatch_rundown_control
 from ..rundown.rundown_state import RundownState
@@ -34,7 +35,10 @@ from ..rundown.rundown_state import RundownState
 __all__ = [
     "build_rundown_tool_provider",
     "RundownControlProvider",
+    "RundownControlToolProvider",
 ]
+
+logger = get_logger("RundownControlToolProvider")
 
 _PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -105,19 +109,52 @@ _CONTROL_SPEC = ToolSpec(
 )
 
 
-def build_rundown_tool_provider(provider: "RundownControlProvider") -> ToolProvider:
-    """把 RundownControlProvider 包成注册形态的 ToolProvider（简单工具路径）。
+class RundownControlToolProvider(BaseToolProvider):
+    """rundown_control 的注册 Provider：按运行期回调动态计算可见 Agent 名单。
 
-    注册键 = 派生全名 ``rundown_control``（provider="rundown" + 声明名
-    control）；执行体即 ``RundownControlProvider.invoke``——Planner 的调用
-    经注册表落到这唯一状态机入口，无第二事实源。
-
-    返回值带 ``structured_content``：快照/结构化拒绝（reason、remaining_ms 等）
-    完整进入观察文本与 tool.result 事件，消费方拿到的信息与直连返回一致。
+    环节推进归当场主控：主播始终可见（流程单状态机归主播 Agent 承载）；
+    游戏主控态下当前主控游戏 Agent 经 ``lead_agent_provider`` 回调并入名单，
+    使其在主控期间能用 rundown_control 推进/续时环节；回调异常时降级为
+    仅主播可见（不阻断主链）。名单变化由宿主在主控切换回调处经
+    ``ToolRegistry.refresh_provider_tools`` 触发重算。
     """
 
-    async def _run(inv: ToolInvocation) -> ToolExecutionResult:
-        text = provider.invoke(dict(inv.arguments or {}))
+    category: ClassVar[str] = "framework"
+
+    def __init__(
+        self,
+        provider: "RundownControlProvider",
+        *,
+        lead_agent_provider: Optional[Callable[[], str]] = None,
+    ) -> None:
+        self._control = provider
+        self._lead_agent_provider = lead_agent_provider
+        self._impl = as_tool_impl(_CONTROL_SPEC.full_name, self._run)
+
+    @property
+    def name(self) -> str:
+        return _CONTROL_SPEC.provider
+
+    def _visible_agents(self) -> List[str]:
+        """构造可见名单：始终含主播，游戏主控态下并入当前主控游戏 Agent 注册名（保序去重）。"""
+        visible: List[str] = ["streamer"]
+        if self._lead_agent_provider is None:
+            return visible
+        try:
+            lead_agent = (self._lead_agent_provider() or "").strip()
+        except Exception as exc:  # noqa: BLE001 - 动态名单回调异常降级为仅主播可见
+            logger.warning(f"rundown_control 读取当前主控游戏 Agent 失败（仅保留 streamer 可见）: {exc}", exc=True)
+            return visible
+        if lead_agent and lead_agent != "*" and lead_agent not in visible:
+            visible.append(lead_agent)
+        return visible
+
+    def list_tools(self) -> Iterable[ToolSpec]:
+        """列出 rundown_control 规格：每次列出时现算 ``visible_to``，不修改模块级常量规格。"""
+        return [replace(_CONTROL_SPEC, visible_to=self._visible_agents())]
+
+    async def _run(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        text = self._control.invoke(dict(invocation.arguments or {}))
         return ToolExecutionResult(
             tool_name=_CONTROL_SPEC.full_name,
             success=True,
@@ -125,11 +162,34 @@ def build_rundown_tool_provider(provider: "RundownControlProvider") -> ToolProvi
             structured_content=json.loads(text),
         )
 
-    return make_provider_from_specs(
-        "rundown",
-        [(_CONTROL_SPEC, as_tool_impl(_CONTROL_SPEC.full_name, _run))],
-        category="framework",
-    )
+    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        if invocation.tool_name == _CONTROL_SPEC.full_name:
+            return await self._run(invocation)
+        return ToolExecutionResult(
+            tool_name=invocation.tool_name,
+            success=False,
+            error_message=f"工具 '{invocation.tool_name}' 不属于 Provider '{self.name}'",
+        )
+
+
+def build_rundown_tool_provider(
+    provider: "RundownControlProvider",
+    *,
+    lead_agent_provider: Optional[Callable[[], str]] = None,
+) -> RundownControlToolProvider:
+    """把 RundownControlProvider 包成注册形态的 ToolProvider。
+
+    注册键 = 派生全名 ``rundown_control``（provider="rundown" + 声明名
+    control）；执行体即 ``RundownControlProvider.invoke``——Planner 的调用
+    经注册表落到这唯一状态机入口，无第二事实源。
+
+    ``lead_agent_provider`` 返回当前游戏主控 Agent 注册名（非主控态返回
+    空串），用于动态可见名单；不传时仅主播可见。
+
+    返回值带 ``structured_content``：快照/结构化拒绝（reason、remaining_ms 等）
+    完整进入观察文本与 tool.result 事件，消费方拿到的信息与直连返回一致。
+    """
+    return RundownControlToolProvider(provider, lead_agent_provider=lead_agent_provider)
 
 
 class RundownControlProvider:
