@@ -531,7 +531,13 @@ class _GatedEngine:
         self.finished: List[str] = []
         self.cancelled: List[str] = []
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         self.started.set()
         try:
             await self.release.wait()

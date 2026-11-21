@@ -55,7 +55,13 @@ class _GatedTTSEngine:
         self.release_first_clause = asyncio.Event()
         self.second_clause_spoken = asyncio.Event()
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         self.spoken.append(text)
         if self.hold_phrase and self.hold_phrase in text:
             self.first_clause_started.set()

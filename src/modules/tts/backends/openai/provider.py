@@ -151,13 +151,20 @@ class OpenAITTSProvider:
 
     # ===== 业务方法 =====
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         """合成并播放语音（流式主干：合成与播放同时进行，首块到达即出声）。
 
         Args:
             text: 要合成的文本。
             utterance_id: 一次发声实例的唯一 ID；非 None 时按
                 ``tts.utterance.*`` 生命周期发布事件。
+            emotion / emotion_intensity: 情绪提示；本引擎不支持动态情感，忽略。
         """
         if not self._has_started:
             await self.setup()

@@ -213,9 +213,19 @@ class SpeechDispatcher:
         try:
             engine = self._tts_engine
 
-            async def _speak(text: str, utterance_id: Optional[str] = None) -> None:
+            async def _speak(
+                text: str,
+                utterance_id: Optional[str] = None,
+                emotion: Optional[str] = None,
+                emotion_intensity: Optional[float] = None,
+            ) -> None:
                 """编排队列 → TTS 引擎的 speak 适配器。"""
-                await engine.handle_speech(text, utterance_id=utterance_id)
+                await engine.handle_speech(
+                    text,
+                    utterance_id=utterance_id,
+                    emotion=emotion,
+                    emotion_intensity=emotion_intensity,
+                )
 
             self._utterance_queue = UtteranceQueue(
                 speak=_speak,
@@ -298,13 +308,23 @@ class SpeechDispatcher:
         """接线杂谈档段落被插断时的尾句去处（话头工作台记下她没说完的后半段）。"""
         self._interrupted_tail_listener = listener
 
-    async def _enqueue_paragraph(self, utterance_id: str, text: str, *, talk: bool, priority: int = 0) -> None:
+    async def _enqueue_paragraph(
+        self,
+        utterance_id: str,
+        text: str,
+        *,
+        talk: bool,
+        priority: int = 0,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         """决策台词入播放队列：杂谈档长段或有观众回复目标的多句评论回复拆成两三句、共用段落号依次入队，其余整句入队。
 
         拆开后句与句之间按播放自然停顿，被更急的台词插进来时还没播的后半段随段落作废，
         作废的原文交给尾句去处。第一句沿用这句台词的 utterance_id（回弹幕确认、字幕、
         记账都按它对上；后续派生编号在字幕跟随器里回退基编号显示同一引用气泡），
         分段上限不超过队列容量，避免一段话自己把开头挤出队列。
+        情绪与强度随段内每句透传给 TTS 引擎。
         """
         queue = self._utterance_queue
         if queue is None:
@@ -312,7 +332,9 @@ class SpeechDispatcher:
         max_parts = min(3, max(1, self._speech_max_queue))
         parts = split_talk_paragraph(text, max_parts=max_parts) if talk else [text]
         if len(parts) <= 1:
-            await queue.enqueue(utterance_id, text, priority=priority)
+            await queue.enqueue(
+                utterance_id, text, priority=priority, emotion=emotion, emotion_intensity=emotion_intensity
+            )
             return
         for index, part in enumerate(parts):
             part_id = utterance_id if index == 0 else f"{utterance_id}_p{index + 1}"
@@ -321,6 +343,8 @@ class SpeechDispatcher:
                 part,
                 priority=priority,
                 segment=utterance_id,
+                emotion=emotion,
+                emotion_intensity=emotion_intensity,
                 # 每句都挂尾句去处：插断时开头那句往往已经播了，作废的是后面几句，队列只通知一次
                 on_interrupted=self._interrupted_tail_listener,
             )
@@ -472,7 +496,14 @@ class SpeechDispatcher:
                     # 处于杂谈档或本句有观众回复目标时传 talk=True：单句仍单句入队，2～3 句的回应按句拆段连播且保留引用气泡
                     has_viewer_target = bool(target_user_id or reply_to_message_id)
                     talk = reply_payload.get("speech_mode") == "talk" or has_viewer_target
-                    await self._enqueue_paragraph(utterance_id, cleaned_speech, talk=talk, priority=priority)
+                    await self._enqueue_paragraph(
+                        utterance_id,
+                        cleaned_speech,
+                        talk=talk,
+                        priority=priority,
+                        emotion=cleaned_emotion,
+                        emotion_intensity=cleaned_emotion_intensity,
+                    )
             finally:
                 if claimed:
                     self._release_slot()

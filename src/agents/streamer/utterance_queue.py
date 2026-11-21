@@ -95,10 +95,11 @@ DEFAULT_MAX_PENDING = 1
 QUEUE_ENGINE_ID = "utterance_queue"
 
 # speak 可调用对象的形态：
-#   await speak(text: str, utterance_id: Optional[str]) -> None
+#   await speak(text: str, utterance_id: Optional[str],
+#               emotion: Optional[str], emotion_intensity: Optional[float]) -> None
 # 编排队列对外引擎无关：传入真实 TTS 引擎 ``handle_speech`` 适配器或
 # 测试 mock 均可；构造期校验鸭子类型（callable + 可 await）。
-SpeakCallable = Callable[[str, Optional[str]], Awaitable[None]]
+SpeakCallable = Callable[[str, Optional[str], Optional[str], Optional[float]], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -111,6 +112,9 @@ class _UtteranceItem:
         priority: 优先级，越大越先播；同级先来先播。
         expires_at_ms: 过期时刻（Unix 毫秒），轮到它时已过就跳过；0 = 不过期。
         segment: 段落号：长段话拆成的几句共用一个，空串 = 独立一句。
+        emotion: 这句话的情绪提示（``Emotion`` 枚举值字符串）；随句透传给
+            TTS 引擎（支持动态情感的引擎据此调整合成表现）。
+        emotion_intensity: 情绪强度 0.0~1.0；与 ``emotion`` 成对出现。
         on_start: 轮到这句、交给 TTS 的那一刻调用一次；没轮到就被丢掉时不调用。
         on_interrupted: 段落被更急的台词插断、这句和同段后面的句子一起作废时调用一次，
             参数是作废的那几句拼起来的原文（同段作废几句只调一次）。
@@ -121,6 +125,8 @@ class _UtteranceItem:
     priority: int = SPEECH_PRIORITY_NORMAL
     expires_at_ms: int = 0
     segment: str = ""
+    emotion: Optional[str] = None
+    emotion_intensity: Optional[float] = None
     on_start: Optional[Callable[[], None]] = None
     on_interrupted: Optional[Callable[[str], None]] = None
 
@@ -247,6 +253,8 @@ class UtteranceQueue:
         priority: int = SPEECH_PRIORITY_NORMAL,
         ttl_ms: int = 0,
         segment: str = "",
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
         on_start: Optional[Callable[[], None]] = None,
         on_interrupted: Optional[Callable[[str], None]] = None,
     ) -> bool:
@@ -263,6 +271,8 @@ class UtteranceQueue:
             priority: 优先级，越大越先播（默认 0：全部同级，行为等同普通 FIFO 队列）。
             ttl_ms: 多久之内没轮到就作废（0 = 不过期）。突发反应用：过时了不该再说。
             segment: 段落号：长段话拆成的几句共用一个。
+            emotion: 这句话的情绪提示（``Emotion`` 枚举值字符串）；随句透传给 TTS。
+            emotion_intensity: 情绪强度 0.0~1.0；与 ``emotion`` 成对出现。
             on_start: 轮到这句、交给 TTS 的那一刻调用一次（流式引擎此刻发
                 ``tts.utterance.started``，字幕和口型也从这时开始）；用来记它实际
                 排了多久，回调出错只记日志不挡播放。
@@ -284,6 +294,8 @@ class UtteranceQueue:
             priority=priority,
             expires_at_ms=expires_at_ms,
             segment=segment,
+            emotion=emotion,
+            emotion_intensity=emotion_intensity,
             on_start=on_start,
             on_interrupted=on_interrupted,
         )
@@ -846,7 +858,7 @@ class UtteranceQueue:
 
         # 把单次 speak 封装成独立子任务：二级硬打断只 cancel 该子任务，绝不杀死 worker 循环
         speak_task: asyncio.Task[None] = asyncio.create_task(
-            self._speak(item.text, item.utterance_id),
+            self._speak(item.text, item.utterance_id, item.emotion, item.emotion_intensity),
             name=f"{self.__class__.__name__}.speak.{item.utterance_id}",
         )
         self._current_speak_task = speak_task

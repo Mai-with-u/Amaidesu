@@ -1155,7 +1155,13 @@ async def test_mouth_died_uses_emergency_hard_interrupt_and_protects_p2_audience
     release_p2 = asyncio.Event()
 
     class _ControllableTTS:
-        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             del utterance_id
             played_texts.append(text)
             playing_started.set()

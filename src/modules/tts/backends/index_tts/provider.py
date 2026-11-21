@@ -41,6 +41,32 @@ DTYPE = np.int16
 # 情感向量维度：喜/怒/哀/惧/厌恶/低落/惊喜/平静
 EMO_VECTOR_DIMS = 8
 
+# Emotion 枚举值 → IndexTTS 8 维情感向量 [喜,怒,哀,惧,厌恶,低落,惊喜,平静]。
+# 强情绪给满档（0.8~1.0），调用方再用 emotion_intensity 缩放；neutral 与
+# 词表外的值不在表内（不携带，用参考音频自身情绪锚）。数值为首版推断，
+# 听感调优直接改本表。
+_EMOTION_VECTORS: Dict[str, tuple] = {
+    "happy": (0.8, 0, 0, 0, 0, 0, 0, 0.2),
+    "excited": (1.0, 0, 0, 0, 0, 0, 0.4, 0),
+    "love": (0.7, 0, 0, 0, 0, 0, 0.2, 0.3),
+    "smug": (0.7, 0, 0, 0, 0, 0, 0.2, 0.2),
+    "surprised": (0.4, 0, 0, 0, 0, 0, 0.9, 0),
+    "angry": (0, 0.9, 0, 0, 0, 0, 0, 0),
+    "sad": (0, 0, 0.8, 0, 0, 0.4, 0, 0),
+    "crying": (0.3, 0, 0.9, 0.2, 0, 0.4, 0, 0),
+    "scared": (0, 0, 0.3, 0.9, 0, 0, 0, 0),
+    "disgusted": (0, 0.2, 0, 0, 0.9, 0, 0, 0),
+    "shy": (0.3, 0, 0.2, 0.2, 0, 0, 0, 0.3),
+    "embarrassed": (0.4, 0, 0.2, 0.1, 0, 0, 0.2, 0.2),
+    "confused": (0, 0, 0.2, 0.1, 0, 0, 0.3, 0.5),
+    "serious": (0, 0, 0, 0, 0, 0.1, 0, 0.9),
+    "tired": (0, 0, 0.2, 0, 0, 0.4, 0, 0.6),
+    "speechless": (0, 0.1, 0.2, 0, 0.2, 0.3, 0, 0.5),
+}
+
+# emotion_intensity 缺省强度：与表达侧（mouth 解析情绪前缀）的缺省一致
+_DEFAULT_EMOTION_INTENSITY = 0.7
+
 
 class IndexTTSProvider:
     """IndexTTS 本地语音合成引擎。
@@ -165,13 +191,36 @@ class IndexTTSProvider:
 
     # ===== 业务方法 =====
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    def _emotion_vector(self, emotion: Optional[str], intensity: Optional[float]) -> Optional[list[float]]:
+        """情绪词 → 本请求的 8 维向量；neutral 与词表外的值返回 None。
+
+        强度直接缩放向量（0.5 = 中等强度把满档情感减半）；None 按 0.7 处理
+        （与表达侧的缺省强度一致）。本请求向量优先于配置的静态 ``emo_vector``。
+        """
+        if not emotion:
+            return None
+        base = _EMOTION_VECTORS.get(emotion)
+        if base is None:
+            return None
+        scale = intensity if intensity is not None else _DEFAULT_EMOTION_INTENSITY
+        return [round(value * scale, 3) for value in base]
+
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         """合成并播放语音（流式主干：合成与播放同时进行，首段到达即出声）。
 
         Args:
             text: 要合成的文本。
             utterance_id: 一次发声实例的唯一 ID；非 None 时按
                 ``tts.utterance.*`` 生命周期发布事件。
+            emotion: 这句话的情绪提示（``Emotion`` 枚举值字符串）；映射为
+                8 维情感向量随请求携带，词表外 / neutral 时不携带。
+            emotion_intensity: 情绪强度 0.0~1.0，缩放映射出的向量。
         """
         if not self._has_started:
             await self.setup()
@@ -206,7 +255,8 @@ class IndexTTSProvider:
                 # 累计写往声卡的 PCM 样本数（单声道：ndarray.size 即样本数），
                 # finished 事件的 duration_ms 由"样本数 ÷ 采样率"精确计算
                 total_samples = 0
-                async for pcm_bytes in self.client.stream_synthesize(final_text):  # type: ignore[union-attr]
+                emo_vector = self._emotion_vector(emotion, emotion_intensity)
+                async for pcm_bytes in self.client.stream_synthesize(final_text, emo_vector=emo_vector):  # type: ignore[union-attr]
                     chunk = np.frombuffer(pcm_bytes, dtype=DTYPE)
                     if chunk.size == 0:
                         continue

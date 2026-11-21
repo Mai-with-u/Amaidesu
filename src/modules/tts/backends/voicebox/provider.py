@@ -124,13 +124,20 @@ class VoiceboxProvider:
 
     # ===== 业务方法 =====
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         """TTS 播放入口（发声四步前奏走公共入口，引擎只剩合成差异）。
 
         Args:
             text: 要合成的文本。
             utterance_id: 一次发声实例的唯一 ID；非 None 时按
                 ``tts.utterance.*`` 生命周期发布事件。
+            emotion / emotion_intensity: 情绪提示；本引擎不支持动态情感，忽略。
         """
         await run_full_engine_speech(self, text=text, utterance_id=utterance_id, synthesize=self._synthesize_audio)
 

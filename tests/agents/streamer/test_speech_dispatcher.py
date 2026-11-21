@@ -52,7 +52,13 @@ class _Engine:
         self.calls: list[tuple[str, Optional[str]]] = []
         self.delay_s = delay_s
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         self.calls.append((text, utterance_id))
         if self.delay_s > 0:
             await asyncio.sleep(self.delay_s)
@@ -422,7 +428,7 @@ async def test_dispatch_returns_immediately_and_stop_is_bounded(speak_seconds: f
     """慢或挂死的 TTS 不阻塞 dispatch；stop 在汇合窗口内返回（挂死由队列取消机制截断）。"""
     speak_started = asyncio.Event()
 
-    async def _slow_speak(text, utterance_id=None):
+    async def _slow_speak(text, utterance_id=None, emotion=None, emotion_intensity=None):
         speak_started.set()
         await asyncio.sleep(speak_seconds)
 
@@ -756,7 +762,13 @@ async def test_play_mode_splits_multi_sentence_viewer_reply_and_keeps_quote(star
         def __init__(self) -> None:
             self.gate_first = False
 
-        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             spoken_calls.append((text, utterance_id))
             if self.gate_first and len(spoken_calls) == 1:
                 first_started.set()
@@ -893,7 +905,13 @@ async def test_dispatch_level1_preempts_queued_low_priority_independent_lines(st
     spoken: list[str] = []
 
     class _GateEngine:
-        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             spoken.append(text)
             if text == "正在念的解说":
                 first_started.set()
@@ -935,7 +953,13 @@ async def test_dispatch_reaction_hard_interrupt_cuts_p0_only_when_allowed(starte
     spoken: list[str] = []
 
     class _CancelAwareEngine:
-        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             spoken.append(text)
             if text == "常规慢悠悠解说":
                 p0_started.set()
@@ -992,7 +1016,13 @@ async def test_dispatch_reaction_hard_interrupt_skips_gap_ms_and_plays_immediate
     spoken: list[str] = []
 
     class _CancelAwareEngine:
-        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             spoken.append(text)
             if text == "常规漫长独白":
                 p0_started.set()
@@ -1042,7 +1072,13 @@ async def test_dispatch_hard_interrupt_respects_p2_and_preempts_lower_pending(st
     spoken: list[str] = []
 
     class _GateEngine:
-        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             nonlocal p2_cancelled
             spoken.append(text)
             if text == "感谢老哥上舰！":

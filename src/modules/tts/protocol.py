@@ -96,7 +96,13 @@ class TTSProvider(Protocol):
         """
         ...
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         """合成并播放语音——TTS 引擎唯一业务入口。
 
         Args:
@@ -104,6 +110,11 @@ class TTSProvider(Protocol):
             utterance_id: 一次发声实例的唯一 ID；非 None 时按
                 ``tts.utterance.*`` 生命周期发布事件；None 时静默跳过
                 事件发布（手动 / 直调场景无 utterance 上下文）。
+            emotion: 这句话的情绪提示（``Emotion`` 枚举值字符串，如
+                ``"happy"``）；支持动态情感的引擎按它调整合成表现，
+                不支持的引擎忽略。None / 未知值 = 中性处理。
+            emotion_intensity: 情绪强度 0.0~1.0（缺省 0.5 语义由调用方
+                决定）；仅与 ``emotion`` 同时给出才有意义。
 
         错误语义：合成失败时**主动发** ``tts.utterance.failed`` 事件并
         向上 raise，由编排队列兜底。

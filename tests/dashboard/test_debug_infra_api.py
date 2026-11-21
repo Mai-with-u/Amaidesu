@@ -79,7 +79,13 @@ class FakeTtsEngine:
         self.event_bus = event_bus
         self.tts_lock = asyncio.Lock()
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         self.speech_calls.append({"text": text, "utterance_id": utterance_id})
         if self._speech_exception is not None:
             raise self._speech_exception
@@ -110,7 +116,13 @@ class FakeTtsEngine:
 class _MinimalEngine:
     """非 GSV 后端：没有 debug_synthesize。"""
 
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def handle_speech(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         pass
 
     def get_stats(self) -> Dict[str, Any]:

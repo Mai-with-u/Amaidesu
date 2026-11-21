@@ -91,6 +91,24 @@ async def _byte_stream(pieces: List[bytes]) -> AsyncIterator[bytes]:
         yield piece
 
 
+def test_build_payload_emo_vector_per_call_overrides_bound() -> None:
+    """情感向量：每请求覆盖优先于构造时绑定的静态配置；未配置时不携带。"""
+    bound = IndexTTSClient(host="127.0.0.1", port=9888, emo_vector=[0.5, 0, 0, 0, 0, 0, 0, 0.5])
+    assert bound._build_payload("x")["emo_vector"] == [0.5, 0, 0, 0, 0, 0, 0, 0.5]  # 回退静态
+    assert bound._build_payload("x", emo_vector=[1.0, 0, 0, 0, 0, 0, 0, 0])["emo_vector"] == [
+        1.0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]  # 每请求覆盖
+    plain = IndexTTSClient(host="127.0.0.1", port=9888)
+    assert "emo_vector" not in plain._build_payload("x")
+
+
 async def test_header_strip_and_odd_sample_alignment() -> None:
     """头部拆块 + 半样本跨界（真机首测实锤的失败形态）：产出片段全为偶数
     字节，拼接后与 PCM 完全一致——奇数尾字节跨块暂存，不丢不重。"""

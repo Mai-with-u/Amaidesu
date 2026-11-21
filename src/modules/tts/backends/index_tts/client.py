@@ -92,11 +92,16 @@ class IndexTTSClient:
 
     # ----- 请求组装（纯函数，测试直接断言形状）-----
 
-    def _build_payload(self, text: str) -> Dict[str, Any]:
-        """组装请求体：文本 + 分段上限；情感向量仅在使用时携带。"""
+    def _build_payload(self, text: str, emo_vector: Optional[list[float]] = None) -> Dict[str, Any]:
+        """组装请求体：文本 + 分段上限；情感向量仅在使用时携带。
+
+        ``emo_vector`` 是本请求的动态覆盖（情绪映射产出）；None 时回退构造
+        时绑定的静态配置向量。
+        """
         payload: Dict[str, Any] = {"text": text, "seg_tokens": self.seg_tokens}
-        if self.emo_vector is not None:
-            payload["emo_vector"] = list(self.emo_vector)
+        effective = emo_vector if emo_vector is not None else self.emo_vector
+        if effective is not None:
+            payload["emo_vector"] = list(effective)
         return payload
 
     # ----- 会话与合成 -----
@@ -114,16 +119,16 @@ class IndexTTSClient:
             await self._session.close()
         self._session = None
 
-    async def synthesize_full(self, text: str) -> bytes:
+    async def synthesize_full(self, text: str, emo_vector: Optional[list[float]] = None) -> bytes:
         """整段合成：等服务端合成完毕，一次性返回完整 WAV 字节。
 
         走 ``POST /tts`` 整段端点（服务端内部仍是低显存分段合成后拼接），
-        供调试试听等不逐块写声卡的场景。HTTP 非 200 抛
-        :class:`IndexTTSServiceError`。
+        供调试试听等不逐块写声卡的场景。``emo_vector`` 语义同
+        :meth:`stream_synthesize`。HTTP 非 200 抛 :class:`IndexTTSServiceError`。
         """
         session = await self._ensure_session()
         try:
-            async with session.post(f"{self.base_url}/tts", json=self._build_payload(text)) as response:
+            async with session.post(f"{self.base_url}/tts", json=self._build_payload(text, emo_vector)) as response:
                 if response.status != 200:
                     body = await response.text()
                     raise IndexTTSServiceError(f"接口返回 HTTP {response.status}: {body[:200]}")
@@ -131,10 +136,12 @@ class IndexTTSClient:
         except aiohttp.ClientError as e:
             raise IndexTTSServiceError(f"连接 IndexTTS 服务失败（{type(e).__name__}）: {e}") from e
 
-    async def stream_synthesize(self, text: str) -> AsyncIterator[bytes]:
+    async def stream_synthesize(self, text: str, emo_vector: Optional[list[float]] = None) -> AsyncIterator[bytes]:
         """合成一段文本，逐块产出裸 PCM 字节片段（int16 单声道）。
 
-        服务端边合成边推；头部剥除按固定 44 字节计数（网络分块可能把头部
+        ``emo_vector`` 是本请求的动态情感向量（情绪映射产出）；None 时回退
+        构造时绑定的静态配置向量。服务端边合成边推；头部剥除按固定 44 字节
+        计数（网络分块可能把头部
         与首段 PCM 合并在同一读块里，也可能把头部拆到多个读块里，计数法对
         两种都对）。HTTP 非 200 抛 :class:`IndexTTSServiceError`。
 
@@ -143,7 +150,9 @@ class IndexTTSClient:
         """
         session = await self._ensure_session()
         try:
-            async with session.post(f"{self.base_url}/tts_stream", json=self._build_payload(text)) as response:
+            async with session.post(
+                f"{self.base_url}/tts_stream", json=self._build_payload(text, emo_vector)
+            ) as response:
                 if response.status != 200:
                     body = await response.text()
                     raise IndexTTSServiceError(f"接口返回 HTTP {response.status}: {body[:200]}")

@@ -342,7 +342,13 @@ async def test_playback_slot_before_emit_vetoes_stale_speech_when_mouth_spoke_du
     replyer_generated = asyncio.Event()
 
     class _GatedTTS:
-        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             del utterance_id
             if text == "上一句还在播放中。":
                 first_tts_started.set()

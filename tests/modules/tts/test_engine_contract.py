@@ -183,14 +183,14 @@ class _IndexTTS(_Engine):
             await asyncio.gather(provider._warmup_task, return_exceptions=True)
 
     def synth_patches(self, provider, stack, fail):
-        async def _gen(_text: str):
+        async def _gen(_text: str, emo_vector=None):
             if fail:
                 raise RuntimeError("boom")
             yield b"\x00\x00" * 1024
             yield b"\x00\x00" * 1024
 
         client = MagicMock()
-        client.stream_synthesize = MagicMock(side_effect=lambda text: _gen(text))
+        client.stream_synthesize = MagicMock(side_effect=lambda text, emo_vector=None: _gen(text, emo_vector))
         stack.enter_context(patch.object(provider, "client", new=client))
         self.sent_text = lambda: client.stream_synthesize.call_args.args[0]
 
@@ -347,6 +347,32 @@ async def test_voicebox_without_profile_id_fails_before_synthesis(event_bus: Eve
         await setup_with_audio_manager(provider)
     with pytest.raises(RuntimeError, match="profile_id"):
         await provider.handle_speech("x")
+
+
+async def test_index_tts_emotion_maps_to_per_request_vector(event_bus: EventBus) -> None:
+    """情绪映射：枚举词→8 维向量随请求携带（强度缩放）；neutral 与词表外不携带（回退静态配置）。"""
+    provider = IndexTTSProvider(config={"type": "index_tts"}, event_bus=event_bus)
+    await setup_with_audio_manager(provider, make_audio_manager())
+    calls: list[dict] = []
+
+    async def _gen(_text: str, emo_vector=None):
+        calls.append({"text": _text, "emo_vector": emo_vector})
+        yield b"\x00\x00" * 1024
+
+    client = MagicMock()
+    client.stream_synthesize = MagicMock(side_effect=lambda text, emo_vector=None: _gen(text, emo_vector))
+    provider.client = client
+    if provider._warmup_task is not None:
+        await asyncio.gather(provider._warmup_task, return_exceptions=True)
+
+    await provider.handle_speech("开心一句", utterance_id="u1", emotion="happy", emotion_intensity=0.5)
+    assert calls[-1]["emo_vector"] == [0.4, 0, 0, 0, 0, 0, 0, 0.1]  # 满档向量 × 强度 0.5
+
+    await provider.handle_speech("中性一句", utterance_id="u2", emotion="neutral")
+    assert calls[-1]["emo_vector"] is None  # neutral 不在映射表 → 回退静态配置（本例全 0 = 不携带）
+
+    await provider.handle_speech("词表外一句", utterance_id="u3", emotion="wtf")
+    assert calls[-1]["emo_vector"] is None
 
 
 async def test_index_tts_debug_synthesize_returns_full_wav_and_rejects_blank(event_bus: EventBus) -> None:

@@ -35,7 +35,13 @@ class _Recorder:
         self.inflight = 0
         self.max_inflight = 0
 
-    async def __call__(self, text: str, utterance_id: Optional[str]) -> None:
+    async def __call__(
+        self,
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         self.inflight += 1
         self.max_inflight = max(self.max_inflight, self.inflight)
         self.calls.append((text, utterance_id))
@@ -108,7 +114,9 @@ async def test_overflow_drops_oldest_with_warning(make_queue, loguru_capture) ->
 async def test_per_item_timeout_skips_and_continues(make_queue, loguru_capture) -> None:
     calls: list[str] = []
 
-    async def _slow_first(text: str, utterance_id: Optional[str]) -> None:
+    async def _slow_first(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if len(calls) == 1:
             await asyncio.sleep(2.0)
@@ -141,7 +149,9 @@ async def test_render_timeout_emits_failed_event(make_queue) -> None:
     bus = EventBus()
     failed = _capture_failed(bus)
 
-    async def _hang(text: str, utterance_id: Optional[str]) -> None:
+    async def _hang(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         await asyncio.sleep(5.0)
 
     queue = await make_queue(_hang, render_timeout_ms=150, event_bus=bus)
@@ -161,7 +171,9 @@ async def test_unreported_speak_exception_emits_failed_event_and_queue_continues
     failed = _capture_failed(bus)
     calls: list[str] = []
 
-    async def _setup_fails_first(text: str, utterance_id: Optional[str]) -> None:
+    async def _setup_fails_first(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if len(calls) == 1:
             raise RuntimeError("未配置 voice 音色")
@@ -196,7 +208,9 @@ async def test_exception_already_reported_by_engine_is_counted_but_not_emitted_a
     failed = _capture_failed(bus)
     calls: list[str] = []
 
-    async def _engine_reports_then_raises(text: str, utterance_id: Optional[str]) -> None:
+    async def _engine_reports_then_raises(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if len(calls) == 1:
             error = ConnectionError("合成中途连接断了")
@@ -230,7 +244,9 @@ async def test_speak_exception_without_event_bus_still_continues(make_queue, log
     """没注入事件总线：speak 抛异常时无处可补发，只计数打日志，队列照常处理下一条。"""
     calls: list[str] = []
 
-    async def _fails_first(text: str, utterance_id: Optional[str]) -> None:
+    async def _fails_first(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if len(calls) == 1:
             raise RuntimeError("未配置 voice 音色")
@@ -269,7 +285,9 @@ async def test_failed_event_skipped_without_event_bus(make_queue) -> None:
     """未注入事件总线时超时路径只记日志不发布，队列继续运转。"""
     calls: list[str] = []
 
-    async def _slow_first(text: str, utterance_id: Optional[str]) -> None:
+    async def _slow_first(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if len(calls) == 1:
             await asyncio.sleep(2.0)
@@ -301,7 +319,12 @@ async def test_wait_idle_tracks_whole_queue_drain(make_queue) -> None:
 async def test_wait_idle_times_out_while_speaking(make_queue) -> None:
     started = asyncio.Event()
 
-    async def _long_speak(text: str, utterance_id: Optional[str]) -> None:
+    async def _long_speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         started.set()
         await asyncio.sleep(1.0)
 
@@ -525,7 +548,12 @@ async def test_dropped_events_only_fire_on_four_confirmed_undelivered_paths() ->
         # 3. 关停清队：用慢 speak 堵住当前句，后面排队两句在 stop() 时被清掉
         slow_gate = asyncio.Event()
 
-        async def _block_first(text: str, utterance_id: Optional[str]) -> None:
+        async def _block_first(
+            text: str,
+            utterance_id: Optional[str],
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             if utterance_id == "blocking":
                 await slow_gate.wait()
 
@@ -543,7 +571,12 @@ async def test_dropped_events_only_fire_on_four_confirmed_undelivered_paths() ->
         assert await q2.enqueue("rejected_after_stop", "已停机") is False
 
         # 5. 渲染超时与引擎启动异常：只发 failed，不发 dropped
-        async def _fail_or_hang(text: str, utterance_id: Optional[str]) -> None:
+        async def _fail_or_hang(
+            text: str,
+            utterance_id: Optional[str],
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
             if utterance_id == "hang":
                 await asyncio.sleep(5.0)
             raise RuntimeError("引擎未启动")
@@ -578,7 +611,9 @@ async def test_dropped_events_only_fire_on_four_confirmed_undelivered_paths() ->
 async def _make_hang_speak(hang_gate: asyncio.Event) -> SpeakCallable:
     """一直卡到门开才返回的 speak 替身：渲染看门狗每句都会超时。"""
 
-    async def _hang(text: str, utterance_id: Optional[str]) -> None:
+    async def _hang(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         await hang_gate.wait()
 
     return _hang
@@ -648,7 +683,9 @@ async def test_fuse_half_open_probe_success_recovers() -> None:
     failed = _capture_failed(bus)
     calls: List[Optional[str]] = []
 
-    async def _fail_three_then_ok(text: str, utterance_id: Optional[str]) -> None:
+    async def _fail_three_then_ok(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if len(calls) <= 3:
             await asyncio.sleep(5.0)
@@ -683,7 +720,9 @@ async def test_fuse_probe_failure_keeps_fuse() -> None:
     failed = _capture_failed(bus)
     calls: List[Optional[str]] = []
 
-    async def _always_timeout(text: str, utterance_id: Optional[str]) -> None:
+    async def _always_timeout(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         await asyncio.sleep(5.0)
 
@@ -716,7 +755,9 @@ async def test_success_resets_consecutive_timeout_counter() -> None:
     failed = _capture_failed(bus)
     calls: List[Optional[str]] = []
 
-    async def _fail_all_but_one(text: str, utterance_id: Optional[str]) -> None:
+    async def _fail_all_but_one(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if utterance_id != "ok":
             await asyncio.sleep(5.0)
@@ -761,7 +802,9 @@ async def test_fuse_open_emits_core_error_alert_with_throttle() -> None:
     alerts = _capture_core_error(bus)
     calls: List[Optional[str]] = []
 
-    async def _timeout_unless_probe(text: str, utterance_id: Optional[str]) -> None:
+    async def _timeout_unless_probe(
+        text: str, utterance_id: Optional[str], emotion: Optional[str] = None, emotion_intensity: Optional[float] = None
+    ) -> None:
         calls.append(utterance_id)
         if utterance_id not in ("probe_1", "probe_2"):
             await asyncio.sleep(5.0)
@@ -842,7 +885,12 @@ async def test_interrupt_lower_priority_clears_same_segment_and_other_low_pendin
     release_playing = asyncio.Event()
     played: List[str] = []
 
-    async def _gated_speak(text: str, utterance_id: Optional[str]) -> None:
+    async def _gated_speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         played.append(utterance_id or "")
         if utterance_id == "seg_0":
             playing_started.set()
@@ -911,7 +959,12 @@ async def test_interrupt_segment_remains_backward_compatible_for_current_segment
     release_playing = asyncio.Event()
     played: List[str] = []
 
-    async def _gated_speak(text: str, utterance_id: Optional[str]) -> None:
+    async def _gated_speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         played.append(utterance_id or "")
         if utterance_id == "seg_0":
             playing_started.set()
@@ -948,7 +1001,12 @@ async def test_hard_interrupt_playing_cancels_p0_emits_hard_interrupted_and_keep
     emergency_done = asyncio.Event()
     played: List[str] = []
 
-    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+    async def _speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         played.append(utterance_id or "")
         if utterance_id == "p0_playing":
             playing_started.set()
@@ -1021,7 +1079,12 @@ async def test_hard_interrupt_refuses_to_cut_p1_and_higher_playing(victim_priori
     release_playing = asyncio.Event()
     was_cancelled = False
 
-    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+    async def _speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         nonlocal was_cancelled
         playing_started.set()
         try:
@@ -1059,7 +1122,12 @@ async def test_hard_interrupt_requires_emergency_min_priority() -> None:
     release_playing = asyncio.Event()
     was_cancelled = False
 
-    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+    async def _speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         nonlocal was_cancelled
         playing_started.set()
         try:
@@ -1094,7 +1162,12 @@ async def test_hard_interrupt_render_timeout_and_stop_are_strictly_isolated() ->
     stop_target_cancelled = asyncio.Event()
     after_timeout_done = asyncio.Event()
 
-    async def _speak(text: str, utterance_id: Optional[str]) -> None:
+    async def _speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
         if utterance_id == "p0_cut":
             p0_started.set()
             await asyncio.Event().wait()
