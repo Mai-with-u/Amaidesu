@@ -347,3 +347,20 @@ async def test_voicebox_without_profile_id_fails_before_synthesis(event_bus: Eve
         await setup_with_audio_manager(provider)
     with pytest.raises(RuntimeError, match="profile_id"):
         await provider.handle_speech("x")
+
+
+async def test_index_tts_debug_synthesize_returns_full_wav_and_rejects_blank(event_bus: EventBus) -> None:
+    """调试试听契约：返回整段 wav 字节、纯空白文本早退；overrides 为 GSV 签名占位不生效。"""
+    provider = IndexTTSProvider(config={"type": "index_tts"}, event_bus=event_bus)
+    await setup_with_audio_manager(provider, make_audio_manager())
+    client = MagicMock()
+    client.synthesize_full = AsyncMock(return_value=b"WAVDATA")
+    provider.client = client
+
+    assert await provider.debug_synthesize("你好") == b"WAVDATA"
+    assert client.synthesize_full.call_args.args[0] == "你好"
+    # GSV 签名的覆盖参数对本引擎是占位：携带也不报错、不改变调用
+    assert await provider.debug_synthesize("你好", {"temperature": 0.5}) == b"WAVDATA"
+
+    with pytest.raises(ValueError, match="无可合成内容"):
+        await provider.debug_synthesize("   ")

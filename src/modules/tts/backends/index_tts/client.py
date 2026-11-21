@@ -114,6 +114,23 @@ class IndexTTSClient:
             await self._session.close()
         self._session = None
 
+    async def synthesize_full(self, text: str) -> bytes:
+        """整段合成：等服务端合成完毕，一次性返回完整 WAV 字节。
+
+        走 ``POST /tts`` 整段端点（服务端内部仍是低显存分段合成后拼接），
+        供调试试听等不逐块写声卡的场景。HTTP 非 200 抛
+        :class:`IndexTTSServiceError`。
+        """
+        session = await self._ensure_session()
+        try:
+            async with session.post(f"{self.base_url}/tts", json=self._build_payload(text)) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    raise IndexTTSServiceError(f"接口返回 HTTP {response.status}: {body[:200]}")
+                return await response.read()
+        except aiohttp.ClientError as e:
+            raise IndexTTSServiceError(f"连接 IndexTTS 服务失败（{type(e).__name__}）: {e}") from e
+
     async def stream_synthesize(self, text: str) -> AsyncIterator[bytes]:
         """合成一段文本，逐块产出裸 PCM 字节片段（int16 单声道）。
 

@@ -29,6 +29,7 @@ from ...common import (
     emit_utterance_failed,
     emit_utterance_finished,
     emit_utterance_started,
+    normalize_tts_text,
     prepare_speech_text,
 )
 from .client import IndexTTSClient, IndexTTSServiceError
@@ -270,6 +271,22 @@ class IndexTTSProvider:
                 cause=e,
             )
             raise
+
+    async def debug_synthesize(self, text: str, overrides: Optional[Dict[str, Any]] = None) -> bytes:
+        """调试合成：按当前配置合成完整音频并返回 wav 字节（不播放、不发事件）。
+
+        调试面板"生成试听音频"的引擎侧入口（能力判据 = 本方法存在）。参数
+        签名与 GSV 对齐：``overrides`` 是调试面板按 GSV 可调项组装的占位，
+        本引擎不接受运行时覆盖——试听固定按当前配置合成。自治 ensure_setup
+        与 ``tts_lock`` 串行化内聚于此，调用方无需预调 setup。
+        """
+        if not self._has_started:
+            await self.setup()
+        clean = normalize_tts_text(text)
+        if not clean.strip():
+            raise ValueError("文本规范化后为空，无可合成内容")
+        async with self.tts_lock:
+            return await self.client.synthesize_full(clean)  # type: ignore[union-attr]
 
     def get_stats(self) -> Dict[str, Any]:
         return build_stats_dict(
