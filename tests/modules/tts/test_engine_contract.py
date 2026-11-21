@@ -366,18 +366,21 @@ async def test_index_tts_emotion_maps_to_per_request_vector(event_bus: EventBus)
         await asyncio.gather(provider._warmup_task, return_exceptions=True)
 
     await provider.handle_speech("开心一句", utterance_id="u1", emotion="happy", emotion_intensity=0.5)
-    # 词表基准 × 强度 0.5 → 官方同款归一化：维度偏置后总和 0.43 ≤ 0.8，不触发上限
-    assert calls[-1]["emo_vector"] == pytest.approx([0.375, 0, 0, 0, 0, 0, 0, 0.0563])
+    # 官方单维风格：基准喜 0.8 × 强度 0.5 → 偏置 0.9375 后 0.375（总和 0.375 ≤ 0.8 不触发上限）
+    assert calls[-1]["emo_vector"] == pytest.approx([0.375, 0, 0, 0, 0, 0, 0, 0])
 
-    await provider.handle_speech("开心满档", utterance_id="u2", emotion="happy", emotion_intensity=1.0)
+    await provider.handle_speech("兴奋一句", utterance_id="u2", emotion="excited", emotion_intensity=1.0)
     full = calls[-1]["emo_vector"]
-    assert sum(full) == pytest.approx(0.8, abs=1e-3)  # 满档触发 0.8 上限（负锚防护）
-    assert full[0] == pytest.approx(0.75 * (0.8 / 0.8625), abs=1e-3)  # 偏置 0.9375×0.8 再按比例压到上限
+    assert full[0] == pytest.approx(0.75, abs=1e-3)  # 偏置 0.9375 后 0.75（≤ 0.8 不触发上限）
+    assert sum(full) == pytest.approx(0.75, abs=1e-3)
 
-    await provider.handle_speech("中性一句", utterance_id="u3", emotion="neutral")
-    assert calls[-1]["emo_vector"] is None  # neutral 不在映射表 → 回退静态配置（本例全 0 = 不携带）
+    await provider.handle_speech("害羞一句", utterance_id="u3", emotion="shy")
+    assert calls[-1]["emo_vector"] is None  # 无直接对应维度 → 不携带（回退参考音频情绪锚）
 
-    await provider.handle_speech("词表外一句", utterance_id="u4", emotion="wtf")
+    await provider.handle_speech("中性一句", utterance_id="u4", emotion="neutral")
+    assert calls[-1]["emo_vector"] is None
+
+    await provider.handle_speech("词表外一句", utterance_id="u5", emotion="wtf")
     assert calls[-1]["emo_vector"] is None
 
 
