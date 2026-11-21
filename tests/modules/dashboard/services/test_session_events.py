@@ -78,10 +78,13 @@ def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> Non
             "agent.replied",
             # 动态主从切换事实（回看时间线还原主控权交接分隔行）
             "agent.lead.changed",
-            # tts 播报态三名（回看按 utterance_id 回填发言卡）
+            # tts 播报态五名（回看按 utterance_id 回填发言卡；首声锚与句界供
+            # 回放调试卡的耗时分段与逐句点亮）
             "tts.utterance.started",
             "tts.utterance.finished",
             "tts.utterance.failed",
+            "tts.utterance.playback_started",
+            "tts.utterance.sentence_boundary",
             # 任务区间数据源（不出卡，供游戏侧记录分组）
             "task.changed",
         }
