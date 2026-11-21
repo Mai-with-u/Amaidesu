@@ -28,6 +28,7 @@ def test_route_table_channels_and_dispositions() -> None:
         "timer_due": ("wake_even_idle", {}),
         "need_unhandled": ("inject_if_busy", {"dedup_content", "publish_material"}),
         "character_died": ("inject_if_busy", {"publish_material"}),
+        "gear_broken": ("inject_if_busy", {"publish_material"}),
         "others_food_taken": ("inject_if_busy", {}),
         "player_body_language": ("wake_for_interaction", {}),
         "temporary_task_started": ("attention_event", {"execution_context_prefix"}),

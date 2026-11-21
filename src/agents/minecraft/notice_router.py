@@ -72,6 +72,12 @@ _FOLLOW_NOTICE = (
     "需要时换许可重下（例如放开 change_blocks）、取消，或跟主播说一声。"
 )
 
+# 装备用坏：模型读到才知道手里的工具没了，能当场换一件或换种办法；
+# 原话同时发主播素材——装备损坏常发生在两批任务之间，不给素材通道就会静默丢掉
+_GEAR_BROKEN_NOTICE = (
+    "[装备] {message}。这是观察不是命令：那件装备已经不能用了，手上的活还依赖它就换一件好的或换种办法，不依赖就接着做。"
+)
+
 # 天色变了（天黑、天亮、下雨、雨停）：身体照常做手上的事，夜里能弄到床会自己找空当去睡、
 # 弄不到床又打不过会挖坑封顶熬到天亮；为一次天色把等结果的模型叫醒只会白花一次推理。
 _SKY_NOTICE = (
@@ -152,6 +158,13 @@ _BODY_EVENT_ROUTES: Dict[str, BodyEventRoute] = {
         kind="character_died",
         channel="inject_if_busy",
         template=_BODY_NOTICE_TEMPLATES["character_died"],
+        publish_material=True,
+    ),
+    # 装备用坏：任务进行中注入模型（当场换工具）；原话发主播素材，批次间隙不丢
+    "gear_broken": BodyEventRoute(
+        kind="gear_broken",
+        channel="inject_if_busy",
+        template=_GEAR_BROKEN_NOTICE,
         publish_material=True,
     ),
     # 拿了别人家的吃的 / 动了别人放的东西：任务进行中告诉模型（主人来问时认得出）；转告主播由注意流采集器出，这里不重复
