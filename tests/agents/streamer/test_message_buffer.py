@@ -130,3 +130,47 @@ def test_max_wait_without_compensation_releases_at_window() -> None:
     buf.add(_msg("a"), arrival_ms=1_000)
     assert buf.should_flush(4_000) == (True, "window_expired")
     assert buf.should_flush(40_000) == (True, "window_expired")
+
+
+def test_quiet_window_fast_flushes_single_danmaku_and_merges_burst() -> None:
+    """首条短窗触发 + 连发延展：单条弹幕 800ms 静默快放，连发弹幕在短窗内合并为一批且不被空窗补偿拖长。"""
+    buf = MessageBuffer(
+        batch_window_ms=3_000,
+        batch_max_size=20,
+        enable_idle_compensation=True,
+        batch_max_wait_ms=30_000,
+        quiet_window_ms=800,
+    )
+    # 单条弹幕：t=1000 到达，t=1799 仍等待，t=1800 静默满 800ms 立即放行（压缩原 3000ms 空等）
+    buf.add(_msg("主播晚上好"), arrival_ms=1_000)
+    assert buf.should_flush(1_799) == (False, "window_not_expired")
+    assert buf.should_flush(1_800) == (True, "window_expired")
+    assert [m.content for m in buf.drain()] == ["主播晚上好"]
+
+    # 连发弹幕：t=10_000、t=10_450、t=10_900 到达，短窗随最后一条顺延合并 3 条，t=11_700 一次性放行
+    buf.add(_msg("第一句"), arrival_ms=10_000)
+    buf.add(_msg("第二句"), arrival_ms=10_450)
+    assert buf.should_flush(10_800, avg_interval_ms=450.0) == (False, "window_not_expired")
+    buf.add(_msg("第三句"), arrival_ms=10_900)
+    assert buf.should_flush(11_699, avg_interval_ms=450.0) == (False, "window_not_expired")
+    assert buf.should_flush(11_700, avg_interval_ms=450.0) == (True, "window_expired")
+    assert [m.content for m in buf.drain()] == ["第一句", "第二句", "第三句"]
+
+
+def test_quiet_window_respects_batch_window_cap_on_continuous_burst() -> None:
+    """持续刷屏使静默窗口始终不满时，总等待仍由 batch_window_ms 封顶放行，不无限顺延。"""
+    buf = MessageBuffer(batch_window_ms=3_000, batch_max_size=20, quiet_window_ms=800)
+    for idx in range(7):
+        buf.add(_msg(f"刷屏{idx}"), arrival_ms=1_000 + idx * 450)
+    # 最后一条在 t=3700，距首条 t=1000 为 2700 < 3000，距末条 200 < 800 -> 继续等
+    assert buf.should_flush(3_900) == (False, "window_not_expired")
+    # 到达首条后满 3000ms（t=4000），即使距末条不足 800ms 也立即封顶放行
+    assert buf.should_flush(4_000) == (True, "window_expired")
+
+
+def test_quiet_window_bounded_by_smaller_batch_window() -> None:
+    """当显式配置的 batch_window_ms 小于 quiet_window_ms 时按更小的 batch_window_ms 放行，不拖慢测试或低延迟配置。"""
+    buf = MessageBuffer(batch_window_ms=100, batch_max_size=20, quiet_window_ms=800)
+    buf.add(_msg("快测"), arrival_ms=1_000)
+    assert buf.should_flush(1_099) == (False, "window_not_expired")
+    assert buf.should_flush(1_100) == (True, "window_expired")

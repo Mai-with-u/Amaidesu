@@ -123,6 +123,12 @@ GAME_CHAT_SEND_TOOL_NAME: str = "minecraft_chat_send"
 FRAMEWORK_SUGGEST_TOOL_NAME: str = "framework_suggest"
 #: 自备话题匣主动抽卡工具全名（卡池可用卡为 0 时动态从工具表隐藏，避免反复空抽）
 TALK_DRAW_CARDS_TOOL_NAME: str = "talk_draw_cards"
+#: 流程单控制工具全名（收播道别轮动态隐藏，防止 live.ended 后再推进流程单）
+RUNDOWN_CONTROL_TOOL_NAME: str = "rundown_control"
+#: 纯弹幕响应轮的轻量思考档位（压低端到端弹幕延迟，避免十余秒长思考）
+_DANMAKU_REASONING_EFFORT: str = "low"
+#: profile 已显式设为关思考时的取值集合（纯弹幕轮不得将其反升为 low）
+_REASONING_DISABLED_EFFORTS: frozenset[str] = frozenset({"none", "off", "disabled"})
 #: canonical 观众弹幕行尾的消息 ID 标签（透传给游戏侧原话时剥离内部 ID 噪声，保留昵称、坐标与物品名）
 _ID_TAG_TAIL_RE = re.compile(r"\s*\[id:[^\]]+\]\s*$")
 #: 游戏主控态下对主播侧隐藏的委派与强干预工具（轻从轮保留 framework_suggest 与只读查询）
@@ -301,6 +307,8 @@ class RoundContext:
     game_lead_idle_fallback: bool = False
     # 本窗话题匣是否有可用卡片（为 False 时从工具列表动态隐藏 talk_draw_cards，避免反复空抽）
     has_talk_cards: bool = True
+    # 本轮是否为收播道别轮（道别轮隐藏 rundown_control，配合执行层只读闸杜绝播后改单）
+    signoff_window: bool = False
 
 
 @dataclass(frozen=True)
@@ -368,6 +376,20 @@ class PlannerEnv:
     working_note_provider: Optional[Callable[[], str]] = None
     # 动态主从：查询当前处于自主主控态的游戏 Agent 注册名（主播主控态返回 None）
     game_lead_agent_provider: Optional[Callable[[], Optional[str]]] = None
+
+
+def _supports_kwarg(fn: Any, kwarg_name: str) -> bool:
+    """检查可调用对象签名是否接受指定关键字参数（含 **kwargs，并解包 AsyncMock.side_effect 兼容轻量替身）。"""
+    # unittest.mock.AsyncMock 自身签名恒为 (*args, **kwargs)；若绑了可调用 side_effect，应以真实回调函数签名为准
+    target = fn
+    side_effect = getattr(fn, "side_effect", None)
+    if callable(side_effect):
+        target = side_effect
+    try:
+        params = inspect.signature(target).parameters
+    except (TypeError, ValueError):
+        return False
+    return kwarg_name in params or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -713,6 +735,7 @@ class Planner:
         game_lead_idle_fallback = (
             trigger_cause is not None and trigger_cause.kind is TriggerKind.GAME_LEAD_IDLE_FALLBACK
         )
+        signoff_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
         ctx = RoundContext(
             facts_text=resolved_batch.facts_text,
             game_events=list(resolved_batch.events),
@@ -733,6 +756,7 @@ class Planner:
             in_game_lead=in_game_lead,
             lead_agent=lead_agent,
             game_lead_idle_fallback=game_lead_idle_fallback,
+            signoff_window=signoff_window,
         )
         self._recent_player_notes = keep_recent_notes(
             self._recent_player_notes, resolved_batch.player_notes, self._clock()
@@ -830,6 +854,18 @@ class Planner:
         # 她本窗说过的台词：本窗历史里的已说台词并上实时口头流水（尚未落库的嘴反应立即可见）
         speech_history = self._collect_speech_history(history)
 
+        # 纯弹幕响应轮（非主动轮、含观众消息、无运营指令/续播重放，且处于游戏主控轻从态或无突发游戏急事）
+        # 使用轻思考档位压低端到端弹幕延迟；若 profile 已显式设为关思考（none/off/disabled）则不反升覆写
+        round_reasoning_effort: Optional[str] = None
+        if (
+            not proactive
+            and bool(batch)
+            and not (reminders or "").strip()
+            and not (resume_replay or "").strip()
+            and (ctx.in_game_lead or not urgent_game)
+        ):
+            round_reasoning_effort = self._resolve_danmaku_reasoning_effort()
+
         # 直播画面只挂在本窗第一次请求的尾部：后续 ReAct 步骤靠模型第一步的判断继续
         frame_tail = self._live_frame_message()
         # 本窗压住过的那句话（给游戏的安排被拒时）：每窗最多压一次，免得一窗里接连被拒、整窗哑掉；
@@ -845,11 +881,18 @@ class Planner:
             tail = self._transient_images.drain()
             extra = step_extra_messages(frame_tail, tail, steps)
             try:
+                generate_kwargs: Dict[str, Any] = {
+                    "tools": tool_list,
+                    "profile": PLANNER_PROFILE,
+                    "on_delta": thinking.callback_for("planner", steps) if thinking else None,
+                }
+                if round_reasoning_effort is not None and _supports_kwarg(
+                    self._llm_service.generate, "reasoning_effort"
+                ):
+                    generate_kwargs["reasoning_effort"] = round_reasoning_effort
                 response = await self._llm_service.generate(
                     [*messages, *extra] if extra else messages,
-                    tools=tool_list,
-                    profile=PLANNER_PROFILE,
-                    on_delta=thinking.callback_for("planner", steps) if thinking else None,
+                    **generate_kwargs,
                 )
             except Exception as e:
                 self.logger.warning(f"Planner LLM 调用异常: {e}")
@@ -954,6 +997,19 @@ class Planner:
         if ctx.mouth_bounced:
             return "mouth_superseded"
         return "memory_repeat_held" if ctx.memory_bounced else default
+
+    def _resolve_danmaku_reasoning_effort(self) -> Optional[str]:
+        """解析纯弹幕轮的思考档位：profile 已显式关闭思考时返回 None 避免反升为 low，其余返回 low。"""
+        getter = getattr(self._llm_service, "get_profile_reasoning_effort", None)
+        if callable(getter):
+            try:
+                configured = getter(PLANNER_PROFILE)
+            except Exception as exc:  # noqa: BLE001 - 查询档位失败时按未关思考处理
+                self.logger.debug(f"读取 planner 思考档位失败（按默认降档 low 处理）: {exc}", exc=True)
+            else:
+                if isinstance(configured, str) and configured.strip().lower() in _REASONING_DISABLED_EFFORTS:
+                    return None
+        return _DANMAKU_REASONING_EFFORT
 
     def _collect_speech_history(self, history: Optional[List[Any]]) -> Optional[List[str]]:
         """合成本窗表达侧可见的已说台词（历史中的台词 + 实时口头流水里尚未入历史的近期台词）。"""
@@ -1808,6 +1864,9 @@ class Planner:
         # 话题匣无可用卡时动态过滤掉 talk_draw_cards，避免模型在空池下反复空抽
         if ctx is not None and not ctx.has_talk_cards:
             specs = [spec for spec in specs if str(getattr(spec, "full_name", "") or "") != TALK_DRAW_CARDS_TOOL_NAME]
+        # 收播道别轮动态隐藏 rundown_control，与执行层只读闸门形成双保险，杜绝 live.ended 后再推进流程单
+        if ctx is not None and ctx.signoff_window:
+            specs = [spec for spec in specs if str(getattr(spec, "full_name", "") or "") != RUNDOWN_CONTROL_TOOL_NAME]
         # 定义附上下文计量归属（MCP / 内置工具），上下文面板据此分段；
         # 定义形状由工具域的 LLM 转换层统一生成（llm_defs）
         return [function_definition(spec, self._tool_registry.category_of(spec.full_name)) for spec in specs]

@@ -34,7 +34,13 @@
     concurrency, queue_max
 
     [agents.streamer.batch]
-    batch_window_ms, batch_max_size, tick_interval_ms, enable_idle_compensation
+    (
+        batch_window_ms,
+        batch_max_size,
+        tick_interval_ms,
+        enable_idle_compensation,
+    )
+    batch_max_wait_ms, danmaku_quiet_window_ms
 
     [agents.streamer.force]
     force_message_types
@@ -267,6 +273,15 @@ class StreamerBatchConfig(BaseConfig):
         default=30_000,
         ge=1_000,
         description="首条弹幕到达后最多等待多久必须放行本批（毫秒）；防止空窗补偿在弹幕稀疏时无限推迟放行",
+    )
+    danmaku_quiet_window_ms: int = Field(
+        title="弹幕静默快放窗口",
+        default=800,
+        ge=0,
+        description=(
+            "收到观众弹幕后若连续这么多毫秒无新弹幕到达则提前放行本批，连发期间随新弹幕自动延展但不超过聚合窗口上限"
+            "（毫秒；0 = 关闭，退回固定聚合窗口与空窗补偿）"
+        ),
     )
 
 

@@ -33,6 +33,7 @@ class MessageBuffer:
         batch_max_size: int = 20,
         enable_idle_compensation: bool = True,
         batch_max_wait_ms: int = 30_000,
+        quiet_window_ms: int = 0,
     ) -> None:
         """初始化缓冲。
 
@@ -41,6 +42,8 @@ class MessageBuffer:
             batch_max_size: 单批最多聚合的消息条数，达到即触发刷新
             enable_idle_compensation: 是否启用空窗补偿（窗口过期时按空窗时间折算等效消息数）
             batch_max_wait_ms: 首条消息到达后的最长等待（毫秒），超过即放行，为空窗补偿设上界
+            quiet_window_ms: 弹幕静默快放窗口（毫秒；>0 时启用“首条短窗触发 + 连发延展”，
+                距最后一条弹幕静默满该时长立即放行，连续刷屏时由 ``batch_window_ms`` 封顶；0 = 关闭）
         """
         self._messages: List[RoomMessagePayload] = []
         self._force: bool = False
@@ -51,6 +54,7 @@ class MessageBuffer:
         self._batch_max_size = batch_max_size
         self._enable_idle_compensation = enable_idle_compensation
         self._batch_max_wait_ms = batch_max_wait_ms
+        self._quiet_window_ms = max(0, int(quiet_window_ms))
 
     # ==================== 写入 ====================
 
@@ -124,6 +128,11 @@ class MessageBuffer:
         """空窗补偿是否启用"""
         return self._enable_idle_compensation
 
+    @property
+    def quiet_window_ms(self) -> int:
+        """弹幕静默快放窗口（毫秒；0 = 关闭）"""
+        return self._quiet_window_ms
+
     # ==================== 刷新判定 ====================
 
     def should_flush(
@@ -166,6 +175,24 @@ class MessageBuffer:
         # 条数达标
         if self.size >= self._batch_max_size:
             return True, "batch_full"
+
+        # 首条短窗触发 + 连发延展（quiet_window_ms > 0 启用）：
+        # 收到单条观众弹幕后静默满 quiet_window_ms 立即放行（压缩无谓空等）；
+        # 若短窗内继续有连发弹幕到达，则以最新弹幕时刻顺延静默窗以合并连发，
+        # 同时受 batch_window_ms 封顶防止持续刷屏导致单批无限推迟。
+        if self._quiet_window_ms > 0 and self._first_arrival_ms > 0:
+            elapsed_ms = max(0, now_ms - self._first_arrival_ms)
+            if elapsed_ms >= self._batch_window_ms:
+                return True, "window_expired"
+            effective_quiet_ms = (
+                min(self._quiet_window_ms, self._batch_window_ms)
+                if self._batch_window_ms > 0
+                else self._quiet_window_ms
+            )
+            quiet_ms = max(0, now_ms - self._last_arrival_ms)
+            if quiet_ms >= effective_quiet_ms:
+                return True, "window_expired"
+            return False, "window_not_expired"
 
         # 窗口未到期
         window_expired = self._first_arrival_ms > 0 and (now_ms - self._first_arrival_ms) >= self._batch_window_ms

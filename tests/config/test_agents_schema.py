@@ -57,6 +57,7 @@ def test_streamer_defaults_are_the_full_package_config() -> None:
     )  # 画像按本批发言人全量注入，无条数上限
     assert (streamer.background.light_tick_ms, streamer.background.compressor.concurrency) == (5_000, 1)
     assert (streamer.background.compressor.queue_max, streamer.batch.batch_window_ms) == (100, 3_000)
+    assert streamer.batch.danmaku_quiet_window_ms == 800
     assert streamer.force.force_message_types == ["super_chat", "guard", "gift"]
     assert (streamer.proactive.enabled, streamer.word_filter.enabled, streamer.command.prefix) == (True, False, "/")
     assert streamer.command.tool_mappings == []  # 工具映射表默认空：委派 mappings 不受影响

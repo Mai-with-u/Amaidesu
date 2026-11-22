@@ -63,6 +63,7 @@ def _make_planner(
     archive_lookup: Any | None = None,
     memory_cues_provider: Any | None = None,
     used_archive_ids_provider: Any | None = None,
+    game_lead_agent_provider: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """mock LLM（generate）+ mock prompt_service；缺省真注册表 + 注册成功的 reply（reply 经 registry.invoke）。"""
     llm = MagicMock()
@@ -96,6 +97,7 @@ def _make_planner(
             archive_lookup=archive_lookup,
             memory_cues_provider=memory_cues_provider,
             used_archive_ids_provider=used_archive_ids_provider,
+            game_lead_agent_provider=game_lead_agent_provider,
         ),
     )
     return planner, llm, prompt
@@ -1082,3 +1084,63 @@ async def test_successful_chat_send_without_spoken_reply_marks_round_chat_answer
 
     assert outcome.replied is False and chat_handler.await_count == 1
     assert [(note.who, note.said, note.answered) for note in planner.recent_player_notes] == [("玩家甲", True, True)]
+
+
+async def test_danmaku_round_passes_low_reasoning_effort_while_proactive_keeps_default() -> None:
+    """纯弹幕响应轮向 LLM 透传 reasoning_effort='low' 压缩延迟；主动轮与运营提醒轮保留 profile 默认思考预算。"""
+    from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+
+    danmaku = RoomMessagePayload(
+        message_type="danmaku",
+        user=RoomMessageUser(id="u_fast", name="快问观众"),
+        content="今天吃啥呀",
+    )
+
+    # 1) 纯弹幕响应轮 → reasoning_effort="low"
+    planner_dm, llm_dm, _ = _make_planner([_resp(content="不开口")])
+    await planner_dm.plan([danmaku], proactive=False)
+    assert llm_dm.generate.await_args.kwargs.get("reasoning_effort") == "low"
+
+    # 2) 游戏主控轻从态弹幕轮（即使携带背景游戏事件）→ reasoning_effort="low"
+    planner_lead, llm_lead, _ = _make_planner(
+        [_resp(content="不开口")],
+        game_lead_agent_provider=lambda: "adventure",
+    )
+    await planner_lead.plan([danmaku], proactive=False, game_batch=GameEventBatch(has_urgent=True))
+    assert llm_lead.generate.await_args.kwargs.get("reasoning_effort") == "low"
+
+    # 3) 主动规划轮 → 不覆盖 reasoning_effort
+    planner_pro, llm_pro, _ = _make_planner([_resp(content="不开口")])
+    await planner_pro.plan([], proactive=True)
+    assert "reasoning_effort" not in llm_pro.generate.await_args.kwargs
+
+    # 4) 运营提醒轮 → 不覆盖 reasoning_effort
+    planner_rem, llm_rem, _ = _make_planner([_resp(content="不开口")])
+    await planner_rem.plan([danmaku], proactive=False, reminders="请重点介绍赞助活动")
+    assert "reasoning_effort" not in llm_rem.generate.await_args.kwargs
+
+    # 5) 主播主控态突发游戏急事轮 → 不覆盖 reasoning_effort
+    planner_urgent, llm_urgent, _ = _make_planner([_resp(content="不开口")])
+    await planner_urgent.plan([danmaku], proactive=False, game_batch=GameEventBatch(has_urgent=True))
+    assert "reasoning_effort" not in llm_urgent.generate.await_args.kwargs
+
+    # 6) profile 已显式设为关思考（none/off/disabled）时，纯弹幕轮绝不反升为 low
+    for disabled_effort in ("none", "off", "disabled"):
+        planner_off, llm_off, _ = _make_planner([_resp(content="不开口")])
+        llm_off.get_profile_reasoning_effort = MagicMock(return_value=disabled_effort)
+        await planner_off.plan([danmaku], proactive=False)
+        assert "reasoning_effort" not in llm_off.generate.await_args.kwargs
+
+    # 7) AsyncMock(side_effect=...) 回调未声明 reasoning_effort 时自动解包跳过，不抛 TypeError
+    planner_strict, llm_strict, _ = _make_planner([])
+    called_strict: list[dict[str, Any]] = []
+
+    async def _strict_generate(
+        messages: list[Any], *, tools: Any = None, profile: str = "", on_delta: Any = None
+    ) -> Response:
+        called_strict.append({"messages": messages, "tools": tools, "profile": profile, "on_delta": on_delta})
+        return _resp(content="不开口")
+
+    llm_strict.generate = AsyncMock(side_effect=_strict_generate)
+    outcome_strict = await planner_strict.plan([danmaku], proactive=False)
+    assert outcome_strict.error is None and len(called_strict) == 1

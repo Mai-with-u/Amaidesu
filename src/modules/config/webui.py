@@ -357,6 +357,7 @@ _FIELD_ROW_LAYOUT: dict[str, tuple[str, str]] = {
     "agents.agents.streamer.batch.batch_max_size": ("batch", "聚合参数"),
     "agents.agents.streamer.batch.enable_idle_compensation": ("batch", "聚合参数"),
     "agents.agents.streamer.batch.batch_max_wait_ms": ("batch", "聚合参数"),
+    "agents.agents.streamer.batch.danmaku_quiet_window_ms": ("batch", "聚合参数"),
     # 主播 Agent：弹幕命令
     "agents.agents.streamer.command.enabled": ("command-basic", "命令接线"),
     "agents.agents.streamer.command.prefix": ("command-basic", "命令接线"),
