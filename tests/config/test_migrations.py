@@ -727,6 +727,10 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
         "test",
         "test_game_lead_idle_fallback_migration.py#test_old_default_rewritten_and_written_back",
     ),
+    "widen_tts_max_queue": (
+        "test",
+        "test_tts_max_queue_migration.py#test_old_default_rewritten_and_written_back",
+    ),
 }
 
 

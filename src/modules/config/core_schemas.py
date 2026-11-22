@@ -604,7 +604,7 @@ class TTSConfig(BaseConfig):
         json_schema_extra={"x-ui-type": "select"},
     )
     max_queue: int = Field(
-        default=3,
+        default=6,
         ge=1,
         le=20,
         title="播放队列上限",

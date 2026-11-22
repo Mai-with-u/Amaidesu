@@ -364,7 +364,7 @@ def test_constructor_validation(kwargs: dict, error: type, match: str) -> None:
     with pytest.raises(error, match=match):
         UtteranceQueue(**kwargs)
     # 默认值与核心配置一致
-    assert (DEFAULT_MAX_QUEUE, DEFAULT_RENDER_TIMEOUT_MS) == (3, 60_000)
+    assert (DEFAULT_MAX_QUEUE, DEFAULT_RENDER_TIMEOUT_MS) == (6, 60_000)
 
 
 # ---------------- 优先级、过期与段落（快嘴用） ----------------
@@ -1217,4 +1217,68 @@ async def test_hard_interrupt_render_timeout_and_stop_are_strictly_isolated() ->
         assert [f.utterance_id for f in failed] == ["hang_timeout"]
         assert "render_timeout" in failed[0].error_message
     finally:
+        await queue.stop()
+
+
+async def test_default_capacity_six_absorbs_segmented_reply_and_commentary_without_overflow() -> None:
+    """默认容量放宽至 6：长弹幕分 3 段叠加欢迎与实况解说（共 6 句在排）零 queue_overflow，第 7 句才溢出。"""
+    bus = EventBus()
+    failed: list[UtteranceFailedPayload] = []
+
+    async def _on_failed(_e: str, payload: UtteranceFailedPayload, _s: str) -> None:
+        failed.append(payload)
+
+    bus.on(CoreEvents.TTS_UTTERANCE_FAILED, _on_failed, model_class=UtteranceFailedPayload)
+
+    gate = asyncio.Event()
+    first_entered = asyncio.Event()
+    spoken: list[str] = []
+
+    async def _speak(
+        text: str,
+        utterance_id: Optional[str],
+        emotion: Optional[str] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> None:
+        del text, emotion, emotion_intensity
+        if utterance_id == "playing_now":
+            first_entered.set()
+            await gate.wait()
+        spoken.append(str(utterance_id))
+
+    # 使用默认 max_queue=DEFAULT_MAX_QUEUE (6)
+    queue = UtteranceQueue(speak=_speak, event_bus=bus, render_timeout_ms=2000, clock=_Clock())
+    assert queue.get_stats()["max_queue"] == 6
+    await queue.start()
+    try:
+        # 1 句在播 + 6 句待播（3 段长弹幕 + 欢迎 + 2 句实况解说）全部稳稳入队零丢包
+        await queue.enqueue("playing_now", "正在播的一句", priority=SPEECH_PRIORITY_NORMAL)
+        await asyncio.wait_for(first_entered.wait(), timeout=2.0)
+
+        for uid, txt, prio in [
+            ("reply_p1", "第一段回答", SPEECH_PRIORITY_AUDIENCE),
+            ("reply_p2", "第二段回答", SPEECH_PRIORITY_AUDIENCE),
+            ("reply_p3", "第三段回答", SPEECH_PRIORITY_AUDIENCE),
+            ("welcome_1", "欢迎新观众", SPEECH_PRIORITY_HIGHLIGHT),
+            ("comm_1", "实况解说一", SPEECH_PRIORITY_NORMAL),
+            ("comm_2", "实况解说二", SPEECH_PRIORITY_NORMAL),
+        ]:
+            assert await queue.enqueue(uid, txt, priority=prio) is True
+
+        await bus.wait_until_drained()
+        assert failed == []
+        assert queue.size == 6
+
+        # 第 7 句待播到来才触发溢出，且丢掉最低优先级里最旧的 comm_1，保住高优 reply_p1~p3
+        assert await queue.enqueue("reply_new", "新观众回复", priority=SPEECH_PRIORITY_AUDIENCE) is True
+        await bus.wait_until_drained()
+        assert [f.utterance_id for f in failed] == ["comm_1"]
+        assert "queue_overflow" in failed[0].error_message
+
+        gate.set()
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        assert {"reply_p1", "reply_p2", "reply_p3", "reply_new", "welcome_1", "comm_2"} <= set(spoken)
+        assert "comm_1" not in spoken
+    finally:
+        gate.set()
         await queue.stop()

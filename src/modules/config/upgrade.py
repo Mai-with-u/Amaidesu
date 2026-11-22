@@ -1192,6 +1192,13 @@ _disable_game_lead_idle_fallback = swap_default("agents.streamer.game_lead_idle_
 # 生产钩子登记：agents.toml v2.0.53（游戏主控冷场兜底默认 50s → 0）
 register_file_hook("agents.toml", "disable_game_lead_idle_fallback", "2.0.53", _disable_game_lead_idle_fallback)
 
+# infra.toml v2.0.46：TTS 发声队列默认容量 3 → 6。长回复拆 2–3 段播报叠加欢迎/实况解说时，
+# 3 槽队列极易触发 queue_overflow 丢弃尾段；仅改写落盘值恰为旧默认 3 的存量文件，用户自设值原样保留。
+_widen_tts_max_queue = swap_default("tts.max_queue", 3, 6)
+
+# 生产钩子登记：infra.toml v2.0.46（[tts].max_queue 默认 3 → 6）
+register_file_hook("infra.toml", "widen_tts_max_queue", "2.0.46", _widen_tts_max_queue)
+
 
 __all__ = [
     "FileUpgradeHook",

@@ -60,8 +60,8 @@ SPEECH_PRIORITY_HIGHLIGHT = 1
 SPEECH_PRIORITY_AUDIENCE = 2
 SPEECH_PRIORITY_EMERGENCY = 3
 
-# 默认队列容量
-DEFAULT_MAX_QUEUE = 3
+# 默认队列容量（放宽至 6：容纳长弹幕分 2–3 段播报叠加欢迎/实况解说，防轻易触发 queue_overflow）
+DEFAULT_MAX_QUEUE = 6
 
 # 默认单 utterance 等待超时（毫秒）：覆盖"合成 + 播放"全周期。
 # 播放时长与语音等长（长句可达数十秒），此值是防引擎卡死的兜底，
