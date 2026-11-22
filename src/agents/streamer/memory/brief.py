@@ -31,6 +31,7 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 from .commitment_ttl import partition_brief_commitments
 from .render import (
     MAX_BRIEF_COMMITMENTS,
+    MAX_KNOWN_PLAYERS_IN_BRIEF,
     brief_archive_ids,
     memory_ref_archive_numbers,
     memory_ref_numbers,
@@ -39,6 +40,7 @@ from .render import (
 from .saves import SavePlace, place_of
 
 if TYPE_CHECKING:
+    from src.modules.storage.models.game_players import GamePlayer
     from src.modules.storage.privacy import PrivacyService
     from src.modules.storage.repos import (
         ArchiveRepo,
@@ -134,6 +136,12 @@ async def build_brief(
         game_player_repo=game_player_repo,
         privacy_service=privacy_service,
     )
+    known_players = await _load_known_players(
+        game_player_repo,
+        current_saves=saves,
+        privacy_service=privacy_service,
+        speaking_mode=speaking_mode,
+    )
     text = render_brief(
         snapshot_lines=snapshot_lines,
         commitments=taken,
@@ -149,6 +157,7 @@ async def build_brief(
         operator_notes=operator_notes,
         commitment_progress=commitment_progress,
         closed_commitments_this_session=closed_commitments,
+        known_players=known_players,
         speaking_mode=speaking_mode,
     )
     return MemoryBrief(
@@ -359,3 +368,51 @@ async def _load_session_corrections(
         commitment_progress,
         closed_commitments[-MAX_CLOSED_COMMITMENTS_IN_BRIEF:],
     )
+
+
+async def _load_known_players(
+    game_player_repo: Optional["GamePlayerRepo"],
+    *,
+    current_saves: Mapping[str, GameSave],
+    privacy_service: Optional["PrivacyService"] = None,
+    speaking_mode: str = "gameplay",
+) -> List["GamePlayer"]:
+    """加载配置了常用称呼的游戏熟人短表：过滤已申请遗忘、不记录名单与别的存档的玩家。
+
+    纯杂谈且未进入任何游戏存档时省略，避免无关的游戏熟人占用杂谈上下文；
+    命中玩家按主键升序返回，确保表不变时记忆摘要文本逐字节稳定。
+    """
+    if game_player_repo is None or not hasattr(game_player_repo, "list_players"):
+        return []
+    if speaking_mode == "zatsudan" and not current_saves:
+        return []
+    try:
+        rows = await game_player_repo.list_players(limit=_CANDIDATE_LIMIT)
+    except Exception as exc:  # noqa: BLE001 - 熟人短表读不到不挡记忆摘要主干
+        logger.warning(f"读取游戏玩家常用称呼失败（记忆摘要暂省略熟人短表）: {exc}", exc=exc)
+        return []
+
+    eligible: List["GamePlayer"] = []
+    for player in rows:
+        if player.forget_requested_at_ms is not None:
+            continue
+        if not player.effective_aliases():
+            continue
+        if current_saves:
+            active_save = current_saves.get(player.game)
+            if active_save is None:
+                continue
+            # 已进入明确存档时，只在当前存档见过面（或未记录存档历史）的熟人才列进来，防止跨存档串人
+            if active_save.known and player.saves:
+                if not any(item.save_id == active_save.id for item in player.saves):
+                    continue
+        if privacy_service is not None:
+            try:
+                if await privacy_service.is_player_forgotten(game=player.game, uuid=player.uuid):
+                    continue
+            except Exception as exc:  # noqa: BLE001 - 查不了遗忘名单时保守跳过，避免误泄隐私
+                logger.warning(f"核对熟人短表玩家 #{player.id} 遗忘名单失败（已跳过）: {exc}", exc=exc)
+                continue
+        eligible.append(player)
+    eligible.sort(key=lambda item: int(item.id))
+    return eligible[:MAX_KNOWN_PLAYERS_IN_BRIEF]

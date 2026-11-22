@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from src.agents.streamer.memory import refs
+from src.modules.storage.models.game_players import format_player_display
 from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotLine
 from src.modules.storage.privacy import mask_names_in_text
 from src.modules.types.game_save import GameSave
@@ -64,6 +65,7 @@ __all__ = [
     "MAX_BRIEF_ARCHIVE_LINES",
     "MAX_BRIEF_COMMITMENTS",
     "MAX_GAMEPLAY_HIGHLIGHT_LINES",
+    "MAX_KNOWN_PLAYERS_IN_BRIEF",
     "MAX_PRESENCE_VIEWERS",
     "MAX_RECENT_EARLIER_LINES",
     "MAX_RECENT_PREVIOUS_LINES",
@@ -95,6 +97,7 @@ __all__ = [
     "render_forget_notice",
     "render_game_card",
     "render_joke_card",
+    "render_known_players_block",
     "render_player_card",
     "render_presence_line",
     "render_recalled_commitment_card",
@@ -109,6 +112,8 @@ __all__ = [
 
 # 单块档案列表的兼容默认上限（供 render_archive_block 单独渲染时截断；记忆摘要按 zones 各区名额计）
 MAX_BRIEF_ARCHIVE_LINES = 12
+# 记忆摘要顶部【游戏里的熟人】短表上限：只列配置了常用称呼的游戏玩家，防常驻上下文膨胀
+MAX_KNOWN_PLAYERS_IN_BRIEF = 12
 # 老观众在场一行最多几个人，超出的折成"等 N 位"
 MAX_PRESENCE_VIEWERS = 6
 # 档位词分界：三天内来过写"前几天刚来过"，否则写"有阵子没来"
@@ -124,6 +129,7 @@ _CUE_HEADER = (
 )
 # 各分区抬头：新增分区只需往 BRIEF_ZONES 加一项，渲染骨架不动
 _OPERATOR_NOTES_HEADER = "【运营本场提醒过】（与旧记忆或之前的印象冲突时，以此为准）："
+_KNOWN_PLAYERS_HEADER = "【游戏里的熟人】（账号 ID 与常用称呼对应；核对清楚再叫，别把不同人串成同一个）："
 _WORLD_ZONE_HEADER = "【这个世界里】"
 _RECENT_ZONE_HEADER = "【最近几场】"
 _GAMEPLAY_HIGHLIGHT_HEADER = "【忘不掉的名场面】"
@@ -763,6 +769,22 @@ def render_save_heads(current_saves: Mapping[str, GameSave]) -> List[str]:
     return heads
 
 
+def render_known_players_block(players: Sequence["GamePlayer"]) -> List[str]:
+    """渲染记忆摘要与主控交接共用的【游戏里的熟人】短表：只列有常用称呼且未申请遗忘的玩家。
+
+    按玩家主键升序稳定排列，确保表未变时输出逐字节不变，不影响前缀缓存命中。
+    """
+    eligible = [
+        player
+        for player in players
+        if player.forget_requested_at_ms is None and player.effective_aliases() and (player.name or "").strip()
+    ]
+    if not eligible:
+        return []
+    ordered = sorted(eligible, key=lambda item: int(item.id))[:MAX_KNOWN_PLAYERS_IN_BRIEF]
+    return [_KNOWN_PLAYERS_HEADER, *(f"- {format_player_display(p.name, p.aliases)}" for p in ordered)]
+
+
 def render_brief(
     *,
     archive_lines: Sequence[ArchiveLine] = (),
@@ -780,6 +802,7 @@ def render_brief(
     operator_notes: Sequence[str] = (),
     commitment_progress: Optional[Mapping[int, str]] = None,
     closed_commitments_this_session: Sequence[Tuple[int, str, str]] = (),
+    known_players: Sequence["GamePlayer"] = (),
     speaking_mode: str = "gameplay",
     zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> str:
@@ -812,18 +835,20 @@ def render_brief(
     operator_block: List[str] = []
     if ctx.operator_notes:
         operator_block = [_OPERATOR_NOTES_HEADER, *(f"- {note}" for note in ctx.operator_notes)]
+    known_players_block = render_known_players_block(known_players)
     rendered_zones: List[str] = []
     for zone in zones:
         output = zone.render(ctx)
         if output.lines:
             rendered_zones.append("\n".join([zone.header, *output.lines]) if zone.header else "\n".join(output.lines))
-    if not operator_block and not folded_other_saves and not rendered_zones:
+    if not operator_block and not known_players_block and not folded_other_saves and not rendered_zones:
         return ""
     return "\n".join(
         [
             _BRIEF_HEADER,
             *render_save_heads(ctx.current_saves),
             *operator_block,
+            *known_players_block,
             *folded_other_saves,
             *rendered_zones,
         ]
@@ -1006,9 +1031,17 @@ def render_player_card(
         latest = history[0].live_session_id
         when = "上一场" if previous_session_id is not None and latest == previous_session_id else "之前"
         past = f"{when}他{'、'.join(parts)}。"
+    aliases = player.effective_aliases()
     former = player.former_names()
-    name = f"{player.name}（以前叫 {'、'.join(former[-2:])}）" if former else player.name
-    return f"[玩家·{player.name}] {name} 在游戏里找你了。{past}{said_text}{promise_text}认得出他就好，别念清单。"
+    header_name = format_player_display(player.name, aliases)
+    # 抬头与正文同源锚定常用称呼；同时存在曾用名时合并到同一对括号内，避免双括号嵌套
+    name_notes: List[str] = []
+    if aliases:
+        name_notes.append(f"常叫：{'、'.join(aliases)}")
+    if former:
+        name_notes.append(f"以前叫 {'、'.join(former[-2:])}")
+    name = f"{player.name}（{'；'.join(name_notes)}）" if name_notes else player.name
+    return f"[玩家·{header_name}] {name} 在游戏里找你了。{past}{said_text}{promise_text}认得出他就好，别念清单。"
 
 
 PresenceViewerItem = Union[Tuple[str, Optional[int]], Tuple[str, Optional[int], str, Sequence[str]]]

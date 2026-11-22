@@ -11,8 +11,10 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
+from src.agents.minecraft.chat_attribution import format_chat_sender
 from src.agents.minecraft.chat_collector import MaicraftChatCollector
 from src.agents.minecraft.config import MinecraftConfig
+from src.agents.minecraft.player_interactions import build_player_alias_index, format_companions_anchor
 from src.modules.collectors.base import BaseCollector
 from src.modules.events.event_bus import EventBus
 
@@ -54,4 +56,10 @@ def build_companion_collectors(
     ]
 
 
-__all__ = ["build_companion_collectors", "companion_config"]
+__all__ = [
+    "build_companion_collectors",
+    "build_player_alias_index",
+    "companion_config",
+    "format_chat_sender",
+    "format_companions_anchor",
+]

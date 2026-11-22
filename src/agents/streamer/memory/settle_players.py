@@ -114,8 +114,8 @@ class PlayerChat:
 
 
 def _names_of(player: GamePlayer) -> List[str]:
-    """按点名认人用的名字：现在的名字和以前用过的，太短的不算。"""
-    names = {player.name, *player.names}
+    """按点名认人用的名字：现在的名字、运营维护的常用称呼与以前用过的名字，太短的不算。"""
+    names = {player.name, *player.names, *player.effective_aliases()}
     return [name for name in names if len(name.strip()) >= _MIN_NAME_CHARS]
 
 
@@ -235,8 +235,15 @@ def build_player_chat(
     roster = []
     for player_id, code in codes.items():
         player = players[player_id]
+        aliases = player.effective_aliases()
         former = player.former_names()
-        roster.append(f"{code} = {player.name}" + (f"（以前叫 {'、'.join(former[-2:])}）" if former else ""))
+        # 下播整理玩家清单同源标注常用称呼，让模型把口头简称准确对齐到对应玩家代号
+        notes: List[str] = []
+        if aliases:
+            notes.append(f"常叫：{'、'.join(aliases)}")
+        if former:
+            notes.append(f"以前叫 {'、'.join(former[-2:])}")
+        roster.append(f"{code} = {player.name}" + (f"（{'；'.join(notes)}）" if notes else ""))
     parts = ["【游戏里的玩家】\n" + "；".join(roster)]
     if rendered:
         parts.append("【你在游戏公屏打出去的字（前面附着玩家说的话）】\n" + "\n".join(rendered))

@@ -14,14 +14,23 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.agents.minecraft.maicraft import GoalRun
 from src.agents.minecraft.player_body_language import spoken_fact
 from src.modules.events.payloads.game_player import GamePlayerInteractedPayload
+from src.modules.storage.models.game_players import GamePlayer, format_player_display
 from src.modules.types.game_save import OnlineMode
 
-__all__ = ["SelfChatLog", "SparOpponents", "body_language_interactions", "player_of", "spar_interaction"]
+__all__ = [
+    "SelfChatLog",
+    "SparOpponents",
+    "body_language_interactions",
+    "build_player_alias_index",
+    "format_companions_anchor",
+    "player_of",
+    "spar_interaction",
+]
 
 #: Mod 肢体动作原话里的固定说法 → 记账用的动作名（按出现与否计，次数看打招呼的条数）
 _ACTIONS: Tuple[Tuple[str, str], ...] = (
@@ -194,3 +203,45 @@ def spar_interaction(
         save_name=save_name,
         save_online_mode=online_mode,
     )
+
+
+def build_player_alias_index(
+    players: Sequence[GamePlayer],
+) -> Tuple[Dict[str, Tuple[str, ...]], Dict[str, Tuple[str, ...]]]:
+    """从玩家档案列表构建只读别名查表索引 ``(by_uuid, by_name_casefold)``。
+
+    跳过已申请遗忘或无有效常用称呼的玩家；按名字映射只在同游戏内该名字唯一对应一人时写入，
+    避免同名不同 UUID 的两名玩家在无 UUID 消息里串用彼此别名。
+    """
+    by_uuid: Dict[str, Tuple[str, ...]] = {}
+    name_owners: Dict[str, List[Tuple[str, ...]]] = {}
+    for player in players:
+        if player.forget_requested_at_ms is not None:
+            continue
+        aliases = tuple(player.effective_aliases())
+        if not aliases:
+            continue
+        uid_key = (player.uuid or "").strip().lower()
+        if uid_key:
+            by_uuid[uid_key] = aliases
+        name_key = " ".join((player.name or "").split()).casefold()
+        if name_key:
+            name_owners.setdefault(name_key, []).append(aliases)
+    by_name: Dict[str, Tuple[str, ...]] = {
+        name_key: entries[0] for name_key, entries in name_owners.items() if len(entries) == 1
+    }
+    return by_uuid, by_name
+
+
+def format_companions_anchor(players: Sequence[GamePlayer], *, limit: int = 12) -> str:
+    """生成紧凑的联机同伴称呼核对锚点行，防止提交解说或喊人时把不同玩家串成同一人。"""
+    eligible = [
+        player
+        for player in players
+        if player.forget_requested_at_ms is None and player.effective_aliases() and (player.name or "").strip()
+    ]
+    if not eligible:
+        return ""
+    ordered = sorted(eligible, key=lambda item: int(item.id))[: max(1, int(limit))]
+    pairs = "；".join(format_player_display(player.name, player.aliases) for player in ordered)
+    return f"同伴称呼核对（提交解说或喊人前先核对账号 ID 与常用称呼，勿串人）：{pairs}"

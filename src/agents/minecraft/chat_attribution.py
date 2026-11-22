@@ -32,9 +32,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.modules.events.payloads.game_chat import GameChatMention
+from src.modules.storage.models.game_players import format_player_display
 
 __all__ = [
     "ChatAttribution",
@@ -44,9 +45,11 @@ __all__ = [
     "NOTE_UNVERIFIED",
     "SELF_MENTION_TYPE",
     "attribute_chat",
+    "format_chat_sender",
     "line_speaker",
     "matched_self_mention",
     "mentions_of",
+    "render_attributed_chat_line",
 ]
 
 #: 自提及条目在 ``GameChatMention.type`` 里用的标记：不是游戏报的点名词，是归因层按文本判定补的
@@ -166,3 +169,53 @@ def mentions_of(event: Dict[str, Any]) -> List[GameChatMention]:
             GameChatMention(name=str(item.get("name") or ""), type=str(item.get("type") or ""), id=str(item["uuid"]))
         )
     return mentions
+
+
+def format_chat_sender(
+    sender: str,
+    *,
+    sender_id: str = "",
+    aliases_by_uuid: Optional[Mapping[str, Sequence[str]]] = None,
+    aliases_by_name: Optional[Mapping[str, Sequence[str]]] = None,
+) -> str:
+    """格式化游戏公屏发言人显示名：有常用称呼时输出 ``Name（常叫：Alias1、Alias2）``，否则返回原名。
+
+    查表顺序：先按归一化后的 ``sender_id``（UUID 小写去空白）精准查 ``aliases_by_uuid``；
+    未带 UUID 或未命中时再按 ``sender``（去空白、大小写不敏感）查 ``aliases_by_name``。
+    """
+    display_name = " ".join((sender or "").split())
+    if not display_name:
+        return ""
+    aliases: Sequence[str] = ()
+    uid_key = (sender_id or "").strip().lower()
+    if uid_key and aliases_by_uuid:
+        aliases = aliases_by_uuid.get(uid_key, ())
+    if not aliases and aliases_by_name:
+        aliases = aliases_by_name.get(display_name.casefold(), ()) or aliases_by_name.get(display_name, ())
+    return format_player_display(display_name, aliases)
+
+
+def render_attributed_chat_line(
+    attributed: ChatAttribution,
+    *,
+    aliases_by_uuid: Optional[Mapping[str, Sequence[str]]] = None,
+    aliases_by_name: Optional[Mapping[str, Sequence[str]]] = None,
+) -> str:
+    """把归属后的游戏公屏消息渲染为带常用称呼锚定的单行文本，供公屏投递与解说前核对复用。"""
+    content = " ".join((attributed.content or "").split())
+    if attributed.kind == "system":
+        return f"{content}（{attributed.note}）" if attributed.note else content
+    speaker = format_chat_sender(
+        attributed.sender,
+        sender_id=attributed.sender_id,
+        aliases_by_uuid=aliases_by_uuid,
+        aliases_by_name=aliases_by_name,
+    )
+    speaker = speaker or "未知发言人"
+    if attributed.note:
+        # 发言人已带「（常叫：…）」时合并到同一对括号内，避免双括号杂乱
+        if speaker.endswith("）") and "（" in speaker:
+            speaker = f"{speaker[:-1]}；{attributed.note}）"
+        else:
+            speaker = f"{speaker}（{attributed.note}）"
+    return f"{speaker}：{content}"

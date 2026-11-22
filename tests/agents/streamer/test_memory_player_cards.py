@@ -20,6 +20,8 @@ from src.agents.streamer.memory.cues import PUSH_COOLDOWN_MS, MemoryCueProvider
 from src.agents.streamer.memory.render import render_player_card
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.game_players import GamePlayer
+from src.modules.storage.privacy import PrivacyService
+from src.modules.types.game_save import GameSave
 
 _NOW = 1_000_000_000_000
 
@@ -355,3 +357,99 @@ async def test_player_card_syncs_progress_and_drops_closed_promise(store: SQLite
     cues_after_done = await provider_with_corr.collect(batch=[], game_players=[("minecraft", "uuid-pa")])
     assert cues_after_done.card_count == 0
     assert promise not in cues_after_done.commitment_ids
+
+
+async def test_player_aliases_anchor_card_and_brief_known_players_table(store: SQLiteDatabase, tmp_path: Path) -> None:
+    """玩家常用称呼同源渲染：玩家卡抬头与记忆摘要【游戏里的熟人】短表均按 Name（常叫：Alias）对齐，且遵守存档与隐私隔离。"""
+    before, current = await _two_sessions(store)
+    repo = store.game_players
+    alpha = await repo.meet_player(
+        game="minecraft",
+        uuid="uuid-alpha",
+        name="OldAlpha",
+        live_session_id=before,
+        save_id="w1",
+        save_name="测试一档",
+        at_ms=_NOW - 85_000_000,
+    )
+    await repo.meet_player(
+        game="minecraft",
+        uuid="uuid-alpha",
+        name="AlphaPlayer",
+        live_session_id=before,
+        save_id="w1",
+        save_name="测试一档",
+        at_ms=_NOW - 84_000_000,
+    )
+    await repo.set_aliases(player_id=alpha.id, aliases=["小阿尔", "阿法"])
+    await repo.record_greeting(player_id=alpha.id, live_session_id=before, actions=["挥手"], at_ms=_NOW - 83_000_000)
+
+    beta = await repo.meet_player(
+        game="minecraft",
+        uuid="uuid-beta",
+        name="BetaPlayer",
+        live_session_id=before,
+        save_id="w2",
+        save_name="另一存档",
+        at_ms=_NOW - 82_000_000,
+    )
+    await repo.set_aliases(player_id=beta.id, aliases=["小贝"])
+
+    gamma = await repo.meet_player(
+        game="minecraft",
+        uuid="uuid-gamma",
+        name="GammaPlayer",
+        live_session_id=before,
+        save_id="w1",
+        save_name="测试一档",
+        at_ms=_NOW - 81_000_000,
+    )
+    await repo.set_aliases(player_id=gamma.id, aliases=["小伽"])
+    with store.manager.transaction() as conn:
+        conn.execute("UPDATE game_players SET forget_requested_at_ms=? WHERE id=?", (_NOW, gamma.id))
+
+    # 1. 玩家线索卡抬头与正文同源带出常用称呼
+    cues = await _provider(store, current, _Clock(), before).collect(
+        batch=[], game_players=[("minecraft", "uuid-alpha")]
+    )
+    assert cues.card_count == 1
+    assert "[玩家·AlphaPlayer（常叫：小阿尔、阿法）]" in cues.text
+    assert "AlphaPlayer（常叫：小阿尔、阿法；以前叫 OldAlpha） 在游戏里找你了。" in cues.text
+
+    # 2. 记忆摘要【游戏里的熟人】短表：只列当前存档且未申请遗忘的带别名玩家，纯杂谈无存档时省略
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    await privacy.initialize()
+    try:
+        brief = await build_brief(
+            archive_repo=store.archive,
+            commitments_repo=store.commitments,
+            current_saves={"minecraft": GameSave(id="w1", name="测试一档")},
+            game_player_repo=repo,
+            privacy_service=privacy,
+        )
+        assert "【游戏里的熟人】" in brief.text
+        assert "- AlphaPlayer（常叫：小阿尔、阿法）" in brief.text
+        assert "BetaPlayer" not in brief.text, "别的存档的熟人不串入当前存档短表"
+        assert "GammaPlayer" not in brief.text, "已申请遗忘的玩家立即隔离"
+
+        # 表未变时二次构建逐字节一致（前缀缓存稳定）
+        brief_again = await build_brief(
+            archive_repo=store.archive,
+            commitments_repo=store.commitments,
+            current_saves={"minecraft": GameSave(id="w1", name="测试一档")},
+            game_player_repo=repo,
+            privacy_service=privacy,
+        )
+        assert brief_again.text == brief.text
+
+        # 纯杂谈未进任何存档时不塞游戏熟人短表
+        zatsudan_brief = await build_brief(
+            archive_repo=store.archive,
+            commitments_repo=store.commitments,
+            game_player_repo=repo,
+            privacy_service=privacy,
+            speaking_mode="zatsudan",
+        )
+        assert "【游戏里的熟人】" not in zatsudan_brief.text
+    finally:
+        await privacy.close()

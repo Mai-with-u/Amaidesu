@@ -138,3 +138,44 @@ def test_line_she_answered_on_stream_is_shown_and_found_by_quote() -> None:
         speech_player_ids=[1], lines=lines, players=players, clock_text=str, speech_replies=[(1, 1_000 + 180_001)]
     )
     assert "风车房" not in late.text, "隔了 3 分钟以上不算她在接这句"
+
+
+def test_aliases_resolve_chat_targets_and_annotate_roster() -> None:
+    """下播整理把常用称呼纳入点名认人，并在【游戏里的玩家】清单同源展示常叫称呼。"""
+    alpha = GamePlayer(
+        id=1,
+        game="minecraft",
+        uuid="uuid-alpha",
+        name="AlphaPlayer",
+        names=["OldAlpha", "AlphaPlayer"],
+        aliases=["小阿尔", "阿法"],
+        first_seen_ms=0,
+        last_seen_ms=0,
+    )
+    beta = GamePlayer(
+        id=2,
+        game="minecraft",
+        uuid="uuid-beta",
+        name="BetaPlayer",
+        names=["BetaPlayer"],
+        aliases=["小贝"],
+        first_seen_ms=0,
+        last_seen_ms=0,
+    )
+    players = {1: alpha, 2: beta}
+    lines = [
+        _line(1, "other"),
+        _line(2, "streamer", "小阿尔明天我帮你一起修仓库"),
+        _line(3, "streamer", "好的，小贝，等下带你去矿洞"),
+        _line(4, "streamer", "小贝壳真好看"),
+    ]
+    targets = chat_targets(lines, players)
+    assert targets[2] == frozenset({1}), "三字常用称呼子串点名正确归属 AlphaPlayer"
+    assert targets[3] == frozenset({2}), "两字常用称呼整词点名正确归属 BetaPlayer"
+    assert targets[4] == frozenset(), "两字常用称呼撞上普通词（小贝壳）不误匹配"
+
+    chat = build_player_chat(speech_player_ids=[1, 2], lines=lines, players=players, clock_text=lambda ms: "20:00")
+    assert "玩家1 = AlphaPlayer（常叫：小阿尔、阿法；以前叫 OldAlpha）" in chat.text
+    assert "玩家2 = BetaPlayer（常叫：小贝）" in chat.text
+    assert chat.targets[2] == frozenset({1})
+    assert chat.targets[3] == frozenset({2})
