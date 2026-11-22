@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List
@@ -1165,6 +1166,468 @@ async def test_game_lead_sees_and_invokes_streamer_memory_correct_and_receives_i
         await _wait_until(lambda: len(llm.seen) > turns_before_took and not agent.batch_active)
         took_notice = str(llm.seen[-1][-1].get("content") or "")
         assert "[身体] 从 PlayerA 放的箱子（20, 64, 8）拿了 1 个 minecraft:oak_planks。" in took_notice
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_known_places_tail_injection_steady_state_remember_refresh_and_world_switch_clear() -> None:
+    """known_places 挂在尾部 [当前任务状态]，稳态零重发，msg[0] 全程零改写，remember 后刷新且换存档干净清空。"""
+    clock = FakeClock(8_000_000)
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    server = FakeMaicraft()
+    server.enter_world("save_kp_1", "设施目录测试档")
+    server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+    server.world_memory_view = {
+        "places": [
+            {
+                "name": "地狱门（主世界侧）",
+                "kind": "place",
+                "position": {"dimension": "minecraft:overworld", "x": 12, "y": 64, "z": -8},
+                "distance": 14,
+            },
+            {
+                "name": "建筑@12,64,-8",
+                "kind": "building",
+                "position": {"dimension": "minecraft:overworld", "x": 12, "y": 64, "z": -8},
+            },
+            {
+                "name": "地狱门（下界侧）",
+                "kind": "place",
+                "position": {"dimension": "minecraft:the_nether", "x": 2, "y": 64, "z": -1},
+            },
+        ],
+        "stations": [
+            {
+                "name": "自动冶炼站",
+                "via": "smelting",
+                "input": {"dimension": "minecraft:overworld", "x": 5, "y": 64, "z": 3},
+                "output": {"dimension": "minecraft:overworld", "x": 7, "y": 64, "z": 3},
+                "exclude": [],
+            }
+        ],
+        "regions": [],
+        "records": [],
+    }
+
+    step = {"n": 0}
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        step["n"] += 1
+        if step["n"] == 1:
+            # 第 1 步仅只读观察，不改写设施，验证稳态第 2 步不重复发 known_places
+            return _resp("看看周围情况", calls=[_call("maicraft_observe", {"what": "scene"}, "c_kp_obs")])
+        if step["n"] == 2:
+            # 第 2 步调用 remember 登记新地标并同步更新替身视图，验证第 3 步尾部自动刷新 known_places
+            server.world_memory_view["places"].append(
+                {
+                    "name": "东坡矿洞口",
+                    "kind": "place",
+                    "position": {"dimension": "minecraft:overworld", "x": 40, "y": 60, "z": 12},
+                }
+            )
+            return _resp(
+                "记下矿洞入口",
+                calls=[
+                    _call(
+                        "maicraft_execute",
+                        {"goal": {"ability": "remember", "parameters": {"name": "东坡矿洞口"}}},
+                        "c_kp_rem",
+                    )
+                ],
+            )
+        return _resp("收到，设施目录已对齐")
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        script,
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=0,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="营地盘点"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 3 and not agent.batch_active)
+
+        # 1) msg[0] 系统提示词前缀全程纹丝不动
+        msg0 = dict(llm.seen[0][0])
+        assert all(seen[0] == msg0 for seen in llm.seen)
+        assert "地狱门（主世界侧）" not in str(msg0.get("content") or "")
+
+        # 2) 开局第 1 步尾部 [当前任务状态] 挂入紧凑 known_places，剥除匿名建筑与坐标
+        step1_states = [
+            str(m.get("content") or "") for m in llm.seen[0] if "[当前任务状态]" in str(m.get("content") or "")
+        ]
+        assert len(step1_states) == 1
+        assert "known_places" in step1_states[0]
+        assert "地狱门（主世界侧）" in step1_states[0]
+        assert "自动冶炼站" in step1_states[0]
+        assert "地狱门（下界侧）(the_nether)" in step1_states[0]
+        assert "建筑@12,64,-8" not in step1_states[0]
+        assert '"x"' not in step1_states[0]
+
+        # 3) 第 2 步未变更设施：稳态零重发（[当前任务状态] 仍只有开局那 1 条）
+        step2_states = [
+            str(m.get("content") or "") for m in llm.seen[1] if "[当前任务状态]" in str(m.get("content") or "")
+        ]
+        assert len(step2_states) == 1
+
+        # 4) 第 2 步 remember 成功后，第 3 步尾部自动刷新并带出新地标“东坡矿洞口”
+        step3_states = [
+            str(m.get("content") or "") for m in llm.seen[2] if "[当前任务状态]" in str(m.get("content") or "")
+        ]
+        assert len(step3_states) == 2
+        assert "东坡矿洞口" in step3_states[-1]
+
+        # 5) 切换到空设施新存档：旧存档设施目录被彻底清空，绝不串入新世界
+        turns_before_switch = len(llm.seen)
+        server.world_memory_view = {"places": [], "stations": [], "regions": [], "records": []}
+        server.enter_world("save_kp_2", "空设施新存档")
+        await _wait_until(lambda: len(llm.seen) > turns_before_switch and not agent.batch_active)
+
+        after_switch_text = _texts(llm.seen[-1])
+        assert llm.seen[-1][0] == msg0
+        assert "地狱门（主世界侧）" not in after_switch_text
+        assert "东坡矿洞口" not in after_switch_text
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_opening_intent_triggers_passive_flash_with_exclude_texts_and_zero_bytes_on_miss(
+    db_path: Path,
+) -> None:
+    """主控态开局按任务/环节意图触发 [脑中闪过] 并透传 exclude_texts 去重已有公共规矩；未命中时 0 字节不追加空块。"""
+    clock = FakeClock(9_000_000)
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    try:
+        # 先落两条真实游戏公屏证据行，再写入 2 条已核实公共规矩，进入开局 [当前存档公共规矩] 后须作为 exclude_texts 透传给被动检索去重
+        old_sid = await db.sessions.insert_live_session(started_at_ms=clock.now_ms() - 3_600_000)
+        await db.sessions.close_live_session(live_session_id=old_sid, ended_at_ms=clock.now_ms() - 1_800_000)
+        with db.manager.transaction() as conn:
+            gc_1 = int(
+                conn.execute(
+                    "INSERT INTO game_chat(live_session_id, game, direction, content, save_id, save_name, at_ms, message_id)"
+                    " VALUES (?, 'minecraft', 'player', ?, 'save_intent_1', '意图测试档', ?, 'gc_intent_1')",
+                    (old_sid, "营地公共熔炉烧完铁记得补煤", clock.now_ms() - 2_000_000),
+                ).lastrowid
+                or 0
+            )
+            gc_2 = int(
+                conn.execute(
+                    "INSERT INTO game_chat(live_session_id, game, direction, content, save_id, save_name, at_ms, message_id)"
+                    " VALUES (?, 'minecraft', 'player', ?, 'save_intent_1', '意图测试档', ?, 'gc_intent_2')",
+                    (old_sid, "河谷这边算公共区", clock.now_ms() - 1_900_000),
+                ).lastrowid
+                or 0
+            )
+        await db.social_facts.insert_fact(
+            kind="sharing",
+            text="营地公共熔炉烧完铁要归位煤炭",
+            quote="营地公共熔炉烧完铁记得补煤",
+            game="minecraft",
+            save_id="save_intent_1",
+            save_name="意图测试档",
+            evidence_game_chat_id=gc_1,
+            now_ms_value=clock.now_ms(),
+        )
+        await db.social_facts.insert_fact(
+            kind="setting",
+            text="出生点河谷为共享公共区",
+            quote="河谷这边算公共区",
+            game="minecraft",
+            save_id="save_intent_1",
+            save_name="意图测试档",
+            evidence_game_chat_id=gc_2,
+            now_ms_value=clock.now_ms(),
+        )
+
+        bus = EventBus(enable_stats=False)
+        registry = ToolRegistry(event_bus=bus)
+        manager = AgentManager(tool_registry=registry)
+        manager.register(StreamerPlaceholder())
+        coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+        cue_calls: List[Dict[str, Any]] = []
+        cue_reply_mode = {"hit": True}
+
+        async def _passive_provider(
+            *,
+            game: str,
+            texts: Any = (),
+            players: Any = (),
+            situation: Any = None,
+            arrived_places: Any = (),
+            exclude_texts: Any = (),
+            limit: int = 2,
+        ) -> List[str]:
+            cue_calls.append(
+                {
+                    "game": game,
+                    "texts": tuple(texts),
+                    "players": tuple(players),
+                    "arrived_places": tuple(arrived_places),
+                    "exclude_texts": tuple(exclude_texts),
+                    "limit": limit,
+                }
+            )
+            if cue_reply_mode["hit"] and any("下界门" in str(t) for t in texts):
+                return ["记着的事：营地西边本来就有一座现成的下界门"]
+            return []
+
+        coord.set_passive_cue_provider(_passive_provider)
+
+        server = FakeMaicraft()
+        server.enter_world("save_intent_1", "意图测试档")
+
+        agent, llm, _ = await make_minecraft_agent(
+            server,
+            lambda _msgs: _resp("明白，先核对现成下界门"),
+            registry=registry,
+            bus=bus,
+            live=True,
+            social_fact_repo=db.social_facts,
+            lead_coordinator=coord,
+            lead_idle_wakeup_s=0.0,
+            chat_batch_window_ms=0,
+            clock=lambda: clock.now_ms() / 1000.0,
+        )
+        manager.register(agent)
+        try:
+            # 1) 命中场景：开局按环节目标文本“凑钻石镐去砌下界门”触发 [脑中闪过] 且透传当前存档公共规矩作 exclude_texts
+            assert (
+                await coord.request_game_lead(
+                    LeadHandoverContext(segment_title="下界探索", segment_goal="凑钻石镐去砌下界门"),
+                    target="minecraft",
+                )
+                == "minecraft"
+            )
+            await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+
+            assert cue_calls
+            first_call = cue_calls[0]
+            assert any("凑钻石镐去砌下界门" in t for t in first_call["texts"])
+            assert any("营地公共熔炉烧完铁要归位煤炭" in ex for ex in first_call["exclude_texts"])
+            assert any("出生点河谷为共享公共区" in ex for ex in first_call["exclude_texts"])
+
+            first_seen = llm.seen[0]
+            msg0_snapshot = dict(first_seen[0])
+            tail_text = str(first_seen[-1].get("content") or "")
+            assert "[脑中闪过]" in tail_text
+            assert "营地西边本来就有一座现成的下界门" in tail_text
+            assert "营地西边本来就有一座现成的下界门" not in str(msg0_snapshot.get("content") or "")
+
+            # 2) 公屏触发同样透传 exclude_texts，避免重复闪出前 6 条已有规矩
+            turns_before_chat = len(llm.seen)
+            await bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender="PlayerA",
+                    sender_distance=4.0,
+                    content="公共熔炉还能用吗",
+                    timestamp_ms=clock.now_ms(),
+                ),
+                source="test",
+            )
+            await bus.wait_until_drained()
+            await _wait_until(lambda: len(llm.seen) > turns_before_chat and not agent.batch_active)
+            assert any("营地公共熔炉烧完铁要归位煤炭" in ex for ex in cue_calls[-1]["exclude_texts"])
+            assert llm.seen[-1][0] == msg0_snapshot
+
+            # 3) 未命中场景：退主控重开无命中任务，开局尾部 0 字节不追加任何空 [脑中闪过] 块
+            cue_reply_mode["hit"] = False
+            await coord.reclaim_streamer_lead(reason="reset_for_miss_case")
+            turns_before_miss = len(llm.seen)
+            assert (
+                await coord.request_game_lead(
+                    LeadHandoverContext(segment_title="日常整理", segment_goal="修整营地菜田"),
+                    target="minecraft",
+                )
+                == "minecraft"
+            )
+            await _wait_until(lambda: len(llm.seen) > turns_before_miss and not agent.batch_active)
+            miss_seen = llm.seen[-1]
+            # 跳过 msg[0] 系统提示词本身，核对对话历史中未追加任何 [脑中闪过] 消息（未命中 0 字节）
+            assert all("[脑中闪过]" not in str(m.get("content") or "") for m in miss_seen[1:])
+        finally:
+            await agent.stop()
+            await bus.cleanup()
+    finally:
+        await db.close()
+
+
+async def test_world_switch_cross_dimension_does_not_borrow_stale_dimension_and_refreshes_after_observe_self() -> None:
+    """存档 A（the_nether）中途切到存档 B（overworld）：切档后不借用旧档维度，observe(self) 认出 overworld 后准确刷新 B 的 known_places。"""
+    clock = FakeClock(10_000_000)
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    server = FakeMaicraft()
+    server.enter_world("save_dim_a", "存档A下界")
+    server.self_view["position"] = {"x": 10.0, "y": 64.0, "z": 5.0, "dimension": "minecraft:the_nether"}
+    server.world_memory_view = {
+        "places": [
+            {
+                "name": "下界堡垒",
+                "kind": "place",
+                "position": {"dimension": "minecraft:the_nether", "x": 20, "y": 64, "z": 10},
+            }
+        ],
+        "stations": [],
+        "regions": [],
+        "records": [],
+    }
+
+    observed_b = {"done": False}
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        joined = _texts(messages)
+        if "存档B主世界" in joined and not observed_b["done"]:
+            observed_b["done"] = True
+            return _resp(
+                "切到新世界了，先 observe(self) 确认位置和维度",
+                calls=[_call("maicraft_observe", {"what": "self"}, "c_obs_b")],
+            )
+        return _resp("明白，已核对当前维度设施目录")
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        script,
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=0,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="跨档维度测试"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+
+        msg0 = dict(llm.seen[0][0])
+        assert "下界堡垒" in _texts(llm.seen[0])
+
+        # 中途通过事件流从存档 A（the_nether）切换到存档 B（overworld）
+        turns_before_switch = len(llm.seen)
+        server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+        server.world_memory_view = {
+            "places": [
+                {
+                    "name": "主世界营地",
+                    "kind": "place",
+                    "position": {"dimension": "minecraft:overworld", "x": 12, "y": 64, "z": -6},
+                },
+                {
+                    "name": "下界分站",
+                    "kind": "place",
+                    "position": {"dimension": "minecraft:the_nether", "x": 3, "y": 64, "z": 2},
+                },
+            ],
+            "stations": [],
+            "regions": [],
+            "records": [],
+        }
+        server.enter_world("save_dim_b", "存档B主世界")
+        await _wait_until(
+            lambda: observed_b["done"] and len(llm.seen) >= turns_before_switch + 2 and not agent.batch_active
+        )
+
+        # 1) 切档后的首步（尚未 observe(self)）：绝不借用存档 A 的 the_nether 维度把“主世界营地”误归进 other_dimensions
+        before_obs_seen = llm.seen[turns_before_switch]
+        before_obs_text = _texts(before_obs_seen)
+        assert "下界堡垒" not in before_obs_text
+        assert "主世界营地(overworld)" not in before_obs_text
+
+        # 2) observe(self) 认出 overworld 后的下一步：按 overworld 准确挂出存档 B 的 known_places
+        after_obs_seen = llm.seen[turns_before_switch + 1]
+        assert after_obs_seen[0] == msg0
+        state_msgs = [
+            str(m.get("content") or "") for m in after_obs_seen[1:] if "[当前任务状态]" in str(m.get("content") or "")
+        ]
+        assert state_msgs
+        latest_state = state_msgs[-1]
+        parsed_state = json.loads(latest_state.split("\n", 1)[1])
+        assert parsed_state["known_places"] == {
+            "places": ["主世界营地"],
+            "other_dimensions": ["下界分站(the_nether)"],
+        }
+        assert "主世界营地(overworld)" not in latest_state
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_empty_handover_context_does_not_query_passive_cues_with_template_boilerplate() -> None:
+    """交接简报的 segment_title / segment_goal / operator_notes 全为空时，不拿 [主控交接简报] 模板原文触发被动线索检索。"""
+    clock = FakeClock(11_000_000)
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    cue_calls: List[Dict[str, Any]] = []
+
+    async def _passive_provider(
+        *,
+        game: str,
+        texts: Any = (),
+        players: Any = (),
+        situation: Any = None,
+        arrived_places: Any = (),
+        exclude_texts: Any = (),
+        limit: int = 2,
+    ) -> List[str]:
+        cue_calls.append({"game": game, "texts": tuple(texts)})
+        return ["误命中模板的线索"]
+
+    coord.set_passive_cue_provider(_passive_provider)
+
+    server = FakeMaicraft()
+    server.enter_world("save_empty_ctx", "空简报测试档")
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        lambda _msgs: _resp("收到，先看看现场"),
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=0,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        assert await coord.request_game_lead(LeadHandoverContext(), target="minecraft") == "minecraft"
+        await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+
+        assert cue_calls == []
+        assert all("[脑中闪过]" not in str(m.get("content") or "") for m in llm.seen[0][1:])
     finally:
         await agent.stop()
         await bus.cleanup()

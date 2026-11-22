@@ -187,6 +187,7 @@ async def _start_dual_agent_rig(
     embedding_setup: Optional[Any] = None,
     streamer_extra_kwargs: Optional[Dict[str, Any]] = None,
     work_docs_repo: Optional[Any] = None,
+    social_fact_repo: Optional[Any] = None,
 ) -> _DualAgentRig:
     """按生产装配拓扑启动真实 StreamerAgent + 真实 MinecraftAgent 同台环境。"""
     register_core_events()
@@ -272,6 +273,7 @@ async def _start_dual_agent_rig(
         mcp_client=SimpleNamespace(connected=True),
         mcp_provider=server,
         work_docs_repo=work_docs_repo,
+        social_fact_repo=social_fact_repo,
         embedding_setup=embedding_setup,
         lead_coordinator=coordinator,
         lead_idle_wakeup_s=0.0,
@@ -1803,6 +1805,229 @@ async def test_e2e_live_commitment_ledger_delivery_progress_and_done_closure(
         finally:
             await collector._teardown()
             await storage_ledger.stop()
+            await rig.stop()
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# 链路 13：双真 Agent 开局 known_places 轻目录 + 意图联想浮出第 7 条 works 事实闭环
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_game_lead_opening_known_places_and_intent_social_fact_flash(
+    prompts: Any,
+    fake_clock: Any,
+    tmp_path: Any,
+) -> None:
+    """全真 SQLite + StreamerAgent + MinecraftAgent + LeadCoordinator：
+    库里超 6 条 game_social_facts（第 7 条 works 为现成下界门）+ 含匿名脏档的 places，
+    以“凑钻石镐去砌下界门”开局时：
+    - 尾部 [当前任务状态] 精准带出紧凑 known_places（含地狱门、无坐标与建筑@/机器@）；
+    - 尾部 [脑中闪过] 精准浮出被前 6 条截断的第 7 条 works 事实，且经 exclude_texts 去重不重复前 6 条；
+    - msg[0] 系统提示词前缀全程零变化，稳态下一步零重发。
+    """
+    db = SQLiteDatabase(tmp_path / "e2e_known_places_intent.db")
+    await db.initialize()
+    try:
+        old_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms() - 86_400_000)
+        await db.sessions.close_live_session(live_session_id=old_sid, ended_at_ms=fake_clock.now_ms() - 80_000_000)
+
+        save_id = "save_e2e_1"
+        save_name = "联机冒险二周目"
+
+        def _insert_game_chat(content: str, idx: int) -> int:
+            with db.manager.transaction() as conn:
+                return int(
+                    conn.execute(
+                        "INSERT INTO game_chat(live_session_id, game, direction, content, save_id, save_name, at_ms, message_id)"
+                        " VALUES (?, 'minecraft', 'player', ?, ?, ?, ?, ?)",
+                        (
+                            old_sid,
+                            content,
+                            save_id,
+                            save_name,
+                            fake_clock.now_ms() - 82_000_000 + idx * 1000,
+                            f"gc13_{idx}",
+                        ),
+                    ).lastrowid
+                    or 0
+                )
+
+        # 前 6 条高优先级 sharing / setting 事实占满 [当前存档公共规矩]（其中一条特意含“钻石镐”，验证去重不会重复闪回）
+        resident_facts = [
+            ("sharing", "公共箱子里的钻石镐借用完要放回原箱"),
+            ("sharing", "营地公用熔炉区里的铁锭可以按需取用"),
+            ("sharing", "北岸农田收完小麦要顺手补种"),
+            ("setting", "这是多人共建生存服，东边高地是公共营地"),
+            ("setting", "PlayerA 负责基地仓储与红石分拣"),
+            ("setting", "PlayerB 负责北岸牧场与畜牧区"),
+        ]
+        for idx, (kind, text) in enumerate(resident_facts, start=1):
+            gc_id = _insert_game_chat(text, idx)
+            await db.social_facts.insert_fact(
+                kind=kind,
+                text=text,
+                quote=text,
+                game="minecraft",
+                save_id=save_id,
+                save_name=save_name,
+                evidence_game_chat_id=gc_id,
+                created_session_id=old_sid,
+                updated_session_id=old_sid,
+                now_ms_value=fake_clock.now_ms() - 81_000_000 + idx * 1000,
+            )
+
+        # 第 7 条 works 事实因前 6 条上限未进常驻 [当前存档公共规矩]，应由新任务意图“凑钻石镐去砌下界门”精准浮出
+        portal_fact_text = "营地本来就有一座现成的下界门"
+        portal_gc_id = _insert_game_chat("营地本来就有一座现成的下界门，不用重新砌啦", 7)
+        await db.social_facts.insert_fact(
+            kind="works",
+            text=portal_fact_text,
+            quote="营地本来就有一座现成的下界门，不用重新砌啦",
+            game="minecraft",
+            save_id=save_id,
+            save_name=save_name,
+            evidence_game_chat_id=portal_gc_id,
+            created_session_id=old_sid,
+            updated_session_id=old_sid,
+            now_ms_value=fake_clock.now_ms() - 80_500_000,
+        )
+
+        live_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms())
+
+        nether_rundown = Rundown(
+            rundown_id="e2e_nether_intent",
+            title="下界探索准备",
+            segments=[
+                RundownSegment(
+                    id="seg_nether",
+                    title="准备去下界",
+                    task_description="凑钻石镐去砌下界门",
+                    expected_ms=1_800_000,
+                    mode="play",
+                )
+            ],
+        )
+
+        step = {"n": 0}
+
+        def _mc_script(_messages: List[Dict[str, Any]]) -> Response:
+            step["n"] += 1
+            if step["n"] == 1:
+                return _resp("先核对现场与营地设施", calls=[_call("maicraft_observe", {"what": "scene"}, "c13_obs")])
+            return _resp("原来营地已有现成下界门，不用再砌啦")
+
+        rig = await _start_dual_agent_rig(
+            prompts=prompts,
+            fake_clock=fake_clock,
+            mc_script=_mc_script,
+            rundown=nether_rundown,
+            work_docs_repo=db.game_work_docs,
+            social_fact_repo=db.social_facts,
+            streamer_extra_kwargs={
+                "chat_repo": db.chat,
+                "sessions_repo": db.sessions,
+                "commitments_repo": db.commitments,
+                "archive_repo": db.archive,
+                "memory_cue_log_repo": db.memory_cue_log,
+                "game_player_repo": db.game_players,
+                "work_docs_repo": db.game_work_docs,
+                "social_fact_repo": db.social_facts,
+                "session_manager": ActiveSessionStub(live_sid),
+            },
+        )
+        rig.server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+        rig.server.world_memory_view = {
+            "places": [
+                {
+                    "name": "地狱门（主世界侧）",
+                    "kind": "place",
+                    "position": {"dimension": "minecraft:overworld", "x": 18, "y": 64, "z": -12},
+                    "distance": 21,
+                },
+                {
+                    "name": "建筑@18,64,-12",
+                    "kind": "building",
+                    "position": {"dimension": "minecraft:overworld", "x": 18, "y": 64, "z": -12},
+                },
+                {
+                    "name": "机器@-4,64,7",
+                    "kind": "machine",
+                    "position": {"dimension": "minecraft:overworld", "x": -4, "y": 64, "z": 7},
+                },
+                {
+                    "name": "地狱门（下界侧）",
+                    "kind": "place",
+                    "position": {"dimension": "minecraft:the_nether", "x": 2, "y": 64, "z": -1},
+                },
+            ],
+            "stations": [
+                {
+                    "name": "自动冶炼站",
+                    "via": "smelting",
+                    "input": {"dimension": "minecraft:overworld", "x": 6, "y": 64, "z": 4},
+                    "output": {"dimension": "minecraft:overworld", "x": 8, "y": 64, "z": 4},
+                    "exclude": [],
+                }
+            ],
+            "regions": [],
+            "records": [],
+        }
+        try:
+            await rig.bus.emit(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(live_session_id=live_sid, kind="live", started_at_ms=fake_clock.now_ms()),
+                source="e2e_test",
+            )
+            await rig.bus.wait_until_drained()
+            await _wait_until(lambda: len(rig.minecraft_llm.seen) >= 2 and not rig.minecraft.batch_active)
+            await _settle_loop(rig.bus)
+
+            first_seen = rig.minecraft_llm.seen[0]
+            second_seen = rig.minecraft_llm.seen[1]
+
+            # 1) msg[0] 系统提示词前缀全程零变化，且不含动态目录或记忆闪回
+            assert first_seen[0] == second_seen[0]
+            msg0_text = str(first_seen[0].get("content") or "")
+            assert "地狱门（主世界侧）" not in msg0_text
+            assert portal_fact_text not in msg0_text
+
+            # 2) 常驻 [当前存档公共规矩] 仅收前 6 条，不含被截断的第 7 条 works 事实
+            social_rule_msgs = [
+                str(m.get("content") or "") for m in first_seen if "[当前存档公共规矩]" in str(m.get("content") or "")
+            ]
+            assert len(social_rule_msgs) == 1
+            assert "公共箱子里的钻石镐借用完要放回原箱" in social_rule_msgs[0]
+            assert portal_fact_text not in social_rule_msgs[0]
+
+            # 3) 尾部 [当前任务状态] 精准带出紧凑 known_places，不含坐标与建筑@/机器@匿名档；稳态第 2 步零重发
+            state_msgs_1 = [
+                str(m.get("content") or "") for m in first_seen if "[当前任务状态]" in str(m.get("content") or "")
+            ]
+            state_msgs_2 = [
+                str(m.get("content") or "") for m in second_seen if "[当前任务状态]" in str(m.get("content") or "")
+            ]
+            assert len(state_msgs_1) == 1
+            assert len(state_msgs_2) == 1
+            assert "known_places" in state_msgs_1[0]
+            assert "地狱门（主世界侧）" in state_msgs_1[0]
+            assert "自动冶炼站" in state_msgs_1[0]
+            assert "地狱门（下界侧）(the_nether)" in state_msgs_1[0]
+            assert "建筑@18,64,-12" not in state_msgs_1[0]
+            assert "机器@-4,64,7" not in state_msgs_1[0]
+            assert '"x"' not in state_msgs_1[0]
+            assert '"distance"' not in state_msgs_1[0]
+
+            # 4) 尾部 [脑中闪过]（跳过 msg[0] 系统提示词）精准浮出被前 6 条截断的第 7 条 works 事实，且不重复前 6 条已有规矩
+            flash_msgs = [
+                str(m.get("content") or "") for m in first_seen[1:] if "[脑中闪过]" in str(m.get("content") or "")
+            ]
+            assert len(flash_msgs) == 1
+            assert portal_fact_text in flash_msgs[0]
+            for _, resident_text in resident_facts:
+                assert resident_text not in flash_msgs[0]
+        finally:
             await rig.stop()
     finally:
         await db.close()
