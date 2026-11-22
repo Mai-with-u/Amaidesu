@@ -2,6 +2,12 @@
 
 Amaidesu 是一个 VTuber 直播辅助工具，支持弹幕互动、语音合成、虚拟形象控制等功能。本指南会带你从零走到首次成功运行。
 
+装好之后去哪：
+
+- 只想先跑起来：照第 2 节走完安装与最小配置即可，第 3 节的细节可以以后再回来看
+- 要接弹幕 / 语音 / 游戏等更多能力：看 [3.3 可用组件清单](#33-可用组件清单)找对应组件，按 2.5 节的方式启用
+- 想了解架构或自己写组件：直接跳到 [6. 下一步](#6-下一步)的文档入口
+
 ## 1. 环境要求
 
 - Python 3.12+
@@ -67,7 +73,11 @@ config/
 
 #### LLM 配置（必需）
 
-`config/model.toml` 采用 **provider / model / profile 三层结构**：`[[llm_providers]]` 定义可复用的 API 连接，`[[llm_models]]` 登记模型标识与价格，`[llm_profiles]` 按**用途**（planner / replyer / summary / minecraft / vision / simulator，六成员必填）组合 provider 与模型列表并支持故障切换。
+`config/model.toml` 采用 **provider / model / profile 三层结构**：
+
+- `[[llm_providers]]`：定义可复用的 API 连接
+- `[[llm_models]]`：登记模型标识与价格
+- `[llm_profiles]`：按**用途**组合 provider 与模型列表，支持故障切换；用途为 planner / replyer / summary / minecraft / vision / simulator，六成员必填
 
 ```toml
 # config/model.toml
@@ -97,7 +107,9 @@ temperature = 0.7
 
 #### 启用 Agent（必需）
 
-`config/agents.toml` 控制哪些业务 Agent 启动。首次推荐只开 `streamer`（主播 Agent），等跑通后再加游戏 Agent。LLM profile 用途名由装配期固定（Planner→planner、Replyer→replyer），不作为配置字段。
+`config/agents.toml` 控制哪些业务 Agent 启动。首次推荐只开 `streamer`（主播 Agent），等跑通后再加游戏 Agent。
+
+LLM profile 用途名由装配期固定（Planner→planner、Replyer→replyer），不作为配置字段。
 
 ```toml
 # config/agents.toml
@@ -110,7 +122,11 @@ enabled = ["streamer"]
 # [agents.streamer.proactive] # 主动发言（enabled 默认 true）
 ```
 
-游戏 Agent 是独立顶级配置段，启用即在 `enabled` 列表加名（当前可用：`text_adv` 文字冒险示例，零依赖开箱可玩；`game_2048` 2048 对局示例，Agent 自任棋局宿主；`minecraft` 需 MCP 服务器，Agent 私有 MCP 配置在 `[agents.minecraft.mcp]`，位置即归属，完整用法见 [Minecraft Agent 使用指南](guides/minecraft-agent.md)）：
+游戏 Agent 是独立顶级配置段，启用即在 `enabled` 列表加名。当前可用：
+
+- `text_adv`：文字冒险示例，零依赖开箱可玩
+- `game_2048`：2048 对局示例，Agent 自任棋局宿主
+- `minecraft`：需 MCP 服务器，Agent 私有 MCP 配置在 `[agents.minecraft.mcp]`（位置即归属），完整用法见 [Minecraft Agent 使用指南](guides/minecraft-agent.md)
 
 ```toml
 [agents]
@@ -121,7 +137,11 @@ enabled = ["streamer", "text_adv"]
 
 #### 启用采集器
 
-采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认只启用"控制台输入"；Minecraft 的注意流 `maicraft_attention` 与聊天流 `maicraft_chat` 是 Minecraft Agent 的附属采集器，随 `agents.enabled` 里的 `minecraft` 一同开关，不在这里配置（游戏未运行时空转、无感），零依赖就能对话：
+采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认只启用"控制台输入"，零依赖就能对话。
+
+Minecraft 的注意流 `maicraft_attention` 与聊天流 `maicraft_chat` 是 Minecraft Agent 的附属采集器，随 `agents.enabled` 里的 `minecraft` 一同开关。
+
+它们不在这里配置，游戏未运行时空转、无感：
 
 ```toml
 # config/collectors.toml
@@ -141,7 +161,13 @@ user_nickname = "控制台"
 
 #### 启用渲染输出（可选）
 
-字幕 / 虚拟形象 / OBS 等渲染输出各有装配入口：虚拟形象由 `config/avatar.toml` 的平台名单决定哪家平台接收面捕合成器的逐帧数据与主播的动作，OBS 走 `config/tools.toml` 的提供者开关，字幕走 `config/infra.toml` 的 `[subtitle]` 段；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
+字幕 / 虚拟形象 / OBS 等渲染输出各有装配入口：
+
+- 虚拟形象：`config/avatar.toml` 的平台名单，决定哪家平台接收面捕合成器的逐帧数据与主播的动作
+- OBS：`config/tools.toml` 的提供者开关
+- 字幕：`config/infra.toml` 的 `[subtitle]` 段
+- **TTS 是基础设施**：不在工具池，由 `config/infra.toml` 的 `[tts]` 段独立控制。
+  `enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎，详见 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)
 
 ```toml
 # config/avatar.toml —— 虚拟形象平台启用（名单成员 = 接收面捕合成器的逐帧驱动，不向 LLM 提供工具）
@@ -174,13 +200,20 @@ uv run python main.py --dry
 
 | 配置文件 | 顶层段/键 | 说明 |
 |---------|--------|------|
-| `agents.toml` | `[meta]` / `[agents].enabled` / `[agents.<name>]` | 业务 Agent 启用与子树配置（streamer 子树含 persona/context/proactive/background/command 等） |
+| `agents.toml` | `[meta]` / `[agents].enabled` / `[agents.<name>]` | 业务 Agent 启用与子树配置 |
 | `collectors.toml` | `enabled` + 各采集器同名段 | 采集器名单驱动装配；子段由包内 ConfigSchema 校验 |
-| `tools.toml` | `[tools]` | 提供者开关（`[tools.studio.*]` / `[tools.vision]` / `[tools.mcp]` / `[tools.web.*]`）+ `disabled_tools` + `[tools.tasks]` / `[tools.health]` |
-| `avatar.toml` | `[avatar.platform]` / `[avatar.platform.<名>]` / `[avatar.lipsync]` | 虚拟形象平台（enabled 启用名单 + 各平台成员段直接铺键 + 口型分析共享件调参） |
-| `model.toml` | `[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles.<用途>]` | 三层模型结构；六用途 profile（planner/replyer/summary/minecraft/vision/simulator）必填 |
+| `tools.toml` | `[tools]` | 提供者开关 + `disabled_tools` + 任务与健康管理段 |
+| `avatar.toml` | `[avatar.platform]` / `[avatar.platform.<名>]` / `[avatar.lipsync]` | 虚拟形象平台名单、各平台成员段与口型共享件 |
+| `model.toml` | `[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles.<用途>]` | 三层模型结构；六用途 profile 必填 |
 | `storage.toml` | `[sqlite]` | SQLite 连接（db_path / busy_timeout_ms） |
-| `infra.toml` | `[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[simulator]` / `[events]` / `[agent_supervisor]` / `[interceptors.*]` | 基础设施段集（hot 段：写后即时重载） |
+| `infra.toml` | `[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` 等 | 基础设施段集（hot 段：写后即时重载） |
+
+补充说明：
+
+- `tools.toml` 的提供者开关覆盖 `[tools.studio.*]` / `[tools.vision]` / `[tools.mcp]` / `[tools.web.*]`；另有 `[tools.tasks]` 与 `[tools.health]`
+- `model.toml` 的六用途 profile：planner / replyer / summary / minecraft / vision / simulator
+- `infra.toml` 全段清单：`[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[simulator]` / `[events]` / `[agent_supervisor]` / `[interceptors.*]`
+- `agents.toml` 的 streamer 子树含 persona / context / proactive / background / command 等段
 
 > 字段权威定义在 `src/modules/config/*_schemas.py`；修改后加载管线自动写回补齐默认值；每文件 `[meta].version` 独立递进。
 
@@ -192,7 +225,16 @@ uv run python main.py --dry
 | **业务 Agent（Agent）** | 拥有内部状态与工具的主循环体；订阅事件、决策、调用工具 | `src/agents/` | `[agents]` + `[agents.<name>]` |
 | **工具（Tool）** | 单一能力契约（ToolSpec + BaseToolProvider / as_tool_impl），由 Agent 在决策时按需调用 | `src/modules/tools/` | `tools.toml` 提供者开关与子配置 |
 
-> 渲染输出（字幕 / 虚拟形象 / OBS 等）的装配入口不统一：OBS 等能力以 **Tool Provider** 的形式注册，开启对应开关后工具进入可见集；虚拟形象平台只接收面捕合成器的逐帧数据与 `avatar_act` 的动作，不注册 LLM 工具；字幕由 `infra.toml` 的 `[subtitle]` 段驱动。**TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component/README.md) 与 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
+> 渲染输出（字幕 / 虚拟形象 / OBS 等）的装配入口不统一：
+>
+> - OBS 等能力以 **Tool Provider** 的形式注册，开启对应开关后工具进入可见集
+> - 虚拟形象平台只接收面捕合成器的逐帧数据与 `avatar_act` 的动作，不注册 LLM 工具
+> - 字幕由 `infra.toml` 的 `[subtitle]` 段驱动
+> - **TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配
+>
+> 装配细节：`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，开启后主播每句话自动播出。
+>
+> 详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component/README.md) 与 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
 
 ### 3.3 可用组件清单
 
@@ -216,8 +258,9 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 | 名称 | 所属 Agent | 用途 | 配置 |
 |------|-----------|------|------|
 | `maicraft_attention` | `minecraft` | 游戏注意流：观察 Minecraft 身体遭遇（挨打/死亡/换维度等），分类叙事化后发布 | 连接取 `[agents.minecraft.mcp]`；`events_wait_ms` / `events_retry_interval_ms` |
-| `maicraft_chat` | `minecraft` | 游戏聊天流：把 Minecraft 里其他玩家的聊天与服务器系统消息转给主播（AI 自己的话不收，私聊标出来、主播不念原话） | 同上 |
+| `maicraft_chat` | `minecraft` | 游戏聊天流：把 Minecraft 里其他玩家的聊天与服务器系统消息转给主播 | 同上 |
 
+> `maicraft_chat` 不收 AI 自己说的话；私聊会标出来，主播不念原话。
 
 #### 业务 Agent（`SUPPORTED_AGENTS`）
 
@@ -232,7 +275,13 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 
 #### 工具（按族列举，代表工具名）
 
-工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall`（回忆她说过的台词、场次档案与答应过的事），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
+工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带三个工具，均只对 `streamer` Agent 可见：
+
+- `streamer_reply`：发言出口
+- `rundown_control`：流程单推进（随 rundown 注册项）
+- `memory_recall`：回忆她说过的台词、场次档案与答应过的事
+
+主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
 
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|
@@ -420,6 +469,9 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 
 ### 已知限制
 
-- **TTS 是基础模块**（基础设施，不在工具池内）：在 `config/infra.toml` 的 `[tts]` 段设 `enabled = true` 后，主播每句回复自动合成播出（引擎由 `provider` 选择，默认 `gptsovits` 需本地服务在跑；无本地服务可用 `edge_tts`，仅需网络）。字幕 / 虚拟形象 / OBS 等渲染工具走装配开关：avatar.toml `[avatar.platform].enabled` 名单与 `[tools.studio.obs].enabled` 控制虚拟形象与演播装配，`[subtitle]`（infra 段）驱动字幕基础设施。
+- **TTS 是基础模块**（基础设施，不在工具池内）：在 `config/infra.toml` 的 `[tts]` 段设 `enabled = true` 后，主播每句回复自动合成播出。
+  引擎由 `provider` 选择：默认 `gptsovits` 需本地服务在跑；无本地服务可用 `edge_tts`，仅需网络。
+- **字幕 / 虚拟形象 / OBS 等渲染工具**走装配开关：avatar.toml `[avatar.platform].enabled` 名单与 `[tools.studio.obs].enabled` 控制虚拟形象与演播装配。
+  字幕由 `[subtitle]`（infra 段）驱动。
 - **控制台交互**已可用；弹幕采集、屏幕识别、语音转写需对应第三方凭据（id_code / appid / VLM API Key 等）。
 - 完整字段定义在 `src/modules/config/*_schemas.py`；本指南只覆盖"首次跑通"的最小集。

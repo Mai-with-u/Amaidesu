@@ -6,14 +6,19 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 - 只有主播 Agent 自我驱动；游戏 Agent 命令驱动（类 Code Agent）——收到命令启动任务循环，完成即停、空闲零消耗
 - 因有自身状态与任务内自主决策，游戏 Agent 仍是 Agent 而非工具（三分判据见 [v2-architecture.md](v2-architecture.md)）
-- 游戏 Agent 与主播有两种交互形态：**委派型**（本文——主播交代目标，游戏侧自带 LLM 拆解）与**遥控型**（主播直接按键、选项，游戏侧零 LLM，如 text_adv、game_2048）。主播按各工具面的使用说明拼装【当前游戏的玩法】，两种形态的定案见 [ADR-043：游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
+- 游戏 Agent 与主播有两种交互形态：**委派型**（本文——主播交代目标，游戏侧自带 LLM 拆解）与**遥控型**（主播直接按键、选项，游戏侧零 LLM，如 text_adv、game_2048）
+- 主播按各工具面的使用说明拼装【当前游戏的玩法】；两种形态的定案见 [ADR-043：游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
 
 ## 核心意象
 
 **MinecraftAgent = 一个用 MCP 工具玩 Minecraft 的普通 ReAct Agent。**
 
 - 系统提示词 + 工具列表 = 全部"编程"，不发明任何特殊协议
-- 主播 Agent 是它的用户：发指令（跨 Agent 派活走框架委派 `framework_delegate`，中途插话走递话 `framework_prompt`）/读工作文档（`minecraft_get_work_log`）/看一眼游戏（`minecraft_glance`）/收上报（`game.report`）
+- 主播 Agent 是它的用户：
+  - 发指令：跨 Agent 派活走框架委派 `framework_delegate`，中途插话走递话 `framework_prompt`
+  - 读工作文档：`minecraft_get_work_log`
+  - 看一眼游戏：`minecraft_glance`
+  - 收上报：`game.report`
 - 需要角色动手的目标在 Mod 里后台推进；宿主用 `events` 长轮询盯着本 Agent 下达的目标，在它结束、提问或被暂停时带着结果唤醒任务，LLM 不用推理步数轮询
 - LLM 可一次返回多个 tool_calls（批量请求 → 串行执行 → 批量作为观察返回，标准 function calling 循环）
 
@@ -55,27 +60,56 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 ### 后台目标跟踪（events → 唤醒）
 
-- **登记**：`maicraft_execute` 返回没结束的目标（`state` 为 running / awaiting_answer / paused）即开始跟踪；当场完成的目标（只改记忆、只读分析）结果已在回复里，不跟踪。模型用 `maicraft_goal(resume)` 解除暂停的旧目标也纳入跟踪
+- **登记**：`maicraft_execute` 返回没结束的目标（`state` 为 running / awaiting_answer / paused）即开始跟踪
+  - 当场完成的目标（只改记忆、只读分析）结果已在回复里，不跟踪
+  - 模型用 `maicraft_goal(resume)` 解除暂停的旧目标也纳入跟踪
 - **读事件**：`GoalWatch` 带着游标长轮询 `events`（`events_wait_ms`，默认 25 秒），事件流只给宿主读、不进模型工具列表。首次读取只建立游标，接手前的事件不补发
-- **事实核实**：目标的 asked / paused / resumed / finished 事件只说明"变了"，宿主再用 `goal(get)` 取它此刻的样子（结果、变化、问题）交给任务；finished 事件另带的 `self_brief`（结束那一刻角色在哪、血、饱食、手上拿着什么、开着什么界面）查询里没有，随查询结果一起交过去；结束的目标不再跟踪
-- **唤醒**：结束 → 注入"目标 N 结束了"、结束时的自身摘要与结果；Mod 把大块证据折进 `result.folded` 时，通知里说明照抄 `path` 用 `maicraft_goal(get, goal_id, path)` 读回；提问 → 注入问题、选项与回答方式；被暂停 → 注入"身体没在做它"。只有这些需要模型处理的变化才唤醒，恢复推进静默记账
+- **事实核实**：目标的 asked / paused / resumed / finished 事件只说明"变了"，宿主再用 `goal(get)` 取它此刻的样子（结果、变化、问题）交给任务
+  - finished 事件另带的 `self_brief`（结束那一刻角色在哪、血、饱食、手上拿着什么、开着什么界面）查询里没有，随查询结果一起交过去
+  - 结束的目标不再跟踪
+- **唤醒**：只有这些需要模型处理的变化才唤醒，恢复推进静默记账
+  - 结束 → 注入"目标 N 结束了"、结束时的自身摘要与结果；Mod 把大块证据折进 `result.folded` 时，通知里说明照抄 `path` 用 `maicraft_goal(get, goal_id, path)` 读回
+  - 提问 → 注入问题、选项与回答方式
+  - 被暂停 → 注入"身体没在做它"
 - **换世界**：事件流编号变了（换世界、重进世界、Mod 重启）时旧游标作废，逐个重新查在跟踪的目标；查不到或编号已是别的能力的目标，按"不在了"注入通知，不让任务挂着等不来的结果
-- **认存档**：MaiCraft 在每页事件与 `observe(self)` 里报 `world{id, name}`（不在世界里为 null，旧版 Mod 不报这个键）。每读一页交给 `WorldIdentity`，读自己时顺手也喂；三态：旧版 Mod（不分存档，与以前一样）、不明、认出。"换存档"只认上一个认出的编号被另一个取代，回主菜单再进同一存档不算，不看事件流编号。认出后：工具面 `current_save()` 报给主播（主播每个决策回合拉一次），游戏事件载荷填上存档；待办、工作笔记与近期上报按存档分开，换存档收起旧的、换上新的（新存档是空的），回老存档还原，切换只经 `MinecraftAgentState.switch_world`；换存档时手上有任务就告诉它任务是在旧存档里接的，并发一条换存档里程碑。进程启动后第一次认出只记下。生物名册按世界编号分，第一次按新编号读前把旧编号名下的名册整份搬过来（新编号已有就不搬）。决策依据见 [ADR-069：游戏里的记忆按存档分开](../decisions/069-game-memory-per-save.md)
-- **身体事件**：与目标无关的事件（生存需求的临时任务开始与结束、处理不了的需求、角色死亡）进本批身体上下文；处理不了的需求与角色死亡同时注入任务并发 `game.attention_required`；处理不了的需求的说明（饿了没吃上会逐个列出各来源的原因，常有几千字）与对话历史或待读队列里一字不差的那条重复时，只注入一句指回前面那条，前面那条已被历史整理换成摘要时才完整再给
-- **Mod 挂出的决策**：死亡恢复这类决策不是谁下达的目标（`goal_id` 是负数）。它提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕），模型按问题里给的选项用 `maicraft_goal(answer)` 回答；不进跟踪名单、不记任务登记，执行结果事件 `death_recovery_applied` 不转给主播
+- **认存档**：MaiCraft 在每页事件与 `observe(self)` 里报 `world{id, name}`（不在世界里为 null，旧版 Mod 不报这个键）
+  - 每读一页交给 `WorldIdentity`，读自己时顺手也喂；三态：旧版 Mod（不分存档，与以前一样）、不明、认出
+  - 判定："换存档"只认上一个认出的编号被另一个取代；回主菜单再进同一存档不算，不看事件流编号
+  - 认出后，工具面 `current_save()` 报给主播（主播每个决策回合拉一次），游戏事件载荷填上存档
+  - 认出后，待办、工作笔记与近期上报按存档分开：换存档收起旧的、换上新的（新存档是空的），回老存档还原；切换只经 `MinecraftAgentState.switch_world`
+  - 换存档时手上有任务就告诉它任务是在旧存档里接的，并发一条换存档里程碑；进程启动后第一次认出只记下
+  - 生物名册按世界编号分，第一次按新编号读前把旧编号名下的名册整份搬过来（新编号已有就不搬）
+  - 决策依据见 [ADR-069：游戏里的记忆按存档分开](../decisions/069-game-memory-per-save.md)
+- **身体事件**：与目标无关的事件（生存需求的临时任务开始与结束、处理不了的需求、角色死亡）进本批身体上下文
+  - 处理不了的需求与角色死亡同时注入任务并发 `game.attention_required`
+  - 处理不了的需求的说明（饿了没吃上会逐个列出各来源的原因，常有几千字）与对话历史或待读队列里一字不差的那条重复时，只注入一句指回前面那条
+  - 前面那条已被历史整理换成摘要时才完整再给
+- **Mod 挂出的决策**：死亡恢复这类决策不是谁下达的目标（`goal_id` 是负数）
+  - 它提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕）
+  - 模型按问题里给的选项用 `maicraft_goal(answer)` 回答；不进跟踪名单、不记任务登记
+  - 执行结果事件 `death_recovery_applied` 不转给主播
 - **任务登记镜像**：目标同时记进通用任务登记（`maicraft-goal-<id>`，发起方 minecraft），主播的任务查询看得到；任务登记的长时间无进展告警回到 Agent 注入提醒，成败本身以事件流为准
 
 ### 运营干预入口（递话 / 硬取消 / 断连恢复）
 
-委派之外，minecraft 另有两个干预入口与一条自愈路径（入口设计见 [ADR-034：Agent 干预原语](../decisions/034-agent-intervention-primitives.md)，escalation 上报的状态语义见 [ADR-035：escalation 状态语义与断连恢复](../decisions/035-escalation-ledger-semantics.md)）：
+委派之外，minecraft 另有两个干预入口与一条自愈路径：
 
-- **递话 `receive_prompt`**：纯文本留言（主播经 `framework_prompt` 工具、运营经 REST），不派新任务、不进任务登记——文本入消息队列 + 唤醒；入队时按来源加 `[运营原话]` / `[主播补充]` 标签，冲突时原话与游戏结果优先于转述。
-- **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 状态记录写 `cancelled` + 注入"任务已被取消"通知，LLM 下一步自行停手（还在跑的游戏目标由它用 `maicraft_goal(cancel)` 取消）。软取消：不打断当前工具调用。
+- **递话 `receive_prompt`**：纯文本留言（主播经 `framework_prompt` 工具、运营经 REST），不派新任务、不进任务登记——文本入消息队列 + 唤醒
+  - 入队时按来源加 `[运营原话]` / `[主播补充]` 标签，冲突时原话与游戏结果优先于转述
+- **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 状态记录写 `cancelled` + 注入"任务已被取消"通知，LLM 下一步自行停手
+  - 还在跑的游戏目标由它用 `maicraft_goal(cancel)` 取消
+  - 软取消：不打断当前工具调用
 - **MCP 断连恢复续跑**：私有 MCP 恢复循环装配成功后注入"连接已恢复"通知 + 解锁挂起态 + 唤醒；能力清单与事件游标按新连接重新读取。
+
+入口设计见 [ADR-034：Agent 干预原语](../decisions/034-agent-intervention-primitives.md)。
+escalation 上报的状态语义与断连恢复见 [ADR-035](../decisions/035-escalation-ledger-semantics.md)。
 
 ## 工具契约
 
-**注册名 = `<Provider名字>_<工具名字>`**，分隔符 `_`（满足 LLM function calling 工具名字符集约束）。Provider 名全局唯一、用全名（`minecraft` 禁缩写）；工具名 Provider 内唯一、语义化。前缀由模块声明（provider 值）、ToolRegistry 一处拼接——工具名里不手写前缀。
+**注册名 = `<Provider名字>_<工具名字>`**，分隔符 `_`（满足 LLM function calling 工具名字符集约束）。
+
+- Provider 名全局唯一、用全名（`minecraft` 禁缩写）；工具名 Provider 内唯一、语义化
+- 前缀由模块声明（provider 值）、ToolRegistry 一处拼接——工具名里不手写前缀
 
 **决策工具列表**（LLM 可见，注册名）：
 
@@ -84,14 +118,31 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | `minecraft_todo` | 待办文档（read/write 全量读写，无 id）。任务分解与推进由 LLM 自主决策 |
 | `minecraft_notebook` | 工作笔记（read/write）。对话历史会整理、笔记不会——这一场的重要发现写这里；按存档分开，进程重启清空。长期要记的地点用 MaiCraft 的 `remember` 记成命名地点（按存档存在 Mod 的世界记忆里） |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
-| `minecraft_skill` | 按名读技能正文（装配了技能库时才有）。技能目录随系统提示词给出，由本地直播策略与 MaiCraft 的 `resources/list` 合并而成；玩法技能随 Mod 发布，目录里标着“来自 MaiCraft”，正文按 `skill://` 地址经 `resources/read` 读；MaiCraft 没连上时远端技能消失，本地策略照常可用 |
-| `minecraft_drawing` | 建筑图纸委派（异步内部工具）：主模型调它委派画图——`purpose` 必填（要什么样的房子）、`target` 可选（参照建筑/地点）。工具当场返回任务编号即返回，不等画完；后台在 agent 事件循环里生成：读一次现场（指了参照时经 design(read_site)）→ 拉 Mod 知识目录与 building 文档 → 用 `minecraft_builder` 档生成 drawing JSON → 发 Mod design create 校验，被拒把报错拼回去重画（重画上限按 `[agents.minecraft.drawing_builder]`），成功/失败都以 [系统] 通知注入唤醒主模型，模型按通知里的编号 `build(design_id=编号)` 落地。同一时间最多一张图纸，第二个调用当场拒绝；委派收手（release）时取消生成、结果静默丢弃。交付门禁不管图纸——build 引用还没就绪的图纸会得到 Mod 的明确错误观察，由模型按错误处置 |
-| `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_goal` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表；截桌面的 `vision_look_at_screen` 也不交给游戏 Agent 的模型（看游戏画面用 `observe(what=picture)`）。画面的文字那一块当观察进历史，图在模型能看图时只挂在下一次请求尾部，不能看图时经视觉模型转成文字接在观察后面；一个任务里看几次、两次隔多久按 `[agents.minecraft.picture]` 限，超了不调 Mod |
+| `minecraft_skill` | 按名读技能正文（装配了技能库时才有），细节见表格下方补充 |
+| `minecraft_drawing` | 建筑图纸委派（异步内部工具）：主模型调它委派画图，工具当场返回任务编号即返回，不等画完；同一时间最多一张图纸，第二个调用当场拒绝 |
+| `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_goal` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写 |
+
+补充说明：
+
+- **技能目录（`minecraft_skill`）**：随系统提示词给出，由本地直播策略与 MaiCraft 的 `resources/list` 合并而成
+- 玩法技能随 Mod 发布，目录里标着“来自 MaiCraft”，正文按 `skill://` 地址经 `resources/read` 读；MaiCraft 没连上时远端技能消失，本地策略照常可用
+- **图纸生成（`minecraft_drawing`）**：`purpose` 必填（要什么样的房子）、`target` 可选（参照建筑/地点）
+- 图纸后台在 agent 事件循环里生成：读一次现场（指了参照时经 design(read_site)）→ 拉 Mod 知识目录与 building 文档 → 用 `minecraft_builder` 档生成 drawing JSON
+- 生成后发 Mod design create 校验，被拒把报错拼回去重画（重画上限按 `[agents.minecraft.drawing_builder]`）
+- 成功/失败都以 [系统] 通知注入唤醒主模型，模型按通知里的编号 `build(design_id=编号)` 落地
+- 委派收手（release）时取消生成、结果静默丢弃
+- 交付门禁不管图纸——build 引用还没就绪的图纸会得到 Mod 的明确错误观察，由模型按错误处置
+- `maicraft_events` 只给宿主读，不进 LLM 工具列表；截桌面的 `vision_look_at_screen` 也不交给游戏 Agent 的模型（看游戏画面用 `observe(what=picture)`）
+- 画面的文字那一块当观察进历史；图在模型能看图时只挂在下一次请求尾部，不能看图时经视觉模型转成文字接在观察后面
+- 一个任务里看几次、两次隔多久按 `[agents.minecraft.picture]` 限，超了不调 Mod
 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
 - `framework_delegate`：跨 Agent 委派通道——把工作交给另一 Agent（指令只当自然语言，不给步骤）；BaseAgent 默认拒收，minecraft 实现接收入口（指令入队带任务号 + 唤醒）
 - `minecraft_get_work_log`：工作文档读服务——只读返回眼下这个存档的 `{todo, notebook, recent_reports}`；查任务进度用 `framework_task_status`
-- `minecraft_glance`：主播看一眼游戏——读一次 `observe(self)`、`observe(scene)` 与 `observe(world_memory)`，只返回直播叙事用得上的事实（身体状态、背包物品与数量、身边 24 格内的生物与设施、时段天气、记住的地点名——只列几个、不带坐标）与身体手头的工作（待办、在跑的目标）。原始 `maicraft_*` 工具只对玩家自己可见
+- `minecraft_glance`：主播看一眼游戏——读一次 `observe(self)`、`observe(scene)` 与 `observe(world_memory)`，只返回直播叙事用得上的事实与身体手头的工作
+  - 叙事事实：身体状态、背包物品与数量、身边 24 格内的生物与设施、时段天气、记住的地点名（只列几个、不带坐标）
+  - 身体手头的工作：待办、在跑的目标
+  - 原始 `maicraft_*` 工具只对玩家自己可见
 
 ## 事件契约（确定性系统事件，无 LLM 自觉汇报）
 
@@ -105,9 +156,11 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 ## 对话管理与压缩
 
-- 消息累积：任务内多轮，经 `LLMManager.generate(messages, profile=..., tools=...)`（OpenAI 格式消息）；工具结果以 `tool` role + `tool_call_id` 关联作为观察返回，内容就是 MaiCraft 原样的 JSON 回复
+- 消息累积：任务内多轮，经 `LLMManager.generate(messages, profile=..., tools=...)`（OpenAI 格式消息）
+- 工具结果以 `tool` role + `tool_call_id` 关联作为观察返回，内容就是 MaiCraft 原样的 JSON 回复
 - 同一逻辑任务跨后台等待沿用历史。整理分三道，都不让角色站着等（关掉 `active_fold` 时只剩第二道，超预算同步等摘要）：
-  1. **后台折叠**：新追加的 user / tool 消息开头写编号 `[m0012]`；历史过了折叠线，另发一次与行动步同前缀、同工具声明的整理请求，请模型用 `minecraft_context_fold` 把已经用完的区间折成摘要，写好后在下一步开始前按编号套上。系统说明、任务事实、摘要段、开任务的主播原话与最近几组不能折；整理请求里调的游戏动作一律丢弃
+  1. **后台折叠**：新追加的 user / tool 消息开头写编号 `[m0012]`；历史过了折叠线，另发一次与行动步同前缀、同工具声明的整理请求，请模型用 `minecraft_context_fold` 把已经用完的区间折成摘要，写好后在下一步开始前按编号套上
+     - 系统说明、任务事实、摘要段、开任务的主播原话与最近几组不能折；整理请求里调的游戏动作一律丢弃
   2. **集中整理**：历史过了提前整理线，在后台把旧调用组压成一段摘要（每步行动前或让出等待时都可发起，与后台折叠互斥）。原始指令、待办、笔记、在跑的目标与最近结束的目标独立于摘要保留；最新调用组保持可读
   3. **收起**：到了预算线还没有现成摘要，把最老的大条记录换成一行"原文已收起"的占位，不调模型、瞬间降到回落线；收起后仍超预算才同步整理
 - 被折叠或收起的原文进块库，`minecraft_context_recall` 按块号读整块、或按关键词只取命中的片段，结果作为一次工具回执出现在尾部，不还原回历史中段；开新任务时块库清空
@@ -155,5 +208,6 @@ max_validation_retries = 3         # 图纸被 Mod 校验拒绝后的重画上�
 - [事件系统](event-system.md) — game.* 事件语义单一事实源
 - [数据流规则](../conventions/data-flow.md) — 事件流约束
 - [组件开发指南](../guides/component/README.md) — 游戏 Agent 范式
+- [使用指南](../guides/minecraft-agent.md) — 前置清单、配置与排障操作
 - [ADR-034：Agent 干预原语（递话/硬取消/运营直派）](../decisions/034-agent-intervention-primitives.md)
 - [ADR-035：escalation 状态语义与断连恢复续跑](../decisions/035-escalation-ledger-semantics.md)
