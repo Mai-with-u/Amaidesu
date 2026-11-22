@@ -1055,7 +1055,12 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
     """
     if not table_exists(conn, "game_players"):
         return False
-    row = conn.execute("SELECT game, uuid, name, names FROM game_players WHERE id = ?", (player_id,)).fetchone()
+    has_aliases = column_exists(conn, "game_players", "aliases")
+    select_cols = "game, uuid, name, names, aliases" if has_aliases else "game, uuid, name, names"
+    row = conn.execute(
+        f"SELECT {select_cols} FROM game_players WHERE id = ?",  # noqa: S608 常量列名
+        (player_id,),
+    ).fetchone()
     if row is None:
         return False
     if secret_key is not None:
@@ -1070,7 +1075,20 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
     except (TypeError, ValueError) as exc:
         logger.warning(f"玩家 {player_id} 的曾用名不是合法 JSON，只替换现在的名字：{exc}")
         former = []
-    names = {str(row["name"] or "").strip(), *(str(name).strip() for name in former if isinstance(name, str))}
+    aliases: List[object] = []
+    if has_aliases:
+        try:
+            parsed_aliases = json.loads(row["aliases"] or "[]")
+            if isinstance(parsed_aliases, list):
+                aliases = parsed_aliases
+        except (TypeError, ValueError) as exc:
+            logger.warning(f"玩家 {player_id} 的常用称呼不是合法 JSON，忽略常用称呼擦除：{exc}")
+    # 删玩家时连同他的常用称呼一起替换为代称，防止旧台词、档案或工作文档残留称呼
+    names = {
+        str(row["name"] or "").strip(),
+        *(str(name).strip() for name in former if isinstance(name, str)),
+        *(str(alias).strip() for alias in aliases if isinstance(alias, str)),
+    }
     session_ids = _player_sessions(conn, player_id)
     # 必须在删 game_players 级联删掉 game_chat 之前删掉本人游戏公屏作证的社交事实（evidence_game_chat_id 为 SET NULL）
     if table_exists(conn, "game_social_facts") and table_exists(conn, "game_chat"):

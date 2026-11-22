@@ -495,3 +495,45 @@ async def test_deleting_player_and_viewer_scrubs_social_facts_work_docs_and_chec
     assert doc_after_viewer.todos[1] == {"content": "替一位观众立路牌", "status": "pending"}
     corrs_after_viewer = await store.memory_corrections.list_by_session(live_session_id=session)
     assert corrs_after_viewer[0].summary == "运营提醒：一位玩家和一位观众刚换了基地"
+
+
+async def test_deleting_player_also_scrubs_aliases(wired: Tuple[SQLiteDatabase, PrivacyService]) -> None:
+    """删玩家时连同他的常用称呼一起替换为代称，不在台词、游戏公屏或工作文档里残留。"""
+    store, privacy = wired
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    alpha = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-alpha-del", name="AlphaPlayer", live_session_id=session, at_ms=1_010
+    )
+    await store.game_players.set_aliases(player_id=alpha.id, aliases=["小阿尔"])
+    await store.game_players.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction="streamer",
+        content="小阿尔我来帮你搬箱子",
+        at_ms=1_020,
+    )
+    speech_id = await store.chat.insert_live_chat(
+        live_session_id=session,
+        timestamp_ms=1_030,
+        sender_role="assistant",
+        content="刚才小阿尔给了我面包",
+        message_type="speech",
+        reply_player_id=alpha.id,
+    )
+    await store.game_work_docs.save_work_docs(
+        game="minecraft",
+        save_id="w1",
+        notebook="记得帮小阿尔修桥",
+        todos=[{"content": "给小阿尔送木头", "status": "pending"}],
+    )
+
+    assert await privacy.delete_player(player_id=alpha.id) is True
+    with store.manager.transaction() as conn:
+        chat_row = conn.execute("SELECT content FROM game_chat WHERE direction='streamer'").fetchone()
+        speech_row = conn.execute("SELECT content FROM live_chat WHERE id=?", (speech_id,)).fetchone()
+    assert chat_row["content"] == "一位玩家我来帮你搬箱子"
+    assert speech_row["content"] == "刚才一位玩家给了我面包"
+    doc = await store.game_work_docs.get_work_docs(game="minecraft", save_id="w1")
+    assert doc is not None
+    assert doc.notebook == "记得帮一位玩家修桥"
+    assert doc.todos == [{"content": "给一位玩家送木头", "status": "pending"}]

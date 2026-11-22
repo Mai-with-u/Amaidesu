@@ -26,6 +26,8 @@ from src.modules.storage.models.game_players import (
     GAME_CHAT_PLAYER,
     INTERACTION_GREET,
     INTERACTION_KINDS,
+    MAX_PLAYER_ALIAS_CHARS,
+    MAX_PLAYER_ALIASES,
     GameChatDirection,
     GameChatLine,
     GamePlayer,
@@ -35,6 +37,7 @@ from src.modules.storage.models.game_players import (
     PlayerSave,
     PlayerStatement,
     ViewerPlayerLink,
+    normalize_player_aliases,
 )
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.memory_review import MAX_REVIEW_TITLE_CHARS, MemoryReviewError, record_edit
@@ -42,7 +45,7 @@ from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS
 from src.modules.types.game_save import OnlineMode, online_mode_of
 
 _PLAYER_COLUMNS = (
-    "id, game, uuid, name, names, saves, first_session_id, first_seen_ms, last_session_id, last_seen_ms,"
+    "id, game, uuid, name, names, aliases, saves, first_session_id, first_seen_ms, last_session_id, last_seen_ms,"
     " forget_requested_at_ms"
 )
 _INTERACTION_COLUMNS = "id, player_id, live_session_id, save_id, save_name, kind, fact, at_ms"
@@ -63,7 +66,12 @@ def _json_list(raw: Any) -> List[Any]:
 
 
 def _player(row: Any) -> GamePlayer:
+    current_name = str(row["name"])
     names = [str(name) for name in _json_list(row["names"]) if str(name)]
+    aliases = normalize_player_aliases(
+        [str(alias) for alias in _json_list(row["aliases"]) if str(alias)],
+        display_name=current_name,
+    )
     # 早先记下的存档没有账号验证一项：按 unknown 读
     saves = [
         PlayerSave(
@@ -78,8 +86,9 @@ def _player(row: Any) -> GamePlayer:
         id=int(row["id"]),
         game=str(row["game"]),
         uuid=str(row["uuid"]),
-        name=str(row["name"]),
+        name=current_name,
         names=names,
+        aliases=aliases,
         saves=saves,
         first_session_id=row["first_session_id"],
         first_seen_ms=int(row["first_seen_ms"]),
@@ -298,6 +307,44 @@ class GamePlayerRepo(BaseRepo):
                 return [_player(row) for row in rows]
 
         return await self._run_in_executor(_exec)
+
+    async def set_aliases(self, *, player_id: int, aliases: Sequence[str]) -> GamePlayer:
+        """运营者手动更新一位玩家的纯游戏侧常用称呼（不涉及任何观众关联，严禁向 LLM 工具暴露）。
+
+        写入前清洗：去首尾与多余空白、保序去重、忽略空串与与当前名字完全相同的项；
+        超出条数上限或单条长度上限时抛 ``MemoryReviewError("invalid", ...)``，玩家不存在抛 ``not_found``。
+        """
+
+        def _exec() -> GamePlayer:
+            with self._manager.transaction(immediate=True) as conn:
+                row = conn.execute(
+                    f"SELECT {_PLAYER_COLUMNS} FROM game_players WHERE id=?",  # noqa: S608 常量列清单
+                    (int(player_id),),
+                ).fetchone()
+                if row is None:
+                    raise MemoryReviewError("not_found", f"玩家不存在: #{player_id}")
+                current_name = str(row["name"])
+                cleaned = normalize_player_aliases(aliases, display_name=current_name)
+                if len(cleaned) > MAX_PLAYER_ALIASES:
+                    raise MemoryReviewError("invalid", f"常用称呼至多 {MAX_PLAYER_ALIASES} 个")
+                for item in cleaned:
+                    if len(item) > MAX_PLAYER_ALIAS_CHARS:
+                        raise MemoryReviewError("invalid", f"单个常用称呼至多 {MAX_PLAYER_ALIAS_CHARS} 字")
+                conn.execute(
+                    "UPDATE game_players SET aliases=? WHERE id=?",
+                    (json.dumps(cleaned, ensure_ascii=False), int(player_id)),
+                )
+                updated = conn.execute(
+                    f"SELECT {_PLAYER_COLUMNS} FROM game_players WHERE id=?",  # noqa: S608 常量列清单
+                    (int(player_id),),
+                ).fetchone()
+                return _player(updated)
+
+        return await self._run_in_executor(_exec)
+
+    async def update_aliases(self, *, player_id: int, aliases: Sequence[str]) -> GamePlayer:
+        """``set_aliases`` 的语义别名，供运营者手动维护玩家常用称呼。"""
+        return await self.set_aliases(player_id=player_id, aliases=aliases)
 
     async def record_greeting(
         self,

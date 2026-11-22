@@ -17,7 +17,7 @@ UUID 在不记录名单里的玩家（被运营者删过、或连同观众一起
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Optional, Sequence
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
@@ -28,6 +28,9 @@ from src.modules.storage.models.game_players import (
     GAME_CHAT_PLAYER,
     GAME_CHAT_STREAMER,
     INTERACTION_GREET,
+    GamePlayer,
+    format_player_display,
+    normalize_player_aliases,
 )
 from src.modules.storage.repos.game_players import GamePlayerRepo
 
@@ -212,6 +215,14 @@ class GamePlayerLedger:
             logger.warning(f"玩家游戏公屏消息的隐私处理失败，按正常处理: {exc}", exc=exc)
             return "normal"
 
+    async def update_aliases(self, *, player_id: int, aliases: Sequence[str]) -> GamePlayer:
+        """运营者手动更新一位玩家的纯游戏侧常用称呼（经仓储做清洗校验，严禁向 LLM 工具暴露）。"""
+        return await self.player_repo.set_aliases(player_id=player_id, aliases=aliases)
+
+    async def set_aliases(self, *, player_id: int, aliases: Sequence[str]) -> GamePlayer:
+        """运营者手动更新一位玩家的纯游戏侧常用称呼（同 ``update_aliases``）。"""
+        return await self.player_repo.set_aliases(player_id=player_id, aliases=aliases)
+
     async def _forgotten(self, game: str, uuid: str) -> bool:
         """这位玩家是否在不记录名单里；查不了时按没在处理（只是少一道拦截，落库照常）。"""
         if self._privacy is None:
@@ -223,4 +234,4 @@ class GamePlayerLedger:
             return False
 
 
-__all__ = ["GamePlayerLedger"]
+__all__ = ["GamePlayerLedger", "format_player_display", "normalize_player_aliases"]

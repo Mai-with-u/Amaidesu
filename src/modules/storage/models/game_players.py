@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +25,8 @@ __all__ = [
     "INTERACTION_KINDS",
     "INTERACTION_SPAR",
     "INTERACTION_TOGETHER",
+    "MAX_PLAYER_ALIASES",
+    "MAX_PLAYER_ALIAS_CHARS",
     "GameChatDirection",
     "GameChatLine",
     "GamePlayer",
@@ -35,7 +37,39 @@ __all__ = [
     "PlayerSave",
     "PlayerStatement",
     "ViewerPlayerLink",
+    "format_player_display",
+    "normalize_player_aliases",
 ]
+
+# 运营者维护的玩家常用称呼上限：限制条目数与单条长度，防止误粘贴长段文本污染提示词
+MAX_PLAYER_ALIASES = 8
+MAX_PLAYER_ALIAS_CHARS = 24
+
+
+def normalize_player_aliases(aliases: Sequence[str], *, display_name: str = "") -> List[str]:
+    """清洗玩家常用称呼列表：去首尾与多余空白、保序去重、忽略空串与与 ``display_name`` 完全相同的项。"""
+    base = " ".join((display_name or "").split())
+    result: List[str] = []
+    seen: set[str] = set()
+    for raw in aliases:
+        cleaned = " ".join(str(raw or "").split())
+        if not cleaned or (base and cleaned == base) or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
+
+
+def format_player_display(name: str, aliases: Sequence[str] = ()) -> str:
+    """统一格式化玩家显示名：无有效常用称呼返回现名，有则返回 ``Name（常叫：Alias1、Alias2）``。"""
+    base = " ".join((name or "").split())
+    if not base:
+        return ""
+    cleaned = normalize_player_aliases(aliases, display_name=base)
+    if not cleaned:
+        return base
+    return f"{base}（常叫：{'、'.join(cleaned)}）"
+
 
 # 和她的互动种类：打招呼（冲她蹲起挥手、游戏公屏点她名说话或她回应了他，按场合并计数）、送东西
 # （朝她扔东西落在她身边）、切磋（谁赢、几局）、一起做的事（委派任务点名了这位玩家）、帮过忙
@@ -77,6 +111,10 @@ class GamePlayer(BaseModel):
     uuid: str = Field(..., description="游戏给这个账号的 UUID")
     name: str = Field(..., description="最近一次见到时的名字")
     names: List[str] = Field(default_factory=list, description="见过的名字，按第一次见到的先后（含当前名字）")
+    aliases: List[str] = Field(
+        default_factory=list,
+        description="运营者手动维护的纯游戏侧常用称呼（与观众对号表彻底无关）",
+    )
     saves: List[PlayerSave] = Field(default_factory=list, description="见过他的存档，按第一次见到的先后")
     first_session_id: Optional[int] = Field(default=None, description="第一次见到他的场次；场次被删时为空")
     first_seen_ms: int = Field(..., description="第一次见到的时刻")
@@ -89,6 +127,14 @@ class GamePlayer(BaseModel):
     def former_names(self) -> List[str]:
         """以前用过、和现在不同的名字（卡片写"以前叫某某"）。"""
         return [name for name in self.names if name != self.name]
+
+    def effective_aliases(self) -> List[str]:
+        """清洗后的有效常用称呼（去空白、去重、保序、忽略与当前名字完全相同的项）。"""
+        return normalize_player_aliases(self.aliases, display_name=self.name)
+
+    def display_label(self) -> str:
+        """带常用称呼锚定的统一展示名：无别名返回现名，有则返回 ``Name（常叫：Alias1、Alias2）``。"""
+        return format_player_display(self.name, self.aliases)
 
 
 class PlayerInteraction(BaseModel):
