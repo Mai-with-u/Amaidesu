@@ -21,6 +21,8 @@ from src.agents.minecraft.glance import (
     glance_worth_seeing,
     nearby_player_names,
     nearest_places,
+    online_player_names,
+    visible_nearby_player_names,
 )
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.agents.minecraft.tools import STREAMER_GUIDE, build_notebook_spec
@@ -954,21 +956,26 @@ def test_glance_self_distinguishes_powered_gear_from_durability_gear() -> None:
 
 
 async def test_glance_scene_and_nearby_player_names_merge_online_players_and_keep_empty_list() -> None:
-    """全服在线玩家感知与脱敏覆盖：合并视野内玩家实体与视野外在线玩家名单（去重保序），无其他玩家时保留空列表区分读取失败。"""
+    """全服在线名单与真实身边玩家彻底解耦：online_player_names 合并视野内外供脱敏，visible_nearby_player_names 仅认近身实体。"""
     populated = MaicraftReply(
         ok=True,
         data={
             "entities": [
-                {"type": "minecraft:player", "name": "Steve", "distance": 6},
-                {"type": "minecraft:player", "name": "Alex", "distance": 45},
+                {"type": "minecraft:player", "name": "PlayerA", "distance": 6},
+                {"type": "minecraft:player", "name": "PlayerB", "distance": 45},
+                {"type": "minecraft:player", "name": "PlayerLegacy"},
                 {"type": "minecraft:cow", "name": "奶牛", "distance": 4},
             ],
-            "online_players_not_nearby": ["Alex", "玩家甲", "  ", "Steve"],
+            "online_players_not_nearby": ["PlayerB", "PlayerC", "  ", "PlayerA"],
         },
     )
     view = glance_scene(populated)
-    assert view["online_players"] == ["Steve", "Alex", "玩家甲"]
-    assert nearby_player_names(populated) == ("Steve", "Alex", "玩家甲")
+    assert view["online_players"] == ["PlayerA", "PlayerB", "PlayerLegacy", "PlayerC"]
+    # 脱敏用全服在线名单覆盖视野内实体与视野外在线名单
+    assert online_player_names(populated) == ("PlayerA", "PlayerB", "PlayerLegacy", "PlayerC")
+    # 真实身边玩家名单仅含近身（≤24格或旧版无距离）的实体，绝不混入视野外在线名单或超距实体
+    assert visible_nearby_player_names(populated) == ("PlayerA", "PlayerLegacy")
+    assert nearby_player_names(populated) == ("PlayerA", "PlayerLegacy")
 
     # 服内除角色自己外没有其他玩家在线：online_players 必须保留为空列表，不省略键
     alone_view = glance_scene(MaicraftReply(ok=True, data={"entities": [{"type": "minecraft:pig", "distance": 5}]}))
@@ -978,17 +985,22 @@ async def test_glance_scene_and_nearby_player_names_merge_online_players_and_kee
     failed = MaicraftReply(ok=False, error_code="not_in_world", error_message="角色不在世界里")
     failed_view = glance_scene(failed)
     assert failed_view == {"nearby_error": "角色不在世界里"} and "online_players" not in failed_view
+    assert online_player_names(failed) == ()
+    assert visible_nearby_player_names(failed) == ()
     assert nearby_player_names(failed) == ()
 
-    # 端到端校验：游戏情境 players 同步带上视野外在线玩家名，供对外请求统一遮名
+    # 端到端校验：游戏情境 players 仍同步带上视野外在线玩家名，供对外请求统一遮名
     server = FakeMaicraft()
     server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": _OVERWORLD}
-    server.scene_view["online_players_not_nearby"] = ["玩家甲", "Steve"]
+    server.scene_view["entities"] = [
+        {"id": "e1", "type": "minecraft:player", "name": "PlayerA", "direction": "前方", "distance": 6}
+    ]
+    server.scene_view["online_players_not_nearby"] = ["PlayerC", "PlayerA"]
     registry = ToolRegistry()
     agent, _llm, _bus = await make_minecraft_agent(server, lambda _m: _resp("好"), registry=registry)
     await agent._glance()
     situation = registry.current_situations(for_agent="streamer")["minecraft"]
-    assert situation.players == ("Steve", "玩家甲")
+    assert situation.players == ("PlayerA", "PlayerC")
     await agent.stop()
 
 

@@ -44,6 +44,8 @@ __all__ = [
     "glance_world_memory",
     "glance_worth_seeing",
     "nearby_player_names",
+    "online_player_names",
+    "visible_nearby_player_names",
     "REMEMBERED_PLACES_MAX",
     "REMEMBERED_PLACES_TTL_S",
     "RememberedPlacesCache",
@@ -654,6 +656,25 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
     return result
 
 
+def _visible_nearby_player_names(data: Dict[str, Any]) -> List[str]:
+    """提取当前场景中真实在身边的玩家名（仅读 ``entities`` 里的玩家实体，绝不混入视野外在线名单）。
+
+    若实体带有效数值距离且超出 ``NEARBY_BLOCKS``（24 格）则视为远处实体予以排除；
+    旧版未报 ``distance`` 时按场景内近身实体兼容保留，按出现先后去重。
+    """
+    names: List[str] = []
+    for entity in data.get("entities") or []:
+        if not isinstance(entity, dict) or _bare_entity_type(entity.get("type")) != "player":
+            continue
+        distance = entity.get("distance")
+        if isinstance(distance, (int, float)) and not isinstance(distance, bool) and distance > NEARBY_BLOCKS:
+            continue
+        name = str(entity.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def _online_player_names(data: Dict[str, Any]) -> List[str]:
     """汇总当前服务器在线的其他玩家名（按出现先后去重）。
 
@@ -662,7 +683,7 @@ def _online_player_names(data: Dict[str, Any]) -> List[str]:
     """
     names: List[str] = []
     for entity in data.get("entities") or []:
-        if not isinstance(entity, dict) or entity.get("type") != "minecraft:player":
+        if not isinstance(entity, dict) or _bare_entity_type(entity.get("type")) != "player":
             continue
         name = str(entity.get("name") or "").strip()
         if name and name not in names:
@@ -678,14 +699,30 @@ def _online_player_names(data: Dict[str, Any]) -> List[str]:
     return names
 
 
-def nearby_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
-    """这次观察读到的全部在线其他玩家名（含视野内玩家实体与视野外在线名单，按出现先后去重）；没读到时为空。
+def visible_nearby_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
+    """这次观察读到的真实身边玩家名（仅含场景 ``entities`` 内近身玩家实体，不含视野外全服名单）；没读到时为空。
+
+    供游戏公屏门控在旧版 Mod 未报 ``sender_distance`` 时做 ``[游戏公屏·身边]`` 降级判定，
+    与脱敏用全服在线名单解耦，避免把远处全服在线玩家误判成身边同伴并强制唤醒。
+    """
+    if not reply.ok:
+        return ()
+    return tuple(_visible_nearby_player_names(reply.data))
+
+
+def online_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
+    """这次观察读到的全部全服在线其他玩家名（含视野内玩家实体与视野外在线名单，按出现先后去重）；没读到时为空。
 
     主播把游戏情境（委派原话等）发给外部服务前，用它把在服玩家名统一换成"玩家"，确保远处在线玩家的名字也一并脱敏。
     """
     if not reply.ok:
         return ()
     return tuple(_online_player_names(reply.data))
+
+
+def nearby_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
+    """这次观察读到的身边真实玩家名（与 :func:`visible_nearby_player_names` 一致，不含视野外全服在线名单）。"""
+    return visible_nearby_player_names(reply)
 
 
 #: 视野外普通野生生物保留的贴身半径（格）：超过此距离且明确不在前方视野内（in_view=False）时不进主播前景速览

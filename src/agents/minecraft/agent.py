@@ -73,9 +73,10 @@ from src.agents.minecraft.glance import (
     glance_self,
     glance_world_memory,
     glance_worth_seeing,
-    nearby_player_names,
     nearest_places,
+    online_player_names,
     self_position,
+    visible_nearby_player_names,
 )
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
@@ -424,6 +425,143 @@ def _mutates_known_places(ability: str, arguments: Optional[Mapping[str, Any]] =
     return bool(params.get("save_archive"))
 
 
+# 游戏公屏单条消息温和提醒的字数阈值（非阻断）：超过该字数时在 maicraft_execute 返回的 notes 附轻提醒
+PUBLIC_CHAT_SOFT_LENGTH_LIMIT = 45
+# MaiCraft ChatTask 仅在非命令普通公屏消息实际提交成功后才写入 attempts 的固定标识
+_CHAT_SUBMITTED_ATTEMPT_TRIED = "提交聊天"
+# 已记账 sequence 目标的去重保留上限（防止回复与事件流两头重复提取同一 sequence 的公屏发言）
+_MAX_ANNOUNCED_SEQUENCE_CHATS = 64
+# 翻页读回被折叠 /attempts 证据时的安全页数上限
+_MAX_FOLDED_ATTEMPTS_PAGES = 20
+# 递归提取 sequence 嵌套步骤时的安全深度上限
+_MAX_SEQUENCE_GOAL_DEPTH = 8
+
+
+def _extract_public_chat_messages_from_goal(goal: Any, *, _depth: int = 0) -> List[str]:
+    """从 ``maicraft_execute`` 的 goal 参数提取待发普通游戏公屏正文（支持直接 chat 与 sequence 内嵌 chat）。
+
+    排除对指定实体说话（携带非空 ``target``）、空白文本以及以 ``/`` 开头的游戏命令或私聊命令，
+    只覆盖普通游戏公屏消息。
+    """
+    if _depth > _MAX_SEQUENCE_GOAL_DEPTH or not isinstance(goal, Mapping):
+        return []
+    short = _ability_short_name(str(goal.get("ability") or ""))
+    if short == "chat":
+        # 给了 target（如对女仆说话）不进游戏公屏
+        if goal.get("target"):
+            return []
+        params = goal.get("parameters")
+        if not isinstance(params, Mapping):
+            return []
+        raw_message = params.get("message")
+        if not isinstance(raw_message, str):
+            return []
+        message = raw_message.strip()
+        if not message or message.startswith("/"):
+            return []
+        return [message]
+    if short == "sequence":
+        steps = goal.get("steps")
+        if not isinstance(steps, list):
+            return []
+        found: List[str] = []
+        for step in steps:
+            found.extend(_extract_public_chat_messages_from_goal(step, _depth=_depth + 1))
+        return found
+    return []
+
+
+def _public_chat_length_note(arguments: Mapping[str, Any], *, limit: int = PUBLIC_CHAT_SOFT_LENGTH_LIMIT) -> str:
+    """检查本次 ``maicraft_execute`` 的普通公屏消息长度：超限时返回温和非阻断提醒，不拦截不报错。"""
+    if arguments.get("dry_run") is True:
+        return ""
+    messages = _extract_public_chat_messages_from_goal(arguments.get("goal"))
+    over_lengths = [len(msg) for msg in messages if len(msg) > limit]
+    if not over_lengths:
+        return ""
+    max_len = max(over_lengths)
+    return f"这条公屏消息有 {max_len} 字，游戏聊天栏较窄，下次可以更简短一点或拆成几句说。"
+
+
+def _append_observation_note(observation: Dict[str, Any], note: str) -> None:
+    """向工具返回字典的 ``notes`` 列表追加一条去重提醒（无 ``notes`` 时自动创建列表）。"""
+    cleaned = note.strip()
+    if not cleaned:
+        return
+    raw_notes = observation.get("notes")
+    if isinstance(raw_notes, list):
+        notes = list(raw_notes)
+    elif raw_notes:
+        notes = [raw_notes]
+    else:
+        notes = []
+    if cleaned not in notes:
+        notes.append(cleaned)
+    observation["notes"] = notes
+
+
+def _has_folded_attempts(result: Any) -> bool:
+    """判断目标结果是否因体积过大而将 ``attempts`` 折叠进了 ``result.folded``（需要按路径读回）。"""
+    if not isinstance(result, Mapping):
+        return False
+    attempts = result.get("attempts")
+    if isinstance(attempts, list) and attempts:
+        return False
+    folded = result.get("folded")
+    if not isinstance(folded, list):
+        return False
+    return any(isinstance(entry, Mapping) and entry.get("path") == "/attempts" for entry in folded)
+
+
+def _extract_submitted_chats_from_steps(steps: Any, *, _depth: int = 0) -> List[str]:
+    """兼容从带结构化步骤明细的 ``result.steps`` 提取已确认提交的普通公屏 chat 正文。"""
+    if _depth > _MAX_SEQUENCE_GOAL_DEPTH or not isinstance(steps, list):
+        return []
+    found: List[str] = []
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        ability = _ability_short_name(str(step.get("ability") or ""))
+        step_result = step.get("result") if isinstance(step.get("result"), Mapping) else step
+        if ability == "chat":
+            details = step_result.get("details")
+            if isinstance(details, Mapping) and details.get("submitted") is True and "to" not in details:
+                message = str(details.get("message") or "").strip()
+                if message and not message.startswith("/"):
+                    found.append(message)
+        elif ability == "sequence":
+            found.extend(_extract_submitted_chats_from_steps(step_result.get("steps"), _depth=_depth + 1))
+    return found
+
+
+def _extract_sequence_self_chats(run: GoalRun, *, extra_attempts: Optional[Sequence[Any]] = None) -> List[str]:
+    """从已结束的 ``sequence`` 目标结果提取实际已提交的普通游戏公屏发言（按执行先后）。
+
+    只信任已实际执行并写入结果的提交事实，未执行到被中断的步骤不会进入 ``attempts``，绝不误记：
+    - 主通道：MaiCraft ``ChatTask`` 仅在非命令普通公屏消息真正提交成功时写入
+      ``{"tried": "提交聊天", "result": message}``，并由 ``GoalRunner.settle`` 合并进 ``sequence`` 的
+      ``result.attempts``（命令记为「提交命令」，对生物说话不写此项，打字中途取消不写此项）；
+    - 兼容通道：若未在 ``attempts`` 命中且结果带结构化 ``steps``，仅提取 ``submitted=True`` 且非私聊/非命令项。
+    """
+    if not run.finished or _ability_short_name(run.ability) != "sequence":
+        return []
+    result = run.result if isinstance(run.result, Mapping) else {}
+    raw_attempts = extra_attempts if extra_attempts is not None else result.get("attempts")
+    messages: List[str] = []
+    if isinstance(raw_attempts, Sequence) and not isinstance(raw_attempts, (str, bytes)):
+        for attempt in raw_attempts:
+            if not isinstance(attempt, Mapping):
+                continue
+            if str(attempt.get("tried") or "").strip() != _CHAT_SUBMITTED_ATTEMPT_TRIED:
+                continue
+            message = str(attempt.get("result") or "").strip()
+            if message and not message.startswith("/"):
+                messages.append(message)
+    if messages:
+        return messages
+    return _extract_submitted_chats_from_steps(result.get("steps"))
+
+
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 
@@ -603,12 +741,16 @@ class MinecraftAgent(BaseAgent):
         self._spar_opponents = SparOpponents()
         # 她在游戏公屏打出去的话：交出去了就发一条给存储记进游戏公屏（认她在回应哪位玩家），不改怎么说
         self._self_chats = SelfChatLog()
+        # 已完成自发公屏提取的 sequence 目标编号去重表（防止 execute/goal/events 多路重复记账）
+        self._seen_sequence_chat_goals: Dict[int, None] = {}
         # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
         self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
         # 最近一次 observe(self) 读到的三维坐标：站桩开始时作位移基线；目标结束或换存档时清掉，不拿旧坐标充新进展
         self._last_self_coords: Optional[Coords] = None
-        # 最近一次看周围时身边的玩家名：随游戏情境交给主播，主播发情境给外部服务前遮名用
+        # 最近一次看周围时真实在身边的玩家名（仅场景 entities 内近身玩家）：供游戏公屏门控降级判定 [游戏公屏·身边]
         self._nearby_players: Tuple[str, ...] = ()
+        # 最近一次看周围时的全服在线玩家名（含视野外在线名单）：随游戏情境交给主播，发给外部服务前统一脱敏
+        self._online_players: Tuple[str, ...] = ()
         # 当前视野及近期游戏公屏/交互过的在线玩家 UUID：供游戏主控态向权威承诺账本按人筛选关联承诺
         self._nearby_player_uuids: Tuple[str, ...] = ()
         self._recent_player_uuids: Deque[str] = deque(maxlen=16)
@@ -631,6 +773,8 @@ class MinecraftAgent(BaseAgent):
         self._pending_place_marks: List[GamePlacePayload] = []
         # 当场就结束的游戏公屏说话排在这里，回复记账之后发出（记账是同步的，发事件要等）
         self._pending_self_chats: List[str] = []
+        # 同步回复里发现 /attempts 被折叠进 result.folded 的已结束 sequence，留待异步 flush 阶段按路径读回后记账
+        self._pending_folded_self_chat_runs: List[GoalRun] = []
         # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不代发停了没交付
         self._furnace_waits = FurnaceWaits(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
@@ -2809,7 +2953,7 @@ class MinecraftAgent(BaseAgent):
                 await self._sync_world_fields(reply.data, from_observation=True)
             if picture_call and reply.ok:
                 return await self._absorb_picture(arguments, reply, result)
-            return reply.raw
+            return dict(reply.raw)
         if result.success:
             data: Dict[str, Any] = (
                 dict(result.structured_content)
@@ -2890,13 +3034,20 @@ class MinecraftAgent(BaseAgent):
                 self._last_dimension = dim
             return
         if name == OBSERVE and arguments.get("what", "scene") == "scene":
-            # 顺手同步身边玩家名单，供旧版 Mod 未报 sender_distance 时游戏公屏门控降级判定 [游戏公屏·身边]；
+            # 拆分真实身边玩家名单（喂给游戏公屏门控降级判定 [游戏公屏·身边]）与全服在线名单（喂给外部脱敏）；
             # 并提取视野内在线玩家 UUID，供游戏主控态拉取权威承诺账本
-            self._nearby_players = nearby_player_names(MaicraftReply(ok=True, data=data))
+            scene_reply = MaicraftReply(ok=True, data=data)
+            self._nearby_players = visible_nearby_player_names(scene_reply)
+            self._online_players = online_player_names(scene_reply)
             self._sync_nearby_player_uuids(data)
             return
         if name not in (EXECUTE, GOAL):
             return
+        if name == EXECUTE:
+            # 普通游戏公屏单条超过 45 字时附温和非阻断轻提醒（不拦截、不报错，兼容直接 chat 与 sequence 内嵌 chat）
+            length_note = _public_chat_length_note(arguments)
+            if length_note:
+                _append_observation_note(observation, length_note)
         if name == GOAL and arguments.get("operation") == "list":
             for item in data.get("goals") or []:
                 listed = goal_run_of(item) if isinstance(item, dict) else None
@@ -2912,8 +3063,11 @@ class MinecraftAgent(BaseAgent):
                     self._mark_known_places_dirty()
             return
         if name == EXECUTE:
-            if run.ability == "chat" or run.ability.endswith(":chat"):
-                # 角色发游戏内 chat 时把目标玩家或刚回应的游戏公屏对话人记入近 2 分钟互动同伴窗
+            run_ability_short = _ability_short_name(run.ability)
+            if run_ability_short == "chat" or (
+                run_ability_short == "sequence" and bool(_extract_public_chat_messages_from_goal(arguments.get("goal")))
+            ):
+                # 角色发游戏内 chat（含 sequence 内嵌公屏 chat）时把目标玩家或刚回应的对话人记入近 2 分钟互动同伴窗
                 self._note_chat_partner_from_execute(arguments)
             if run.finished:
                 if run.result_status == "done" and _mutates_known_places(run.ability, arguments):
@@ -2931,16 +3085,12 @@ class MinecraftAgent(BaseAgent):
                 self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
                 misuse_hint = use_air_misuse_hint(run)
                 if misuse_hint:
-                    notes = list(observation.get("notes") or [])
-                    notes.append(misuse_hint)
-                    observation["notes"] = notes
+                    _append_observation_note(observation, misuse_hint)
                 # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：同步回炉计时与看门狗的自设计时器
                 self._furnace_waits.absorb(run)
                 self._wait_progress.absorb_timer(run, arguments)
-                # 当场就结束的游戏公屏说话（关了逐字打字）：交出去的那句排进待发，调用方随后发给存储记进游戏公屏
-                message = self._self_chats.take(run)
-                if message:
-                    self._pending_self_chats.append(message)
+                # 当场就结束的游戏公屏说话（含 sequence 内嵌 chat）：交出去的每句排进待发，调用方随后发给存储与对话窗
+                self._queue_self_chats_from_reply(run)
                 return
             if _mutates_known_places(run.ability, arguments):
                 # 后台异步执行且成功后可能改写建筑/机器档案的目标记下编号，完工时失效设施短目录缓存
@@ -2965,6 +3115,9 @@ class MinecraftAgent(BaseAgent):
             self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
             # 模型先于结束事件读到结束的 obtain：装好炉先走的回炉计时从这里记上（同一个计时只记一次）
             self._furnace_waits.absorb(run)
+            if run.finished:
+                # 模型先于结束事件经 goal(get) 读到已结束的 chat/sequence：同步提取已交出的公屏发言防漏记
+                self._queue_self_chats_from_reply(run)
             return
         if not self._goals.tracking(run.goal_id) and arguments.get("operation") == "resume":
             # 重启或重进世界后恢复的目标：模型明确解除暂停，从此由宿主跟踪。
@@ -3426,6 +3579,8 @@ class MinecraftAgent(BaseAgent):
             self._last_position = None
             self._last_dimension = ""
             self._pending_intent_texts.clear()
+            self._nearby_players = ()
+            self._online_players = ()
             self._nearby_player_uuids = ()
             self._recent_player_uuids.clear()
         self._commitment_ledger_dirty = True
@@ -4182,6 +4337,7 @@ class MinecraftAgent(BaseAgent):
         if not self._maicraft_ready():
             self._last_position = None
             self._nearby_players = ()
+            self._online_players = ()
             self._nearby_player_uuids = ()
             view["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
         else:
@@ -4202,7 +4358,8 @@ class MinecraftAgent(BaseAgent):
                     self._wait_progress.observe_state(coords, self._tracked_goal_doings())
             # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
             scene = await self._read_creatures(body)
-            self._nearby_players = nearby_player_names(scene)
+            self._nearby_players = visible_nearby_player_names(scene)
+            self._online_players = online_player_names(scene)
             if scene.ok and isinstance(scene.data, Mapping):
                 self._sync_nearby_player_uuids(scene.data)
             view.update(glance_scene(scene, self._creatures.nicknames_by_scene_id()))
@@ -4258,7 +4415,7 @@ class MinecraftAgent(BaseAgent):
             return None
         where, read_at = position
         age_ms = max(0, int((self._clock() - read_at) * 1000))
-        return GameSituation(places=nearest_places(places, where), age_ms=age_ms, players=self._nearby_players)
+        return GameSituation(places=nearest_places(places, where), age_ms=age_ms, players=self._online_players)
 
     async def _read_remembered_places(self) -> MaicraftReply:
         """速览与设施短目录共用的记住地点快照：缓存新鲜时直接复用，否则真读一次 ``observe(what="places")``。
@@ -5038,14 +5195,80 @@ class MinecraftAgent(BaseAgent):
     # 事件上报（GamePayload(game="minecraft")）
     # ==================================================================
 
+    def _take_self_chats(self, run: GoalRun, *, extra_attempts: Optional[Sequence[Any]] = None) -> List[str]:
+        """从已结束的目标提取本方实际发出的普通游戏公屏句列表（兼容直接 chat 与 sequence 内嵌 chat，按 goal_id 去重）。"""
+        if not run.finished:
+            return []
+        short = _ability_short_name(run.ability)
+        if short == "chat":
+            message = self._self_chats.take(run)
+            return [message] if message else []
+        if short != "sequence":
+            return []
+        if run.goal_id in self._seen_sequence_chat_goals:
+            return []
+        # 同步回执里若 attempts 被折叠进 folded，暂不提前标已处理，留给异步 _emit_self_chat 翻页取回后再记账
+        if extra_attempts is None and _has_folded_attempts(run.result):
+            return []
+        messages = _extract_sequence_self_chats(run, extra_attempts=extra_attempts)
+        self._seen_sequence_chat_goals[run.goal_id] = None
+        while len(self._seen_sequence_chat_goals) > _MAX_ANNOUNCED_SEQUENCE_CHATS:
+            self._seen_sequence_chat_goals.pop(next(iter(self._seen_sequence_chat_goals)))
+        return messages
+
+    async def _read_folded_attempts(self, goal_id: int) -> List[Any]:
+        """当 sequence 结束结果的 ``attempts`` 因超长被折叠进 ``result.folded`` 时，按路径翻页读回全部尝试记录。"""
+        collected: List[Any] = []
+        offset = 0
+        for _ in range(_MAX_FOLDED_ATTEMPTS_PAGES):
+            reply = await self._call_maicraft(
+                GOAL,
+                {"operation": "get", "goal_id": goal_id, "path": "/attempts", "offset": offset},
+            )
+            if not reply.ok:
+                self._logger.warning(
+                    f"读取 sequence 目标 {goal_id} 被折叠的 /attempts 失败：{reply.error_code} {reply.error_message}"
+                )
+                break
+            value = reply.data.get("value")
+            if isinstance(value, list):
+                collected.extend(value)
+            next_offset = reply.data.get("next_offset")
+            if not isinstance(next_offset, int) or isinstance(next_offset, bool) or next_offset <= offset:
+                break
+            offset = next_offset
+        return collected
+
     async def _emit_self_chat(self, run: GoalRun) -> None:
-        """游戏公屏说话的目标结束、那句交出去了：发一条给存储记进游戏公屏，主播记进她的对话时间线。"""
-        message = self._self_chats.take(run)
-        if message:
+        """游戏公屏说话目标（含 sequence 内嵌 chat 步骤）结束且已交出：逐条记账并广播给存储、对话窗与主播时间线。"""
+        extra_attempts: Optional[List[Any]] = None
+        if (
+            run.finished
+            and _ability_short_name(run.ability) == "sequence"
+            and run.goal_id not in self._seen_sequence_chat_goals
+            and _has_folded_attempts(run.result)
+        ):
+            extra_attempts = await self._read_folded_attempts(run.goal_id)
+        for message in self._take_self_chats(run, extra_attempts=extra_attempts):
             await self._send_self_chat(message)
 
+    def _queue_self_chats_from_reply(self, run: GoalRun) -> None:
+        """在同步回复吸收阶段收集已结束目标的公屏发言；若 sequence 的 /attempts 被折叠，排队留待异步读回。"""
+        if (
+            run.finished
+            and _ability_short_name(run.ability) == "sequence"
+            and run.goal_id not in self._seen_sequence_chat_goals
+            and _has_folded_attempts(run.result)
+        ):
+            self._pending_folded_self_chat_runs.append(run)
+            return
+        for message in self._take_self_chats(run):
+            self._pending_self_chats.append(message)
+
     async def _flush_self_chats(self) -> None:
-        """把回复记账时排下的游戏公屏说话发出去（当场就结束的那种）。"""
+        """把回复记账时排下的游戏公屏说话发出去（含需异步读回折叠 /attempts 的已结束 sequence）。"""
+        while self._pending_folded_self_chat_runs:
+            await self._emit_self_chat(self._pending_folded_self_chat_runs.pop(0))
         while self._pending_self_chats:
             await self._send_self_chat(self._pending_self_chats.pop(0))
 

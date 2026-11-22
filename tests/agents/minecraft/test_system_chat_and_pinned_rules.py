@@ -683,7 +683,7 @@ async def test_pinned_rules_survive_notebook_overwrite_and_background_folding_an
 
 
 def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_fold_guard() -> None:
-    """提示词覆盖查包后 obtain、纠偏高优穿透、同伴社交停手与多条合并回应、记忆回忆、钉住规矩与折叠保真。"""
+    """提示词覆盖查包后 obtain、纠偏高优穿透、同伴社交停手、公屏简洁与放权推进、记忆回忆、钉住规矩与折叠保真。"""
     reset_prompt_manager()
     try:
         pm = get_prompt_manager()
@@ -695,7 +695,10 @@ def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_
     assert "minecraft_rules" in agent_prompt
     assert "observe(what=self)" in agent_prompt and "obtain" in agent_prompt
     assert "暂停或取消非紧急的移动与施工目标" in agent_prompt
-    assert "合并回应所有未答要点" in agent_prompt
+    # 已删除诱发长文堆砌的冲突条款，补入公屏简洁与放权推进正向边界
+    assert "合并回应所有未答要点" not in agent_prompt
+    assert "游戏公屏聊天栏空间狭小" in agent_prompt
+    assert "同伴已经明确放权交给你做的事项" in agent_prompt
 
     assert "同伴明确表达的拒绝、禁令" in fold_prompt
     assert "minecraft_rules" in fold_prompt
@@ -706,5 +709,7 @@ def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_
     assert "correction=True" in LEAD_MODE_PROMPT_SECTION
     assert "observe(what=self)" in LEAD_MODE_PROMPT_SECTION
     assert "暂停或取消非紧急的移动与施工目标" in LEAD_MODE_PROMPT_SECTION
-    assert "合并回应所有未答要点" in LEAD_MODE_PROMPT_SECTION
+    assert "合并回应所有未答要点" not in LEAD_MODE_PROMPT_SECTION
+    assert "游戏公屏聊天栏空间狭小" in LEAD_MODE_PROMPT_SECTION
+    assert "同伴已经明确放权交给你做的事项" in LEAD_MODE_PROMPT_SECTION
     assert "rundown_control" in LEAD_MODE_PROMPT_SECTION

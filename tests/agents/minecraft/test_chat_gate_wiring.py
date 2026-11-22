@@ -11,6 +11,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game_chat import GameChatMention, GameChatPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.llm.payload import Response
+from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.minecraft._wiring_helpers import StreamerPlaceholder, no_real_sleep, settle
 from tests.agents.minecraft_v1_fakes import (
@@ -388,6 +389,101 @@ async def test_chat_flush_timer_concurrent_reschedule_yield_cleanup_and_mid_awai
         release_c.set()
         assert await flush_task is False
         assert len(llm.seen) == turns_after_reenter
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_online_players_not_nearby_never_triggers_nearby_fallback_wake() -> None:
+    """BUG-B3 回归：视野外在线玩家名单绝不混入 chat_gate 近身名单，同时脱敏情境仍保留全服在线名单。"""
+    clock = FakeClock()
+    server = FakeMaicraft()
+    server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
+    server.scene_view["entities"] = [
+        {"id": "e1", "type": "minecraft:player", "name": "PlayerNear", "direction": "前方", "distance": 6},
+        {"id": "e2", "type": "minecraft:player", "name": "PlayerFar", "direction": "后方", "distance": 45},
+    ]
+    server.scene_view["online_players_not_nearby"] = ["PlayerRemote"]
+
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        lambda _m: _resp("收到，继续推进"),
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=2_000,
+        chat_flush_wait=no_real_sleep,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="视野外玩家隔离测试"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
+
+        # 触发一次速览刷新（经公共工具调用同步近身实体名单与全服脱敏名单）
+        glance_result = await registry.invoke(
+            ToolInvocation(tool_name="minecraft_glance", arguments={}, source="test", invoking_agent="streamer")
+        )
+        assert glance_result.success is True
+        situation = registry.current_situations(for_agent="streamer")["minecraft"]
+        assert situation.players == ("PlayerNear", "PlayerFar", "PlayerRemote")
+
+        # 视野外全服在线玩家与超距实体玩家发 sender_distance=None 的普通公屏消息：
+        # 绝不降级假标为 [游戏公屏·身边]，也不触发唤醒
+        for sender, msg in (("PlayerRemote", "我在主城修仓库"), ("PlayerFar", "我也在四十五格外")):
+            await bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender=sender,
+                    sender_distance=None,
+                    content=msg,
+                    timestamp_ms=clock.now_ms(),
+                ),
+                source="test",
+            )
+        await settle(bus)
+        clock.tick(3_000)
+        assert await agent.flush_pending_chat() is False
+        assert len(llm.seen) == 1
+
+        # 真实身边玩家（≤24格）发 sender_distance=None 的普通公屏消息：
+        # 正确降级标为 [游戏公屏·身边] 并按窗唤醒，且先前两名远处玩家的发言仅作为 [游戏公屏旁听] 的 [游戏公屏·远处] 附入
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerNear",
+                sender_distance=None,
+                content="你看看这个箱子",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await settle(bus)
+        clock.tick(2_000)
+        assert await agent.flush_pending_chat() is True
+        await _wait_until(lambda: len(llm.seen) == 2 and not agent.batch_active)
+
+        step2_text = _texts(llm.seen[1])
+        assert "[游戏公屏·身边] PlayerNear：你看看这个箱子" in step2_text
+        assert "[游戏公屏·远处] PlayerRemote：我在主城修仓库" in step2_text
+        assert "[游戏公屏·远处] PlayerFar：我也在四十五格外" in step2_text
+        assert "[游戏公屏·身边] PlayerRemote" not in step2_text
+        assert "[游戏公屏·身边] PlayerFar" not in step2_text
     finally:
         await agent.stop()
         await bus.cleanup()
