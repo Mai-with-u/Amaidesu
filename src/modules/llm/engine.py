@@ -912,6 +912,20 @@ class LLMManager:
         configured = [window for window in windows if window > 0]
         return min(configured) if configured else 0
 
+    def get_profile_reasoning_effort(self, profile: Optional[str]) -> str:
+        """返回该 profile 在配置中显式设定的思考强度档位；未配置或未知 profile 返回空串。
+
+        供有兜底思考档位的调用方（如下播整理）在发请求前判断运营者是否已在配置里显式指定档位，
+        避免调用方默认值覆盖掉运营者写进配置的显式档位（如 none/high）。
+        """
+        try:
+            resolved = self._profiles.get(self._resolve_profile_name(profile))
+        except ValueError:
+            return ""
+        if resolved is None:
+            return ""
+        return (resolved.reasoning_effort or "").strip()
+
     def is_profile_visual(self, profile: Optional[str]) -> bool:
         """该 profile 当前主模型是否声明视觉能力（``llm_models[].visual``）。
 

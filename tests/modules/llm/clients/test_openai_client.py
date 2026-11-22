@@ -409,6 +409,61 @@ async def test_reasoning_effort_and_extra_body_sent_only_when_set(path: str, ext
     assert {k: sent[k] for k in ("reasoning_effort", "extra_body") if k in sent} == expected
 
 
+@pytest.mark.parametrize("path", ["generate", "stream", "vision"])
+@pytest.mark.parametrize("disable_effort", ["none", "off", "disabled"])
+async def test_deepseek_disable_reasoning_effort_translates_to_thinking_disabled(
+    path: str, disable_effort: str
+) -> None:
+    """DeepSeek 端点收到关思考档位时翻译为 extra_body.thinking.disabled 且不污染原始配置 dict。"""
+    original_extra = {"custom_flag": 1, "thinking": {"type": "enabled"}}
+    client, sdk = make_openai_client({"base_url": "https://api.deepseek.com", "extra_body": original_extra})
+    request = _request(reasoning_effort=disable_effort)
+    if path == "stream":
+        sdk.chat.completions.create.return_value = FakeStream([chunk(content="ok"), chunk(usage=usage(1, 1))])
+        await client.generate(request, model="deepseek-flash", on_delta=lambda kind, text: None)
+    elif path == "vision":
+        await client.generate_vision(
+            _request("描述图", reasoning_effort=disable_effort), [b"img"], model="deepseek-flash"
+        )
+    else:
+        await client.generate(request, model="deepseek-flash")
+
+    sent = _sent(sdk)
+    assert "reasoning_effort" not in sent
+    assert sent["extra_body"] == {"custom_flag": 1, "thinking": {"type": "disabled"}}
+    # 浅拷贝保护：provider 原配置 dict 不被本次请求覆写
+    assert original_extra == {"custom_flag": 1, "thinking": {"type": "enabled"}}
+
+
+async def test_deepseek_low_effort_and_non_deepseek_none_effort_pass_through() -> None:
+    """DeepSeek 传 low 原样发顶层 reasoning_effort；非 DeepSeek 端点传 none 仍发顶层 reasoning_effort。"""
+    ds_client, ds_sdk = make_openai_client({"base_url": "https://api.deepseek.com"})
+    await ds_client.generate(_request(reasoning_effort="low"), model="deepseek-flash")
+    assert _sent(ds_sdk)["reasoning_effort"] == "low"
+    assert "extra_body" not in _sent(ds_sdk)
+
+    oa_client, oa_sdk = make_openai_client({"base_url": "https://api.openai.com/v1"})
+    await oa_client.generate(_request(reasoning_effort="none"), model="gpt-5")
+    assert _sent(oa_sdk)["reasoning_effort"] == "none"
+    assert "extra_body" not in _sent(oa_sdk)
+
+
+async def test_deepseek_disable_reasoning_does_not_fill_empty_reasoning_content() -> None:
+    """DeepSeek 显式关闭思考时，不因端点启发式给跨模型工具历史误塞空 reasoning_content。"""
+    client, sdk = make_openai_client({"base_url": "https://api.deepseek.com"})
+    request = GenerateRequest(
+        messages=[
+            Message(role="assistant", parts=[""], tool_calls=[ToolCall(id="c1", name="ping", arguments={})]),
+            Message(role="tool", parts=['{"ok": true}'], tool_call_id="c1"),
+        ],
+        reasoning_effort="none",
+        reasoning_echo=True,
+    )
+    await client.generate(request, model="deepseek-flash")
+    assistant_msg = _sent(sdk)["messages"][0]
+    assert "reasoning_content" not in assistant_msg
+
+
 # generate_audio：音频输出模态（omni_tts 引擎消费）
 
 

@@ -82,6 +82,8 @@ async def test_engine_writes_final_effort_into_request_for_client() -> None:
     """请求对象未给思考档位时，profile 档值由引擎写进请求对象（client 收到的即最终值）。"""
     client, sdk = _client_with_text_reply()
     async with engine_with(client, {"minecraft": {"temperature": 0.7, "reasoning_effort": "high"}}) as manager:
+        assert manager.get_profile_reasoning_effort("minecraft") == "high"
+        assert manager.get_profile_reasoning_effort("unknown_profile") == ""
         request = GenerateRequest(messages=[Message(role="user", parts=["总结"])])
         await manager._call_with_failover("minecraft", method="generate", request=request)
     assert sdk.chat.completions.create.call_args.kwargs["reasoning_effort"] == "high"

@@ -62,6 +62,8 @@ _STREAM_CLOSE_ERRORS = (Exception,)
 # 错误消息携带的服务端响应体长度上限：足够容纳拒绝原因原文，
 # 又不撑爆决策卡与日志里的单行展示
 _MAX_ERROR_DETAIL_CHARS = 500
+# 表达“关闭思考”的 reasoning_effort 取值集合（大小写无关）
+_DISABLE_REASONING_EFFORTS: frozenset[str] = frozenset({"none", "off", "disabled"})
 
 
 def _server_error_detail(exc: BaseException) -> str:
@@ -343,6 +345,16 @@ class OpenAIClient(BaseLLMClient):
                 messages.append(wire)
         return messages
 
+    @staticmethod
+    def _is_deepseek_target(model: str, base_url: str) -> bool:
+        """判断当前请求是否指向 DeepSeek 模型或官方/兼容 DeepSeek 端点。"""
+        return "deepseek" in (model or "").lower() or "deepseek" in (base_url or "").lower()
+
+    @staticmethod
+    def _is_disable_reasoning_effort(reasoning_effort: Optional[str]) -> bool:
+        """判断思考强度档位是否显式要求关闭思考（none / off / disabled）。"""
+        return isinstance(reasoning_effort, str) and reasoning_effort.strip().lower() in _DISABLE_REASONING_EFFORTS
+
     def _needs_empty_reasoning_field(self, request: GenerateRequest, model: str) -> bool:
         """当前请求在跨模型切换后是否需要给缺思考的工具调用步补空 ``reasoning_content``。
 
@@ -365,6 +377,9 @@ class OpenAIClient(BaseLLMClient):
             return True
         if mode is ReasoningParseMode.NATIVE:
             return True
+        # 本次请求显式要求关闭思考时，不因历史/端点启发式再强塞空 reasoning_content
+        if self._is_disable_reasoning_effort(request.reasoning_effort):
+            return False
         extra_body = self.config.get("extra_body")
         thinking_extra = (
             isinstance(extra_body, dict)
@@ -373,7 +388,7 @@ class OpenAIClient(BaseLLMClient):
         )
         if thinking_extra:
             return True
-        has_effort = bool(isinstance(request.reasoning_effort, str) and request.reasoning_effort)
+        has_effort = bool(isinstance(request.reasoning_effort, str) and request.reasoning_effort.strip())
         target = f"{model.lower()} {base_url}"
         if "reasoner" in model.lower():
             return True
@@ -398,18 +413,29 @@ class OpenAIClient(BaseLLMClient):
         self,
         request_params: Dict[str, Any],
         reasoning_effort: Optional[str],
+        *,
+        model: str = "",
     ) -> None:
         """把思考强度档位与 provider 级方言逃生舱按"设了才发"原则合入请求参数。
 
-        ``reasoning_effort`` 非 None 且非空串 → ``request_params["reasoning_effort"]`` 带上；
-        ``self.config["extra_body"]`` 为非空 dict → ``request_params["extra_body"]`` 带上。
-        任一未配置则对应键完全不出现（OpenAI SDK 缺省不发送）。
+        ``reasoning_effort`` 非 None 且非空串 → 常规端点写入 ``request_params["reasoning_effort"]``；
+        当目标为 DeepSeek 模型/端点且档位显式要求关闭思考（``none`` / ``off`` / ``disabled``）时，
+        翻译为 DeepSeek 协议支持的 ``extra_body.thinking = {"type": "disabled"}`` 且不下发顶层
+        ``reasoning_effort``，避免原生端点拒收或被 provider 既有 thinking 配置覆盖。
+        ``self.config["extra_body"]`` 为非空 dict 时浅拷贝后合入，避免污染配置原文。
         """
-        if isinstance(reasoning_effort, str) and reasoning_effort:
-            request_params["reasoning_effort"] = reasoning_effort
-        extra_body = self.config.get("extra_body")
-        if isinstance(extra_body, dict) and extra_body:
-            request_params["extra_body"] = extra_body
+        raw_extra = self.config.get("extra_body")
+        merged_extra: Dict[str, Any] = dict(raw_extra) if isinstance(raw_extra, dict) and raw_extra else {}
+        if isinstance(reasoning_effort, str) and reasoning_effort.strip():
+            effort = reasoning_effort.strip()
+            base_url = str(self.config.get("base_url") or "")
+            if self._is_disable_reasoning_effort(effort) and self._is_deepseek_target(model, base_url):
+                # DeepSeek 端点关闭思考需走 thinking.type=disabled，顶层传 reasoning_effort=none 易被 400/422 拒收
+                merged_extra["thinking"] = {"type": "disabled"}
+            else:
+                request_params["reasoning_effort"] = effort
+        if merged_extra:
+            request_params["extra_body"] = merged_extra
 
     @staticmethod
     def _extract_usage(vendor_usage: Any) -> Optional[Usage]:
@@ -634,7 +660,7 @@ class OpenAIClient(BaseLLMClient):
                 # 显式零温度也是调用方选择，只有 None 才采用客户端默认值。
                 "temperature": self.temperature if temperature is None else temperature,
             }
-            self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
+            self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort, model=model)
             if request_extra:
                 request_params.update(request_extra)
             if tools:
@@ -718,7 +744,7 @@ class OpenAIClient(BaseLLMClient):
             # 那属于不可恢复失败（重发同一份请求仍会被拒），不做非流式降级
             "stream_options": {"include_usage": True},
         }
-        self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
+        self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort, model=model)
         if tools:
             request_params["tools"] = self._normalize_tool_definitions(tools)
             request_params["tool_choice"] = "auto"
@@ -835,7 +861,7 @@ class OpenAIClient(BaseLLMClient):
                 # 视觉请求同样保留调用方显式给出的零温度。
                 "temperature": self.temperature if temperature is None else temperature,
             }
-            self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
+            self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort, model=model)
             response = await self.client.chat.completions.create(**request_params)
             result = Response(
                 success=True,
