@@ -126,6 +126,7 @@ class PassiveCueProvider(Protocol):
         players: Sequence[Tuple[str, str]] = (),
         situation: Optional[Any] = None,
         arrived_places: Sequence[str] = (),
+        exclude_texts: Sequence[str] = (),
         limit: int = 2,
     ) -> Union[Awaitable[Sequence[str]], Sequence[str]]: ...
 
@@ -1016,14 +1017,16 @@ class LeadCoordinator:
         players: Sequence[Tuple[str, str]] = (),
         situation: Optional[Any] = None,
         arrived_places: Sequence[str] = (),
+        exclude_texts: Sequence[str] = (),
         limit: int = 2,
     ) -> List[str]:
-        """供主控游戏 Agent 在收到公屏合批或到达地标时拉取跨场被动记忆线索卡（异常隔离、零游戏名硬编码）。"""
+        """供主控游戏 Agent 在收到公屏合批、产生行动意图或到达地标时拉取跨场被动记忆线索卡（异常隔离、零游戏名硬编码）。"""
         provider = self._passive_cue_provider
         normalized_game = (game or "").strip()
         if provider is None or not normalized_game or limit <= 0:
             return []
         clean_places = tuple(p for raw in (arrived_places or ()) if (p := str(raw or "").strip()))
+        clean_excludes = tuple(t for raw in (exclude_texts or ()) if (t := str(raw or "").strip()))
         kwargs: Dict[str, Any] = {
             "game": normalized_game,
             "texts": tuple(texts or ()),
@@ -1031,15 +1034,19 @@ class LeadCoordinator:
             "situation": situation,
             "limit": int(limit),
         }
+        # 检测回调签名，仅向声明接收对应可选参数或 **kwargs 的回调透传，保持对旧签名回调向后兼容
         try:
             params = inspect.signature(provider).parameters
-            accepts_arrived = "arrived_places" in params or any(
-                param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
-            )
+            has_var_kw = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+            accepts_arrived = "arrived_places" in params or has_var_kw
+            accepts_excludes = "exclude_texts" in params or has_var_kw
         except (TypeError, ValueError):
             accepts_arrived = True
+            accepts_excludes = True
         if accepts_arrived:
             kwargs["arrived_places"] = clean_places
+        if accepts_excludes:
+            kwargs["exclude_texts"] = clean_excludes
         try:
             raw = provider(**kwargs)
             if inspect.isawaitable(raw):

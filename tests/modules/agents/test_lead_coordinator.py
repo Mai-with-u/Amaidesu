@@ -1350,3 +1350,99 @@ async def test_fetch_commitment_ledger_normalizes_and_isolates_errors() -> None:
     # 解绑后返回 {}
     coord.set_commitment_ledger_provider(None)
     assert await coord.fetch_commitment_ledger(game="beta_game", save_id="save-1") == {}
+
+
+async def test_fetch_passive_cues_forwards_exclude_texts_and_keeps_legacy_compat() -> None:
+    """fetch_passive_cues 清洗并透传 exclude_texts，同时向后兼容未声明该参数的旧回调签名。"""
+    mgr = AgentManager()
+    coord = LeadCoordinator(mgr)
+
+    # 1. 新签名回调：准确透传清洗后的 exclude_texts
+    new_calls: List[Dict[str, Any]] = []
+
+    async def _new_cb(
+        *,
+        game: str,
+        texts: Any = (),
+        players: Any = (),
+        situation: Any = None,
+        arrived_places: Any = (),
+        exclude_texts: Any = (),
+        limit: int = 2,
+    ) -> List[str]:
+        new_calls.append(
+            {
+                "game": game,
+                "texts": texts,
+                "players": players,
+                "situation": situation,
+                "arrived_places": arrived_places,
+                "exclude_texts": exclude_texts,
+                "limit": limit,
+            }
+        )
+        return ["[存档记忆·记着的事] 营地本来就有一座现成的下界门"]
+
+    coord.set_passive_cue_provider(_new_cb)
+    result = await coord.fetch_passive_cues(
+        game="sandbox_game",
+        texts=("准备砌一座下界门",),
+        exclude_texts=("  共享惯例：公共箱子随便拿  ", "", "   ", "环境形态：多人共建生存服"),
+        limit=2,
+    )
+    assert result == ["[存档记忆·记着的事] 营地本来就有一座现成的下界门"]
+    assert new_calls[-1]["exclude_texts"] == ("共享惯例：公共箱子随便拿", "环境形态：多人共建生存服")
+
+    # 2. 旧签名回调（未声明 exclude_texts 也未声明 arrived_places / **kwargs）：向后兼容零报错
+    legacy_calls: List[Dict[str, Any]] = []
+
+    def _legacy_cb(
+        *,
+        game: str,
+        texts: Any = (),
+        players: Any = (),
+        situation: Any = None,
+        limit: int = 2,
+    ) -> List[str]:
+        legacy_calls.append(
+            {
+                "game": game,
+                "texts": texts,
+                "players": players,
+                "situation": situation,
+                "limit": limit,
+            }
+        )
+        return ["旧回调线索"]
+
+    coord.set_passive_cue_provider(_legacy_cb)
+    legacy_res = await coord.fetch_passive_cues(
+        game="sandbox_game",
+        texts=("提到木桥",),
+        arrived_places=("北边木桥",),
+        exclude_texts=("共享惯例：公共箱子随便拿",),
+        limit=1,
+    )
+    assert legacy_res == ["旧回调线索"]
+    assert legacy_calls[-1] == {
+        "game": "sandbox_game",
+        "texts": ("提到木桥",),
+        "players": (),
+        "situation": None,
+        "limit": 1,
+    }
+
+    # 3. 接收 **kwargs 的回调同样收到 exclude_texts
+    kwargs_seen: List[Dict[str, Any]] = []
+
+    async def _kwargs_cb(**kwargs: Any) -> List[str]:
+        kwargs_seen.append(kwargs)
+        return ["动态参数线索"]
+
+    coord.set_passive_cue_provider(_kwargs_cb)
+    assert await coord.fetch_passive_cues(
+        game="sandbox_game",
+        texts=("刷石机",),
+        exclude_texts=("记着的事：旧设施",),
+    ) == ["动态参数线索"]
+    assert kwargs_seen[-1]["exclude_texts"] == ("记着的事：旧设施",)

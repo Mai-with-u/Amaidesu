@@ -31,7 +31,7 @@ from src.modules.types.game_situation import GameSituation
 
 from .saves import SavePlace, place_of
 from .search import SearchResult
-from .textmatch import KeywordMatcher, normalize
+from .textmatch import KeywordMatcher, bigram_tokens, is_stopword_token, normalize
 
 if TYPE_CHECKING:
     from src.modules.storage.repos import ArchiveRepo
@@ -54,8 +54,11 @@ __all__ = [
     "VECTOR_MAX_QUERIES",
     "VECTOR_MIN_COSINE",
     "VECTOR_TOP",
+    "intent_content_tokens",
+    "merge_matched_phrases",
     "parse_inside_jokes",
     "query_worthy",
+    "score_intent_keyword_match",
     "vector_hits",
     "vector_top3_summary",
 ]
@@ -102,6 +105,404 @@ _PLAYER_LABEL = "玩家"
 # 老梗栏一行："倒立洗头/洗头挑战：她说过输了就倒立洗头"——冒号前是梗与别名，冒号后是说明
 _JOKE_HEAD = re.compile(r"[：:]")
 _JOKE_ALIASES = re.compile(r"[/／、|]")
+
+# 意图关键词联想：多字通用泛词在切分前替换为空格，避免计划外壳/寒暄/量词拼出伪重合触发无关记忆
+_INTENT_GENERIC_PHRASES: Tuple[str, ...] = tuple(
+    sorted(
+        {
+            "准备",
+            "打算",
+            "计划",
+            "想要",
+            "想去",
+            "需要",
+            "开始",
+            "继续",
+            "完成",
+            "进行",
+            "处理",
+            "整理",
+            "查看",
+            "检查",
+            "看看",
+            "看下",
+            "看一眼",
+            "找找",
+            "找下",
+            "逛逛",
+            "转转",
+            "溜达",
+            "休息",
+            "聊聊",
+            "聊天",
+            "说话",
+            "问问",
+            "告诉",
+            "帮忙",
+            "帮我",
+            "麻烦",
+            "谢谢",
+            "感谢",
+            "辛苦",
+            "没事",
+            "没关系",
+            "好的",
+            "可以",
+            "马上",
+            "立刻",
+            "待会",
+            "等会",
+            "等下",
+            "稍等",
+            "尽量",
+            "争取",
+            "先去",
+            "回去",
+            "过去",
+            "过来",
+            "出来",
+            "进去",
+            "回来",
+            "拿点",
+            "拿些",
+            "搞点",
+            "弄点",
+            "做个",
+            "做一个",
+            "建个",
+            "建一个",
+            "盖个",
+            "盖一个",
+            "造个",
+            "造一个",
+            "修个",
+            "修一下",
+            "去找",
+            "去看",
+            "去拿",
+            "去做",
+            "凑点",
+            "凑些",
+            "弄一下",
+            "搞一下",
+            "看一下",
+            "找一下",
+            "问一下",
+            "说一下",
+            "今天",
+            "明天",
+            "昨天",
+            "今晚",
+            "昨晚",
+            "上午",
+            "下午",
+            "晚上",
+            "刚才",
+            "刚刚",
+            "以前",
+            "之前",
+            "以后",
+            "之后",
+            "目前",
+            "现在",
+            "本来",
+            "原来",
+            "平时",
+            "经常",
+            "总是",
+            "一直",
+            "已经",
+            "正在",
+            "还没",
+            "还没有",
+            "顺便",
+            "顺路",
+            "刚好",
+            "恰好",
+            "正好",
+            "终于",
+            "果然",
+            "确实",
+            "真的",
+            "实在",
+            "非常",
+            "特别",
+            "比较",
+            "稍微",
+            "差不多",
+            "大概",
+            "可能",
+            "也许",
+            "应该",
+            "必须",
+            "一定",
+            "千万",
+            "好像",
+            "其实",
+            "就是",
+            "还是",
+            "或者",
+            "而且",
+            "因为",
+            "所以",
+            "如果",
+            "虽然",
+            "但是",
+            "不过",
+            "然后",
+            "接着",
+            "随便",
+            "顺手",
+            "挺好",
+            "真好",
+            "不错",
+            "怎么样",
+            "怎样",
+            "什么",
+            "为什么",
+            "哪儿",
+            "哪里",
+            "哪个",
+            "哪些",
+            "怎么",
+            "是不是",
+            "有没有",
+            "能不能",
+            "一个",
+            "一座",
+            "一条",
+            "一块",
+            "一堆",
+            "一些",
+            "一点",
+            "一点点",
+            "一下",
+            "一会",
+            "一会儿",
+            "一次",
+            "一趟",
+            "一批",
+            "一起",
+            "一共",
+            "全部",
+            "所有",
+            "很多",
+            "不少",
+            "几个",
+            "几块",
+            "几组",
+            "东西",
+            "事情",
+            "地方",
+            "位置",
+            "附近",
+            "旁边",
+            "周围",
+            "前面",
+            "后面",
+            "左边",
+            "右边",
+            "上面",
+            "下面",
+            "里边",
+            "外边",
+            "里面",
+            "外面",
+            "这边",
+            "那边",
+            "这里",
+            "那里",
+            "别人",
+            "大家",
+            "咱们",
+            "自己",
+            "我们",
+            "你们",
+            "他们",
+            "她们",
+            "那个",
+            "这个",
+            "这些",
+            "那些",
+            "同伴",
+            "朋友",
+            "玩家",
+            "队友",
+            "主播",
+            "观众",
+            "直播",
+            "直播间",
+            "游戏",
+            "存档",
+            "世界",
+            "服务器",
+            "现成",
+            "已有",
+            "天气",
+            # 日常口头禅、基础采集动作与高频背景泛词（防无向量兜底时误触发无关记录）
+            "知道",
+            "没问题",
+            "问题",
+            "明白",
+            "收到",
+            "等等",
+            "不管",
+            "小心点",
+            "小心",
+            "算了",
+            "行吧",
+            "好吧",
+            "走吧",
+            "出发",
+            "不用",
+            "不要",
+            "别急",
+            "挖点",
+            "挖些",
+            "挖矿",
+            "砍点",
+            "砍些",
+            "砍树",
+            "采点",
+            "采些",
+            "找点",
+            "找些",
+            "带点",
+            "带些",
+            "放点",
+            "留点",
+            "石头",
+            "木头",
+            "泥土",
+            "材料",
+            "资源",
+            "工具",
+            "装备",
+            "背包",
+            "身上",
+            "营地",
+            "基地",
+            "家里",
+            "老家",
+            "门口",
+            "路边",
+            "山脚",
+            "山上",
+            "山下",
+            "河边",
+            "水边",
+            "边上",
+        },
+        key=len,
+        reverse=True,
+    )
+)
+_INTENT_GENERIC_PHRASES_RE = re.compile("|".join(re.escape(phrase) for phrase in _INTENT_GENERIC_PHRASES))
+# 句法助词、语气词与人称代词边界：切分前作分隔符，防止跨虚字粘出伪二元组
+_INTENT_SPLIT_CHARS_RE = re.compile(r"[的了吗呢吧啊呀啦喔哦噢哈嘿诶唉嗯哦我你他她它们把被给让和跟与着过]")
+_INTENT_GENERIC_EN_WORDS: frozenset[str] = frozenset(
+    (
+        "going get got make making build building fix fixing check checking look looking find finding "
+        "need want plan ready try trying help please thanks thank okay good nice great just some more "
+        "back here there near around stuff thing things item items player players game world server hello"
+    ).split()
+)
+# 仅在两段文本只命中单个两字汉字二元组时拦截的边缘虚/泛动词，防"修好""放到""去拿"之类误触发
+_WEAK_EDGE_CJK_CHARS: frozenset[str] = frozenset(
+    "在是有就都也还又去来做弄搞拿放到往向从看找说想要能会好完掉着过不没再先刚太很挺真这那一二三两几"
+)
+_CJK_TWO_CHAR_RE = re.compile(r"^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]{2}$")
+
+
+def intent_content_tokens(text: str) -> List[str]:
+    """提取用于意图关键词联想的高纯度实词（去重保序，剥离泛词、单字与纯数字）。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    stripped = _INTENT_SPLIT_CHARS_RE.sub(" ", _INTENT_GENERIC_PHRASES_RE.sub(" ", raw))
+    tokens: List[str] = []
+    seen: Set[str] = set()
+    for token in bigram_tokens(stripped):
+        if token in seen or is_stopword_token(token):
+            continue
+        if _CJK_TWO_CHAR_RE.match(token):
+            seen.add(token)
+            tokens.append(token)
+            continue
+        # 英文与混合实词要求至少 3 字符且非纯数字，过滤单字母与泛英文寒暄词
+        if len(token) < 3 or token.isdigit() or token in _INTENT_GENERIC_EN_WORDS:
+            continue
+        if token.isascii():
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def _is_weak_cjk_bigram(token: str) -> bool:
+    """两字汉字二元组若首字或尾字为高频泛动词/虚字，单独命中时不足以作为触发依据。"""
+    return bool(_CJK_TWO_CHAR_RE.match(token)) and (
+        token[0] in _WEAK_EDGE_CJK_CHARS or token[1] in _WEAK_EDGE_CJK_CHARS
+    )
+
+
+def merge_matched_phrases(tokens: Sequence[str]) -> Tuple[str, ...]:
+    """把相连重叠的汉字二元组还原为自然词组（如 ('下界', '界门') -> ('下界门',)），供卡面展示。"""
+    phrases: List[str] = []
+    for token in tokens:
+        if (
+            phrases
+            and _CJK_TWO_CHAR_RE.match(token)
+            and len(phrases[-1]) >= 2
+            and not phrases[-1].isascii()
+            and phrases[-1][-1] == token[0]
+        ):
+            phrases[-1] = phrases[-1] + token[1]
+        elif token not in phrases:
+            phrases.append(token)
+    return tuple(phrases)
+
+
+def score_intent_keyword_match(query: str, document: str) -> Tuple[float, Tuple[str, ...]]:
+    """计算意图文本与候选记忆正文的实质关键词重合得分与命中词组；未达门槛返回 (0.0, ())。
+
+    防误触发门禁：
+    - 单字与通用计划外壳/寒暄词不参与匹配；
+    - 仅命中单个 2 字汉字词时，首尾均不得为高频泛动词/虚字；
+    - 命中连续重叠二元组（对应 3+ 字实体词）或多项强实词给予显著高分。
+    """
+    q_tokens = intent_content_tokens(query)
+    if not q_tokens:
+        return 0.0, ()
+    d_tokens = intent_content_tokens(document)
+    if not d_tokens:
+        return 0.0, ()
+    d_set = set(d_tokens)
+    matched = [token for token in q_tokens if token in d_set]
+    if not matched:
+        return 0.0, ()
+
+    if len(matched) == 1:
+        only = matched[0]
+        if _is_weak_cjk_bigram(only):
+            return 0.0, ()
+        base = 1.2 if only.isascii() and len(only) >= 4 else 1.0
+        return base, (only,)
+
+    q_norm = normalize(query)
+    d_norm = normalize(document)
+    strong_count = sum(1 for token in matched if not _is_weak_cjk_bigram(token))
+    chained_pairs = 0
+    for left, right in zip(matched, matched[1:], strict=False):
+        if _CJK_TWO_CHAR_RE.match(left) and _CJK_TWO_CHAR_RE.match(right) and left[1] == right[0]:
+            trigram = left + right[1]
+            if trigram in q_norm and trigram in d_norm:
+                chained_pairs += 1
+
+    if strong_count == 0 and chained_pairs == 0:
+        return 0.0, ()
+
+    score = float(len(matched)) + chained_pairs * 1.5 + strong_count * 0.5
+    return score, merge_matched_phrases(matched)
 
 
 def parse_inside_jokes(text: str) -> Dict[str, List[str]]:
@@ -267,16 +668,21 @@ def vector_top3_summary(result: SearchResult) -> List[Dict[str, Any]]:
     return top
 
 
-def vector_hits(results: Sequence[Tuple[str, str, SearchResult]]) -> List[PassiveHit]:
-    """各条查询（来源, 弹幕编号, 检索结果）合成候选：前几名里余弦够高的档案行与承诺。
+def vector_hits(
+    results: Sequence[Tuple[str, str, SearchResult]],
+    *,
+    allowed_sources: Sequence[str] = ("archive", "commitment"),
+) -> List[PassiveHit]:
+    """各条查询（来源, 弹幕编号, 检索结果）合成候选：前几名里余弦够高的指定来源条目。
 
     同一条目被几条查询找到时合并来源、留最高的余弦及对应查询的前三名分数；按余弦从高到低排。
     """
+    allowed = set(allowed_sources)
     hits: Dict[ItemKey, PassiveHit] = {}
     for query_idx, (source, message_id, result) in enumerate(results):
         top3 = vector_top3_summary(result)
         for found in result.hits[:VECTOR_TOP]:
-            if found.source not in ("archive", "commitment"):
+            if found.source not in allowed:
                 continue
             if found.vector_score is None or found.vector_score < VECTOR_MIN_COSINE:
                 continue

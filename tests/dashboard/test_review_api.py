@@ -589,6 +589,13 @@ async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> N
             NewCueLogEntry(
                 live_session_id=pk, pushed_at_ms=BASE + 6_000, card_kind="joke", detail={"joke": "阿杰的猫"}
             ),
+            NewCueLogEntry(
+                live_session_id=pk,
+                pushed_at_ms=BASE + 7_000,
+                card_kind="social_fact",
+                sources=["player"],
+                detail={"social_fact_id": 42, "fact_kind": "works"},
+            ),
         ]
     )
     await store.memory_cue_log.mark_used(live_session_id=pk, archive_line_ids=[line], used_at_ms=BASE + 5_000)
@@ -607,6 +614,7 @@ async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> N
         ("老梗第 2 条", "", "joke"),
         (f"档#{line}", "女仆取名团子", "place"),
         ("老梗", "", "joke"),
+        ("社交事实#42", "", "social_fact"),
     ], "指向的档案行删掉后，那条记录跟着删"
     assert items[0]["used_at_ms"] == BASE + 5_000 and items[0]["sources"] == ["danmaku"]
     assert items[0]["detail"] == {"keyword_index": [1], "how": ["exact"], "keywords": ["女仆"]}

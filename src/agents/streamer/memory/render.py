@@ -52,6 +52,7 @@ from .zones import (
 
 if TYPE_CHECKING:
     from src.modules.storage.models.game_players import GamePlayer, PlayerInteraction
+    from src.modules.storage.models.social_facts import SocialFact
 
 __all__ = [
     "BRIEF_ZONES",
@@ -99,6 +100,7 @@ __all__ = [
     "render_recalled_commitment_card",
     "render_retract_notice",
     "render_save_heads",
+    "render_social_fact_card",
     "render_spoken_archive",
     "render_spoken_memory",
     "render_viewer_card",
@@ -846,6 +848,24 @@ def render_game_card(commitment: Commitment, *, game: str, unsure_save: bool = F
         f"[{render_commitment_number(commitment.id)}·{game}] "
         f"你之前说过「{quote}」，截至上一场还没做。这件承诺挂在你玩的游戏 {game} 上；{unsure}时机对再提。"
     )
+
+
+# 游戏主控态社交事实线索卡的类别短标签（与回想工具和社交事实渲染口径一致）
+_SOCIAL_FACT_CUE_LABELS: Mapping[str, str] = {
+    "works": "记着的事",
+    "sharing": "共享惯例",
+    "setting": "环境形态",
+    "members": "成员关系",
+}
+
+
+def render_social_fact_card(fact: "SocialFact") -> str:
+    """游戏主控态社交事实线索卡：清晰紧凑，不带内部数据库主键、不泄露直播间观众隐私。"""
+    text = " ".join((fact.text or "").split())
+    if not text:
+        return ""
+    label = _SOCIAL_FACT_CUE_LABELS.get(fact.kind, "记着的事")
+    return f"[存档记忆·{label}] {text}"
 
 
 def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = False, note: str = "") -> str:

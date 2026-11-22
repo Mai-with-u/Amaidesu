@@ -224,6 +224,10 @@ async def session_cues(
             viewer_id = entry.detail.get("viewer_id")
             label = f"老观众#{int(viewer_id)}" if isinstance(viewer_id, int) else "老观众卡"
             title = ""
+        elif entry.card_kind == "social_fact":
+            fact_id = entry.detail.get("social_fact_id")
+            label = f"社交事实#{int(fact_id)}" if isinstance(fact_id, int) else "社交事实"
+            title = ""
         else:
             label, title = _joke_label(entry.detail), ""
         items.append(
