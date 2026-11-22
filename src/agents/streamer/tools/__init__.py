@@ -1,6 +1,6 @@
 """主播 Agent 专属工具壳层（Agent 内部 Provider）。
 
-- ``reply_tool``        - ``streamer_reply`` 工具入口（包装 Replyer 表达引擎；
+- ``reply_tool``        - ``streamer_reply`` 工具入口（包装 Replyer 回复器；
   注册进 ToolRegistry，名单 ["streamer"]）
 - ``rundown_tool``      - ``rundown_control`` 工具（provider="rundown"；决策面
   按流程单激活状态条件追加）

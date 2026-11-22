@@ -1,4 +1,4 @@
-"""主播表达引擎：按复古提示词格式生成纯文本台词。
+"""主播回复器：按复古提示词格式生成纯文本台词。
 
 system 只放稳定的两块：人设块（名字、直播身份、性格、说话风格、口吻示例）在前、占大头，
 提炼过的直播说话规矩在后；整段每轮逐字一致，请求前缀缓存靠它命中。
@@ -136,7 +136,7 @@ _REPLYER_SYSTEM_TEMPLATE = "amaidesu_replyer_system"
 _REPLYER_TEMPLATE = "amaidesu_replyer"
 
 # Replyer 绑定的 LLM profile（封闭六成员之一）。绑定由代码显式声明，
-# 配置不承载绑定、无静默兜底——表达引擎固定走 replyer 档位。
+# 配置不承载绑定、无静默兜底——回复器固定走 replyer 档位。
 REPLYER_PROFILE = "replyer"
 
 
@@ -333,8 +333,8 @@ class Replyer:
                 keep_names=required_names,
             )
 
-        # 近逐字复读机械兜底：初稿把更早某句话几乎原样又说了一遍时，打回让表达层换个说法重说一次，
-        # 不直接吞掉这轮发言；重说仍撞车才退回给决策层换话题
+        # 近逐字复读机械兜底：初稿把更早某句话几乎原样又说了一遍时，打回让回复器换个说法重说一次，
+        # 不直接吞掉这轮发言；重说仍撞车才退回给规划器换话题
         earlier_lines = list(recent_speeches) if recent_speeches is not None else assistant_speech_lines(history)
         repeat = find_verbatim_repeat(speech, earlier_lines)
         if repeat is not None:
@@ -471,7 +471,7 @@ class Replyer:
         still_repeat = find_verbatim_repeat(rephrased, earlier_lines)
         if still_repeat is not None:
             self.logger.info(
-                f"Replyer 重说后仍近逐字复读（重合度 {still_repeat.ratio:.2f}），退回决策层: {still_repeat.sentence!r}"
+                f"Replyer 重说后仍近逐字复读（重合度 {still_repeat.ratio:.2f}），退回规划器: {still_repeat.sentence!r}"
             )
             return "", request_id
         return rephrased, request_id
@@ -658,7 +658,7 @@ class Replyer:
         """一条记录渲染成一行：去掉消息 ID 与提及标注；前情提要与游戏记录原样成行，游戏记录截短。
 
         消息 ID 只对 Planner 有用（它按 ID 指定要回应哪条）；要回应的原话已单独给出，
-        她这边看 ID 只是噪声。提及标注同样只给决策判据用，不进表达侧。
+        她这边看 ID 只是噪声。提及标注同样只给决策判据用，不进回复器。
         """
         content = entry.content
         if entry.role == "user":
@@ -678,7 +678,7 @@ class Replyer:
         self,
         result: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        """敏感词净化（Replyer 表达引擎内部净化；判定与词表收拢在 speech_guard）。
+        """敏感词净化（Replyer 回复器内部净化；判定与词表收拢在 speech_guard）。
 
         Args:
             result: 待净化的台词 dict（含 speech 与请求历史指针）
@@ -889,7 +889,7 @@ def _people_lines(
 
 def _pick_notes(notes: Sequence[PlayerNote], reply_to: str) -> List[PlayerNote]:
     """玩家条目留最近 :data:`_PEOPLE_LINES_MAX` 条；回应对象的条目都被挤出去时，换掉最早的一条、留下他最新的
-    那条（仍按先后排）：交接稿要她回他，表达侧却看不到他说了什么、做了什么，只能瞎接。"""
+    那条（仍按先后排）：交接稿要她回他，回复器却看不到他说了什么、做了什么，只能瞎接。"""
     picked = list(notes[-_PEOPLE_LINES_MAX:])
     if not reply_to or any(note.who == reply_to for note in picked):
         return picked
@@ -1034,7 +1034,7 @@ def _strip_id_tag(content: str, message_id: str) -> str:
     return content.removesuffix(f" [id:{message_id}]")
 
 
-#: canonical 行尾的提及标注（`` [提及…]``，决策层专用，拼在消息号之后）：剥标注要先于剥
+#: canonical 行尾的提及标注（`` [提及…]``，规划器专用，拼在消息号之后）：剥标注要先于剥
 #: 消息号，否则消息号的 removesuffix 对不上行尾
 _MENTION_TAG_SUFFIX = re.compile(r" \[提及[^\]]*\]$")
 

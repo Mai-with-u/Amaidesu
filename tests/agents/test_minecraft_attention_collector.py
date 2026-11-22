@@ -691,7 +691,7 @@ async def test_rare_sighting_forwards_boss_and_rare_ore_without_numbers() -> Non
 
 
 async def test_rare_loot_marks_notable_milestone_while_step_finished_stays_routine() -> None:
-    """开箱发现稀罕战利品标 notable=True 供快嘴惊呼；常规步进完成保持 notable=False 只留背景。"""
+    """开箱发现稀罕战利品标 notable=True 供即时反应惊呼；常规步进完成保持 notable=False 只留背景。"""
     bus = _FakeEventBus()
     collector, client = await _primed(bus, cursor=5)
     loot = _event(6, "rare_loot_found", "打开战利品箱（-311, 59, 73）开出了附魔金苹果 ×1，已经拿走", goal_id=12)

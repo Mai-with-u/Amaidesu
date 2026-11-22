@@ -213,7 +213,7 @@ async def test_replyer_renders_state_facts_or_placeholder() -> None:
 
 @pytest.mark.asyncio
 async def test_planner_hands_state_facts_to_reply_tool() -> None:
-    """批次 facts_text 与回执合成事实块随 reply 交给表达侧，调用后槽位清空。"""
+    """批次 facts_text 与回执合成事实块随 reply 交给回复器，调用后槽位清空。"""
     from unittest.mock import AsyncMock, MagicMock
 
     from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
@@ -313,7 +313,7 @@ def test_chat_speakers_list_who_spoke_this_batch() -> None:
 
 
 def test_chat_mention_mark_reaches_decision_view_only() -> None:
-    """提及标注挂在决策层看的事件行尾；交给表达侧的原话与玩家条目不带标注。"""
+    """提及标注挂在规划器看的事件行尾；交给回复器的原话与玩家条目不带标注。"""
     ledger = GameLedger()
     ledger.record_chat("minecraft", "玩家 Alex：麦麦来看看我", _ts(20, 1), speaker="uuid-a", who="Alex", mention="麦麦")
     ledger.record_chat("minecraft", "玩家 Steve：这谁挖的坑", _ts(20, 2), speaker="uuid-s", who="Steve")
@@ -343,7 +343,7 @@ def test_sole_chat_player_only_when_one_checked_player_spoke(speakers: tuple, ex
 
 
 def test_chat_message_id_only_reaches_decision_view() -> None:
-    """公屏消息号挂在决策层看的时间线行末尾（折叠行带第一条的号）；交给表达侧的原话不带号。"""
+    """公屏消息号挂在规划器看的时间线行末尾（折叠行带第一条的号）；交给回复器的原话不带号。"""
     ledger = GameLedger()
     ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="a1b2")
     ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="c3d4")
@@ -359,8 +359,8 @@ def test_chat_message_id_only_reaches_decision_view() -> None:
 
 
 def test_chat_mention_mark_follows_the_turn_into_the_timeline() -> None:
-    """提及标注记在时间线行上：canonical 决策侧行尾（消息号之后）挂 [提及…]，折叠行带第一条的标注；
-    事件行与 canonical 决策行同构，交给表达侧的原话不带标注。"""
+    """提及标注记在时间线行上：canonical 规划器行尾（消息号之后）挂 [提及…]，折叠行带第一条的标注；
+    事件行与 canonical 决策行同构，交给回复器的原话不带标注。"""
     ledger = GameLedger()
     ledger.record_chat(
         "minecraft",
@@ -394,7 +394,7 @@ def test_chat_mention_mark_follows_the_turn_into_the_timeline() -> None:
 
 
 def test_replyer_dialogue_strips_game_chat_message_id() -> None:
-    """表达侧聊天记录里的公屏行与弹幕行同一办法剥掉消息号。"""
+    """回复器聊天记录里的公屏行与弹幕行同一办法剥掉消息号。"""
     from src.agents.streamer.replyer import _history_entry, _strip_id_tag
 
     ledger = GameLedger()

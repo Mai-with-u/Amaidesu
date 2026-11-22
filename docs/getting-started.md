@@ -88,7 +88,7 @@ model_list = ["deepseek-chat"]
 [llm_profiles.planner.selection_strategy]
 name = "sequential"
 
-[llm_profiles.replyer]       # 表达引擎
+[llm_profiles.replyer]       # 回复器
 model_list = ["deepseek-chat"]
 temperature = 0.7
 ```
@@ -225,7 +225,7 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 
 | 名称 | 用途 | 关键子配置 |
 |------|------|-----------|
-| `streamer` | 主播 Agent（Planner ReAct 决策循环 + Replyer 表达引擎） | `[agents.streamer]` 子树（persona / context / proactive / background / command / word_filter） |
+| `streamer` | 主播 Agent（Planner ReAct 决策循环 + Replyer 回复器） | `[agents.streamer]` 子树（persona / context / proactive / background / command / word_filter） |
 | `minecraft` | 游戏 Agent（MCP 工具玩 Minecraft，事件驱动 ReAct） | `[agents.minecraft]`（[包内配置 Schema](../src/agents/minecraft/config.py)） |
 | `text_adv` | 游戏 Agent（文字冒险示例，零依赖开箱可玩） | `[agents.text_adv]` |
 | `game_2048` | 游戏 Agent（2048 对局宿主，主播直接调工具遥控落子） | `[agents.game_2048]` |

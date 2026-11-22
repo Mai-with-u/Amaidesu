@@ -1,18 +1,18 @@
-"""嘴与决策环节的对账件（Agent 内部件，代码直连，不注册为工具）。
+"""即时反应与规划器的对账件（Agent 内部件，代码直连，不注册为工具）。
 
 解决的问题：
-决策环节从开窗读快照到真正张嘴出声通常隔十多秒，这期间"嘴"可能已经对刚发生的游戏事件
+规划器从开窗读快照到真正出声通常隔十多秒，这期间"即时反应"可能已经对刚发生的游戏事件
 当场接了一句。两条出口互不知情时会出现三类穿帮：
-1. 重复欢迎：同一个人进直播间或上线进游戏，嘴刚欢迎完，决策环节二十秒后又欢迎一遍；
-2. 重复反应：同一场遭遇或送礼，嘴刚接完话，决策环节又把同一件事讲一遍；
+1. 重复欢迎：同一个人进直播间或上线进游戏，即时反应刚欢迎完，规划器二十秒后又欢迎一遍；
+2. 重复反应：同一场遭遇或送礼，即时反应刚接完话，规划器又把同一件事讲一遍；
 3. 相邻矛盾：决策开窗时还在旧现场（如掉线卡在门外、东西还没吃），出声前游戏已切入新世界
-   且嘴已说出"换到新世界站岸边了"，决策台词却接着说"还卡在门口进不去"。
+   且即时反应已说出"换到新世界站岸边了"，决策台词却接着说"还卡在门口进不去"。
 
-本模块维护本场口头流水（区分嘴与决策），并在决策台词出声前做对账：
+本模块维护本场口头流水（区分即时反应与规划器），并在决策台词出声前做对账：
 - 本场已欢迎过的人再次被欢迎时，确定性剥掉重复欢迎句（只剩欢迎则整条不说，后面还有新进展则只留新进展）；
-- 本轮开窗后嘴没说过话时，不做任何模型调用，零额外时延放行；
-- 本轮开窗后嘴说过话时，用独立核对档（verifier profile，缺省关思考、可换小模型）核对一次：
-  内容已被嘴说过的直接不说，被嘴与期间新游戏事件推翻的整句作废（交给决策层按新现场重想一步，
+- 本轮开窗后即时反应没说过话时，不做任何模型调用，零额外时延放行；
+- 本轮开窗后即时反应说过话时，用独立核对档（verifier profile，缺省关思考、可换小模型）核对一次：
+  内容已被即时反应说过的直接不说，被即时反应与期间新游戏事件推翻的整句作废（交给规划器按新现场重想一步，
   或静默撤回）；裁决契约三选一（放行 / 重复 / 作废），无改写分支——模型裁决只判不写，
   避免轻量模型借裁剪扭曲原话（ADR-080）。
 """
@@ -82,12 +82,12 @@ _PLAYER_JOIN_PATTERNS: Tuple[re.Pattern[str], ...] = (
 )
 
 _RECONCILE_SYSTEM = (
-    "你是直播台词出声前的核对器。主播在十几秒前开始构思一句台词，构思期间她的快反应通道（嘴）"
-    "已经先对刚发生的事说出了一两句话。请对照嘴刚说的话与这几秒刚发生的游戏记录，判断准备说出的这句台词该怎么处理。\n"
+    "你是直播台词出声前的核对器。主播在十几秒前开始构思一句台词，构思期间她的即时反应通道"
+    "已经先对刚发生的事说出了一两句话。请对照她刚说的话与这几秒刚发生的游戏记录，判断准备说出的这句台词该怎么处理。\n"
     "只输出下面三种格式之一，不要解释：\n"
     "1. 放行 —— 两边说的是不同的事，且这句台词没有被刚发生的新情况推翻。\n"
-    "2. 重复 —— 这句台词的主要意思嘴刚才已经说过了（包括同一声欢迎、对同一遭遇或同一份礼物的同义反应），不必再说一遍。\n"
-    "3. 作废：<一句话说明哪点过时或矛盾> —— 这句台词依赖的处境已被嘴刚说的话或刚发生的游戏记录推翻"
+    "2. 重复 —— 这句台词的主要意思她刚才已经说过了（包括同一声欢迎、对同一遭遇或同一份礼物的同义反应），不必再说一遍。\n"
+    "3. 作废：<一句话说明哪点过时或矛盾> —— 这句台词依赖的处境已被她刚说的话或刚发生的游戏记录推翻"
     "（例如已经换进新世界或重生上岸，台词却说还卡在门外进不去；东西已经吃掉或做完，台词却说还没吃或没拿到）。"
 )
 
@@ -104,7 +104,7 @@ class SpokenEntry:
 
 @dataclass(frozen=True, slots=True)
 class ReconcileVerdict:
-    """决策台词出声前与嘴对账的裁决结果。"""
+    """台词出声前与即时反应对账的裁决结果。"""
 
     action: ReconcileAction
     speech: str = ""
@@ -115,8 +115,8 @@ class ReconcileVerdict:
 class SpokenLog:
     """本场两条出口共用的已说台词流水（场次边界清空）。
 
-    嘴单独用它保底读取决策环节最近说的台词（不被高频身体事件挤掉），
-    决策环节用它查询本轮开窗之后嘴插过哪些话。
+    即时反应单独用它保底读取规划器最近说的台词（不被高频身体事件挤掉），
+    规划器用它查询本轮开窗之后即时反应插过哪些话。
     """
 
     def __init__(self, maxlen: int = 60) -> None:
@@ -133,7 +133,7 @@ class SpokenLog:
         cleaned = (text or "").strip()
         if not cleaned:
             return
-        # 短时间内同一出口同文不重复记（发声分发器回调与嘴内部多行跟读记账可能先后触达同一句）
+        # 短时间内同一出口同文不重复记（发声分发器回调与即时反应内部多行跟读记账可能先后触达同一句）
         for idx in range(len(self._entries) - 1, max(-1, len(self._entries) - 5), -1):
             existing = self._entries[idx]
             if existing.source == source and existing.text == cleaned and abs(at_ms - existing.at_ms) <= 2_000:
@@ -143,11 +143,11 @@ class SpokenLog:
         self._entries.append(SpokenEntry(at_ms=at_ms, source=source, text=cleaned, trigger=trigger))
 
     def mouth_since(self, since_ms: int) -> List[SpokenEntry]:
-        """返回 ``since_ms``（含）之后嘴说出口的全部台词，按时间正序排列。"""
+        """返回 ``since_ms``（含）之后即时反应说出口的全部台词，按时间正序排列。"""
         return [entry for entry in self._entries if entry.source == "mouth" and entry.at_ms >= since_ms]
 
     def recent_texts(self, limit: int = 20) -> List[str]:
-        """返回本场最近 ``limit`` 句已说台词（含决策与嘴，旧→新）。"""
+        """返回本场最近 ``limit`` 句已说台词（含规划器与即时反应，旧→新）。"""
         if limit <= 0:
             return []
         return [entry.text for entry in list(self._entries)[-limit:]]
@@ -262,7 +262,7 @@ def _parse_reconcile_output(raw: str, working_speech: str) -> Tuple[ReconcileAct
     if not first_line or first_line.startswith("放行"):
         return "pass", working_speech, ""
     if first_line.startswith("重复"):
-        return "duplicate", "", "内容已被嘴刚才说过"
+        return "duplicate", "", "内容已被她刚才说过"
     if first_line.startswith(("作废：", "作废:")):
         _, _, reason = first_line.partition("：" if "：" in first_line[:4] else ":")
         return "contradicted", "", reason.strip() or "构思期间现场已变，原话与新事实矛盾"
@@ -282,7 +282,7 @@ async def reconcile_with_mouth(
     llm_service: Optional[Any] = None,
     profile: str = "verifier",
 ) -> ReconcileVerdict:
-    """决策环节出声前核对：剥除重复欢迎，并对照本轮开窗后嘴说的话判断放行、重复或矛盾作废。
+    """规划器出声前核对：剥除重复欢迎，并对照本轮开窗后即时反应说的话判断放行、重复或矛盾作废。
 
     ``profile`` 缺省 ``verifier``——独立核对档，缺省引用与表达档相同的模型但
     关思考（reasoning_effort 不下发），用户可换成更小的模型；换档只改
@@ -292,7 +292,7 @@ async def reconcile_with_mouth(
     if not text:
         return ReconcileVerdict(action="duplicate", reason="空台词")
 
-    # 第一道（确定性，不看嘴本轮有没开口）：已在欢迎表里的人不再欢迎第二遍，同时保护未欢迎观众分句
+    # 第一道（确定性，不看即时反应本轮有没开口）：已在欢迎表里的人不再欢迎第二遍，同时保护未欢迎观众分句
     working, stripped_greeting = strip_duplicate_greetings(
         text,
         welcomed_names,
@@ -302,27 +302,27 @@ async def reconcile_with_mouth(
         _LOGGER.info(f"出声前拦下重复欢迎整句: {text!r}")
         return ReconcileVerdict(action="duplicate", reason="同一位观众或玩家本场已欢迎过")
 
-    # 本轮开窗后嘴没插过话：常态直接返回，零模型调用开销
+    # 本轮开窗后即时反应没插过话：常态直接返回，零模型调用开销
     if not mouth_entries:
         if stripped_greeting:
             _LOGGER.info(f"出声前剥除重复欢迎分句: {text!r} -> {working!r}")
             return ReconcileVerdict(action="trim", speech=working)
         return ReconcileVerdict(action="pass", speech=text)
 
-    # 第二道（确定性）：和本轮嘴刚说出口的话近逐字重合时直接按重复省掉模型调用
+    # 第二道（确定性）：和本轮即时反应刚说出口的话近逐字重合时直接按重复省掉模型调用
     mouth_texts = [entry.text for entry in mouth_entries if entry.text]
     if find_verbatim_repeat(working, mouth_texts) is not None:
-        _LOGGER.info(f"出声前命中与嘴近逐字重复，本句不说: {working!r}")
-        return ReconcileVerdict(action="duplicate", reason="与本轮嘴刚说的话近逐字重复")
+        _LOGGER.info(f"出声前命中与即时反应近逐字重复，本句不说: {working!r}")
+        return ReconcileVerdict(action="duplicate", reason="与本轮即时反应刚说的话近逐字重复")
 
-    # 第三道（语义与事实对账）：只在嘴确实插过话的少数轮次调一次轻量表达档核对
+    # 第三道（语义与事实对账）：只在即时反应确实插过话的少数轮次调一次轻量表达档核对
     if llm_service is None:
         if stripped_greeting:
             return ReconcileVerdict(action="trim", speech=working)
         return ReconcileVerdict(action="pass", speech=working)
 
     mouth_block = "\n".join(
-        f"- 嘴说：「{entry.text}」" + (f"（触发由头：{entry.trigger}）" if entry.trigger else "")
+        f"- 即时反应说：「{entry.text}」" + (f"（触发由头：{entry.trigger}）" if entry.trigger else "")
         for entry in mouth_entries
     )
     events_block = (
@@ -331,13 +331,13 @@ async def reconcile_with_mouth(
         else ""
     )
     user_prompt = (
-        f"【刚才嘴已经替你说出口的话】\n{mouth_block}"
+        f"【刚才已经替你说出口的话】\n{mouth_block}"
         f"{events_block}\n\n"
         f"【现在准备说出去的这一句】\n{working}\n\n"
         "请给出核对结论（放行 / 重复 / 作废：理由）："
     )
     try:
-        # 出声前与嘴对账仅做四态轻量判别，显式传低思考档位消除长思考带来的发声卡顿
+        # 出声前与即时反应对账仅做四态轻量判别，显式传低思考档位消除长思考带来的发声卡顿
         response = await llm_service.generate(
             [{"role": "user", "content": user_prompt}],
             system=_RECONCILE_SYSTEM,
@@ -345,13 +345,13 @@ async def reconcile_with_mouth(
             reasoning_effort="low",
         )
     except Exception as exc:  # noqa: BLE001 - 辅助核对异常不阻断正常说话
-        _LOGGER.warning(f"出声前与嘴对账调用异常，保守放行: {exc}", exc=True)
+        _LOGGER.warning(f"出声前与即时反应对账调用异常，保守放行: {exc}", exc=True)
         return ReconcileVerdict(
             action="trim" if stripped_greeting else "pass",
             speech=working,
         )
     if not response.ok:
-        _LOGGER.warning(f"出声前与嘴对账返回失败，保守放行: {response.error or 'unknown'}")
+        _LOGGER.warning(f"出声前与即时反应对账返回失败，保守放行: {response.error or 'unknown'}")
         return ReconcileVerdict(
             action="trim" if stripped_greeting else "pass",
             speech=working,
@@ -362,7 +362,9 @@ async def reconcile_with_mouth(
     if action == "pass" and stripped_greeting:
         return ReconcileVerdict(action="trim", speech=working, request_id=response.request_id or None)
     if action != "pass":
-        _LOGGER.info(f"出声前与嘴对账裁决 {action}（{reason or '裁剪重复分句'}）: 原={text!r} -> 现={final_speech!r}")
+        _LOGGER.info(
+            f"出声前与即时反应对账裁决 {action}（{reason or '裁剪重复分句'}）: 原={text!r} -> 现={final_speech!r}"
+        )
     return ReconcileVerdict(
         action=action,
         speech=final_speech,

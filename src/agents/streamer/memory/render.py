@@ -1,14 +1,14 @@
-"""记忆渲染：把承诺与场次档案渲染成两档写法（Planner 档 / 说话档）。
+"""记忆渲染：把承诺与场次档案渲染成两档写法（规划器档 / 回复器档）。
 
 所有通路共用一个渲染函数，两档的差别只有三处：
 
-| 成分 | Planner 档 | 说话档（Replyer） |
+| 成分 | 规划器档 | 回复器档（Replyer） |
 |---|---|---|
 | 编号 | 承诺（约#7）与档案行（档#41）都有，用于点名；别的存档折成的一行不带 | 没有 |
 | 时间 | 跨场只用"上一场""之前" | 跨场只用"上次""之前" |
 | 内容 | 不针对具体观众的承诺给标题加原话；对某位观众的承诺只给动作标题；档案给标题加原话 | 承诺只给动作标题；档案只给标题 |
 
-对某位观众的承诺在 Planner 档也不给原话：原话可能夹着 ta 的私事（"阿杰别难过，
+对某位观众的承诺在 规划器档也不给原话：原话可能夹着 ta 的私事（"阿杰别难过，
 失恋而已！下次进 MC 给你盖个小房子"），进了交接稿她就会当众问起；找承诺时只截
 答应的那半句是同一道防线的写入一侧。
 
@@ -193,17 +193,17 @@ def memory_ref_archive_numbers(memory_refs: Optional[str]) -> Set[int]:
 
 
 def render_commitment_number(commitment_id: int) -> str:
-    """承诺编号的写法（约#7）；Planner 用它点名，说话档不用编号。"""
+    """承诺编号的写法（约#7）；Planner 用它点名，回复器档不用编号。"""
     return refs.render_commitment_number(commitment_id)
 
 
 def render_archive_number(archive_line_id: int) -> str:
-    """档案行编号的写法（档#41）：简报与线索卡里标着，Planner 用它点名；说话档不用编号。"""
+    """档案行编号的写法（档#41）：简报与线索卡里标着，Planner 用它点名；回复器档不用编号。"""
     return refs.render_archive_number(archive_line_id)
 
 
 def _when_word(*, is_previous: bool, spoken: bool) -> str:
-    """跨场时间词：Planner 档"上一场""之前"，说话档"上次""之前"。"""
+    """跨场时间词：规划器档"上一场""之前"，回复器档"上次""之前"。"""
     if is_previous:
         return _SPOKEN_WHEN_PREVIOUS if spoken else _WHEN_PREVIOUS
     return _SPOKEN_WHEN_EARLIER
@@ -215,7 +215,7 @@ def render_commitment_text(
     spoken: bool = False,
     is_previous: bool = False,
 ) -> str:
-    """一条承诺的正文：Planner 档给标题（不针对具体的人时加原话），说话档只给标题。"""
+    """一条承诺的正文：规划器档给标题（不针对具体的人时加原话），回复器档只给标题。"""
     what = (commitment.what or "").strip()
     if spoken:
         return what
@@ -808,7 +808,7 @@ def render_game_card(commitment: Commitment, *, game: str, unsure_save: bool = F
     """游戏承诺卡：挂在这个游戏上、不针对具体观众的承诺；主播正在玩这个游戏时推。
 
     卡面不写"现在开着"：线索推送只认"正在玩"（有进行中的委派任务或刚有游戏事件），
-    但决策层自己看得见眼前现场，卡面替它断言反而容易说错。别的存档里答应的不推这张卡；
+    但规划器自己看得见眼前现场，卡面替它断言反而容易说错。别的存档里答应的不推这张卡；
     ``unsure_save``：这个游戏分存档、但这件承诺没记下是哪个存档，卡面让她先对一对眼前的世界。
     """
     quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
@@ -1058,19 +1058,19 @@ def render_cue_block(
 
 
 def render_spoken_archive(line: ArchiveLine, *, is_previous: bool = False) -> str:
-    """说话档：Planner 点名的那一行档案，交到 Replyer 手里（只给标题，不含编号与原话）。"""
+    """回复器档：Planner 点名的那一行档案，交到 Replyer 手里（只给标题，不含编号与原话）。"""
     # 观众来源的行：标题里那位观众的名字换成"那位观众"
     title, _ = _line_texts(line)
     if not title:
         return ""
     when = _when_word(is_previous=is_previous, spoken=True)
-    # 说话档只给标题，观众来源的再注一句：说"大家定的"，别编出一个具体的人
+    # 回复器档只给标题，观众来源的再注一句：说"大家定的"，别编出一个具体的人
     source = "（和观众一起定的，别说成是哪一位定的）" if source_notes(line) else ""
     return f"{_SPOKEN_HEADER}\n- {when}的事：{title}{source}。"
 
 
 def render_spoken_memory(*, target_label: str, commitment: Commitment, is_previous: bool = False) -> str:
-    """说话档：Planner 点名的那一条，交到 Replyer 手里（至多一条，不含编号与原话）。"""
+    """回复器档：Planner 点名的那一条，交到 Replyer 手里（至多一条，不含编号与原话）。"""
     what = render_commitment_text(commitment, spoken=True)
     if not what:
         return ""

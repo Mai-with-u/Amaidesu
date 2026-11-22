@@ -393,7 +393,7 @@ def rare_sighting_line(event: Dict[str, Any]) -> Tuple[str, str]:
     """把上游 ``rare_sighting`` 事件转成直播白话与细类标识 ``(summary, sighting_kind)``。
 
     角色在眼前视野里撞见 Boss 或露出天然稀有矿脉时，去掉观察编号与坐标格数遥测，
-    保留目标中文名、是否成片以及相对方位，供快嘴当场惊呼并提醒决策层下发采掘或应对任务。
+    保留目标中文名、是否成片以及相对方位，供即时反应当场惊呼并提醒规划器下发采掘或应对任务。
     """
     raw_facts = event.get("rare_sighting")
     facts: Dict[str, Any] = raw_facts if isinstance(raw_facts, dict) else {}

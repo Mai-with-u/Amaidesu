@@ -135,7 +135,7 @@ class MemoryCues:
     text: str = ""
     commitment_ids: Tuple[int, ...] = ()
     card_count: int = 0
-    # 卡片编号 → 对方称呼（对某位观众的卡才有；说话档要拿它说"答应过谁"）
+    # 卡片编号 → 对方称呼（对某位观众的卡才有；回复器档要拿它说"答应过谁"）
     labels: Dict[int, str] = field(default_factory=dict)
     archive_ids: Tuple[int, ...] = ()
     # 本批由观众弹幕或玩家开口推上来的档案行：本场提过的旧事有人提到了，再点名不退回
@@ -302,7 +302,7 @@ class MemoryCueProvider:
         self._announced_enter_viewers: Set[int] = set()
         # 本场观众来访统计轻缓存：观众主键 → (行关键快照元组, ViewerPresenceStats)，遗忘或换场立即作废
         self._presence_stats_cache: Dict[int, Tuple[Tuple[Any, ...], Any]] = {}
-        # 本批推送的卡：编号 → 对方称呼（说话档据此说"答应过谁"）
+        # 本批推送的卡：编号 → 对方称呼（回复器档据此说"答应过谁"）
         self._round_labels: Dict[int, str] = {}
 
     # ------------------------------------------------------------------
@@ -1086,7 +1086,7 @@ class MemoryCueProvider:
                 detail["statement_ids"] = [int(item.id) for item in statements]
             if promises:
                 detail["commitment_ids"] = [int(item.id) for item in promises]
-                # 卡尾的约#N 她点了要认：说话档说"答应过 Alex"，不说成"答应过大家"
+                # 卡尾的约#N 她点了要认：回复器档说"答应过 Alex"，不说成"答应过大家"
                 for item in promises:
                     self._round_labels[int(item.id)] = player.name
             card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail=detail)

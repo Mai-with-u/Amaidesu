@@ -1,7 +1,7 @@
 ---
 name: amaidesu_replyer_system
 version: "2.3"
-description: "主播表达引擎的系统提示词：人设块只写她是谁（名字、直播身份、性格、说话风格、口吻示例），在前、占大头；直播说话规矩在后、只留提炼过的几条。style_section / voice_examples_section / boundaries_rule 由代码渲染成带前导换行的整段（整行），人设里没写时为空串，整段省略、不留空行；AI 声明写死在规矩里，改人设删不掉。persona_profile_section 是本地人物设定档案渲染出的整段（带前导换行，末尾附一句何时拿出来聊的守则），没配档案时为空串。speech_style_rule 是按说话档位（边玩边说 / 杂谈）渲染的说话方式那一条规矩。game_rule_line 是游戏第一人称那一条规矩（整行带换行），没启用游戏时为空串。"
+description: "主播回复器的系统提示词：人设块只写她是谁（名字、直播身份、性格、说话风格、口吻示例），在前、占大头；直播说话规矩在后、只留提炼过的几条。style_section / voice_examples_section / boundaries_rule 由代码渲染成带前导换行的整段（整行），人设里没写时为空串，整段省略、不留空行；AI 声明写死在规矩里，改人设删不掉。persona_profile_section 是本地人物设定档案渲染出的整段（带前导换行，末尾附一句何时拿出来聊的守则），没配档案时为空串。speech_style_rule 是按说话档位（边玩边说 / 杂谈）渲染的说话方式那一条规矩。game_rule_line 是游戏第一人称那一条规矩（整行带换行），没启用游戏时为空串。"
 variables:
   - bot_name
   - personality

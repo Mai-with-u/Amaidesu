@@ -85,7 +85,7 @@ def _last_user_text(call: Dict[str, Any]) -> str:
 
 
 class _EchoReplyer:
-    """记录 generate 入参并回传纯文本台词的表达引擎替身。"""
+    """记录 generate 入参并回传纯文本台词的回复器替身。"""
 
     def __init__(self) -> None:
         self.calls: List[Dict[str, Any]] = []
@@ -226,7 +226,7 @@ async def test_play_mode_unlocks_cold_material_after_one_silent_proactive_round(
 
 
 async def test_planner_passes_talk_mode_and_collects_beat_done_and_card_id(prompts: Any) -> None:
-    """Planner 在杂谈档把 speech_mode=talk 传给表达层，并在 RoundOutcome 收回 beat_done 与 use_card_id。"""
+    """Planner 在杂谈档把 speech_mode=talk 传给回复器，并在 RoundOutcome 收回 beat_done 与 use_card_id。"""
     replyer = _EchoReplyer()
     reg = ToolRegistry()
     reg.register_provider(ReplyToolProvider(replyer=replyer))

@@ -115,7 +115,7 @@ class GamePlayerLedger:
                 save_id=payload.save_id,
                 save_name=payload.save_name,
                 at_ms=payload.timestamp_ms,
-                # 占位行也记号：决策层引到这一句时能说清"没有存原话"，而不是"查不到"
+                # 占位行也记号：规划器引到这一句时能说清"没有存原话"，而不是"查不到"
                 message_id=payload.message_id,
             )
         except Exception as exc:  # noqa: BLE001 - 落库失败不挡聊天流

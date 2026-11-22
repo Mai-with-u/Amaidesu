@@ -318,7 +318,7 @@ class ProactiveTrigger:
                 return TriggerKind.RUNDOWN
 
         # 游戏主控态下：停用高频 rundown_ready / schedule / 常规 cold，改为低频冷场兜底。
-        # 只有全场连续无声（解说、快嘴、观众回复均推进 last_speech_ms）达到阈值时才允许主播暖一句闲话。
+        # 只有全场连续无声（解说、即时反应、观众回复均推进 last_speech_ms）达到阈值时才允许主播暖一句闲话。
         if in_game_lead:
             if self._game_lead_idle_fallback_allowed(
                 last_speech_ms,
@@ -388,7 +388,7 @@ class ProactiveTrigger:
 
     @property
     def has_silent_cooldown(self) -> bool:
-        """最近一轮主动决策是否以沉默收尾（尚未开口清除）；供决策侧判断是否跳过 45 秒冷场死等。"""
+        """最近一轮主动决策是否以沉默收尾（尚未开口清除）；供规划器判断是否跳过 45 秒冷场死等。"""
         return self._last_silent_ms is not None
 
     def should_pace_speech(self, kind: TriggerKind) -> bool:

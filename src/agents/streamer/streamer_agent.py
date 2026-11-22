@@ -1,6 +1,6 @@
 """StreamerAgent - 主播 Agent（BaseAgent 子类）
 
-主播 Agent = Planner（决策核心）+ reply 工具（入口）+ Replyer（表达引擎），一体。
+主播 Agent = Planner（决策核心）+ reply 工具（入口）+ Replyer（回复器），一体。
 协议六项（最小契约）：
 - 生命周期：start/stop/cleanup + 可重建性
 - 工具提供：list_tools() → 暴露 reply（streamer_reply）；rundown_control 由 rundown 注册项声明
@@ -222,7 +222,7 @@ _INTENTIONAL_RECLAIM_REASONS = frozenset(
 )
 
 # 收播道别那一轮正在结束的那一场（其余时候为 None）。只在道别那一轮自己的调用链里看得见：
-# _execute_round 开头设上、跑完（含出错）复位。表达侧读历史（reply 工具 → _read_history）与
+# _execute_round 开头设上、跑完（含出错）复位。回复器读历史（reply 工具 → _read_history）与
 # 回想工具取场次类型都在这条调用链上（同一任务，或这一轮派生的任务——派生任务创建时复制上下文），
 # 读得到这一场；下播瞬间并发的常规轮次、调试轮次、道别期间新开场次的回调各在自己的任务里，
 # 读到的是 None，照常按进行中场次走。不挂在 Agent 实例上，正是为了不漏给这些并发轮次
@@ -249,7 +249,7 @@ def self_mention_word(payload: GameChatPayload) -> str:
     """这条游戏聊天里采集器判定的自提及名字（玩家聊天正文提到她的名字）；没提及为空串。
 
     名字取自 payload 的 ``type="self"`` 点名词条目：采集器在进游戏的进程里按文本判的事实，
-    决策侧只转写标注、不重新判。
+    规划器只转写标注、不重新判。
     """
     return next((m.name for m in payload.mentions if m.type == "self" and m.name), "")
 
@@ -429,7 +429,7 @@ class StreamerAgent(BaseAgent):
                 ``None`` 时启动期照常构造；注入时启动注册复用同一实例不重建。
             session_scope: 可选 ``SessionScope`` 替身（场次作用域）。``None`` 时
                 按内建依赖装配；注入时账本/时间线等以替身自带为准。
-            mouth: 可选 ``Mouth`` 替身（嘴）。``None`` 且配置关闭时不构造；
+            mouth: 可选 ``Mouth`` 替身（即时反应）。``None`` 且配置关闭时不构造；
                 注入时忽略配置直接使用替身。
             memory_cues: 可选 ``MemoryCueProvider`` 替身（线索推送）。``None`` 时有承诺与对话仓储
                 就按内建依赖装配；注入时直接使用替身。
@@ -544,7 +544,7 @@ class StreamerAgent(BaseAgent):
         # 强制触发判定就是一次集合归属判定（消息类型 ∈ 强制名单），直接持有
         # 名单内联判定，不再为它单设类
         self._force_message_types = frozenset(config.force.force_message_types)
-        # 房间态势（纯规则滑动窗口）与本场口头流水（区分嘴与决策出口，出声前对账与现场卡共用）
+        # 房间态势（纯规则滑动窗口）与本场口头流水（区分即时反应与决策出口，出声前对账与现场卡共用）
         self._room_state = RoomState()
         self._spoken_log = SpokenLog()
 
@@ -611,7 +611,7 @@ class StreamerAgent(BaseAgent):
                 if task_ledger is not None
                 else None,
                 game_now_provider=self._game_now,
-                # 付费史标注：查本批观众在付费三表有无记录，给决策侧的消息行加「（付费观众）」
+                # 付费史标注：查本批观众在付费三表有无记录，给规划器的消息行加「（付费观众）」
                 paid_identities_provider=self._paid_viewer_lookup.paid_identities
                 if self._paid_viewer_lookup is not None
                 else None,
@@ -621,7 +621,7 @@ class StreamerAgent(BaseAgent):
                 social_facts_session_provider=self._social_facts_session if social_fact_repo is not None else None,
                 # 开播【上次收尾】：头两窗或第一件委派受理前从确定性账面拼装上一场收工实况
                 opening_wrapup_provider=self._consume_opening_wrapup if sessions_repo is not None else None,
-                # 嘴与决策双向对账：表达侧可见实时口头流水，出声前核对本轮嘴说的话并在矛盾时补最新现场
+                # 即时反应与决策双向对账：回复器可见实时口头流水，出声前核对本轮即时反应说的话并在矛盾时补最新现场
                 recent_speeches_provider=self._spoken_log.recent_texts,
                 mouth_reconciler=self._reconcile_with_mouth,
                 fresh_context_since=self._fresh_context_since_open,
@@ -640,7 +640,7 @@ class StreamerAgent(BaseAgent):
                     frame_provider=self._latest_live_frame,
                     frame_stale_warn_ms=config.live_frame.stale_warn_ms,
                 )
-            # 行为准则（behavior_style）只读包内配置权威 config.persona（决策侧通道）
+            # 行为准则（behavior_style）只读包内配置权威 config.persona（规划器通道）
             _behavior_style = config.persona.behavior_style or ""
             # context 组装器路径开关——直接读包内权威
             _context_enabled = config.context.enabled
@@ -660,7 +660,7 @@ class StreamerAgent(BaseAgent):
                 viewer_repo=viewer_repo,
                 context_enabled=bool(_context_enabled),
                 behavior_style=_behavior_style,
-                # 房管也要知道她是谁：挑话题、在回复指引里定她的态度都以人设为准；措辞风格仍只给表达侧
+                # 房管也要知道她是谁：挑话题、在回复指引里定她的态度都以人设为准；措辞风格仍只给回复器
                 bot_name=config.persona.bot_name,
                 personality=config.persona.personality,
                 # 边界栏三条通路同源：房管替她拿主意时也不答应线下见面、改称呼这类事
@@ -680,9 +680,9 @@ class StreamerAgent(BaseAgent):
             enabled=wf.enabled,
         )
 
-        # Replyer（表达引擎，Agent 内部件——非工具；测试可构造注入替身）
+        # Replyer（回复器，Agent 内部件——非工具；测试可构造注入替身）
         # 人设三件套从包内配置权威 config.persona 单点构建、构造期注入
-        # （behavior_style 不进表达侧——只走 Planner 决策通道）
+        # （behavior_style 不进回复器——只走 Planner 决策通道）
         if replyer is not None:
             self._replyer = replyer
         else:
@@ -701,7 +701,7 @@ class StreamerAgent(BaseAgent):
                     "speech_max_chars": config.speech_max_chars,
                     "talk_speech_max_chars": config.talk_speech_max_chars,
                     "has_game": self._has_enabled_game,
-                    # 表达侧只带最近几条原文（0 = 回退到整份历史）
+                    # 回复器只带最近几条原文（0 = 回退到整份历史）
                     "history_items": config.replyer_history_items,
                 },
                 llm_service=llm_manager,
@@ -881,7 +881,7 @@ class StreamerAgent(BaseAgent):
         # 本场对话进 LLM 前的只追加投影：超预算时后台按章压成前情提要，两次换章之间
         # 历史前缀逐字不变。Replyer 只截最近几条原文，不再整份消费时间线，所以预算只按
         # Planner 的模型窗口换算；回退开关（replyer_history_items=0）让 Replyer 重新整份
-        # 消费，预算随之改回取两个模型中较小的窗口，免得整份历史撑爆表达侧
+        # 消费，预算随之改回取两个模型中较小的窗口，免得整份历史撑爆回复器
         timeline_profiles = (
             (_PROFILE_PLANNER,) if config.replyer_history_items > 0 else (_PROFILE_PLANNER, _PROFILE_REPLYER)
         )
@@ -978,7 +978,7 @@ class StreamerAgent(BaseAgent):
             logger=self._logger,
         )
 
-        # 嘴（Agent 内部件，代码直连）：游戏里出事时不经 Planner 当场出一句短反应。
+        # 即时反应（Agent 内部件，代码直连）：游戏里出事时不经 Planner 当场出一句短反应。
         # 注入替身优先；开关关闭时不构造，关闭与替身缺席路径行为一致（不说话）
         self._mouth: Optional[Mouth] = None
         if mouth is not None:
@@ -1007,7 +1007,7 @@ class StreamerAgent(BaseAgent):
                 recent_speeches_provider=self._spoken_log.recent_texts,
                 on_mouth_spoken=self._on_mouth_spoken,
             )
-        # 她说过的每句话（Planner 的与嘴自己的）经发声分发器直连记进本场口头流水、核销已欢迎名单并同步给嘴
+        # 她说过的每句话（Planner 的与即时反应自己的）经发声分发器直连记进本场口头流水、核销已欢迎名单并同步给即时反应
         self._speech.add_spoken_listener(self._on_speech_emitted)
 
         self._logger.info(
@@ -1113,12 +1113,12 @@ class StreamerAgent(BaseAgent):
                 except Exception as exc:  # noqa: BLE001 - 停机收权失败不阻断后续清理
                     self._logger.warning(f"停机收回游戏主控权失败（已忽略）: {exc}", exc=True)
 
-        # 嘴先停：它会往发声管线里塞台词
+        # 即时反应先停：它会往发声管线里塞台词
         if self._mouth is not None:
             await self._mouth.stop()
 
         # 停发声管线之前先等队尾播完（最多 30 秒）：关程序时 Agent 先停、live.ended 后到，
-        # 她最后几句往往还排在播放队列里，直接停队列会把它们当没送达丢掉。嘴已停、
+        # 她最后几句往往还排在播放队列里，直接停队列会把它们当没送达丢掉。即时反应已停、
         # 不再塞新台词，这里只等已派发的那几句；TTS 卡住等满上限就照常停，剩下的标没送达
         await self._wait_speech_tail(before="停止发声管线")
 
@@ -1148,7 +1148,7 @@ class StreamerAgent(BaseAgent):
         await self._timeline.reset()
 
         # 收拢本 Agent 派出的后台任务，保证停止返回后不再有它发起的写库或 LLM 调用
-        # （停机随后就关 LLM、关库）。排在嘴、发言管线、决策循环都停下之后：停止途中
+        # （停机随后就关 LLM、关库）。排在即时反应、发言管线、决策循环都停下之后：停止途中
         # 它们收尾时引起的流程单变更也已派出落库任务，一并等到。
         # 流程单落库与广播是短写入：等它做完，最后一次环节变更才进得了库
         await self._rundown_coord.stop()
@@ -1255,7 +1255,7 @@ class StreamerAgent(BaseAgent):
         if self._reply_provider is None:
             self._reply_provider = ReplyToolProvider(
                 replyer=self._replyer,
-                # 没有聊天仓储时历史仍由内存对话轮承载，表达侧照样知道上一句说了什么
+                # 没有聊天仓储时历史仍由内存对话轮承载，回复器照样知道上一句说了什么
                 history_provider=self._read_history_sync,
                 rundown_text_provider=self._rundown_coord.build_text_sync,
                 event_bus=self._event_bus,
@@ -2373,7 +2373,7 @@ class StreamerAgent(BaseAgent):
         """续播恢复：上一进程在途的委派重登记进任务记录表（轻量半补）。
 
         与 ``_restore_interrupted_delegations``（续播认领，记回手头的事）分工：
-        认领管决策侧的"她手头有事"，本方法管任务记录表（看板/观察面的委派账）。
+        认领管规划器的"她手头有事"，本方法管任务记录表（看板/观察面的委派账）。
         记录表只在内存里，进程重启后整本清空；库里的委派账在启动期把上一进程
         没等到终态的受理统一记成"被打断"（StorageLedger 启动收尾），这些被打断
         的行就是要恢复的集合。重登记标注来源，不伪造终态。失败只记日志，不挡续播。
@@ -2660,13 +2660,13 @@ class StreamerAgent(BaseAgent):
         return sum(1 for line in lines if line.dropped_at_ms is None)
 
     async def _lookup_commitment(self, commitment_id: int) -> Any:
-        """按编号取一条承诺（Planner 点名后渲染说话档用）；取不到返回 None。"""
+        """按编号取一条承诺（Planner 点名后渲染回复器档用）；取不到返回 None。"""
         if self._commitments_repo is None:
             return None
         return await self._commitments_repo.get_commitment(commitment_id=int(commitment_id))
 
     async def _lookup_archive_line(self, line_id: int) -> Any:
-        """按编号取一行档案（Planner 点名后渲染说话档用）；取不到返回 None。"""
+        """按编号取一行档案（Planner 点名后渲染回复器档用）；取不到返回 None。"""
         if self._archive_repo is None:
             return None
         lines = await self._archive_repo.list_lines_by_ids(line_ids=[int(line_id)])
@@ -2809,7 +2809,7 @@ class StreamerAgent(BaseAgent):
     ) -> None:
         """game.* 事件回调：事件行入待入账队列，下个决策窗边界批量追加进时间线。
 
-        行标签带事件类型（``游戏·<game>·<类型>``），决策层据此区分"剧情推进"
+        行标签带事件类型（``游戏·<game>·<类型>``），规划器据此区分"剧情推进"
         （milestone）与"需要定夺"（report）；message 本体经术语脱敏（任务号/观测
         引用等内部标识不进主播上下文）。``report`` 类型（交付总结/升级决策）同时
         置位待定夺触发信号——游戏停在选项处等主播定夺，下次空缓冲 tick 应促发
@@ -2821,8 +2821,8 @@ class StreamerAgent(BaseAgent):
                 payload.game, payload.event_type, payload.message, payload.timestamp_ms or now_ms()
             )
             if self._mouth is not None and payload.event_type != "error" and message:
-                # 非报错的游戏进展与交付留进嘴的近期背景，使现场卡知道刚做成什么；
-                # 只有高光里程碑（如开箱发现稀罕宝物）才让嘴当场惊呼一句（P1 高光优先级）
+                # 非报错的游戏进展与交付留进即时反应的近期背景，使现场卡知道刚做成什么；
+                # 只有高光里程碑（如开箱发现稀罕宝物）才让即时反应当场惊呼一句（P1 高光优先级）
                 self._mouth.note_game(message)
                 if payload.event_type == "milestone" and payload.notable:
                     self._mouth.react("game:notable_milestone", message, kind="milestone")
@@ -2983,11 +2983,11 @@ class StreamerAgent(BaseAgent):
                 # 只有冲她做肢体动作的玩家算找过她，本窗据此推他的玩家卡；跟随状况上挂的是她跟着的人，
                 # 他没来找她，不推卡、不算她在回应谁
                 player=payload.player_uuid if payload.kind == "player_body_language" else "",
-                # 冲她做动作的人的名字：表达侧据此说清是谁扔来的、谁拍的她，不说成凭空到手
+                # 冲她做动作的人的名字：回复器据此说清是谁扔来的、谁拍的她，不说成凭空到手
                 who=payload.player_name if payload.kind == "player_body_language" else "",
             )
             if self._mouth is not None and summary:
-                # 所有身体侧经历都留进嘴的近期背景，但轻微掉血、摔伤、挨打、天色变换不再触发嘴嗷嗷叫
+                # 所有身体侧经历都留进即时反应的近期背景，但轻微掉血、摔伤、挨打、天色变换不再触发即时反应嗷嗷叫
                 self._mouth.note_game(summary)
             should_react_and_wake = payload.kind in MOUTH_BODY_KINDS and not (
                 payload.kind == "died" and payload.intentional
@@ -3005,8 +3005,8 @@ class StreamerAgent(BaseAgent):
                         refresh_scene=payload.kind in SCENE_CHANGING_BODY_KINDS,
                         kind=payload.kind,
                     )
-                # 主播主控态下：视野撞见强敌/稀有矿藏或意外真死亡时立即唤醒决策层下发任务；
-                # 游戏自主主控态下：由游戏侧直接应急处置，主播侧只经嘴即时出声而不拉起重型 Planner
+                # 主播主控态下：视野撞见强敌/稀有矿藏或意外真死亡时立即唤醒规划器下发任务；
+                # 游戏自主主控态下：由游戏侧直接应急处置，主播侧只经即时反应即时出声而不拉起重型 Planner
                 if not self._is_game_lead_active():
                     self._proactive_signals.set_game()
                     self._notify_fresh_input()
@@ -3033,7 +3033,7 @@ class StreamerAgent(BaseAgent):
                 self._scope.record_private_chat(f"[{payload.game}] {body}")
             else:
                 # 记下这句是谁说的：本窗只有一位核对过的玩家开口时，她这一窗的话落库时记成在回应他
-                # 带上玩家名：表达侧据此分清这句是哪位玩家说的，不安到刚点过名的女仆、宠物头上
+                # 带上玩家名：回复器据此分清这句是哪位玩家说的，不安到刚点过名的女仆、宠物头上
                 self._game_ledger.record_chat(
                     payload.game,
                     body,
@@ -3047,7 +3047,7 @@ class StreamerAgent(BaseAgent):
                 if self._mouth is not None:
                     self._mouth.note_game(body)
                 if payload.kind != "player":
-                    # 公屏系统消息里的玩家加入提示（如"系统消息：玩家甲加入了游戏"）：登记待欢迎名，防嘴与决策重复欢迎
+                    # 公屏系统消息里的玩家加入提示（如"系统消息：玩家甲加入了游戏"）：登记待欢迎名，防即时反应与决策重复欢迎
                     joined_player = extract_player_join_name(payload.content) or extract_player_join_name(body)
                     if joined_player:
                         self._room_state.record_player_join(joined_player)
@@ -3070,7 +3070,7 @@ class StreamerAgent(BaseAgent):
         """``game.self.chatted`` 回调：她在游戏公屏说出去的一句入待入账队列，下个决策窗进时间线。
 
         游戏那一面会自己找玩家搭话（第 58 场问人要蒲公英），不记下来的话玩家回一句"找到了"，
-        她在直播里接不上。这是她自己的话：不促发决策、不交表达侧当别人刚说的话。
+        她在直播里接不上。这是她自己的话：不促发决策、不交回复器当别人刚说的话。
         """
         del event_name, source
         try:
@@ -3142,7 +3142,7 @@ class StreamerAgent(BaseAgent):
         return latest
 
     def _current_segment_title(self) -> str:
-        """当前流程单环节的标题（嘴的现场卡用）；没有流程单为空。"""
+        """当前流程单环节的标题（即时反应的现场卡用）；没有流程单为空。"""
         return self._rundown_coord.current_segment_title()
 
     async def _read_scene_brief(self) -> str:
@@ -3161,7 +3161,7 @@ class StreamerAgent(BaseAgent):
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - 读不到现场不挡反应
-                self._logger.warning(f"嘴读现场工具 '{name}' 失败: {exc}", exc=True)
+                self._logger.warning(f"即时反应读现场工具 '{name}' 失败: {exc}", exc=True)
                 continue
             brief = brief_of(result.structured_content) if result.success else ""
             if brief:
@@ -3169,7 +3169,7 @@ class StreamerAgent(BaseAgent):
         return ""
 
     def _on_speech_emitted(self, text: str, at_ms: int, source: str) -> None:
-        """发声分发器每播出一句台词（决策环节或嘴）后同步记入本场口头流水、核销已欢迎名单并喂给嘴。"""
+        """发声分发器每播出一句台词（规划器或即时反应）后同步记入本场口头流水、核销已欢迎名单并喂给即时反应。"""
         resolved_source: Literal["mouth", "planner"] = "mouth" if source == "mouth" else "planner"
         self._spoken_log.record(text, at_ms, source=resolved_source)
         self._room_state.note_spoken(text)
@@ -3179,11 +3179,11 @@ class StreamerAgent(BaseAgent):
             self._mouth.note_speech(text, at_ms)
 
     def _on_mouth_spoken(self, text: str, at_ms: int, trigger_text: str) -> None:
-        """嘴发声完成后补记触发由头，让决策环节出声前核对时知道嘴刚才接的是哪件事。"""
+        """即时反应发声完成后补记触发由头，让规划器出声前核对时知道即时反应刚才接的是哪件事。"""
         self._spoken_log.record(text, at_ms, source="mouth", trigger=trigger_text)
 
     async def _reconcile_with_mouth(self, candidate: str, since_ms: int) -> ReconcileVerdict:
-        """决策台词出声前核对：剥掉本场重复欢迎，并对照 ``since_ms`` 之后嘴说出口的话及新到游戏事件裁决。"""
+        """决策台词出声前核对：剥掉本场重复欢迎，并对照 ``since_ms`` 之后即时反应说出口的话及新到游戏事件裁决。"""
         # 读取当前渲染窗口内尚未欢迎的进房观众名单，避免同一分句同时提到新人与已欢迎者时误杀新人欢迎
         unwelcomed = [name for _uid, name in self._room_state.recent_unwelcomed_enters(now_ms=self._clock()) if name]
         return await reconcile_with_mouth(
@@ -3197,7 +3197,7 @@ class StreamerAgent(BaseAgent):
         )
 
     async def _fresh_context_since_open(self, since_ms: int) -> Dict[str, Any]:
-        """决策台词因与嘴或新现场矛盾退回重想时，附上本窗开窗后嘴说的话、待入账新事件与最新一句话现场。"""
+        """决策台词因与即时反应或新现场矛盾退回重想时，附上本窗开窗后即时反应说的话、待入账新事件与最新一句话现场。"""
         ctx: Dict[str, Any] = {
             "mouth_just_said": [entry.text for entry in self._spoken_log.mouth_since(since_ms)],
             "latest_game_events": self._game_ledger.pending_lines()[-8:],
@@ -3893,7 +3893,7 @@ class StreamerAgent(BaseAgent):
         调试注入传 False——即使开着场次，这些消息也不在 live_chat 里。
 
         ``closing_session`` 只在收播道别那一轮给出（正在结束的那一场）。决策执行器开窗按
-        这一场读历史、道别句带这一场的编号；reply 工具经 :meth:`_read_history` 给表达侧取
+        这一场读历史、道别句带这一场的编号；reply 工具经 :meth:`_read_history` 给回复器取
         历史、回想工具取场次类型，也都按这一场——这两处不经参数传递，靠 ``_CLOSING_SESSION``
         这个上下文变量读到。
 
@@ -4422,7 +4422,7 @@ class StreamerAgent(BaseAgent):
 
         reply_tool 的 history_provider 锚在本方法上，既有测试也经它读历史——
         保留薄转发，读数语义（合并投影/读库失败返回 None）在 SessionScope 单点维护。
-        收播道别那一轮按正在结束的那一场读：表达侧写道别句时看得到本场最后的对话，
+        收播道别那一轮按正在结束的那一场读：回复器写道别句时看得到本场最后的对话，
         时间线也不会因为"当前场次"解析成空而被当作换场清空。这一场从 ``_CLOSING_SESSION``
         取，只有道别那一轮自己的调用链读得到；并发的常规轮次照常读进行中场次。
         """

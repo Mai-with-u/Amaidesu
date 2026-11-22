@@ -61,7 +61,7 @@ def observation_data(result: ToolExecutionResult) -> Dict[str, Any]:
     """
     data = dict(result.structured_content) if isinstance(result.structured_content, dict) else {}
     # 游戏侧返回结构化 dict 的工具在业务拒绝时仍带外层 success=True、内层 success=False，
-    # 此时观察结果标 ok=False，避免把未发出去的游戏聊天等失败回执包装成成功观察误导决策层
+    # 此时观察结果标 ok=False，避免把未发出去的游戏聊天等失败回执包装成成功观察误导规划器
     data.setdefault("ok", data.get("success") is not False)
     if result.content and "content" not in data and not same_json_document(result.content, result.structured_content):
         data["content"] = result.content
@@ -162,7 +162,7 @@ class DelegationWorkbench:
         return self._delegation_status_provider
 
     def boards(self) -> Dict[str, Board]:
-        """现读任务账本看板并同步手头在做视图（决策环节与嘴共用同一事实源）。"""
+        """现读任务账本看板并同步手头在做视图（规划器与即时反应共用同一事实源）。"""
         return self.sync_from_ledger()
 
     def handles(self, name: str) -> bool:
@@ -266,7 +266,7 @@ class DelegationWorkbench:
         """从任务账本现读各执行者的看板，将手头在做视图对齐到账本唯一事实源。
 
         - 账本上有在做（自动送达、提拔待办、回滚或运营直派）：立即更新 ``_delegations[agent]``，
-          决策参考段与嘴的现场卡读到的都是此刻真正正在做的这一件；
+          决策参考段与即时反应的现场卡读到的都是此刻真正正在做的这一件；
         - 账本上没有在做，但原记录被搁回待办（shelved）：从手头在做移出，只在【待办】显示；
         - 账本上没有在做且不在待办（已终态）：保留 ``_delegations[agent]`` 显示刚了结的那件及怎么了结的。
         未注入看板查询（单测降级装配）时返回空字典，不改动既有内存记录。
@@ -297,7 +297,7 @@ class DelegationWorkbench:
         return boards
 
     def current_goals(self) -> List[GoalLine]:
-        """手上的事（嘴的现场卡用）：先与任务账本看板对齐，再输出当前在做或刚由游戏上报的目标。"""
+        """手上的事（即时反应的现场卡用）：先与任务账本看板对齐，再输出当前在做或刚由游戏上报的目标。"""
         self.sync_from_ledger()
         return goal_lines(self._delegations, self._delegation_status_provider)
 

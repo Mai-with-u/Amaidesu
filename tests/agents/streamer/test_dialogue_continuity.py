@@ -576,7 +576,7 @@ def test_streamer_prompts_speak_as_one_streamer() -> None:
         )
     finally:
         reset_prompt_manager()
-    # 决策侧是房管（第三方视角），表达侧仍是主播本人第一人称：身份分离契约
+    # 规划器是房管（第三方视角），回复器仍是主播本人第一人称：身份分离契约
     assert "# 你与主播的关系" in planner and "房管（运营）" in planner and "不替主播发言" in planner
     assert "没有小伙伴、没有游戏 Agent" in planner and "【我手头在游戏里做的事】" in planner
     assert "你就是" not in planner and "【身体" not in planner
@@ -609,7 +609,7 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
     assert "发言交接契约" in prompt and "不是台词草稿" in prompt
     assert "可核对的客观状态陈述" in prompt and "禁止第一人称叙事" in prompt
     assert "reply_guidance = 方向 +（需要时）一句场景说明" in prompt and "纯方向意图" not in prompt
-    # 态度腔调的硬性要求已撤：事件本身带情绪属性才写一句客观的场景说明，表达层自己管怎么说
+    # 态度腔调的硬性要求已撤：事件本身带情绪属性才写一句客观的场景说明，回复器自己管怎么说
     assert "态度从事实本身推导" not in prompt and "不写成她口吻的整句台词" in prompt
     assert "emotion 填这件事的场景情绪，没有场景情绪就填 neutral" in prompt
     assert "错误示范" in prompt and "正确示范" in prompt
@@ -648,7 +648,7 @@ def test_planner_prompt_names_the_reply_tool_as_registered() -> None:
 
 
 def test_planner_prompt_knows_who_she_is_but_stays_the_room_manager() -> None:
-    """房管知道她是谁：人设进决策侧，挑话题、定态度按她的性子来；身份仍是房管，措辞仍归表达侧。"""
+    """房管知道她是谁：人设进规划器，挑话题、定态度按她的性子来；身份仍是房管，措辞仍归回复器。"""
     reset_prompt_manager()
     try:
         prompt = get_prompt_manager().render(
@@ -884,7 +884,7 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
 
 
 def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) -> None:
-    """表达层用主播的规矩：她是全场中心、短句有态度、只讲游戏里的亲身经历、不复述打算。
+    """回复器用主播的规矩：她是全场中心、短句有态度、只讲游戏里的亲身经历、不复述打算。
 
     线上回放里 30 句台词有 27 句在复述"回屋做床、设重生点"，9 句念出"被系统收掉了""游戏侧取不到货"
     这类幕后说法，12 句对着零观众的房间求主意、求起名；从群聊搬来的"读空气、不刻意找话题、平淡"
@@ -940,7 +940,7 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
 
 
 def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None:
-    """一轮一个点、一句话：指引写几个点她就讲几个点，表达侧又按写稿的路子起承转合，台词成了小作文。
+    """一轮一个点、一句话：指引写几个点她就讲几个点，回复器又按写稿的路子起承转合，台词成了小作文。
 
     本机实测换了两种模型都一样：22 句台词字数中位 91、最长 155，8 句分了段；
     指引只有一个点的那句 50 字，四五个点的一百出头。
@@ -996,7 +996,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
 
 def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
     """游戏之外的事也要有出处：实测 Planner 在话题摘要里编出"开播前桌上摆了两升大水壶、差点碰翻"，
-    表达侧照着当真事讲了一大段。看法和感受可以聊，凭空多出来的现实经历不行。"""
+    回复器照着当真事讲了一大段。看法和感受可以聊，凭空多出来的现实经历不行。"""
     planner = prompts.render(
         "amaidesu_planner_react",
         bot_name="麦麦",

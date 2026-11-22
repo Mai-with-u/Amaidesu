@@ -65,7 +65,7 @@ class ReviewSpeechItem(BaseModel):
 
 
 class ReviewCueItem(BaseModel):
-    """复盘页「本场线索卡」一行：推给决策层的哪张卡、谁触发的、分数、她用上没有。"""
+    """复盘页「本场线索卡」一行：推给规划器的哪张卡、谁触发的、分数、她用上没有。"""
 
     id: int
     pushed_at_ms: int
@@ -232,7 +232,7 @@ class SessionReviewResponse(BaseModel):
     多选合并视图或报告未生成时为 None。
     """
     degraded: bool = False
-    """诊断事件天目录存在缺失（被清理或从未落盘）——决策侧指标相应降级。"""
+    """诊断事件天目录存在缺失（被清理或从未落盘）——规划器指标相应降级。"""
 
 
 class ReviewExportManifest(BaseModel):

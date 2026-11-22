@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 class ReplyQuote(BaseModel):
     """本句字幕在回复的那条观众发言（昵称 + 原文）。
 
-    由决策层在解析回复目标时从本轮弹幕批顺带取出，沿
+    由规划器在解析回复目标时从本轮弹幕批顺带取出，沿
     ``SubtitleService.show`` 链显式传参到各展示位；无回复目标或解析
     不中时整份为 None（宁缺毋假，不显示引用行）。
     """

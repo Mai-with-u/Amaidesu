@@ -1,6 +1,6 @@
 """Replyer 输入预算：系统提示词以人设为主、规矩精简，整份输入有上限且不随场长增长。
 
-旧做法里表达侧背着整场历史开口：90 分钟时输入上万 token，名字和性格只占系统提示词的 3%，
+旧做法里回复器背着整场历史开口：90 分钟时输入上万 token，名字和性格只占系统提示词的 3%，
 后半场她说话像换了个人。这里用真实模板把几条预算钉住：系统提示词 ≤2,400、规矩块 ≤850、
 有代表性的人设（含仓库默认设定档案）占系统提示词四成以上；整份输入 ≤5,200，50 条历史和
 500 条历史一样多，本批弹幕满批时也不超。另核对人设块只写身份、AI 声明写死、边界栏可省、稳定段逐字一致。
@@ -60,8 +60,9 @@ _PERSONA: Dict[str, Any] = {
     ),
     # 代表性人设的设定档案直接用仓库默认档案（钉子按真实默认守）
     "persona_profile": (
-        (Path(__file__).resolve().parents[3] / "src/agents/streamer/profiles/maimai_profile.md")
-        .read_text(encoding="utf-8")
+        (Path(__file__).resolve().parents[3] / "src/agents/streamer/profiles/maimai_profile.md").read_text(
+            encoding="utf-8"
+        )
     ),
 }
 
@@ -100,7 +101,7 @@ def _cycle_turn(index: int) -> TimelineTurn:
     """一场直播里按固定节奏轮换的记录：弹幕、她的话、付费留言、游戏长汇报与里程碑。
 
     同一位置的内容只看 index 除以 10 的余数，50 条与 500 条两场的最近几条逐字相同；
-    消息 ID 随位置变化，表达侧去掉 ID 标签后不影响 token 数。
+    消息 ID 随位置变化，回复器去掉 ID 标签后不影响 token 数。
     """
     message_id = f"m{index}"
     kind = index % 10
@@ -134,7 +135,7 @@ def _cycle_turn(index: int) -> TimelineTurn:
 
 
 def _session(length: int) -> List[Any]:
-    """本场时间线投影：长场前面还有前情目录与两章前情提要（章节层不进表达侧）。"""
+    """本场时间线投影：长场前面还有前情目录与两章前情提要（章节层不进回复器）。"""
     chapters: List[Any] = []
     if length > 100:
         chapters = [
@@ -384,7 +385,7 @@ def _section(user: str, heading: str) -> str:
 
 async def test_player_she_is_told_to_answer_is_listed_even_when_crowded_out(prompts: Any) -> None:
     """交接稿要她回第 1 位开口的玩家（to_player），可条目只留最近 3 位：换掉最早的一条留下他的，
-    他那句给到 40 字，满批仍 ≤3,300。原先他只剩一个句数，表达侧看不到他说了什么。"""
+    他那句给到 40 字，满批仍 ≤3,300。原先他只剩一个句数，回复器看不到他说了什么。"""
     history, batch = _full_batch(stored=True)
     notes, chat = _six_players()
     replyer, llm = _replyer(prompts)
@@ -475,7 +476,7 @@ _DEFAULT_BOUNDARIES_LINE = "- 不答应的事：线下见面、钱和红包、�
 @pytest.mark.parametrize(
     ("boundaries", "expected_last_line"),
     [
-        # 不传边界栏：表达侧的兜底默认值与配置默认值一致
+        # 不传边界栏：回复器的兜底默认值与配置默认值一致
         (None, _DEFAULT_BOUNDARIES_LINE),
         (StreamerPersonaConfig().boundaries, _DEFAULT_BOUNDARIES_LINE),
         ("线下见面", "- 不答应的事：线下见面"),

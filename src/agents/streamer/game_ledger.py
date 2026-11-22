@@ -53,7 +53,7 @@ _MAX_STATE_LINES = 8
 #: 回执摘要里背包最多列出的物品种数
 _MAX_INVENTORY_ITEMS = 8
 
-#: 交给表达侧的"游戏里最近找你的人"只留这么久以内的：送礼、搭话常在上一窗发生、这一窗才接话，
+#: 交给回复器的"游戏里最近找你的人"只留这么久以内的：送礼、搭话常在上一窗发生、这一窗才接话，
 #: 只看本窗会漏掉；再早的多半已经接过，留着反倒让她把旧事当新事讲
 _PLAYER_NOTE_WINDOW_MS = 10 * 60_000
 
@@ -75,17 +75,17 @@ class _PendingEntry:
     base: str  # 未附加折叠计数说明的行原文（折叠比较键）
     arrived_ms: int
     count: int = 1
-    is_chat: bool = False  # 游戏聊天行：入账后其原话随本窗说话交给表达侧
+    is_chat: bool = False  # 游戏聊天行：入账后其原话随本窗说话交给回复器
     # 聊天行是谁说的：核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息与非聊天行为空；
     # 肢体动作遭遇行写冲她做动作的玩家 UUID
     speaker: str = ""
     game: str = ""
-    # 玩家找她的条目：玩家名与给表达侧看的那句（聊天是"玩家 X：原话"，动作是去掉怎么接口径的事实）
+    # 玩家找她的条目：玩家名与给回复器看的那句（聊天是"玩家 X：原话"，动作是去掉怎么接口径的事实）
     who: str = ""
     note: str = ""
-    # 公屏消息号：只挂在决策层看的时间线行末尾（``[id:…]``），折叠比较与交给表达侧的原话都不带它
+    # 公屏消息号：只挂在规划器看的时间线行末尾（``[id:…]``），折叠比较与交给回复器的原话都不带它
     message_id: str = ""
-    # 公屏行提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时在决策层看的行尾挂 [提及…] 标注
+    # 公屏行提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时在规划器看的行尾挂 [提及…] 标注
     mention: str = ""
 
 
@@ -242,7 +242,7 @@ class GameLedger:
 
         ``player`` 是冲她做肢体动作的那位玩家的 UUID（其余遭遇为空）：出账时列进本窗找过她的玩家。
         ``who`` 是那位玩家的名字：有名字时摘要第一句（动作事实，不带后面怎么接的口径）列进
-        玩家找她的条目，表达侧据此说清是谁扔来的、谁拍的她。
+        玩家找她的条目，回复器据此说清是谁扔来的、谁拍的她。
         """
         summary = sanitize_internal_terms(summary)
         body = f"{summary}（已结束）" if resolved else summary
@@ -269,15 +269,15 @@ class GameLedger:
         message_id: str = "",
         mention: str = "",
     ) -> None:
-        """游戏聊天行入账（标签就是游戏名）；原话随本窗说话交给表达侧，行文不经脱敏。
+        """游戏聊天行入账（标签就是游戏名）；原话随本窗说话交给回复器，行文不经脱敏。
 
         ``speaker`` 是这句是谁说的（核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息为空）：
         出账时列进本批的发言人，她这一窗说的话据此记下在回应哪位玩家。
         ``who`` 是玩家名（系统消息为空）：有名字时这一行列进玩家找她的条目。
-        ``message_id`` 是采集时发的消息号：出账时挂在时间线行末尾 ``[id:…]`` 并记在行上，决策层据此指认这一句；
-        交给表达侧的原话与玩家条目不带号，表达侧聊天记录按行上的消息号剥掉标签（与弹幕同一办法）。
-        ``mention`` 是这句正文提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时决策层看的行尾
-        挂 ``[提及…]`` 标注，提示词判据据此优先处理点名她的行、不插嘴旁人对话；与消息号同不进表达侧。
+        ``message_id`` 是采集时发的消息号：出账时挂在时间线行末尾 ``[id:…]`` 并记在行上，规划器据此指认这一句；
+        交给回复器的原话与玩家条目不带号，回复器聊天记录按行上的消息号剥掉标签（与弹幕同一办法）。
+        ``mention`` 是这句正文提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时规划器看的行尾
+        挂 ``[提及…]`` 标注，提示词判据据此优先处理点名她的行、不插嘴旁人对话；与消息号同不进回复器。
         """
         self._stage(
             note_turn(game, body, timestamp_ms or now_ms()),
@@ -297,7 +297,7 @@ class GameLedger:
 
         游戏里那一面会自己找玩家说话（问人要东西、打招呼），不入账的话她在直播里不知道自己
         刚问过什么：玩家回"找到了"，她只能反问"找到啥了"。这一行是她自己的话，不算游戏聊天：
-        不交表达侧当别人刚说的话、不算谁开口、不促发决策。
+        不交回复器当别人刚说的话、不算谁开口、不促发决策。
         """
         label = self.self_chat_label(game)
         self._stage(note_turn(label, message, timestamp_ms or now_ms()), label=label, body=message, game=game)
@@ -368,17 +368,17 @@ class GameLedger:
             content = item.base if item.count == 1 else f"{item.base}（另 {item.count - 1} 次相同）"
             turn = item.turn if content == item.turn.content else replace(item.turn, content=content)
             if item.message_id:
-                # 消息号记在行上：canonical 映射给决策层的这一行末尾挂 [id:…]（折叠的行带第一条的号），
-                # 表达侧聊天记录按行上的号剥掉标签；交给表达侧的原话（fresh_chat）本来就不带号
+                # 消息号记在行上：canonical 映射给规划器的这一行末尾挂 [id:…]（折叠的行带第一条的号），
+                # 回复器聊天记录按行上的号剥掉标签；交给回复器的原话（fresh_chat）本来就不带号
                 turn = replace(turn, message_id=item.message_id)
             if item.mention:
-                # 提及标注与消息号同一套办法记在行上：canonical 给决策层的行尾挂 [提及…]
-                # （折叠的行带第一条的标注），表达侧聊天记录剥掉；fresh_chat 本来就不带标注
+                # 提及标注与消息号同一套办法记在行上：canonical 给规划器的行尾挂 [提及…]
+                # （折叠的行带第一条的标注），回复器聊天记录剥掉；fresh_chat 本来就不带标注
                 turn = replace(turn, mention=item.mention)
             turns.append(turn)
-            # 决策层看的事件行：正文行尾依次挂消息号与提及标注（与 canonical 渲染同构，折叠的行
-            # 带第一条的号与标注）；两者都只给决策判据用，不进表达侧——提示词判据锚提及标注
-            # 分"点名她的行"与"旁人对话"，交给表达侧的原话（fresh_chat）用不带标注的正文
+            # 规划器看的事件行：正文行尾依次挂消息号与提及标注（与 canonical 渲染同构，折叠的行
+            # 带第一条的号与标注）；两者都只给决策判据用，不进回复器——提示词判据锚提及标注
+            # 分"点名她的行"与"旁人对话"，交给回复器的原话（fresh_chat）用不带标注的正文
             marked = content
             if item.message_id:
                 marked = f"{marked} [id:{item.message_id}]"
@@ -413,7 +413,7 @@ class GameLedger:
 
     @staticmethod
     def _player_note(item: _PendingEntry) -> PlayerNote:
-        """一条玩家找她的条目 → 给表达侧看的一行：标签只分"公屏说的"与"冲我做的"，带原钟点。"""
+        """一条玩家找她的条目 → 给回复器看的一行：标签只分"公屏说的"与"冲我做的"，带原钟点。"""
         kind = "公屏" if item.is_chat else "动作"
         note = item.note if item.count == 1 else f"{item.note}（另 {item.count - 1} 次相同）"
         line = note_turn(f"{item.game} {kind}".strip(), note, item.turn.timestamp_ms).content

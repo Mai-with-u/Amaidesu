@@ -139,7 +139,7 @@ def _recall_call(query: str = "钻石") -> ToolCall:
 
 
 def _routed_llm(planner_steps: List[Response]) -> MagicMock:
-    """按档位分流：Planner 依次取预置步骤，表达侧固定回道别句。"""
+    """按档位分流：Planner 依次取预置步骤，回复器固定回道别句。"""
     llm = MagicMock()
 
     async def _generate(*args: Any, **kwargs: Any) -> Response:
@@ -153,7 +153,7 @@ def _routed_llm(planner_steps: List[Response]) -> MagicMock:
 
 def _gated_signoff_llm(gate: asyncio.Event, entered: asyncio.Event, later_steps: List[Response]) -> MagicMock:
     """道别那一轮的 Planner（第一次 Planner 调用）停在闸前等测试放行，放行后决定开口道别；
-    之后的 Planner 调用（道别期间并发的常规轮次）依次取预置步骤。表达侧放行前回打招呼的话、
+    之后的 Planner 调用（道别期间并发的常规轮次）依次取预置步骤。回复器放行前回打招呼的话、
     放行后回道别句，两轮的台词分得开。"""
     llm = MagicMock()
     planner_calls = 0
@@ -178,7 +178,7 @@ def _planner_requests(llm: MagicMock) -> List[str]:
 
 
 def _replyer_dialogues(prompt: MagicMock) -> List[str]:
-    """表达侧每次渲染本轮输入时交进去的聊天记录（按渲染先后；只有表达侧模板带这一项）。"""
+    """回复器每次渲染本轮输入时交进去的聊天记录（按渲染先后；只有回复器模板带这一项）。"""
     return [
         str(call.kwargs["dialogue_prompt"]) for call in prompt.render.call_args_list if "dialogue_prompt" in call.kwargs
     ]
@@ -377,10 +377,10 @@ async def test_signoff_during_new_session_does_not_leak_into_concurrent_round(li
         "并发的常规轮次按进行中的正式场取场次类型，不受道别那一轮影响"
     )
     assert "正式场终于开了" in regular_reply and "彩排一下TNT阵" not in regular_reply, (
-        "并发的常规轮次表达侧读的是正式场的历史"
+        "并发的常规轮次回复器读的是正式场的历史"
     )
     assert "彩排一下TNT阵" in signoff_reply and "正式场终于开了" not in signoff_reply, (
-        "道别那一轮表达侧仍读正在结束的彩排场"
+        "道别那一轮回复器仍读正在结束的彩排场"
     )
     assert [(speech.text, speech.live_session_id) for speech in live_stack.speeches] == [
         (GREETING, live),
@@ -400,7 +400,7 @@ class _Gate:
 
 
 def _scripted_llm(planner_steps: List[Any]) -> MagicMock:
-    """Planner 按调用先后逐步取脚本，遇到闸就停在闸前等放行；表达侧固定回道别句。"""
+    """Planner 按调用先后逐步取脚本，遇到闸就停在闸前等放行；回复器固定回道别句。"""
     llm = MagicMock()
     steps = list(planner_steps)
 

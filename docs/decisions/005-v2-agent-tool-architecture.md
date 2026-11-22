@@ -23,7 +23,7 @@ Amaidesu v1 采用 Input → Decision → Output 三阶段架构：InputCollecto
 
 1. **主体性判据为最高约束**——Agent 与工具的唯一判别是"谁驱动谁"：
    - Agent：自我驱动、有循环/目标、没人调也在跑（主播 Planner 决策循环、游戏代理 AI 玩家）
-   - 工具：被动驱动、被调才干活、无循环（Replyer 表达引擎、TTS、屏幕捕捉、VLM）
+   - 工具：被动驱动、被调才干活、无循环（Replyer 回复器、TTS、屏幕捕捉、VLM）
    - 直播内容是编排配置 + Planner 上下文/行为模式的变化，不是代码模块
 2. **组件收敛为三类范式**：采集器（BaseCollector，`collect()` AsyncIterator + 主动推语义域事件）、业务 Agent（BaseAgent 协议六面 + `list_tools()` 抽象，自包含包放 `src/agents/<family>/<name>/`）、工具（ToolProvider Protocol + ToolSpec，经 ToolRegistry 统一调度，失败兜底不抛异常）。
 3. **Planner/Replyer 是主播 Agent 内脏**，不注册为工具；决策出口 = Agent 调用自有 `reply` 工具，删除 Intent 中间表示与 `decision.intent.generated` / `output.intent.*` 事件链。

@@ -100,7 +100,7 @@ def test_step_and_judgement_from_before_this_task_are_left_out() -> None:
     assert "停了，没交付结果，做没做完不确定" in text and "做完了" not in text and "此刻那一步" not in text
 
     # 续播认领的：重启前被打断，做到哪不确定（和前段委派状态同一句）；
-    # 嘴的现场卡保留"还没重新委派"的语义，但工具名照本层约定脱敏（决策层参考段才带工具名）
+    # 嘴的现场卡保留"还没重新委派"的语义，但工具名照本层约定脱敏（规划器参考段才带工具名）
     cut = _delegation(report_kind="interrupted", reported_ms=_NOW)
     text = render_game_now({"minecraft": cut}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
     assert "重启前在做这件事，被打断了，做到哪不确定" in text and "此刻那一步" not in text

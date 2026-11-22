@@ -616,7 +616,7 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
             body[key] = data[key]
     low_gear = _low_durability_gear_text(data.get("gear_bars"))
     if low_gear is not None:
-        # 手持工具或身上护甲耐久/电量不足两成时挂进身体标量（沿用 low_durability 键名保持兼容），供决策层与表达回执同步感知
+        # 手持工具或身上护甲耐久/电量不足两成时挂进身体标量（沿用 low_durability 键名保持兼容），供规划器与回复器回执同步感知
         body["low_durability"] = low_gear
     air, max_air = data.get("air"), data.get("max_air")
     if isinstance(air, int) and isinstance(max_air, int) and air < max_air:

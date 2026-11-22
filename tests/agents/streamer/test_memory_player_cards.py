@@ -190,7 +190,7 @@ async def test_promises_to_him_ride_on_his_card_only(store: SQLiteDatabase) -> N
     assert f"[玩家·Alex] Alex 在游戏里找你了。你答应过他：帮他修房子（约#{promise}）。" in cues.text
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=current)
     assert entry.detail == {"player_id": alex.id, "commitment_ids": [promise]}
-    # 卡尾印着的约#N 是本批能点名的编号，说话档按他的名字说"答应过谁"
+    # 卡尾印着的约#N 是本批能点名的编号，回复器档按他的名字说"答应过谁"
     assert (cues.commitment_ids, cues.labels) == ((promise,), {promise: "Alex"})
 
 

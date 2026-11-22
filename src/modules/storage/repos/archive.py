@@ -64,7 +64,7 @@ def with_source_viewer_names(conn: sqlite3.Connection, lines: Sequence[ArchiveLi
     """观众来源的行带上那条弹幕的发送者用过的名字（弹幕上的名字、观众的现名与曾用名）。
 
     她那句回应常常点了这位观众的名（"阿杰说得对，就叫团子"），原话逐字存着不改；渲染进简报、
-    线索卡、说话档时按这里带出的名字换成"那位观众"，她就不会当众说出是哪一位定的。
+    线索卡、回复器档时按这里带出的名字换成"那位观众"，她就不会当众说出是哪一位定的。
     她自己说的行、弹幕已经不在的行（观众被删时这一行随外键一起删）不带。
     """
     chat_ids = sorted({int(line.viewer_chat_id) for line in lines if line.source == "viewer" and line.viewer_chat_id})

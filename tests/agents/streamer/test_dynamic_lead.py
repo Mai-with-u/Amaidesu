@@ -630,7 +630,7 @@ def test_proactive_trigger_skips_rundown_ready_and_uses_idle_fallback_in_game_le
     )
     assert trigger.should_pace_speech(TriggerKind.GAME_LEAD_IDLE_FALLBACK) is False
 
-    # 若任意出口（解说/快嘴/观众回复）出声更新 last_speech_ms -> 立刻复位冷场兜底计时
+    # 若任意出口（解说/即时反应/观众回复）出声更新 last_speech_ms -> 立刻复位冷场兜底计时
     room.record_speech(t0 + 45_000)
     assert trigger.should_trigger(room, t0 + 80_000, rundown_ready=True, in_game_lead=True) is None
     assert (
@@ -1332,7 +1332,7 @@ def test_planner_react_prompt_includes_sync_promised_game_action_rule(prompts: A
 
 
 async def test_body_event_passes_kind_to_mouth_and_suppresses_planner_wake_in_game_lead(prompts: Any) -> None:
-    """游戏主控态下意外阵亡仍驱动快嘴发声（kind='died'），但不再唤醒重型 Planner。"""
+    """游戏主控态下意外阵亡仍驱动即时反应发声（kind='died'），但不再唤醒重型 Planner。"""
     clock = _FakeClock()
     bus = EventBus()
     manager = AgentManager()
@@ -2344,7 +2344,7 @@ async def test_game_lead_silence_nudge_triggers_after_threshold_respects_cooldow
         await agent._maybe_flush()
         assert game.silence_nudges == [75_000, 150_000]
 
-        # 任一出口新发言（如游戏解说/快嘴/欢迎）刷新 last_speech_ms 并清零静默提醒冷却
+        # 任一出口新发言（如游戏解说/即时反应/欢迎）刷新 last_speech_ms 并清零静默提醒冷却
         await agent._speech.dispatch(
             {"speech": "这边刚把仓库屋顶补好啦！", "emotion": {"name": "happy", "intensity": 0.5}}
         )

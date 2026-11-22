@@ -2,7 +2,7 @@
 
 经真实 SQLiteDatabase、EventBus、ToolRegistry、AgentManager、PromptManager 与
 StreamerAgent 全链路驱动（只把 LLM 与 TTS 换成可编排替身），逐项核对：
-1. 无游戏装配时委派四件工具对主播隐藏，主动窗与表达层不出现游戏残留；
+1. 无游戏装配时委派四件工具对主播隐藏，主动窗与回复器不出现游戏残留；
 2. 零弹幕场景按提纲要点（beats）推进，要点未完时提前调用 rundown_control(next) 被护栏拦下；
 3. 杂谈档多句台词拆成子句共用段落号连播；播完第一句前观众发弹幕插话会收住后半句并记下尾句，
    下一轮空闲窗参考段出现"上一轮被打断没说完"提醒后顺利接回并切入提问箱环节；

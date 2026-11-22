@@ -639,7 +639,7 @@ class TTSConfig(BaseConfig):
         le=10,
         title="未播积压上限",
         description="发言放行时允许的未播台词数：播放中允许最多 N 句先排队（1 = "
-        "播放时下一句可先排队，决策不用等嘴念完）；0 = 等队列排空的旧行为",
+        "播放时下一句可先排队，规划器不用等嘴念完）；0 = 等队列排空的旧行为",
     )
     edge_tts: EdgeTTSParams = Field(
         default_factory=EdgeTTSParams,

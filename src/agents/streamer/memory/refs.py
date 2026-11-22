@@ -35,7 +35,7 @@ def render_number(kind: str, number: int) -> str:
 
 
 def render_commitment_number(commitment_id: int) -> str:
-    """承诺编号的写法（约#7）；Planner 用它点名，说话档不用编号。"""
+    """承诺编号的写法（约#7）；Planner 用它点名，回复器档不用编号。"""
     return render_number(COMMITMENT, commitment_id)
 
 

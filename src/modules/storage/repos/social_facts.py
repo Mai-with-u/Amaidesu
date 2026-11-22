@@ -5,7 +5,7 @@
 
 写入路径有两条，都经本仓储：
 
-- 场内：主播 Agent 的 ``streamer_social_fact`` 工具（Planner 决策层调用），
+- 场内：主播 Agent 的 ``streamer_social_fact`` 工具（Planner 规划器调用），
   登记一条新事实或用新行取代旧行；
 - 下播整理的第四次调用：归纳"她的角色"这类行、补漏、修正场内写歪的行。
 

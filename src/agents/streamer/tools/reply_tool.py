@@ -1,7 +1,7 @@
 """reply_tool - 主播表达工具（Planner ReAct 循环的出口）
 
 **真工具**——注册到 ToolRegistry 供 LLM 调用；底层执行器是
-``Replyer`` 表达引擎（Agent 内部件，**不**注册为工具）。
+``Replyer`` 回复器（Agent 内部件，**不**注册为工具）。
 
 调用链（Planner ReAct 架构）：
 - Planner（决策主体，ReAct 循环）决定说话时调用 reply 工具
@@ -14,7 +14,7 @@
 - arguments: ``{topic_summary, emotion, intensity, is_novel, reply_guidance?, topic_tag?, target?}``
 - 新颖自检：``is_novel=false`` 或未如实申报布尔值立即打回——她说出的内容有没有新东西，
   由她自己在调用前如实申报
-- 她已说过的台词先交表达侧，聊天记录里看不到的那几句单列成"更早一点你说过的话"
+- 她已说过的台词先交回复器，聊天记录里看不到的那几句单列成"更早一点你说过的话"
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
 """
 
@@ -453,7 +453,7 @@ class ReplyToolProvider(BaseToolProvider):
 
         # 她已经说过的台词（旧→新）：Planner 路径在窗起点算好随单携带；
         # 裸调用（无 attachment 语料）时从刚读到的历史里现取，读失败（None）按空语料处理。
-        # 同一份语料先交表达侧：聊天记录里看不到的那几句单列成"更早一点你说过的话"让她别再说一遍
+        # 同一份语料先交回复器：聊天记录里看不到的那几句单列成"更早一点你说过的话"让她别再说一遍
         speech_history = materials.speech_history
         if speech_history is None:
             speech_history = assistant_speech_lines(history)

@@ -1,7 +1,7 @@
 """台词长度预算：超出先让模型重说成一句，仍超就截到预算内最后一个完整句子。
 
 提示词里的"一两句"是软要求：本机实测换了两种模型，台词字数中位都在 90 上下、最长 155，
-还常分好几段——所以在表达引擎出口再卡一道。
+还常分好几段——所以在回复器出口再卡一道。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from src.agents.streamer.speech_guard import fit_to_budget, guard
 
 
 # 登记（只读穿透，合并时进底账）：接线断言读取内建 Replyer 的台词长度预算
-# （agent._replyer._speech_max_chars）；"配置确实传到了表达引擎"暂无公开观测面。
+# （agent._replyer._speech_max_chars）；"配置确实传到了回复器"暂无公开观测面。
 from src.modules.llm.payload import Response
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -105,7 +105,7 @@ async def test_turn_prompt_states_the_budget() -> None:
 
 
 def test_streamer_wires_speech_budget_into_replyer() -> None:
-    """装配期把 speech_max_chars 交给表达引擎。"""
+    """装配期把 speech_max_chars 交给回复器。"""
     agent = make_streamer_agent({"speech_max_chars": 30})
     assert agent._replyer._speech_max_chars == 30
 

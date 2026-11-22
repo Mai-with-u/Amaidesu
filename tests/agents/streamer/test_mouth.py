@@ -1,4 +1,4 @@
-"""嘴：游戏里出事时当场出一句短反应——由头合并、冷却、安静门槛、现场卡、输出解析与兜底、接线。"""
+"""即时反应：游戏里出事时当场出一句短反应——由头合并、冷却、安静门槛、现场卡、输出解析与兜底、接线。"""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def _trigger(
 
 
 async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts: Any) -> None:
-    """被打了：嘴拿人设与现场卡生成一句，带情绪插队出声，并记下发言时刻。"""
+    """被打了：即时反应拿人设与现场卡生成一句，带情绪插队出声，并记下发言时刻。"""
     llm, speech = _LLM("scared：哇！谁炸我？！"), _Speech()
     mouth = _mouth(llm, speech, prompts)
     mouth.note_speech("走走走，回家！", NOW - 30_000)
@@ -137,7 +137,7 @@ async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts:
 
 
 async def test_mouth_carries_no_memory_in_system_prompt_or_scene_card(prompts: Any) -> None:
-    """嘴不拿任何记忆：系统提示词里没有长期笔记，现场卡里没有备忘录（悬着的事）一段。"""
+    """即时反应不拿任何记忆：系统提示词里没有长期笔记，现场卡里没有备忘录（悬着的事）一段。"""
     llm = _LLM("happy：好家伙")
     mouth = _mouth(llm, _Speech(), prompts)
 
@@ -157,7 +157,7 @@ async def test_mouth_rule_keeps_broadcast_talk_third_person(prompts: Any) -> Non
     assert "他们听不到直播，别对着镜头喊「你」" in llm.calls[0]["system"]
 
 
-#: AI 声明写死在三条说话通路的模板里，不随人设配置变；嘴的这条后面接边界栏那一行（有的话）
+#: AI 声明写死在三条说话通路的模板里，不随人设配置变；即时反应的这条后面接边界栏那一行（有的话）
 _AI_RULE = "- 被问到是不是真人时，坦白自己是 AI 主播，可以俏皮，但不能否认。"
 
 
@@ -207,7 +207,7 @@ async def test_empty_boundaries_omit_the_whole_line_but_keep_ai_declaration(prom
 
 
 async def test_silence_and_cooldown_keep_the_mouth_from_chattering(prompts: Any) -> None:
-    """嘴可以不说；同一类遭遇冷却期内只算一次，第二次连模型都不叫。"""
+    """即时反应可以不说；同一类遭遇冷却期内只算一次，第二次连模型都不叫。"""
     llm, speech = _LLM("[沉默]"), _Speech()
     clock = _Clock()
     mouth = _mouth(llm, speech, prompts, clock=clock)
@@ -336,7 +336,7 @@ async def test_latency_is_logged_when_the_line_actually_starts_playing(prompts: 
     assert await mouth.react_once([_trigger(at_ms=clock.now - 1_000)]) == "疼疼疼！"
 
     def _latency_logs() -> List[str]:
-        return [record["message"] for record in loguru_capture.records if record["message"].startswith("嘴：")]
+        return [record["message"] for record in loguru_capture.records if record["message"].startswith("即时反应：")]
 
     assert _latency_logs() == []
     clock.now += 4_000
@@ -347,17 +347,17 @@ async def test_latency_is_logged_when_the_line_actually_starts_playing(prompts: 
 
 # ---------------- 接线 ----------------
 
-# 登记（只读穿透，合并时进底账）：断言读取嘴的最近记录（agent._mouth._records）与
-# 发声分发器槽位（agent._speech.dispatch）；嘴的最近记录暂无公开只读面。
+# 登记（只读穿透，合并时进底账）：断言读取即时反应的最近记录（agent._mouth._records）与
+# 发声分发器槽位（agent._speech.dispatch）；即时反应的最近记录暂无公开只读面。
 
 
 def test_mouth_is_off_by_default() -> None:
-    """开关默认关闭且未注入替身：不构造嘴，一切照旧。"""
+    """开关默认关闭且未注入替身：不构造即时反应，一切照旧。"""
     assert make_streamer_agent()._mouth is None
 
 
 async def test_accidental_death_triggers_both_mouth_and_planner_while_chosen_suicide_stays_quiet() -> None:
-    """意外真死亡：嘴开着时当场短反应并同步唤醒 Planner 善后；自选寻死回家既不触发嘴也不按事故唤醒。"""
+    """意外真死亡：即时反应开着时当场短反应并同步唤醒 Planner 善后；自选寻死回家既不触发即时反应也不按事故唤醒。"""
     accident = BodyEventPayload(game="minecraft", kind="died", summary="死了：被蜘蛛杀死了", intentional=False)
     chosen = BodyEventPayload(game="minecraft", kind="died", summary="借死亡不掉落回重生点，不是出事", intentional=True)
 
@@ -382,7 +382,7 @@ async def test_accidental_death_triggers_both_mouth_and_planner_while_chosen_sui
 
 
 async def test_routine_hurt_and_sky_stay_silent_while_rare_sighting_reacts_and_wakes_planner() -> None:
-    """摔伤、挨打、天色、装备坏只留进嘴的近期背景不叫唤；视野撞见稀有矿或强敌时快嘴惊呼并同步唤醒 Planner 派单。"""
+    """摔伤、挨打、天色、装备坏只留进即时反应的近期背景不叫唤；视野撞见稀有矿或强敌时即时反应惊呼并同步唤醒 Planner 派单。"""
     mouth = MagicMock()
     reactions: List[tuple] = []
     mouth.react.side_effect = lambda key, text, **kw: reactions.append((key, text, kw))
@@ -426,7 +426,7 @@ async def test_routine_hurt_and_sky_stay_silent_while_rare_sighting_reacts_and_w
 
 
 async def test_only_notable_milestone_triggers_mouth_while_routine_events_stay_background() -> None:
-    """高光里程碑（开箱出稀罕宝物）触发快嘴；常规步进完成、交付上报与急事提醒只留背景不触发快嘴；报错不入背景。"""
+    """高光里程碑（开箱出稀罕宝物）触发即时反应；常规步进完成、交付上报与急事提醒只留背景不触发即时反应；报错不入背景。"""
     mouth = MagicMock()
     reactions: List[str] = []
     mouth.react.side_effect = lambda key, text, **kw: reactions.append(key)
@@ -451,7 +451,7 @@ async def test_only_notable_milestone_triggers_mouth_while_routine_events_stay_b
 
 
 def test_mouth_and_delegate_prompts_align_on_rare_sighting_handoff(prompts: Any) -> None:
-    """提示词契约：嘴不为自己拍板下一步行动承诺；委派守则指导对 rare_sighted 搁下常规在途任务优先采掘或定夺强敌。"""
+    """提示词契约：即时反应不为自己拍板下一步行动承诺；委派守则指导对 rare_sighted 搁下常规在途任务优先采掘或定夺强敌。"""
     mouth_sys = prompts.render(
         "amaidesu_mouth",
         bot_name="麦麦",
@@ -469,7 +469,7 @@ def test_mouth_and_delegate_prompts_align_on_rare_sighting_handoff(prompts: Any)
 
 
 async def test_viewer_messages_go_into_the_mouth_records() -> None:
-    """弹幕记进嘴的最近记录（阶段 1 不由嘴回弹幕，但现场要知道观众刚说了什么）。"""
+    """弹幕记进即时反应的最近记录（阶段 1 不由即时反应回弹幕，但现场要知道观众刚说了什么）。"""
     agent = make_streamer_agent({"mouth": {"enabled": True}})
     message = RoomMessagePayload(
         message_type="danmaku", user=RoomMessageUser(id="u1", name="小明"), content="麦麦小心后面"
@@ -480,7 +480,7 @@ async def test_viewer_messages_go_into_the_mouth_records() -> None:
 
 
 async def test_every_spoken_line_reaches_the_mouth_records_without_subscribing_to_speech() -> None:
-    """她说过的每句话经发声分发器直连记进嘴（Agent 不订阅自己的输出事件）：Planner 的回话也算。"""
+    """她说过的每句话经发声分发器直连记进即时反应（Agent 不订阅自己的输出事件）：Planner 的回话也算。"""
     agent = make_streamer_agent({"mouth": {"enabled": True}})
     await agent._speech.dispatch({"speech": "走走走，回家！", "emotion": {"name": "happy", "intensity": 0.5}})
     records = list(agent._mouth._records)  # type: ignore[union-attr]
@@ -537,7 +537,7 @@ async def test_invalid_or_spaced_emotion_prefix_is_stripped_not_spoken(
 
 
 async def test_mouth_verbatim_repeat_triggers_rephrase_instead_of_dropping(prompts: Any) -> None:
-    """嘴初稿命中本场近逐字复读时，打回让表达模型换个说法重说一次，不直接把整句吞掉。"""
+    """即时反应初稿命中本场近逐字复读时，打回让表达模型换个说法重说一次，不直接把整句吞掉。"""
     earlier = "好家伙，连打我好几下，先别管树苗了，吃我一剑！"
     llm = _LLM(
         f"angry：{earlier}",
@@ -555,7 +555,7 @@ async def test_mouth_verbatim_repeat_triggers_rephrase_instead_of_dropping(promp
 
 
 async def test_mouth_hides_room_enters_and_keeps_planner_speeches_under_event_flood(prompts: Any) -> None:
-    """嘴的现场卡不带直播间进房名单（欢迎归决策环节），且高频游戏事件刷满 _records 后仍看得见刚说过的台词。"""
+    """即时反应的现场卡不带直播间进房名单（欢迎归规划器），且高频游戏事件刷满 _records 后仍看得见刚说过的台词。"""
     llm, speech = _LLM("scared：先把盾举起来！"), _Speech()
     mouth = _mouth(llm, speech, prompts)
     mouth._room_state.record_enter("u_b", "观众乙", now_ms=NOW - 5_000)
@@ -571,7 +571,7 @@ async def test_mouth_hides_room_enters_and_keeps_planner_speeches_under_event_fl
 
 
 async def test_mouth_strips_duplicate_greeting_for_already_welcomed_player(prompts: Any) -> None:
-    """本场已被决策环节欢迎过的玩家，嘴反应时若顺嘴再欢迎一遍则剥掉重复欢迎，只留对当下遭遇的反应。"""
+    """本场已被规划器欢迎过的玩家，即时反应时若顺嘴再欢迎一遍则剥掉重复欢迎，只留对当下遭遇的反应。"""
     llm = _LLM("happy：欢迎玩家甲上线！这苦力怕怎么贴脸炸我呀！")
     speech = _Speech()
     mouth = _mouth(llm, speech, prompts)

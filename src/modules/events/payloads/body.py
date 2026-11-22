@@ -110,7 +110,7 @@ class BodyEventPayload(BasePayload):
     player_name: str = Field(default="", description="同一位玩家的名字；没有时为空串")
     sighting_kind: str = Field(
         default="",
-        description="罕见目击细类（如 boss / rare_ore），供快嘴冷却分桶与叙事区分",
+        description="罕见目击细类（如 boss / rare_ore），供即时反应冷却分桶与叙事区分",
     )
     intentional: bool = Field(
         default=False,

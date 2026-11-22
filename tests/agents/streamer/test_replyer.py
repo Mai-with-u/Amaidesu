@@ -66,7 +66,7 @@ async def test_generate_returns_speech_with_request_id_and_binds_the_replyer_pro
     assert result["speech"] == "好耶！" and result["llm_request_id"] == "req_1"
     kwargs = llm.generate.await_args.kwargs
     assert kwargs["profile"] == "replyer"  # 代码显式常量，与 Planner 的 planner 分离
-    assert kwargs["system"] == "PROMPT" and "tools" not in kwargs  # 稳定段走 system，表达引擎不发工具面
+    assert kwargs["system"] == "PROMPT" and "tools" not in kwargs  # 稳定段走 system，回复器不发工具面
     assert kwargs["on_delta"] is on_delta  # 流式回调透传
 
 
@@ -138,7 +138,7 @@ async def test_history_is_merged_into_one_user_turn_and_system_stays_byte_identi
     assert (
         "小明说：大家好呀" in dialogue and "麦麦(你)说：[直播间] 晚上好" in dialogue
     )  # 观众行去"昵称: "前缀，主播行标注(你)与直播间通道
-    assert "[id:" not in dialogue  # 消息 ID 只给 Planner 指定目标用，表达侧看到只是噪声
+    assert "[id:" not in dialogue  # 消息 ID 只给 Planner 指定目标用，回复器看到只是噪声
     assert (
         first.kwargs["system"] == second.kwargs["system"] == "SYSTEM-STABLE"
     )  # 缓存契约：前缀缓存命中靠 system 全程稳定
@@ -188,7 +188,7 @@ async def test_game_reports_are_clipped_and_kept_verbatim() -> None:
 
 
 async def test_mention_annotation_stays_out_of_the_expression_side() -> None:
-    """表达侧聊天记录与回应原话都不带提及标注：标注只给决策判据用（与消息号同不进表达侧）。"""
+    """回复器聊天记录与回应原话都不带提及标注：标注只给决策判据用（与消息号同不进回复器）。"""
     history = [
         TimelineTurn(
             role="user",
@@ -360,7 +360,7 @@ async def test_speech_that_is_only_a_memory_number_becomes_silence() -> None:
 
 
 async def test_replyer_verbatim_repeat_rephrases_once_and_delivers_new_wording() -> None:
-    """第 63 场 23:44:08 回归：初稿与更早台词近逐字重合时，打回让表达层重说一次，不丢整句。"""
+    """第 63 场 23:44:08 回归：初稿与更早台词近逐字重合时，打回让回复器重说一次，不丢整句。"""
     earlier = "嘴上说不坐船，手倒是很诚实，橡木船都快拼一半了，我这不是打自己脸嘛。"
     fresh = "这工作台怎么在水边死活摆不下去，看来船还真没那么好搓。"
     llm = MagicMock()

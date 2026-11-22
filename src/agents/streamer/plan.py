@@ -61,17 +61,17 @@ class ReplyRoundAttachment(ToolCallAttachment):
 
     Attributes:
         thinking_callback: 本轮 replyer 阶段的思考流回调（LLM 层形态 ``on_delta``）
-        round_batch: 本轮弹幕批——表达侧据此看到观众原话，回应弹幕时不会被
+        round_batch: 本轮弹幕批——回复器据此看到观众原话，回应弹幕时不会被
             当成"本批无弹幕"的主动发言
         game_chat: 本窗新到的游戏聊天原话——玩家在游戏里搭话促发的一轮弹幕批
-            是空的，没有它表达侧只能看到转述
-        state_facts: 本窗状态跃迁事实块——表达侧的客观事实底稿
-        speech_history: 本窗开始前主播已说过的台词（旧→新，未截窗口）——表达侧
+            是空的，没有它回复器只能看到转述
+        state_facts: 本窗状态跃迁事实块——回复器的客观事实底稿
+        speech_history: 本窗开始前主播已说过的台词（旧→新，未截窗口）——回复器
             据此看见自己刚说过什么，聊天记录里看不到的那几句单列成"更早一点你说过的话"；
             与本窗批材料同源同生命周期。``None`` = 调用方未随单携带（裸调用，工具内
             兜底现读）；空列表 = 确认本窗前无台词（刚开播）
         game_people: 最近几分钟游戏里玩家找她的条目（谁在公屏说了什么、谁冲她做了
-            什么，旧→新）——表达侧据此把话和举动归到对的人头上
+            什么，旧→新）——回复器据此把话和举动归到对的人头上
         reply_to: 回应对象的玩家名——不在回弹幕、本窗只有一位玩家在公屏开口时是他；
             空串 = 没有特定玩家
     """
@@ -81,18 +81,18 @@ class ReplyRoundAttachment(ToolCallAttachment):
     game_chat: List[str] = field(default_factory=list)
     state_facts: str = ""
     speech_history: Optional[List[str]] = None
-    #: Planner 点名的那条旧事（说话档写法，已去掉编号与原话）；空串 = 本轮没用旧事
+    #: Planner 点名的那条旧事（回复器档写法，已去掉编号与原话）；空串 = 本轮没用旧事
     remembered: str = ""
     game_people: List[PlayerNote] = field(default_factory=list)
     reply_to: str = ""
     #: 本轮说话档位（"play" 边玩边说 / "talk" 杂谈唠嗑），由宿主按环节与游戏态势判定
     speech_mode: str = "play"
-    #: 本轮观众弹幕 message_id → 熟悉度档位（"close" / "regular"），供表达侧对熟客放轻松语气
+    #: 本轮观众弹幕 message_id → 熟悉度档位（"close" / "regular"），供回复器对熟客放轻松语气
     familiarity_by_message_id: Dict[str, str] = field(default_factory=dict)
 
 
 def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:
-    """历史里主播已说过的台词原文（旧→新）——表达侧"她刚说过什么"的语料。
+    """历史里主播已说过的台词原文（旧→新）——回复器"她刚说过什么"的语料。
 
     历史里自己说过的话才是观众听过的内容。决策窗起点由 Planner 从本窗
     历史算一次，随 attachment 交 reply 工具（见 ``ReplyRoundAttachment.speech_history``）。

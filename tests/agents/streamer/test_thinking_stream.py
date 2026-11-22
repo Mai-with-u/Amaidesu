@@ -32,12 +32,12 @@ def test_context_forwards_reasoning_only_with_increasing_seq():
     planner_cb("content", "正文增量")
     planner_cb("reasoning", "")
     planner_cb("reasoning", "想二")
-    ctx.callback_for("replyer", 1)("reasoning", "表达侧思考")
+    ctx.callback_for("replyer", 1)("reasoning", "回复器思考")
 
     assert [(c["phase"], c["step"], c["seq"], c["text_delta"]) for c in sink.calls] == [
         ("planner", 1, 1, "想一"),
         ("planner", 1, 2, "想二"),
-        ("replyer", 1, 3, "表达侧思考"),
+        ("replyer", 1, 3, "回复器思考"),
     ]
     assert {c["round_id"] for c in sink.calls} == {"round_1"}
 
@@ -91,7 +91,7 @@ def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, 
         async def generate(self, **kwargs):
             captured.update(kwargs)
             if kwargs.get("on_delta") is not None:
-                kwargs["on_delta"]("reasoning", "表达侧思考")
+                kwargs["on_delta"]("reasoning", "回复器思考")
             return {"speech": "台词", "emotion": {"name": "neutral", "intensity": 0.5}, "actions": []}
 
     provider = ReplyToolProvider(
@@ -117,7 +117,7 @@ async def test_provider_passes_thinking_callback_via_attachment():
 
     assert result.success is True
     assert captured["on_delta"] is callback
-    assert any(c["text_delta"] == "表达侧思考" for c in sink.calls)
+    assert any(c["text_delta"] == "回复器思考" for c in sink.calls)
 
 
 # ReplyToolProvider：观测旁路（planner.verdict）异常隔离

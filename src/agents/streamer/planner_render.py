@@ -84,10 +84,10 @@ class Delegation:
 
 @dataclass(frozen=True)
 class Intent:
-    """一轮已说出口的打算：何时说的、围绕什么话题、给表达侧的指引、说出的台词。
+    """一轮已说出口的打算：何时说的、围绕什么话题、给回复器的指引、说出的台词。
 
     台词一并保留：发言闸的台词级重合度检查需要拿"说出口的原话"做比对——
-    指引只是给表达侧的方向，最终落在观众耳朵里的是台词。
+    指引只是给回复器的方向，最终落在观众耳朵里的是台词。
     """
 
     at_ms: int
@@ -324,7 +324,7 @@ def render_delegation_backlog(boards: Mapping[str, Board], current_ms: int) -> s
     """【待办】：现读任务账本看板里排着和先搁下的事项，带本场稳定的短编号（待办1、待办2……）。
 
     没送达过的明写"还没开工"，做过一段先搁下的明写"搁下了，做到：……"，
-    决策环节与嘴共用同一份账本真相，绝不把还没开工的待办误说成已经做完。
+    规划器与即时反应共用同一份账本真相，绝不把还没开工的待办误说成已经做完。
     """
     rows: List[str] = []
     for executor, board in boards.items():
@@ -687,7 +687,7 @@ def goal_lines(
     delegations: Dict[str, Delegation],
     status_provider: Optional[DelegationStatusProvider] = None,
 ) -> List[GoalLine]:
-    """手上的事（嘴的现场卡用）：与决策环节读同一份源，只给当前在做或刚由游戏侧上报的一件，待办与撤单不给。"""
+    """手上的事（即时反应的现场卡用）：与规划器读同一份源，只给当前在做或刚由游戏侧上报的一件，待办与撤单不给。"""
     goals: List[GoalLine] = []
     for delegation in delegations.values():
         if delegation.report_kind in ("closed_by_initiator", "cancelled"):
@@ -698,7 +698,7 @@ def goal_lines(
             and delegation.task_id
             and status_provider(delegation.task_id) is None
         ):
-            # 账本上已终态移除且无游戏交付（如被撤单），不再当进行中的目标喂给嘴
+            # 账本上已终态移除且无游戏交付（如被撤单），不再当进行中的目标喂给即时反应
             continue
         status: GoalStatus = "进行中"
         if delegation.report_kind == "delivery":

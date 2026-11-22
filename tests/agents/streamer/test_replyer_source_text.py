@@ -1,5 +1,5 @@
-"""表达侧看到要回应的原文——target 按整场历史展开成原话、游戏里有人搭话时原话随说话一起交给表达侧，
-她刚说过的话随 reply 一起交给表达侧。"""
+"""回复器看到要回应的原文——target 按整场历史展开成原话、游戏里有人搭话时原话随说话一起交给回复器，
+她刚说过的话随 reply 一起交给回复器。"""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def _turn_kwargs(prompt: MagicMock) -> Dict[str, Any]:
 @pytest.mark.parametrize(
     ("target", "expected_line"),
     [
-        # 一批有好几条时直接给出 target 那条原话，表达侧不用自己对号；消息 ID 不再给她看
+        # 一批有好几条时直接给出 target 那条原话，回复器不用自己对号；消息 ID 不再给她看
         ("[id:m2]", "target 原文: 观众B: 锯子修好了吗\n"),
         # 找不到原话时不出原文行，不拿别人的话凑数；Planner 填的片段照旧给出
         ("观众C", "target: 观众C\n"),
@@ -133,11 +133,11 @@ async def test_game_chat_rendered_or_placeholder() -> None:
     assert _turn_kwargs(prompt)["game_chat"] == "（无）"
 
 
-# 原话一路交到表达侧
+# 原话一路交到回复器
 
 
 async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
-    """玩家搭话促发的一轮（弹幕批为空）：原话随 reply 交给表达侧，调用后槽位清空。"""
+    """玩家搭话促发的一轮（弹幕批为空）：原话随 reply 交给回复器，调用后槽位清空。"""
     seen: List[List[str]] = []
     replyer = MagicMock()
 
@@ -187,7 +187,7 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
 
 
 class _RecordingReplyer:
-    """表达层桩：记下 reply 工具交来的已说台词，固定回一句新台词。"""
+    """回复器桩：记下 reply 工具交来的已说台词，固定回一句新台词。"""
 
     def __init__(self) -> None:
         self.recent_speeches: List[Any] = []
@@ -200,7 +200,7 @@ class _RecordingReplyer:
 @pytest.mark.parametrize(
     ("attachment", "history", "expected"),
     [
-        # Planner 路径：窗起点算好的发言闸语料随单携带，原样交给表达侧
+        # Planner 路径：窗起点算好的发言闸语料随单携带，原样交给回复器
         (ReplyRoundAttachment(speech_history=["刚说的一句"]), None, ["刚说的一句"]),
         # 裸调用：从刚读到的历史里现取她说过的话（与发言闸兜底同源）
         (
@@ -214,7 +214,7 @@ class _RecordingReplyer:
 async def test_reply_tool_hands_recent_speeches_to_the_replyer(
     attachment: Optional[ReplyRoundAttachment], history: Optional[List[Any]], expected: List[str]
 ) -> None:
-    """她刚说过的话和发言闸查重用同一份语料：先交表达侧列出来，生成后再拿来查重。"""
+    """她刚说过的话和发言闸查重用同一份语料：先交回复器列出来，生成后再拿来查重。"""
     replyer = _RecordingReplyer()
     provider = ReplyToolProvider(
         replyer=cast(Replyer, replyer), history_provider=(lambda: history) if history is not None else None
@@ -264,7 +264,7 @@ async def test_executor_splits_game_chat_view() -> None:
 
 
 class _PlanRecordingReplyer:
-    """表达层桩：记下 reply 工具交来的交接稿。"""
+    """回复器桩：记下 reply 工具交来的交接稿。"""
 
     def __init__(self) -> None:
         self.plans: List[DecisionPlan] = []

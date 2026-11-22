@@ -1097,7 +1097,7 @@ END;
 
 
 # --- memory_corrections —— 场内更正 ---
-# 主播在决策环节（或运营递话）对本场简报某行档案或某条惦记承诺做出的当场纠正：
+# 主播在规划器（或运营递话）对本场简报某行档案或某条惦记承诺做出的当场纠正：
 # target_kind 取 archive / commitment / general（运营递话无特定目标时常驻本场）。
 # verdict 取 done（做完了）/ invalid（不成立了）/ wrong（记错了）/ note（运营补充纠正）。
 # evidence_kind 取 game_receipt / player_chat / operator / self_seen；引用玩家公屏时挂外键，

@@ -166,7 +166,7 @@ async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replye
     batch = agent._scope.drain_window()
     assert "系统消息：Alex 请求传送到你这里" in batch.events[0]
     assert "玩家 Steve：麦麦你在干嘛呀（之前还有 2 条重复或刷屏的没转过来）" in batch.events[1]
-    # 聊天原话随本窗说话交给表达侧
+    # 聊天原话随本窗说话交给回复器
     assert batch.fresh_chat == (batch.events[0], batch.events[1])
 
 
@@ -189,7 +189,7 @@ async def test_game_chat_mention_mark_lands_on_decision_line(live_agent) -> None
     batch = agent._scope.drain_window()
     assert batch.events[0].endswith("麦麦一号树场的瓜熟了 [提及麦麦]")
     assert "[提及" not in batch.events[1]
-    assert all("[提及" not in line for line in batch.fresh_chat), "交给表达侧的原话不带标注"
+    assert all("[提及" not in line for line in batch.fresh_chat), "交给回复器的原话不带标注"
 
 
 async def test_game_chat_note_follows_the_speaker(live_agent) -> None:
@@ -210,7 +210,7 @@ async def test_game_chat_note_follows_the_speaker(live_agent) -> None:
 
 
 async def test_private_game_chat_reaches_planner_batch_but_never_timeline(live_agent) -> None:
-    """私聊：随本窗批次交给决策层，但不进时间线（表达侧与历史都看不到）。"""
+    """私聊：随本窗批次交给规划器，但不进时间线（回复器与历史都看不到）。"""
     agent, bus = live_agent
     secret = GameChatPayload(
         game="minecraft", kind="player", sender="Steve", content="悄悄跟你说个事", private=True, timestamp_ms=1_000
@@ -224,7 +224,7 @@ async def test_private_game_chat_reaches_planner_batch_but_never_timeline(live_a
     batch = materials.game_batch
     assert batch.private_chat == ("[minecraft] 玩家 Steve（私聊，只发给我）：悄悄跟你说个事",)
     assert "悄悄跟你说个事" not in "\n".join(turn.content for turn in materials.timeline_notes)
-    assert batch.fresh_chat == (batch.events[0],)  # 私聊不算可交给表达侧的原话
+    assert batch.fresh_chat == (batch.events[0],)  # 私聊不算可交给回复器的原话
     # 私聊只带一窗：下一窗不再携带
     assert agent._scope.drain_window().private_chat == ()
 
@@ -302,7 +302,7 @@ async def test_her_own_public_chat_enters_timeline_without_waking_her(live_agent
     batch = materials.game_batch
     assert [turn.content.split("] ", 1)[1] for turn in materials.timeline_notes] == ["你那儿还有蒲公英吗"]
     assert "我在 minecraft 公屏说]" in materials.timeline_notes[0].content
-    # 她自己的话不交表达侧当"游戏里刚有人说的话"，也不算谁在公屏开口
+    # 她自己的话不交回复器当"游戏里刚有人说的话"，也不算谁在公屏开口
     assert batch.fresh_chat == () and batch.chat_speakers == () and batch.player_notes == ()
 
 

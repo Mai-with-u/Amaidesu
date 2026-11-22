@@ -57,13 +57,13 @@ class GameChatPayload(BasePayload):
         truncated: 上游是否截断了过长的原话
         note: 采集器附的一句归属说明（无说明为空串）
         mentions: 消息里点到的实体，按出现先后（死亡播报的死者与凶手等；玩家聊天文本提到主播的行由
-          采集器补一条 ``type="self"`` 的自提及条目——事实标注，"说她"是否等于"跟她说话"由决策层分辨）
+          采集器补一条 ``type="self"`` 的自提及条目——事实标注，"说她"是否等于"跟她说话"由规划器分辨）
         message_key: 游戏给这条消息的模板编号（Minecraft 是翻译键；没有为空串）
         suppressed: 上游因洪泛或重复而没有转出的消息条数（随这一条一起说明）
         save_id: 收到时角色所在的存档编号（空串 = 不分存档或存档不明）
         save_name: 存档给人看的名字（只显示，不当键）
         save_online_mode: 存档所在服务器验不验账号（on / off / unknown）；存储记在"在哪个存档见过他"上
-        message_id: 消息号（采集时发的随机短串；决策层按它指认这一句，未发号为空串）
+        message_id: 消息号（采集时发的随机短串；规划器按它指认这一句，未发号为空串）
         occurred_at_ms: 上游收到这条消息的时刻（Unix 毫秒；0 = 未提供）
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
     """
@@ -104,7 +104,7 @@ class GameChatPayload(BasePayload):
     )
     message_id: str = Field(
         default="",
-        description="消息号：采集时发的随机短串，主播决策层视野里这一行末尾的 [id:…]，落库时记进 game_chat（未发号为空串）",
+        description="消息号：采集时发的随机短串，主播规划器视野里这一行末尾的 [id:…]，落库时记进 game_chat（未发号为空串）",
     )
     occurred_at_ms: int = Field(default=0, description="上游收到时刻（Unix 毫秒；0 = 未知）")
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")

@@ -2,8 +2,8 @@
 
 主播在杂谈或日常互动中需要稳定知道自己的来历、此刻站在镜头前的舞台外观、其他形态、
 钦定喜好与直播日常，同时严禁编造无出处的现实生活经历。本模块将本地设定档案
-（Markdown 或 TOML，默认档案随仓库分发，运营者可换成本地文件）解析为五个固定小节，并以不超过 900 字的静态文本拼入决策层
-「她是谁」与表达层「你是谁」末尾，整场保持不变以命中模型前缀缓存。
+（Markdown 或 TOML，默认档案随仓库分发，运营者可换成本地文件）解析为五个固定小节，并以不超过 900 字的静态文本拼入规划器
+「她是谁」与回复器「你是谁」末尾，整场保持不变以命中模型前缀缓存。
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ class PersonaProfile(BaseModel):
         )
 
     def render_for_planner(self, *, max_chars: int = MAX_PROFILE_CHARS) -> str:
-        """渲染拼入决策层系统提示词「她是谁」末尾的结构化设定文本。"""
+        """渲染拼入规划器系统提示词「她是谁」末尾的结构化设定文本。"""
         outfit_heading = (
             f"当前舞台形象（观众此刻看到的她：{self.active_outfit_name}）"
             if self.active_outfit_name
@@ -117,7 +117,7 @@ class PersonaProfile(BaseModel):
         return _render_bounded(sections, guardrail=_PLANNER_GUARDRAIL, heading_prefix="##", max_chars=max_chars)
 
     def render_for_replyer(self, *, max_chars: int = MAX_PROFILE_CHARS) -> str:
-        """渲染拼入表达层系统提示词「你是谁」末尾的结构化设定文本。"""
+        """渲染拼入回复器系统提示词「你是谁」末尾的结构化设定文本。"""
         outfit_heading = (
             f"当前舞台形象（观众眼里的你：{self.active_outfit_name}）"
             if self.active_outfit_name

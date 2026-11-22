@@ -85,11 +85,11 @@ def test_canonical_mapping() -> None:
     assert canonical.to_text_view([history_msg, speak]) == "小明: 来个落地水 [id:m9]\n主播: [直播间] 晚上好"
 
 
-# 提及标注：决策侧行尾挂 [提及…]（采集器判定的点名事实，提示词判据锚它），表达侧剥掉
+# 提及标注：规划器行尾挂 [提及…]（采集器判定的点名事实，提示词判据锚它），回复器剥掉
 
 
 def test_mention_annotation_renders_at_decision_line_end() -> None:
-    """游戏聊天行带 mention 时，决策侧行尾（消息号之后）拼 [提及…]；无消息号时同样挂行尾。"""
+    """游戏聊天行带 mention 时，规划器行尾（消息号之后）拼 [提及…]；无消息号时同样挂行尾。"""
     with_id = canonical.turn_to_message(
         FakeTurn(
             role="user",

@@ -1,4 +1,4 @@
-"""streamer_social_fact —— 主播登记游戏社交事实的工具（Planner 决策层调用）。
+"""streamer_social_fact —— 主播登记游戏社交事实的工具（Planner 规划器调用）。
 
 一个动作：登记一条"当前游戏环境里人与人怎么相处"的事实，可以同时取代一条旧行。
 

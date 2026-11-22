@@ -1,21 +1,21 @@
-"""嘴：游戏里出现高光目击、稀罕发现或意外阵亡时不经 Planner、几秒内当场出一句短反应（Agent 内部件，代码直连，不是工具）。
+"""即时反应：游戏里出现高光目击、稀罕发现或意外阵亡时不经 Planner、几秒内当场出一句短反应（Agent 内部件，代码直连，不是工具）。
 
 为什么拆出来：平时每句话都要走一整轮 Planner 加 Replyer，眼前撞见强敌或稀有矿藏、意外开出宝物、
-或角色突然阵亡这类高光瞬间只能事后讲段子。把这类第一时间的惊叹反应交给一张嘴，日常轻微掉血、摔伤、
+或角色突然阵亡这类高光瞬间只能事后讲段子。把这类第一时间的惊叹反应交给一条即时反应通路，日常轻微掉血、摔伤、
 天色变换只留进现场背景而不出声大惊小怪，同时由主播 Agent 在高光目击与意外阵亡时同步唤醒 Planner 下发任务：
 
 - 触发：主播 Agent 只把高光目击（强敌/罕见矿藏进入视野）、高光里程碑（开箱发现稀罕宝物）与非自选的意外阵亡
   转进来（:meth:`react`）。同一时刻只生成一句，生成期间来的由头攒着并成一次反应；按细类分桶冷却。
 - 依据：系统提示词只有人设和几条规矩（含"被问到是不是真人时坦白自己是 AI"和人设里的边界栏），事实全在
-  每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、她刚说过的话）——实验里没有这张卡的瘦嘴会
-  理直气壮地编现场。嘴不带任何记忆：长期笔记和备忘录都不给，几秒内的一句反应用不上，带上只会让她在
+  每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、她刚说过的话）——实验里没有这张卡的即时反应会
+  理直气壮地编现场。即时反应不带任何记忆：长期笔记和备忘录都不给，几秒内的一句反应用不上，带上只会让她在
   急事里翻旧账、拖长输入。
 - 兜底：输出一到三行"情绪：台词"或"[沉默]"——情绪在一次反应里转了（先吓一跳再松口气）就拆成
   几行，每行一个情绪；没写情绪的行沿用上一行的。台词按句累计截到长度预算、过敏感词过滤。出声走发声
   分发器的反应通道：前一句没播完最多等一会儿，等不到整段作废；后面几行排在第一行后面，形象等轮到那句
   播放时再切表情。第一句真轮到播放时记一条日志，写明生成、等前一句、从事件到开始播各用了多久。
 
-嘴只对眼前的发现或意外做第一声反应，不替自己拍板承诺下一步行动：采掘、迎战、撤离等委派决定一律归紧随其后的 Planner。
+即时反应只对眼前的发现或意外做第一声反应，不替自己拍板承诺下一步行动：采掘、迎战、撤离等委派决定一律归紧随其后的 Planner。
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ __all__ = ["MOUTH_BODY_KINDS", "MOUTH_TEMPLATE", "Mouth", "SCENE_CHANGING_BODY_K
 
 MOUTH_TEMPLATE = "amaidesu_mouth"
 
-#: 身体侧真正值得嘴当场开口的突发高光：视野撞见强敌/稀有矿藏，或角色意外阵亡（寻死回家在调用侧排除）
+#: 身体侧真正值得即时反应当场开口的突发高光：视野撞见强敌/稀有矿藏，或角色意外阵亡（寻死回家在调用侧排除）
 MOUTH_BODY_KINDS = frozenset({"rare_sighted", "died"})
 #: 现场一下子变了的遭遇：读到就立即重读一句话现场
 SCENE_CHANGING_BODY_KINDS = frozenset({"died"})
@@ -162,7 +162,7 @@ _STAGE_DIRECTION = re.compile(r"^[（(【\[].*[）)】\]]$")
 
 @dataclass(frozen=True)
 class _Record:
-    """嘴自己留的一条最近记录：弹幕、她说过的话、白话的游戏条目。"""
+    """即时反应自己留的一条最近记录：弹幕、她说过的话、白话的游戏条目。"""
 
     at_ms: int
     kind: str  # viewer / speech / game
@@ -183,7 +183,7 @@ class Trigger:
 
 
 def _reaction_dispatch_level(triggers: Sequence[Trigger]) -> Tuple[int, bool]:
-    """按触发由头判定快嘴语音优先级与是否开启二级硬打断。
+    """按触发由头判定即时反应语音优先级与是否开启二级硬打断。
 
     - 含非自选意外阵亡（``kind == "died"`` 或 ``key == "body:died"``）→ P3 紧急且允许二级硬打断
       （只掐断正在念的 P0 普通独白/解说，绝不掐断 P1 高光或 P2 观众回复）；
@@ -196,7 +196,7 @@ def _reaction_dispatch_level(triggers: Sequence[Trigger]) -> Tuple[int, bool]:
 
 
 class Mouth:
-    """嘴：攒由头、拼现场卡、生成一句、兜底后经发声分发器出声。"""
+    """即时反应：攒由头、拼现场卡、生成一句、兜底后经发声分发器出声。"""
 
     def __init__(
         self,
@@ -314,8 +314,8 @@ class Mouth:
                 await self.react_once(triggers)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - 一句反应失败不能拖垮嘴
-                self._logger.exception(f"嘴生成反应失败: {exc}")
+            except Exception as exc:  # noqa: BLE001 - 一句反应失败不能拖垮即时反应
+                self._logger.exception(f"即时反应生成失败: {exc}")
 
     # ---------------- 一次反应 ----------------
 
@@ -343,11 +343,11 @@ class Mouth:
         response = await self._llm.generate(messages, system=system_prompt, profile=self._profile)
         generated = self._clock()
         if not response.ok:
-            self._logger.warning(f"嘴生成失败: {response.error or 'unknown'}")
+            self._logger.warning(f"即时反应生成失败: {response.error or 'unknown'}")
             return None
         segments = self._parse(response.content or "")
         if not segments:
-            self._logger.info(f"嘴选择不说：由头={self._trigger_text(fresh)}")
+            self._logger.info(f"即时反应选择不说：由头={self._trigger_text(fresh)}")
             return None
         segments = self._guard(segments)
         if not segments:
@@ -408,7 +408,7 @@ class Mouth:
         """这句轮到播放（交给 TTS）时记一条：生成用了多久、等前一句等了多久、从事件到开始播一共多久。"""
         now = self._clock()
         self._logger.info(
-            f"嘴：{text}（由头：{trigger_text}；生成 {generate_ms}ms，等前一句 {now - ready_at_ms}ms，"
+            f"即时反应：{text}（由头：{trigger_text}；生成 {generate_ms}ms，等前一句 {now - ready_at_ms}ms，"
             f"从事件到开始播 {now - event_at_ms}ms）"
         )
 
@@ -416,7 +416,7 @@ class Mouth:
 
     def _system_prompt(self) -> str:
         """系统提示词只有人设和规矩：人设、说话风格、边界栏随人设配置变，"被问到是不是真人时坦白是 AI"
-        写死在模板里；不带长期笔记（嘴不拿任何记忆），整场内容不变，前缀稳定。"""
+        写死在模板里；不带长期笔记（即时反应不拿任何记忆），整场内容不变，前缀稳定。"""
         return self._prompt.render(
             MOUTH_TEMPLATE,
             bot_name=self._persona.get("bot_name", "麦麦"),
@@ -430,7 +430,7 @@ class Mouth:
     def _boundaries_rule(self) -> str:
         """把人设里的边界栏接成规矩列表里的一行；人设里没写（空串或只有空白）时整行省略，不留空行。
 
-        措辞与多行折成一行的规则都归 ``persona_rules``，三条说话通路（Planner、Replyer、嘴）同源，
+        措辞与多行折成一行的规则都归 ``persona_rules``，三条说话通路（Planner、Replyer、即时反应）同源，
         这里只补规矩列表自己的格式：开头的换行加列表记号。模板把返回值直接接在上一条规矩的句末，
         所以空串时那条规矩后面什么都不多，非空时多出一条独立的规矩行。
         """
@@ -478,7 +478,7 @@ class Mouth:
             goals=goals,
             recent_events=[(record.at_ms, record.text) for record in self._records if record.kind == "game"],
             segment_title=segment,
-            # 观众进房名单只由决策环节负责欢迎；嘴不读进房名单，免得因游戏小事开口时顺嘴二次欢迎
+            # 观众进房名单只由规划器负责欢迎；即时反应不读进房名单，免得因游戏小事开口时顺嘴二次欢迎
             room_activity=self._room_state.activity_line(include_enters=False),
             recent_speeches=self._earlier_speeches(),
         )
@@ -515,13 +515,13 @@ class Mouth:
                 # 识别到行首中英文情绪标签时更新当前行情绪并剥除标签前缀，防止“害羞：”之类直念进语音合成
                 current, line, note = parsed_prefix
                 if note:
-                    self._logger.debug(f"嘴情绪标签收敛（标签已剥除不念）: {note}")
+                    self._logger.debug(f"即时反应情绪标签收敛（标签已剥除不念）: {note}")
             if line and not _STAGE_DIRECTION.match(line):
                 segments.append((current, line))
         return segments
 
     def _earlier_speeches(self) -> List[str]:
-        """本场最近已说出口的台词（含决策环节与嘴自己，旧→新），不被高频游戏事件挤掉。"""
+        """本场最近已说出口的台词（含规划器台词与即时反应自己，旧→新），不被高频游戏事件挤掉。"""
         merged: List[str] = []
         if self._recent_speeches_provider is not None:
             try:
@@ -550,7 +550,9 @@ class Mouth:
         fallback_generated: int,
     ) -> Tuple[List[Tuple[Emotion, str]], Any, int]:
         """初稿与更早台词近逐字重合时，退回给表达模型换一句不同的短反应重说一次。"""
-        self._logger.info(f"嘴初稿命中近逐字复读（重合度 {repeat.ratio:.2f}），打回换说法重说: {repeat.sentence!r}")
+        self._logger.info(
+            f"即时反应初稿命中近逐字复读（重合度 {repeat.ratio:.2f}），打回换说法重说: {repeat.sentence!r}"
+        )
         retry_prompt = (
             f"刚才想说的「{repeat.sentence}」你前面已经几乎原样说过了（前面说的是「{repeat.earlier}」）。"
             f"对这次的由头换个不同的切入点重说一句，别重复刚才那句；实在没别的好说就只输出{_SILENCE}"
@@ -563,15 +565,15 @@ class Mouth:
         try:
             retried = await self._llm.generate(retry_messages, system=system_prompt, profile=self._profile)
         except Exception as exc:  # noqa: BLE001 - 重说异常不炸主循环，按放弃这句处理
-            self._logger.warning(f"嘴近逐字重说调用异常，放弃本句: {exc}", exc=True)
+            self._logger.warning(f"即时反应近逐字重说调用异常，放弃本句: {exc}", exc=True)
             return [], fallback_response, fallback_generated
         generated = self._clock()
         if not retried.ok:
-            self._logger.warning(f"嘴近逐字重说失败，放弃本句: {retried.error or 'unknown'}")
+            self._logger.warning(f"即时反应近逐字重说失败，放弃本句: {retried.error or 'unknown'}")
             return [], retried, generated
         segments = self._parse(retried.content or "")
         if not segments:
-            self._logger.info("嘴近逐字打回后改选沉默")
+            self._logger.info("即时反应近逐字打回后改选沉默")
             return [], retried, generated
         segments = self._guard(segments)
         if not segments:
@@ -579,7 +581,7 @@ class Mouth:
         still_repeat = find_verbatim_repeat("\n".join(line for _, line in segments), earlier_lines)
         if still_repeat is not None:
             self._logger.info(
-                f"嘴重说后仍近逐字复读（重合度 {still_repeat.ratio:.2f}），放弃本句: {still_repeat.sentence!r}"
+                f"即时反应重说后仍近逐字复读（重合度 {still_repeat.ratio:.2f}），放弃本句: {still_repeat.sentence!r}"
             )
             return [], retried, generated
         return segments, retried, generated
@@ -588,7 +590,7 @@ class Mouth:
         """长度按句累计到预算、敏感词过滤；不过关返回空列表（直接丢弃不重试）。
 
         长度：第一句照常按预算截（截不出完整句时整句保留）；后面的句子放得下才要，放不下整句
-        不要，不截成半句——跨行预算是嘴自己的算法，逐行出口检查交给 speech_guard 的
+        不要，不截成半句——跨行预算是即时反应自己的算法，逐行出口检查交给 speech_guard 的
         :func:`guard`（此处不截短，只查敏感词）。命中"整条丢弃"就整段丢。
         """
         budget = self._speech_max_chars
@@ -596,10 +598,10 @@ class Mouth:
         kept: List[Tuple[Emotion, str]] = []
         used = 0
         for emotion, raw_line in segments:
-            # 已被任一出口欢迎过的人，嘴不再顺嘴欢迎第二遍；只剩欢迎语的行直接略过
+            # 已被任一出口欢迎过的人，即时反应不再顺嘴欢迎第二遍；只剩欢迎语的行直接略过
             line, stripped_greeting = strip_duplicate_greetings(raw_line, welcomed)
             if stripped_greeting and not line:
-                self._logger.info(f"嘴的台词仅含重复欢迎，已剥除: {raw_line!r}")
+                self._logger.info(f"即时反应的台词仅含重复欢迎，已剥除: {raw_line!r}")
                 continue
             if budget > 0:
                 if not kept:
@@ -608,7 +610,7 @@ class Mouth:
                     break
             verdict = guard(line, speech_max_chars=0, word_filter=self._word_filter)
             if verdict.text is None:
-                self._logger.info("嘴的台词命中敏感词，整段丢弃")
+                self._logger.info("即时反应的台词命中敏感词，整段丢弃")
                 return []
             kept.append((emotion, verdict.text))
             used += len(verdict.text)

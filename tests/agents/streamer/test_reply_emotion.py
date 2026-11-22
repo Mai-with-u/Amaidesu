@@ -15,7 +15,7 @@ from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 
 class _Replyer:
-    """表达引擎桩：固定返回一句台词。"""
+    """回复器桩：固定返回一句台词。"""
 
     async def generate(self, **kwargs: Any) -> dict[str, Any]:
         return {"speech": "掉河里了，行吧", "llm_request_id": None}

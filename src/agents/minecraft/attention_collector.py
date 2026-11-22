@@ -93,7 +93,7 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             return False
         if kind == "milestone":
             # 步进完成与开箱发现稀罕宝物都是主播可讲的进展：去坐标/观察编号后直接讲；
-            # 其中开出稀罕战利品标为高光里程碑，供快嘴当场反应，常规步骤完成只留作背景。
+            # 其中开出稀罕战利品标为高光里程碑，供即时反应当场出声，常规步骤完成只留作背景。
             message = str(event.get("message") or "")
             world = self._page_world
             payload = GamePayload(
@@ -134,7 +134,7 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         return True
 
     async def _forward_rare_sighting(self, event: Dict[str, Any]) -> bool:
-        """角色在眼前视野里亲眼撞见 Boss 或天然稀有矿脉：转成 ``game.body.rare_sighted`` 唤醒快嘴与决策层。"""
+        """角色在眼前视野里亲眼撞见 Boss 或天然稀有矿脉：转成 ``game.body.rare_sighted`` 唤醒即时反应与规划器。"""
         summary, sighting_kind = rare_sighting_line(event)
         payload = BodyEventPayload(
             game="minecraft",

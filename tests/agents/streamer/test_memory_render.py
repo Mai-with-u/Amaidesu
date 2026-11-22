@@ -115,7 +115,7 @@ def test_memory_refs_keep_commitment_and_archive_numbers_apart() -> None:
 
 
 def test_viewer_sourced_lines_say_they_were_decided_with_viewers_without_naming_anyone() -> None:
-    """人批准的观众候选写成的行：简报、线索卡、说话档都注明和观众一起定的，别点名是哪一位。"""
+    """人批准的观众候选写成的行：简报、线索卡、回复器档都注明和观众一起定的，别点名是哪一位。"""
     line = ArchiveLine(
         id=43, live_session_id=7, text="和观众一起给小羊取名雪球", quote="就叫雪球", evidence_chat_id=3, source="viewer"
     )
@@ -180,7 +180,7 @@ def test_the_word_the_viewer_set_is_never_masked(quote: str, word: str, shown: s
 
 
 def test_spoken_archive_gives_title_only() -> None:
-    """说话档只给标题：不带编号，不带原话（原话是 Planner 对口径用的）。"""
+    """回复器档只给标题：不带编号，不带原话（原话是 Planner 对口径用的）。"""
     spoken = render_spoken_archive(_archive())
     assert "水车搭好了" in spoken and "档#" not in spoken and "水车搭好啦" not in spoken
     assert render_spoken_archive(_archive(text=" ")) == ""

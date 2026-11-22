@@ -71,7 +71,7 @@ pm.load_all()
 ```yaml
 ---
 name: amaidesu_replyer_system
-description: "主播表达引擎的系统提示词"
+description: "主播回复器的系统提示词"
 author: Amaidesu
 tags: [live, vtuber, replyer, persona]
 variables:

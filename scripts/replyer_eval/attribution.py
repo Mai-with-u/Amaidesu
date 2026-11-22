@@ -1,4 +1,4 @@
-"""主播表达引擎「谁说的、谁做的」评测：台词有没有把玩家的话、玩家的举动安到别人头上。
+"""主播回复器「谁说的、谁做的」评测：台词有没有把玩家的话、玩家的举动安到别人头上。
 
 第 58 场出过三种错：玩家扔来铁锭，交接稿写成"凭空到手"，她说"这铁锭哪来的，天上掉的"；
 玩家在游戏公屏说"我勒个"，她冲上一句刚点过名的女仆说"小百合你'我勒个'啥呀"；玩家说她
@@ -6,7 +6,7 @@
 用生产的 Replyer 渲染输入、真调模型出台词，再按用例的禁用说法判对错。
 
 每条用例给出聊天记录（她的台词、游戏条目、游戏聊天、玩家冲她做的动作、观众弹幕）、本窗
-新到的游戏聊天和交接稿。玩家说的话与动作经生产的游戏账本入账、出账，得到交给表达侧的
+新到的游戏聊天和交接稿。玩家说的话与动作经生产的游戏账本入账、出账，得到交给回复器的
 "游戏里最近找你的人"与回应对象，和线上同一条路径。
 
 量的是误归因率：台词命中用例禁用说法（安错人、说成来路不明、把话里的事安到说话人头上）的
@@ -313,7 +313,7 @@ def _run(args: argparse.Namespace, cases: list[AttributionCase], prompt_manager:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="主播表达引擎「谁说的、谁做的」评测（dry 渲染自检 / live 真调模型）")
+    parser = argparse.ArgumentParser(description="主播回复器「谁说的、谁做的」评测（dry 渲染自检 / live 真调模型）")
     parser.add_argument("--live", action="store_true", help="真调模型；省略时只渲染每条用例的输入")
     parser.add_argument("--samples", type=int, default=3, help="live 时每条用例采样几次（默认 3）")
     parser.add_argument("--out", type=Path, default=None, help="JSON 报告路径；live 必填")

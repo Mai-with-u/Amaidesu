@@ -93,7 +93,7 @@ async def live_stack(store: SQLiteDatabase) -> AsyncIterator[_LiveStack]:
 
 
 def _routed_llm(planner_requests: List[str]) -> MagicMock:
-    """Planner 决定直接开口（接回发言），表达侧固定回续播句；planner 请求文本按序收集。"""
+    """Planner 决定直接开口（接回发言），回复器固定回续播句；planner 请求文本按序收集。"""
     llm = MagicMock()
 
     async def _generate(*args: Any, **kwargs: Any) -> Response:

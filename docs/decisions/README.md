@@ -94,7 +94,7 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-073：整理结果的人工审核（整理照旧自动生效 / 人改过的行只有人能动 / 放回的行排在快照最前 / 每次改动留记录 / 整理单独一个模型档位）](073-settlement-human-review.md)
 - [ADR-074：观众定下的事经人批准进记忆（修改设计公理 1：观众的话只有经人批准、且她当场接受过，才进跨场记忆 / 她说欠着、账上找不到的事同样只列候选）](074-viewer-defined-memory-needs-approval.md)
 - [ADR-075：游戏里的人按 UUID 认（玩家表放 Amaidesu / 只自动记她亲身经历的互动 / 对某位玩家的承诺按两条证据路径核对 / 玩家与观众对号由运营者确认且永不告诉她 / 删玩家与公屏"忘了我"）](075-game-players-by-uuid.md)
-- [ADR-076：委派改为一件在做、其余待办，换活必须结单（废除急件暂放恢复 / 按短编号结单 / 主播决策与快嘴共读同一账本）](076-delegation-one-in-hand-and-settle-on-switch.md)
+- [ADR-076：委派改为一件在做、其余待办，换活必须结单（废除急件暂放恢复 / 按短编号结单 / 主播规划器与即时反应共读同一账本）](076-delegation-one-in-hand-and-settle-on-switch.md)
 - [ADR-077：常驻简报按种类分区、开播接上次收尾、承诺过期搁置与场内更正（部分取代 ADR-066 / ADR-071 的名额与轮播规则 / 整理逐调用断点续跑）](077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
 - [ADR-078：游戏社交事实的定位、与三类记忆的分工边界及证据隐私治理（对齐 ADR-068 / ADR-074）](078-game-social-facts-boundaries-and-governance.md)
 - [ADR-079：记忆检索抗干扰降噪、双侧记忆桥接与档案名场面分层（扩展 ADR-071 / ADR-072 / ADR-077 / ADR-078）](079-memory-anti-noise-cross-agent-bridge-and-highlights.md)

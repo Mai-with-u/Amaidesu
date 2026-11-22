@@ -1,7 +1,7 @@
-"""谁说的话、谁做的事交到表达侧：玩家找她的条目从账本出账，Planner 留最近几分钟的随 reply 交给 Replyer。
+"""谁说的话、谁做的事交到回复器：玩家找她的条目从账本出账，Planner 留最近几分钟的随 reply 交给 Replyer。
 
 复现的是第 58 场两处错：玩家扔来铁锭在上一窗入账、下一窗交接稿写成"凭空到手"，她说成天上掉的；
-玩家在公屏说"我勒个"，她冲上一句刚点过名的女仆说。这里核对结构化的人和回应对象一路交到了表达侧，
+玩家在公屏说"我勒个"，她冲上一句刚点过名的女仆说。这里核对结构化的人和回应对象一路交到了回复器，
 模型会不会照着说由 scripts/replyer_eval/attribution.py 真调模型评测。
 """
 
@@ -227,11 +227,11 @@ async def test_danmaku_target_wins_over_reply_to_and_people_section_omitted() ->
     assert turn["game_people_section"] == ""
 
 
-# Planner：玩家条目跨窗留着，随 reply 交到表达侧
+# Planner：玩家条目跨窗留着，随 reply 交到回复器
 
 
 class _CaptureReplyer:
-    """表达层桩：记下每次交来的玩家条目与回应对象。"""
+    """回复器桩：记下每次交来的玩家条目与回应对象。"""
 
     def __init__(self) -> None:
         self.calls: List[Tuple[List[str], str]] = []
@@ -270,7 +270,7 @@ def _reply(target: Optional[str] = None, topic_summary: str = "接话") -> Respo
 
 
 async def test_gift_from_the_previous_window_reaches_the_replyer() -> None:
-    """第 58 场原样：铁锭在上一窗入账、那一窗没接；下一窗冷场开口时，表达侧仍看得到是玩家甲扔来的。"""
+    """第 58 场原样：铁锭在上一窗入账、那一窗没接；下一窗冷场开口时，回复器仍看得到是玩家甲扔来的。"""
     replyer = _CaptureReplyer()
     planner = _planner(replyer, [Response(success=True, content="先不说"), _reply()])
     gift = PlayerNote(
@@ -312,7 +312,7 @@ async def test_sole_game_speaker_becomes_reply_to_unless_answering_danmaku(
     assert replyer.calls == [([chat.line], expected_reply_to)]
 
 
-# 第 58 场 00:08:56 那次表达侧请求原样：账本 → Planner → 真实提示词渲染，名字换成占位
+# 第 58 场 00:08:56 那次回复器请求原样：账本 → Planner → 真实提示词渲染，名字换成占位
 
 # 交接稿照抄当晚 Planner 写的（只换了名字）：话题摘要里的"她"指主播自己
 _S58_SUMMARY = (
@@ -320,12 +320,12 @@ _S58_SUMMARY = (
     "手里拿着一扇做好的橡木门，墙上那格门洞还没凿开。"
 )
 _S58_GUIDANCE = "让她被这句没头没尾的感叹勾住，带着好奇去追问对方到底看见什么了，语气俏皮、有点被吊胃口的不服气。"
-# 公屏那句之后、Planner 开口之前，她刚冲女仆说过的一句：当晚表达侧把"我勒个"安到了女仆头上
+# 公屏那句之后、Planner 开口之前，她刚冲女仆说过的一句：当晚回复器把"我勒个"安到了女仆头上
 _S58_MAID_LINE = "哎小白你可算挪开了，画面终于清爽了……不过你走远了我还怪不习惯的，回来点？"
 
 
 class _NoteCapture(_CaptureReplyer):
-    """表达层桩：留下 Planner 交来的玩家条目原件，再交给真实的表达侧渲染。"""
+    """回复器桩：留下 Planner 交来的玩家条目原件，再交给真实的回复器渲染。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -344,8 +344,8 @@ def prompts() -> Any:
 
 
 async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts: Any) -> None:
-    """当晚：玩家在公屏说"我勒个"，交接稿写"她此刻站在墙边"，表达侧把"她"当成上一句刚点名的女仆，说成
-    "小白你'我勒个'啥呀"。这一层不靠模型：改动后表达侧的输入里，这句话明确记在玩家甲名下、来自游戏公屏，
+    """当晚：玩家在公屏说"我勒个"，交接稿写"她此刻站在墙边"，回复器把"她"当成上一句刚点名的女仆，说成
+    "小白你'我勒个'啥呀"。这一层不靠模型：改动后回复器的输入里，这句话明确记在玩家甲名下、来自游戏公屏，
     回应对象写明是玩家甲；刚点过名的女仆既不是说话人，也不是回应对象。
     """
     now = now_ms()
@@ -410,6 +410,6 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
         "小白" not in people.split("\n## ", 1)[0]
         and "小白" not in text.split("提及的游戏同伴:", 1)[1].split("\n", 1)[0]
     )
-    # 第 66 场回归：表达侧归属规矩不再默认"玩家公屏说的事多半在说你"，明确公屏全服可见、不在身边别往自己脚下套
+    # 第 66 场回归：回复器归属规矩不再默认"玩家公屏说的事多半在说你"，明确公屏全服可见、不在身边别往自己脚下套
     assert "玩家公屏说的事多半在说你" not in people
     assert "公屏全服可见" in people and "没说在你身边就别往自己脚下套" in people

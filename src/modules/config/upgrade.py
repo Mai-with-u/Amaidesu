@@ -1085,7 +1085,7 @@ def advance_file_versions(raw_docs: Dict[str, Dict[str, Any]]) -> Dict[str, List
     return changed
 
 
-# agents.toml v2.0.45：style_constraints 默认值去掉"适当使用emoji"尾缀（与表达侧
+# agents.toml v2.0.45：style_constraints 默认值去掉"适当使用emoji"尾缀（与回复器
 # 统一禁 emoji 的模板指令矛盾）。仅值等于旧默认时改写为新默认，用户显式
 # 设置的其他值不动。
 _upgrade_replyer_style_drop_emoji = swap_default(

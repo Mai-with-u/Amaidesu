@@ -59,7 +59,7 @@ _EMOTION_VECTORS: Dict[str, tuple] = {
 }
 # 不入表：neutral / shy / embarrassed / confused / smug / serious / tired / speechless
 
-# emotion_intensity 缺省强度：与表达侧（mouth 解析情绪前缀）的缺省一致
+# emotion_intensity 缺省强度：与回复器（mouth 解析情绪前缀）的缺省一致
 _DEFAULT_EMOTION_INTENSITY = 0.7
 
 # 官方 WebUI 的维度偏置（normalize_emo_vec 同源）：压低易出怪声的惊喜/平静

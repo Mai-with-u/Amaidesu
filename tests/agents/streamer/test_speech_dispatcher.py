@@ -995,7 +995,7 @@ async def test_dispatch_reaction_hard_interrupt_cuts_p0_only_when_allowed(starte
 
     # 默认 allow_hard_interrupt=False：即使传了极急优先级也不硬打断在播 P0，等满 wait_ms 作废
     blocked = await dispatcher.dispatch_reaction(
-        "普通快嘴",
+        "普通即时反应",
         emotion="surprised",
         emotion_intensity=0.7,
         wait_ms=40,

@@ -1,4 +1,4 @@
-"""嘴与决策环节对账（mouth_reconcile）：欢迎去重、口头流水与出声前四态裁决。"""
+"""即时反应与规划器对账（mouth_reconcile）：欢迎去重、口头流水与出声前四态裁决。"""
 
 from __future__ import annotations
 
@@ -106,8 +106,8 @@ def test_spoken_log_deduplicates_rapid_same_source_and_attaches_trigger() -> Non
 
 
 async def test_reconcile_skips_llm_when_mouth_was_silent() -> None:
-    """常态快路径：本轮嘴没开口时零模型调用放行（FakeLLMManager 设 fail=True 若被调用即暴露）。"""
-    llm = FakeLLMManager(fail=True, fail_error="嘴未开口不应调用模型")
+    """常态快路径：本轮即时反应没开口时零模型调用放行（FakeLLMManager 设 fail=True 若被调用即暴露）。"""
+    llm = FakeLLMManager(fail=True, fail_error="即时反应未开口不应调用模型")
     verdict = await reconcile_with_mouth(
         "先把这几块圆石垫在脚下。",
         mouth_entries=[],
@@ -183,7 +183,7 @@ def _reply_tool_call(call_id: str, summary: str) -> ToolCall:
 async def test_session65_game_join_duplicate_welcome_is_suppressed_or_trimmed_end_to_end(
     planner_draft: str, expected_planner_speech: str | None, expected_silent: str | None
 ) -> None:
-    """第 65 场回归：公屏系统消息提示玩家加入游戏，嘴 3 秒内已开口欢迎后，20 秒后决策环节不再重复欢迎。"""
+    """第 65 场回归：公屏系统消息提示玩家加入游戏，即时反应 3 秒内已开口欢迎后，20 秒后规划器不再重复欢迎。"""
     bus = EventBus()
     spoken_events: List[str] = []
 
@@ -194,7 +194,7 @@ async def test_session65_game_join_duplicate_welcome_is_suppressed_or_trimmed_en
     registry = ToolRegistry()
 
     llm_responses = [
-        # 1) 嘴当场反应：欢迎刚上线的玩家甲
+        # 1) 即时反应当场出声：欢迎刚上线的玩家甲
         Response(success=True, content="happy：诶，玩家甲也进来了？欢迎欢迎，来一起栽树苗呗！", request_id="r_m1"),
         # 2) Planner ReAct 调 streamer_reply
         Response(success=True, content="", tool_calls=[_reply_tool_call("c1", "玩家甲加入游戏并看树苗")]),
@@ -202,7 +202,7 @@ async def test_session65_game_join_duplicate_welcome_is_suppressed_or_trimmed_en
         Response(success=True, content=planner_draft, request_id="r_rep1"),
     ]
     if expected_planner_speech is not None:
-        # 剥掉欢迎后仍有新内容，若本轮嘴开口过则会走一次轻量核对放行新内容
+        # 剥掉欢迎后仍有新内容，若本轮即时反应开口过则会走一次轻量核对放行新内容
         llm_responses.append(Response(success=True, content="放行", request_id="r_rec1"))
 
     llm = FakeLLMManager(responses=llm_responses)
@@ -240,7 +240,7 @@ async def test_session65_game_join_duplicate_welcome_is_suppressed_or_trimmed_en
 
 
 async def test_session65_2105_contradiction_bounces_planner_to_rethink_with_fresh_scene() -> None:
-    """第 65 场 21:05:50/21:06:05 相邻矛盾回归：构思期间已换入新世界且嘴先说出"到新世界了"，
+    """第 65 场 21:05:50/21:06:05 相邻矛盾回归：构思期间已换入新世界且即时反应先说出"到新世界了"，
     旧台词"还卡在门口进不去"被拦下作废，携带最新现场退回 Planner 重想出与新世界一致的台词。"""
     clock_now = 10_000
     reply_drafts = iter(
@@ -310,7 +310,7 @@ async def test_session65_2105_contradiction_bounces_planner_to_rethink_with_fres
     assert outcome.speech == "新世界河岸这边视野真宽敞，我先去砍两棵树做工作台。"
     assert "卡在服务器门口" not in (outcome.speech or "")
     assert len(reconcile_calls) == 2
-    # 第一步被退回后的 tool 观察（紧跟在第一步 assistant 调用之后）携带嘴刚说的话与最新现场
+    # 第一步被退回后的 tool 观察（紧跟在第一步 assistant 调用之后）携带即时反应刚说的话与最新现场
     all_msgs = llm.calls[1]["input"]
     bounced_tool_msgs = [m for m in all_msgs if m.get("role") == "tool" and '"ok": false' in m.get("content", "")]
     assert len(bounced_tool_msgs) == 1
@@ -321,7 +321,7 @@ async def test_session65_2105_contradiction_bounces_planner_to_rethink_with_fres
 
 
 async def test_playback_slot_before_emit_vetoes_stale_speech_when_mouth_spoke_during_slot_wait() -> None:
-    """毫秒时序回归（关口二）：Replyer 生成完时尚无嘴插话，但在等前一句 TTS 播放空档期间嘴先回应了新事件，
+    """毫秒时序回归（关口二）：Replyer 生成完时尚无即时反应插话，但在等前一句 TTS 播放空档期间即时反应先回应了新事件，
     占住播放槽位后出声前 before_emit 拦下过时台词，记 mouth_superseded 并唤醒下一拍重评。"""
     bus = EventBus()
     spoken_events: List[str] = []
@@ -358,9 +358,9 @@ async def test_playback_slot_before_emit_vetoes_stale_speech_when_mouth_spoke_du
         responses=[
             # 1) Planner 调 streamer_reply
             Response(success=True, content="", tool_calls=[_reply_tool_call("c1", "门外等重连")]),
-            # 2) Replyer 生成完毕（此时嘴尚未说话，关口一零模型调用直接通过）
+            # 2) Replyer 生成完毕（此时即时反应尚未说话，关口一零模型调用直接通过）
             Response(success=True, content="怎么还在门外转圈圈进不去呀。", request_id="r_rep"),
-            # 3) 等播放槽位后出声前关口二检测到这期间嘴刚开口，核对判定作废
+            # 3) 等播放槽位后出声前关口二检测到这期间即时反应刚开口，核对判定作废
             Response(success=True, content="作废：已进入新世界出生点，不再在门外转圈", request_id="r_rec_slot"),
         ]
     )
@@ -380,7 +380,7 @@ async def test_playback_slot_before_emit_vetoes_stale_speech_when_mouth_spoke_du
         event_bus=bus,
         tool_registry=registry,
         tts_engine=_GatedTTS(),
-        # max_pending=0（排空闸）：本测试锁的是"等播放槽位期间嘴插话"的毫秒时序，
+        # max_pending=0（排空闸）：本测试锁的是"等播放槽位期间即时反应插话"的毫秒时序，
         # 排空语义保住这段等待窗；欠一句的放行时序有专属单测
         speech_config={"enabled": True, "wait_playback": True, "max_pending": 0},
     )
@@ -406,7 +406,7 @@ async def test_playback_slot_before_emit_vetoes_stale_speech_when_mouth_spoke_du
         await replyer_generated.wait()
         await asyncio.sleep(0)
 
-        # 等播放槽位期间，新世界里程碑到达且嘴说出了新世界反应，随后释放前一句播放完毕
+        # 等播放槽位期间，新世界里程碑到达且即时反应说出了新世界反应，随后释放前一句播放完毕
         await agent._on_game_event(
             CoreEvents.GAME_MILESTONE,
             GamePayload(game="minecraft", event_type="milestone", message="已进入新世界河岸"),
@@ -430,7 +430,7 @@ async def test_playback_slot_before_emit_vetoes_stale_speech_when_mouth_spoke_du
 
 
 async def test_planner_receives_realtime_mouth_speeches_in_speech_history() -> None:
-    """嘴刚说出口的反应实时并入下一轮表达侧的已说台词列表（即使尚未落库或无库模式也立即可见）。"""
+    """即时反应刚说出口的反应实时并入下一轮回复器的已说台词列表（即使尚未落库或无库模式也立即可见）。"""
     captured_attachments: List[Any] = []
 
     async def _capture_reply(inv: Any) -> ToolExecutionResult:
@@ -470,7 +470,7 @@ async def test_planner_receives_realtime_mouth_speeches_in_speech_history() -> N
 
 
 async def test_contradiction_bounce_records_mouth_superseded_when_planner_chooses_silence() -> None:
-    """原台词因新现场矛盾被退回后，若 Planner 判断嘴已交代清楚、第二步不再调用工具，静默原因记为 mouth_superseded。"""
+    """原台词因新现场矛盾被退回后，若 Planner 判断即时反应已交代清楚、第二步不再调用工具，静默原因记为 mouth_superseded。"""
 
     async def _fake_reply(_inv: Any) -> ToolExecutionResult:
         return ToolExecutionResult(

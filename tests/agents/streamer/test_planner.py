@@ -587,8 +587,8 @@ _CHAT = {"topic_summary": "聊挖矿", "is_novel": True, "emotion": "happy", "in
 
 
 async def test_her_reply_marks_that_players_notes_answered_for_later_windows() -> None:
-    """她谢了玩家乙扔来的钻石：下一窗交给表达侧的条目里，乙的那条标成已接过，甲的不动——
-    换个话题时表达侧不再把同一份礼谢一遍。"""
+    """她谢了玩家乙扔来的钻石：下一窗交给回复器的条目里，乙的那条标成已接过，甲的不动——
+    换个话题时回复器不再把同一份礼谢一遍。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     planner, _llm, _prompt = _make_planner(
@@ -607,7 +607,7 @@ async def test_her_reply_marks_that_players_notes_answered_for_later_windows() -
 
 
 async def test_reply_that_did_not_go_out_leaves_notes_unanswered() -> None:
-    """谢乙的那句没说出口（表达侧失败）：乙的条目不标已接过，下一窗照样能谢。"""
+    """谢乙的那句没说出口（回复器失败）：乙的条目不标已接过，下一窗照样能谢。"""
     failed = ToolExecutionResult(tool_name="streamer_reply", success=False, error_message="表达失败")
     provider = MagicMock()
     provider.invoke = AsyncMock(side_effect=[failed, _REPLY_RESULT])
@@ -628,7 +628,7 @@ async def test_reply_that_did_not_go_out_leaves_notes_unanswered() -> None:
 
 
 async def test_reset_player_notes_forgets_last_sessions_players() -> None:
-    """场次复位：留着的玩家条目清空，下一窗交给表达侧的是空的。"""
+    """场次复位：留着的玩家条目清空，下一窗交给回复器的是空的。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     planner, _llm, _prompt = _make_planner(
@@ -688,7 +688,7 @@ async def test_use_memory_accepts_single_item_list_and_renders_spoken_form() -> 
     assert outcome.replied is True and outcome.memory_refs == ["约#7"]
     attachment = provider.invoke.await_args.args[0].attachment
     assert "讲完鬼故事的结局" in attachment.remembered
-    assert "约#7" not in attachment.remembered, "说话档不带编号"
+    assert "约#7" not in attachment.remembered, "回复器档不带编号"
 
 
 async def test_use_memory_rejects_archive_prefix_and_multi_values(loguru_capture: Any) -> None:
@@ -797,7 +797,7 @@ def _reply_to(target: str, use_memory: str, **extra: Any) -> list:
 
 
 def _repeat_planner(responses: list, **kwargs: Any) -> tuple[Planner, MagicMock, MagicMock]:
-    """档#41 本场已提过、在简报里能点名的 Planner；返回（Planner, LLM, 表达侧桩）。"""
+    """档#41 本场已提过、在简报里能点名的 Planner；返回（Planner, LLM, 回复器桩）。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     planner, llm, _prompt = _make_planner(
@@ -828,7 +828,7 @@ async def test_archive_line_already_mentioned_is_bounced_once_when_nobody_asked(
     # 同一窗的消息序列是追加写的：退回理由是第一句 reply 的工具结果
     refusal = " ".join(str(message.get("content") or "") for message in llm.generate.await_args_list[1].args[0])
     assert "档#41 这件事本场已经提过" in refusal and "这一窗只退这一次" in refusal
-    assert provider.invoke.await_count == 1, "退回的那句没交给表达侧"
+    assert provider.invoke.await_count == 1, "退回的那句没交给回复器"
 
 
 async def test_second_mention_in_the_same_window_goes_out_and_still_counts() -> None:
@@ -887,7 +887,7 @@ async def test_busy_window_does_not_wave_through_an_unprompted_repeat() -> None:
     outcome = await planner.plan([_msg("主播今天玩啥")], game_batch=GameEventBatch(player_notes=(chatter,)))
 
     assert (outcome.replied, outcome.memory_refs, outcome.memory_repeat_bounces) == (True, [], 1)
-    assert provider.invoke.await_count == 1, "退回的那句没交给表达侧"
+    assert provider.invoke.await_count == 1, "退回的那句没交给回复器"
 
 
 async def test_card_pushed_by_someone_and_answering_a_danmaku_are_not_bounced() -> None:
@@ -932,7 +932,7 @@ def _reply_player_args(player_name: str = "玩家甲", summary: str = "回应玩
 
 
 async def test_game_chat_reply_bounces_once_before_replyer_then_marks_answered_after_chat_send() -> None:
-    """玩家公屏发问时首次仅调 streamer_reply 会在进表达侧前退回一次；补调 minecraft_chat_send 成功后放行并标已回。"""
+    """玩家公屏发问时首次仅调 streamer_reply 会在进回复器前退回一次；补调 minecraft_chat_send 成功后放行并标已回。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     chat_ok = ToolExecutionResult(
@@ -962,7 +962,7 @@ async def test_game_chat_reply_bounces_once_before_replyer_then_marks_answered_a
 
     assert outcome.replied is True and outcome.steps == 2
     assert chat_handler.await_count == 1
-    assert provider.invoke.await_count == 1, "首次被拦在表达侧调用之前，仅第二次真正调用表达侧"
+    assert provider.invoke.await_count == 1, "首次被拦在回复器调用之前，仅第二次真正调用回复器"
     bounce_obs = " ".join(str(msg.get("content") or "") for msg in llm.generate.await_args_list[1].args[0])
     assert "minecraft_chat_send" in bounce_obs and "held_reply" in bounce_obs
     delivered_people = provider.invoke.await_args.args[0].attachment.game_people
@@ -1054,7 +1054,7 @@ async def test_failed_chat_send_payload_does_not_count_as_game_chat_answered(
 
     assert outcome.replied is True and outcome.steps == 2
     assert chat_handler.await_count == 1
-    assert provider.invoke.await_count == 1, "同一步的公屏发送业务失败，首次口播仍在表达侧前被退回"
+    assert provider.invoke.await_count == 1, "同一步的公屏发送业务失败，首次口播仍在回复器前被退回"
     assert [(note.who, note.said, note.answered) for note in planner.recent_player_notes] == [("玩家甲", True, False)]
 
 

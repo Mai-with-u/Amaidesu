@@ -367,7 +367,7 @@ def test_constructor_validation(kwargs: dict, error: type, match: str) -> None:
     assert (DEFAULT_MAX_QUEUE, DEFAULT_RENDER_TIMEOUT_MS) == (6, 60_000)
 
 
-# ---------------- 优先级、过期与段落（快嘴用） ----------------
+# ---------------- 优先级、过期与段落（即时反应用） ----------------
 
 
 class _Clock:

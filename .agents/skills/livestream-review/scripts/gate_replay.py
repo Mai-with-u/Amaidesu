@@ -6,7 +6,7 @@
 - 台词序列（streamer.speech）：成品发言对最近 N 条已说发言的 bigram 包含率——
   线下台词层自身的复读程度；
 - 指导语序列（planner.decision.reply_guidance）：planner 写给台词生成环节的指导语互相之间的
-  重合率——这一层不在台词层，比较两层的重合率就能看出复读源头在决策环节还是表达环节。
+  重合率——这一层不在台词层，比较两层的重合率就能看出复读源头在规划器还是回复器。
 
     uv run python .agents/skills/livestream-review/scripts/gate_replay.py \
         --events logs/events/2026-11-02/21.jsonl logs/events/2026-11-02/22.jsonl --since 21:36 --until 22:15
@@ -178,7 +178,7 @@ def main() -> None:
 
     print(f"参数：回看窗 {args.window} 轮，阈值 {args.ratio:.0%}\n")
     replay("台词序列（台词层自身的复读）", speeches, args.window, args.ratio)
-    replay("指导语序列（决策层的复读）", guidances, args.window, args.ratio)
+    replay("指导语序列（规划器的复读）", guidances, args.window, args.ratio)
 
 
 if __name__ == "__main__":

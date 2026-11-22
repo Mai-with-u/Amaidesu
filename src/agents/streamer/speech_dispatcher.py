@@ -444,7 +444,7 @@ class SpeechDispatcher:
         speech = reply_payload.get("speech", "")
         emotion = reply_payload.get("emotion", {})
 
-        # 书面标点规范化：无论表达侧写了什么，出声、字幕与落库文本统一在此换成口语标点
+        # 书面标点规范化：无论回复器写了什么，出声、字幕与落库文本统一在此换成口语标点
         cleaned_speech = normalize_spoken_punctuation(speech.strip()) if isinstance(speech, str) else ""
         # 情绪契约：replyer 保证 emotion 为 {name, intensity} 且 name 已降级为
         # 合法枚举值（缺失→neutral）、intensity 已 clamp——此处规范化后透传，

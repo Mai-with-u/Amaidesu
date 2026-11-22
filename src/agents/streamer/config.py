@@ -106,53 +106,53 @@ from src.modules.context import ContextBudgetConfig
 class StreamerPersonaConfig(BaseConfig):
     """[agents.streamer.persona] 段
 
-    主播人设。bot_name/personality/style_constraints/voice_examples 注入 Replyer 表达侧，
-    behavior_style 注入 Planner 决策侧，inside_jokes（老梗栏）只进 Planner 系统提示词；
-    boundaries（她不答应的事）三条说话通路（Planner、Replyer、嘴）都带。"被问到时不否认自己是 AI"是法规要求，写死在三份
+    主播人设。bot_name/personality/style_constraints/voice_examples 注入 Replyer 回复器，
+    behavior_style 注入 Planner 规划器，inside_jokes（老梗栏）只进 Planner 系统提示词；
+    boundaries（她不答应的事）三条说话通路（Planner、Replyer、即时反应）都带。"被问到时不否认自己是 AI"是法规要求，写死在三份
     提示词模板里，不放进人设——运营者怎么改人设都删不掉它。
     """
 
-    bot_name: str = Field(title="VTuber 名字", default="麦麦", description="VTuber 名字（注入 Replyer 表达侧）")
+    bot_name: str = Field(title="VTuber 名字", default="麦麦", description="VTuber 名字（注入 Replyer 回复器）")
     personality: str = Field(
         title="性格描述",
         default="活泼开朗，有些调皮，好奇心重，爱接梗。遇到游戏里的破事反应很大，会当场叫出来；偶尔会突然较真，较真起来一板一眼。",
-        description="性格描述（注入 Replyer 表达侧）",
+        description="性格描述（注入 Replyer 回复器）",
     )
     style_constraints: str = Field(
         title="说话风格约束",
         default="口语化，短句为主，偶尔玩个梗",
-        description="说话风格约束（注入 Replyer 表达侧）",
+        description="说话风格约束（注入 Replyer 回复器）",
     )
     behavior_style: str = Field(
         title="行动准则",
         default="积极与观众互动，收到礼物和SC及时致谢，冷场时主动开新话题，遇到争议保持风度不纠缠",
-        description="Planner 行动准则（注入 Planner 决策侧）",
+        description="Planner 行动准则（注入 Planner 规划器）",
     )
     # 口吻示例：Replyer 系统提示词的人设块里带几句她平时会说的话，让后半场说话仍像她；
     # 提示词写明"只学口吻、不照搬句子"，空串时整段省略
     voice_examples: str = Field(
         title="口吻示例",
         default="",
-        description="几句她平时会说的话，一行一句；只给表达侧学口吻，不会被原样照搬（留空 = 不给示例）",
+        description="几句她平时会说的话，一行一句；只给回复器学口吻，不会被原样照搬（留空 = 不给示例）",
     )
     # 边界栏：观众刷屏哄她许诺（"以后都叫你老公""下次线下见"）时她不答应的事。
     # 三条通路渲染成"不答应的事：<这里的文字>"，所以默认写成并列短语；内容照搬原先
     # 写死的规矩。运营者想让她接受观众起的外号，删掉"以后怎么称呼某人"即可
     # 老梗栏：运营者手写的直播间老梗，观众提起时 Planner 才有根据接；整场不变，
-    # 与人设一起吃前缀缓存。只进 Planner——Replyer 与快嘴若各自玩梗会反复出现
+    # 与人设一起吃前缀缓存。只进 Planner——Replyer 与即时反应若各自玩梗会反复出现
     inside_jokes: str = Field(
         title="老梗栏",
         default="",
         description="直播间老梗，一行一条（如「倒立洗头：她说过输了就倒立洗头，观众一直起哄」）；"
         "冒号前可以用 / 写几个别名（如「倒立洗头/洗头挑战：…」），观众弹幕提到这些词时线索里会提醒她一句；"
-        "只给决策侧做参考，观众提起时才接、别自己翻出来；别写观众昵称——删除函数管不到"
+        "只给规划器做参考，观众提起时才接、别自己翻出来；别写观众昵称——删除函数管不到"
         "配置文本（留空 = 不带老梗栏）",
         json_schema_extra={"x-ui-widget": "textarea"},
     )
     boundaries: str = Field(
         title="边界",
         default="线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人",
-        description='她不答应的事，三条说话通路（决策、表达、嘴）都会以"不答应的事：…"带上；可以按直播间改，'
+        description='她不答应的事，三条说话通路（规划器、回复器、即时反应）都会以"不答应的事：…"带上；可以按直播间改，'
         '写成多行会折成一行。"被问到时不否认自己是 AI"写死在提示词里，不在这里（留空 = 不带边界）',
     )
     # 本地结构化人物设定档案：承载来历、当前舞台形象、其他形态、喜好与日常，整场静态拼入人设段吃前缀缓存
@@ -537,15 +537,15 @@ class StreamerLiveFrameConfig(BaseConfig):
 class StreamerMouthConfig(BaseConfig):
     """[agents.streamer.mouth] 段
 
-    嘴：游戏里出现高光目击（强敌或罕见资源进入视野）、稀罕战利品发现或意外阵亡时，
-    不经 Planner、几秒内当场出一句短反应，并由主播侧同步唤醒决策层定夺任务。
+    即时反应：游戏里出现高光目击（强敌或罕见资源进入视野）、稀罕战利品发现或意外阵亡时，
+    不经 Planner、几秒内当场出一句短反应，并由主播侧同步唤醒规划器定夺任务。
     总开关默认关闭，关闭时一切照旧。
     """
 
     enabled: bool = Field(
-        title="是否启用嘴",
+        title="是否启用即时反应",
         default=False,
-        description="开启后，视野撞见强敌或稀有资源、开出稀罕宝物或意外阵亡时由嘴当场出一句短反应，同时仍唤醒 Planner 定夺行动",
+        description="开启后，视野撞见强敌或稀有资源、开出稀罕宝物或意外阵亡时由即时反应当场出一句短反应，同时仍唤醒 Planner 定夺行动",
     )
     reaction_ttl_ms: int = Field(
         title="反应等播放的上限",
@@ -572,14 +572,14 @@ class StreamerMouthConfig(BaseConfig):
         title="低优先事件的安静门槛",
         default=20000,
         ge=0,
-        description="保留兼容现有配置文件的门槛参数（当前快嘴仅在高光目击、稀罕发现与意外阵亡时触发）",
+        description="保留兼容现有配置文件的门槛参数（当前即时反应仅在高光目击、稀罕发现与意外阵亡时触发）",
         json_schema_extra={"x-ui-advanced": True},
     )
     history_items: int = Field(
         title="带几条最近记录",
         default=14,
         ge=0,
-        description="嘴每次看到的最近记录条数（弹幕、她说过的话、游戏条目）",
+        description="即时反应每次看到的最近记录条数（弹幕、她说过的话、游戏条目）",
         json_schema_extra={"x-ui-advanced": True},
     )
     card_max_chars: int = Field(
@@ -668,7 +668,7 @@ class StreamerConfig(BaseConfig):
         "（【重启前可能还没回的话】段，注入一次制），最多往前追溯到上一进程结束前这么多毫秒；0 = 关闭重放",
     )
     # 一句台词的长度上限：提示词里的"一两句"是软要求，换了几种模型都照样写成一大段，
-    # 所以在表达引擎出口再卡一道——超出先让模型重说短一点，仍超就截到预算内最后一个完整句子
+    # 所以在回复器出口再卡一道——超出先让模型重说短一点，仍超就截到预算内最后一个完整句子
     speech_max_chars: int = Field(
         title="台词长度预算",
         default=30,
@@ -684,11 +684,11 @@ class StreamerConfig(BaseConfig):
         description="杂谈档一轮台词最多多少字（两三句自然口语）；接某位观众的话时再多给 25 字（0 = 不限制）",
         json_schema_extra={"x-ui-advanced": True},
     )
-    # 表达侧只看最近几条：Replyer 背着整场历史开口，后半场历史挤掉人设、说话像换了个人；
+    # 回复器只看最近几条：Replyer 背着整场历史开口，后半场历史挤掉人设、说话像换了个人；
     # 改为最近 N 条原文 + 她刚说过的几句 + 交接稿。设 0 是回退开关：带回整份历史，
     # 时间线预算也改回按 Planner 与 Replyer 两个模型中较小的窗口算
     replyer_history_items: int = Field(
-        title="表达侧带几条最近记录",
+        title="回复器带几条最近记录",
         default=14,
         ge=0,
         description="Replyer 每次看到的最近记录条数（弹幕、她说过的话、游戏条目），另附她刚说过的几句与交接稿；"
@@ -707,11 +707,11 @@ class StreamerConfig(BaseConfig):
     )
 
     # 被动想起：每批决策前按观众弹幕、她最近的台词、走到记住的地点，把该想起的档案行与老梗推成线索卡，
-    # 不用等决策层自己想到去查；关掉后线索只剩对象开口与游戏开着两种承诺卡
+    # 不用等规划器自己想到去查；关掉后线索只剩对象开口与游戏开着两种承诺卡
     memory_passive_recall_enabled: bool = Field(
         title="被动想起",
         default=True,
-        description="观众提到旧事的触发词、她走到记住的地点跟前时，自动把那件事推给决策层参考（推不推、提不提"
+        description="观众提到旧事的触发词、她走到记住的地点跟前时，自动把那件事推给规划器参考（推不推、提不提"
         "仍由她定）；关掉后只在观众本人开口、游戏开着时推答应过的事",
     )
     # 被动想起的语义一路：观众换个说法提旧事也能接上；要把弹幕正文与游戏情境发给嵌入服务算向量
@@ -776,7 +776,7 @@ class StreamerConfig(BaseConfig):
         description="决策时看一眼直播画面（默认关闭）",
     )
     mouth: StreamerMouthConfig = Field(
-        title="嘴",
+        title="即时反应",
         default_factory=StreamerMouthConfig,
         description="游戏里出事时当场出一句短反应（默认关闭）",
     )
