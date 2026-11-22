@@ -35,7 +35,7 @@ flowchart LR
     end
 
     subgraph EventBus
-        PIPE[拦截管道<br/>rate_limit=100 / similar_filter=100 / session_stamp=200]
+        PIPE[拦截管道<br/>限流 → 相似过滤 → 场次盖章]
         FAN[订阅广播<br/>并发扇出、互不影响]
     end
 
@@ -72,41 +72,7 @@ flowchart LR
 
 ### 模块结构
 
-```
-src/modules/events/
-├── __init__.py           # 模块导出
-├── event_bus.py          # EventBus 核心实现（emit / on / off / 通配匹配 / 拦截器链）
-├── event_history.py      # EventHistoryService（纯内存环形缓冲，运行期诊断用）
-├── event_recorder.py     # EventHistoryRecorder（订阅 # 全部事件 → 记录）
-├── event_type_map.py     # WS 类型名（room.message 折叠例外，唯一非直通映射）
-├── names.py              # CoreEvents 事件名常量（具名 + 通配占位符）
-├── registry.py           # @register_event + EVENT_REGISTRY + ensure_registry_consistency
-├── interceptors/
-│   ├── base.py           # EventInterceptor 基类（scope_prefixes / priority / intercept）
-│   ├── chain.py          # InterceptorChain（按 priority 升序执行）
-│   ├── lookup.py         # 拦截器共用 payload 字段查找（嵌套 user.id 优先）
-│   ├── rate_limit.py     # 限流（priority=100）
-│   ├── similar_filter.py # 相似文本过滤（priority=100）
-│   └── session_stamp.py  # 场次盖章（priority=200）
-└── payloads/
-    ├── __init__.py       # Payload 统一导出
-    ├── base.py           # BasePayload / OpenPayload（开放载荷，extra=allow）
-    ├── agents.py         # agent.* Payload（agent.prompted / agent.replied）
-    ├── body.py           # game.body.* Payload（BodyEventPayload，判别字段 kind）
-    ├── core.py           # core.* Payload
-    ├── live.py           # live.* Payload（LiveStartedPayload / LiveEndedPayload 两类）
-    ├── room.py           # room.message.* Payload（一类六注册）
-    ├── room_state.py     # room.state.* Payload（RoomStateWatchedPayload）
-    ├── game.py           # game.* Payload（GamePayload 一类四注册 + GameBoardStatePayload）
-    ├── game_chat.py      # game.chat.received Payload
-    ├── rundown.py        # rundown.changed Payload
-    ├── tasks.py          # task.changed Payload
-    ├── planner.py        # planner.decision / planner.verdict / streamer.stage Payload
-    ├── speech.py         # streamer.speech Payload
-    ├── tool_result.py    # tool.result.* Payload（不绑定具体名）
-    ├── tool_health.py    # tool.health.* Payload（不绑定具体名）
-    └── utterance.py      # tts.utterance.* Payload
-```
+目录结构与各文件职责以代码为唯一事实源（`src/modules/events/`，文件级职责见各模块 docstring）；上面表格列的是七个核心组件，其余都是它们的支撑件（拦截器链、各语义域 Payload 分包）。
 
 ---
 
@@ -199,13 +165,47 @@ event_bus.reset_stats(event_name=None)
 - **`room.state.watched_count`**：状态子层（非行为流），不落明细表——主播侧 RoomState 承接为内存快照，经后台记账写 `live_sessions.audience_total`。数据源是 B 站 WATCHED_CHANGE 推送（累计观看人次，UV 口径）；open-live 协议无"当前在线人数"推送，`live_sessions.viewer_count` 暂无数据源、维持 0
 - **`rundown.changed`**：唯一变更边界（工具 / Dashboard / 编辑界面直写 / 装配层 load，四路同径）；`by` 区分 agent/human/system；finish 时 `segment_id=""` 且 `index==total`；直写后游标重置时 `index==-1`
 - **`tts.utterance.*`**：终点广播，消费者不得触发新一轮决策（防环；与 TTS 是否启用正交）
-- **`streamer.speech`**：业务信号，与 TTS 启用正交；`utterance_id` 与 `tts.utterance.*` 共用关联键；`emotion`（17 枚举值）+ `emotion_intensity` 必选（生产者保证必有值），面捕合成器订阅它，等这句开始播放（`tts.utterance.started`）时让表情浮现
+- **`streamer.speech`**：业务信号，与 TTS 启用正交；`utterance_id` 与 `tts.utterance.*` 共用关联键；`emotion` + `emotion_intensity` 必选（生产者保证必有值），面捕合成器订阅它，等这句开始播放（`tts.utterance.started`）时让表情浮现
 - **`tool.result.<tool_name>`**：事件名 emit 时动态填（`ToolSpec.result_event` 可定制）；工具执行完成即广播（无论成败）
-- **`game.body.*`**（9 类，判别字段 `kind`）：`attacked` / `attack_ended` / `died` / `respawned` / `reflex_started` / `reflex_finished` / `dimension_changed` / `need_unhandled` / `unknown`。发布方是 `maicraft_attention` 采集器：它常驻长轮询 Mod 的任务事件流，**分类**后只把"值得向观众叙述的遭遇"转成事件——血量数值、坐标、游标这类遥测留在上游（主播要时用工具直读），未知上游类型归 `unknown` 并保留 `source_event_type`，所以事件面不随上游漂移。分类表与摘要生成在 `src/agents/minecraft/attention_matrix.py`；订阅方用 `CoreEvents.GAME_BODY_WILDCARD`（`game.body.#`）一站式监听。事件说到某位玩家时带 `player_uuid` / `player_name`：肢体动作是冲它做动作的人，主播据此推他的玩家线索；跟随状况是它跟着的人，只透传，主播不推卡。用三层名而非 `game.*`：单层通配是游戏 Agent 的低频里程碑通道（落 `game_events`、进主播参考的短名单有上限，见存储侧代码），身体事件是流，不与之混层
-- **`game.chat.received`**（`kind` = `player` / `system`）：游戏里别人说的话。发布方是 `maicraft_chat` 采集器：它常驻长轮询 Mod 的聊天事件流（`events(topic=chat)`），按流编号与游标找出新消息转出；AI 玩家自己说的话 Mod 已经滤掉；别人私聊角色的话标 `private`，主播只拿它做决定，不交给回复器、不在直播里念出或转述；`content` 是不可信的外部原话，不带任何授权。没有发言人 UUID 的"玩家消息"名字只是聊天栏上显示的：显示名就是角色自己时，它是模组借角色名义发的机器消息（如车万女仆在女仆死后发的坐标），Mod 改记为系统消息并标出借的名字；显示名是别人时照记为玩家消息。两种都在 `note` 里附一句归属说明，主播侧写在发言人后面。`mentions` 是消息里点到的实体（名字、类型、游戏里的唯一编号，按出现先后），`message_key` 是消息模板编号（Minecraft 的翻译键）：Minecraft Agent 据此认出死亡播报里死的是生物名册里哪一只，再以 `game.milestone` 讲给主播。主播侧把它们放进【游戏里的聊天】参考段，玩家聊天促发一轮决策，系统消息只作参考。另一个订阅方是存储侧的游戏玩家落库器：只把游戏公屏上玩家说的话落进 `game_chat`，带 UUID、`sender_online` 核对过的发言人才建玩家（私聊、系统消息不落库，见 [ADR-075：游戏里的人](../decisions/075-game-players-by-uuid.md)）。订阅方用 `CoreEvents.GAME_CHAT_WILDCARD`（`game.chat.#`）；同样用三层名，不混进 `game.*` 里程碑通道
-- **`game.place.noted`**（`kind` = `remembered` / `forgotten` / `near` / `left`）：游戏里一个记住的地点的动静——记住、忘掉（世界记忆改了），速览时走近、离开（角色眼下在哪，走近带水平距离）。发布方是游戏 Agent（Minecraft：记地点、忘掉地点成功时，速览读到位置时）。唯一订阅方是存储台账：落成 `game_events` 里 `place_*` 类型的行，只给下播整理认"这句话是在哪个地点说的"；按场读游戏进展、复盘页按类型计数都不含这几类。主播**不订阅**：不进对话时间线、不促发决策，免得她念叨"我记住了某某地方"。三层名避开 `game.*` 单层通配
-- **`game.player.interacted`**（`kind` = `greet` / `gift` / `spar`）：别的玩家和 AI 玩家的一次互动——打招呼（冲它蹲起、挥手、拍一下，带做了哪几种动作）、送东西（朝它扔东西，事实是那半句话）、切磋（谁赢、各打中几下）。发布方是 `maicraft_attention` 采集器（肢体动作事件带玩家 UUID 时，叙事那条发完再发）与 Minecraft 游戏 Agent（切磋收手时：按结果里 Mod 认出的对手 UUID，按观察编号点的对手也认得出；旧版 Mod 不带对手时只有下令点的名字）。唯一订阅方是存储台账：按 UUID 认人、记进玩家表与互动表，只有名字时按本场见过的同名玩家去对。主播**不订阅**：同一个动作她已从 `game.body.player_body_language` 知道了，不进对话时间线、不促发决策。三层名避开 `game.*` 单层通配，也不放在主播订阅的 `game.chat.#` 下
-- **`game.self.chatted`**：AI 玩家自己在游戏公屏打出去的一句话。发布方是 Minecraft 游戏 Agent：游戏公屏说话的目标结束、结果细节 `submitted=true` 时发一次（对生物说的、游戏命令、没交出去的不发），原话取自结果细节的 `message`，不靠 Mod 回显。订阅方有两个。存储台账：记进游戏公屏，用来认她在回应哪位玩家、下播时找她在游戏公屏答应玩家的事。主播：记成 `[HH:MM 我在 <game> 游戏公屏说]` 进对话时间线——游戏那一面会自己找玩家搭话，不记下来她在直播里不知道自己刚问过什么；这是她自己的话，不促发决策、不交回复器当别人刚说的话。事件名不放在主播订阅的 `game.chat.#` 下，免得被当成别人的聊天
+### 游戏侧事件的边界语义
+
+游戏侧在主族（`game.milestone` 等单层名）之外有五条独立事件，各自的发布方、订阅方与命名理由如下。共同背景：`game.*` 单层通配是游戏 Agent 的低频里程碑通道（落 `game_events` 表、进主播参考的短名单有上限，见存储侧代码），下面这些高频或私密的事件用三层名与它分开，避免混层。
+
+**`game.body.*`**（判别字段 `kind`：attacked / attack_ended / died / respawned / reflex_started / reflex_finished / dimension_changed / need_unhandled / unknown）
+
+- 发布方是 `maicraft_attention` 采集器：它常驻长轮询 Mod 的任务事件流，**分类**后只把"值得向观众叙述的遭遇"转成事件——血量数值、坐标、游标这类遥测留在上游（主播要时用工具直读）。分类表与摘要生成在 `src/agents/minecraft/attention_matrix.py`
+- 未知上游类型归 `unknown` 并保留 `source_event_type`，所以事件面不随上游漂移
+- 订阅方用 `CoreEvents.GAME_BODY_WILDCARD`（`game.body.#`）一站式监听
+- 事件说到某位玩家时带 `player_uuid` / `player_name`：肢体动作是冲它做动作的人，主播据此推他的玩家线索；跟随状况是它跟着的人，只透传，主播不推线索
+
+**`game.chat.received`**（`kind` = `player` / `system`）：游戏里别人说的话
+
+- 发布方是 `maicraft_chat` 采集器：它常驻长轮询 Mod 的聊天事件流（`events(topic=chat)`），按流编号与游标找出新消息转出；AI 玩家自己说的话 Mod 已经滤掉
+- 私聊标 `private`：主播只拿它做决定，不交给回复器、不在直播里念出或转述；`content` 是不可信的外部原话，不带任何授权
+- 没有发言人 UUID 的"玩家消息"，名字只是聊天栏上显示的：显示名就是角色自己时，它是模组借角色名义发的机器消息（如车万女仆在女仆死后发的坐标），Mod 改记为系统消息并标出借的名字；显示名是别人时照记为玩家消息。两种都在 `note` 里附一句归属说明，主播侧写在发言人后面
+- `mentions` 是消息里点到的实体（名字、类型、游戏里的唯一编号，按出现先后），`message_key` 是消息模板编号（Minecraft 的翻译键）：Minecraft Agent 据此认出死亡播报里死的是生物名册里哪一只，再以 `game.milestone` 讲给主播
+- 主播侧把它们放进【游戏里的聊天】参考段：玩家聊天促发一轮决策，系统消息只作参考
+- 存储侧的游戏玩家落库器只把游戏公屏上玩家说的话落进 `game_chat`：带 UUID、`sender_online` 核对过的发言人才建玩家（私聊、系统消息不落库，见 [ADR-075：游戏里的人](../decisions/075-game-players-by-uuid.md)）
+- 订阅用 `CoreEvents.GAME_CHAT_WILDCARD`（`game.chat.#`）
+
+**`game.place.noted`**（`kind` = `remembered` / `forgotten` / `near` / `left`）：游戏里一个记住的地点的动静——记住、忘掉（世界记忆改了），速览时走近、离开（角色眼下在哪，走近带水平距离）
+
+- 发布方是游戏 Agent（Minecraft：记地点、忘掉地点成功时，速览读到位置时）
+- 唯一订阅方是存储台账：落成 `game_events` 里 `place_*` 类型的行，只给下播整理认"这句话是在哪个地点说的"；按场读游戏进展、复盘页按类型计数都不含这几类
+- 主播**不订阅**：不进对话时间线、不促发决策，免得她念叨"我记住了某某地方"
+
+**`game.player.interacted`**（`kind` = `greet` / `gift` / `spar`）：别的玩家和 AI 玩家的一次互动——打招呼（冲它蹲起、挥手、拍一下，带做了哪几种动作）、送东西（朝它扔东西，事实是那半句话）、切磋（谁赢、各打中几下）
+
+- 发布方是 `maicraft_attention` 采集器（肢体动作事件带玩家 UUID 时，叙事那条发完再发）与 Minecraft 游戏 Agent（切磋收手时：按结果里 Mod 认出的对手 UUID，按观察编号点的对手也认得出；旧版 Mod 不带对手时只有下令点的名字）
+- 唯一订阅方是存储台账：按 UUID 认人、记进玩家表与互动表，只有名字时按本场见过的同名玩家去对
+- 主播**不订阅**：同一个动作她已从 `game.body` 的肢体动作事件知道了，不进对话时间线、不促发决策
+
+**`game.self.chatted`**：AI 玩家自己在游戏公屏打出去的一句话
+
+- 发布方是 Minecraft 游戏 Agent：游戏公屏说话的目标结束、结果细节 `submitted=true` 时发一次（对生物说的、游戏命令、没交出去的不发），原话取自结果细节的 `message`，不靠 Mod 回显
+- 存储台账订阅它：记进游戏公屏，用来认她在回应哪位玩家、下播时找她在游戏公屏答应玩家的事
+- 主播也订阅它：记成 `[HH:MM 我在 <game> 游戏公屏说]` 进对话时间线——游戏那一面会自己找玩家搭话，不记下来她在直播里不知道自己刚问过什么；这是她自己的话，不促发决策、不交回复器当别人刚说的话
+- 不放在主播订阅的 `game.chat.#` 下，免得被当成别人的聊天
 
 新增/删除/重命名事件：先改 `CoreEvents` + Payload 注册（启动硬检查会守住契约），再补/删对应调用点——文档不再手抄。
 
@@ -219,18 +219,14 @@ Dashboard WebSocket 的 `type` 字段 = **事件名直通**；唯一例外是 `r
 
 所有载荷继承 `BasePayload`（Pydantic），统一携带 uuid4 的 `id` 字段——EventBus 经 `model_dump → model_validate` 分发，所有订阅者从同一 dict 读回该 id，是记录与广播等通道的幂等去重依据。子类可覆盖 `get_log_format()` 自定义日志格式。
 
-| 形态 | 类 | 事件 |
-|---|---|---|
-| 一类多注册 + 判别字段 | `RoomMessagePayload`（`_DISCRIMINANT_FIELD="message_type"`） | `room.message.*` 六事件 |
-| 一类多注册 + 判别字段 | `GamePayload`（`_DISCRIMINANT_FIELD="event_type"`） | `game.milestone` / `game.attention_required` / `game.error` / `game.report` |
-| 一事件一个类 | `GameBoardStatePayload` | `game.state.changed`（高频呈现流，不落 `game_events` 表） |
-| 一事件一个类 | `LiveStartedPayload` / `LiveEndedPayload`（字段本就不同） | `live.started` / `live.ended` |
-| 一事件一个类 | `CoreStartupPayload` / `CoreShutdownPayload` / `CoreErrorPayload` / `RundownChangedPayload` / `TaskChangedPayload` / `PlannerDecisionPayload` / `PlannerVerdictPayload` / `StreamerStagePayload` / `StreamerSpeechPayload` | 各自对应 |
-| 一事件一个类（形状不同） | `UtteranceStartedPayload` / `UtteranceFinishedPayload` / `UtteranceFailedPayload` | `tts.utterance.*` 三事件 |
-| 一事件一个类（形状不同） | `RoomStateWatchedPayload` | `room.state.watched_count` |
-| 一类多注册 + 判别字段 | `BodyEventPayload`（`_DISCRIMINANT_FIELD="kind"`） | `game.body.*` 九事件（attacked / attack_ended / died / respawned / reflex_started / reflex_finished / dimension_changed / need_unhandled / unknown） |
-| 不绑定具体名（动态族） | `ToolResultPayload` / `ToolHealthPayload` | `tool.result.<name>` / `tool.health.<name>` |
-| 开放载荷 | `OpenPayload`（`extra="allow"`，保留任意字段） | 无绑定事件；通用消费者（记录器）的 model_class |
+| 形态 | 例 |
+|---|---|
+| 一类多注册 + 判别字段 | `RoomMessagePayload`（判别字段 `message_type`）对 `room.message.*`；`GamePayload`（判别字段 `event_type`）对 `game.milestone` 等；`BodyEventPayload`（判别字段 `kind`）对 `game.body.*` |
+| 一事件一个类 | `LiveStartedPayload` / `LiveEndedPayload`（字段本就不同）；`tts.utterance.*` 三个类；`GameBoardStatePayload` 对 `game.state.changed` |
+| 不绑定具体名（动态族） | `ToolResultPayload` / `ToolHealthPayload` 对 `tool.result.<name>` / `tool.health.<name>` |
+| 开放载荷 | `OpenPayload`（`extra="allow"`，保留任意字段）：无绑定事件，通用消费者（记录器）的 model_class |
+
+类与事件的完整绑定以注册表为准（`@register_event` 调用点，见下一节）。
 
 > `tts.utterance.*` 三事件是终点广播：消费者不得基于这些事件触发新一轮决策（防环，见[边界规则](#边界规则)）。
 
@@ -268,13 +264,13 @@ ensure_registry_consistency()   # 启动硬检查：EVENT_REGISTRY 与 CoreEvent
 
 ### 内置拦截器
 
-| 拦截器 | priority | 作用域 | 职责 |
-|--------|----------|--------|------|
-| `RateLimitInterceptor` | 100 | `room.message.*` | 全局 / 单用户滑动窗口限流（防刷屏）；用户标识经共用 `lookup.extract_user_id` 提取（嵌套 `user.id` 优先，顶层键兜底） |
-| `SimilarFilterInterceptor` | 100 | `room.message.*` | 相似文本合并（滑动窗口内相似度超阈值丢弃） |
-| `SessionStampInterceptor` | 200 | 不限域（字段驱动：payload 声明 `live_session_id` 字段即盖章） | 场次盖章：`live_session_id=0` 的业务事件统一注入当前场次主键（单点注入、全链一致；归属解析失败放行原 payload 不阻断） |
+| 拦截器 | 作用域 | 职责 |
+|--------|--------|------|
+| `RateLimitInterceptor` | `room.message.*` | 全局 / 单用户滑动窗口限流（防刷屏）；用户标识经共用 `lookup.extract_user_id` 提取（嵌套 `user.id` 优先，顶层键兜底） |
+| `SimilarFilterInterceptor` | `room.message.*` | 相似文本合并（滑动窗口内相似度超阈值丢弃） |
+| `SessionStampInterceptor` | 不限域（字段驱动：payload 声明 `live_session_id` 字段即盖章） | 场次盖章：`live_session_id=0` 的业务事件统一注入当前场次主键（单点注入、全链一致；归属解析失败放行原 payload 不阻断） |
 
-**执行顺序 = `priority` 升序**（数值小者先行，同值按注册顺序），与 `add_interceptor` 的注册顺序解耦：净化类（限流 / 相似过滤）先于加工类（场次盖章），被净化丢弃的消息不消耗归属解析。
+各拦截器的 `priority` 值在其类定义里（本节不抄数字）。**执行顺序 = `priority` 升序**（数值小者先行，同值按注册顺序），与 `add_interceptor` 的注册顺序解耦：净化类（限流 / 相似过滤）先于加工类（场次盖章），被净化丢弃的消息不消耗归属解析。
 
 ### 核心 API
 
@@ -309,10 +305,9 @@ event_bus.get_interceptor_names()            # 已挂载拦截器（按执行顺
 
 **谁可以发布**
 
-- 采集器只发布数据事件（`room.message.*`）；下游结果的查询诉求走工具实现——"能挥手吗"可问，"刚才挥手成功了吗"不可问
+- 采集器只发布数据事件、快照型能力实现为工具：全局数据流边界，权威定义见[数据流规则](../conventions/data-flow.md)
 - 工具是被动调用方：执行完成后由 `ToolRegistry` 统一发布 `tool.result.<name>`，工具本体不发布其他事件
 - TTS 引擎是基础模块：只发 `tts.utterance.*`、不订阅任何事件（发布-only）
-- 快照型能力（被调才看）实现为工具，持续流型实现为采集器
 
 **谁可以订阅**
 
@@ -334,20 +329,7 @@ event_bus.get_interceptor_names()            # 已挂载拦截器（按执行顺
 
 ## 时间字段约定
 
-项目统一使用**毫秒（ms）**作为时间单位。时刻字段用 `int` Unix epoch 毫秒，时长/超时字段用毫秒，命名统一 `<name>_ms`（如 `timestamp_ms` / `started_at_ms` / `duration_ms`）。
-
-```python
-from src.modules.time_utils import now_ms, elapsed_ms, format_duration_ms, ms_to_datetime
-
-ts = now_ms()                        # 当前时刻（int 毫秒）
-elapsed = elapsed_ms(start_ms=ts)    # 经过时长
-format_duration_ms(1234)             # "1.2s"
-```
-
-**注意事项**：
-
-- 禁止使用秒为单位的字段（如 `timestamp_s` / `duration_seconds`），如需人类阅读用 `ms_to_datetime()` 转换
-- `timestamp` 字段通过 Pydantic `alias` 兼容（`alias="timestamp"`，实际字段为 `timestamp_ms`）
+事件与载荷的时间字段全项目统一毫秒：时刻用 `int` Unix epoch 毫秒，时长/超时命名 `<name>_ms`；这是根 AGENTS.md「代码约定」的硬规则，此处只提醒不展开。工具函数（当前时刻、经过时长、人类可读格式化）在 `src/modules/time_utils.py`。
 
 ---
 
