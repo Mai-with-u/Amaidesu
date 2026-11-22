@@ -31,9 +31,11 @@
 - [事件系统](architecture/event-system.md)
 - [事件命名](conventions/event-naming.md)
 - [工具层](architecture/tools.md)（注册表 / 可见名单 / 熔断探活 / 异步任务 / MCP 集成）
+- [LLM 接入层](architecture/llm.md)（三层配置 / 用途档 / 故障切换 / 观测出库）
 - [流程单机制](architecture/rundown.md)
 - [存储](architecture/storage.md)
 - [语音合成（TTS）](architecture/tts.md)
+- [字幕](architecture/subtitle.md)（播放跟随 / 多后端广播）
 - [屏幕感知（Vision）](architecture/vision.md)
 - [游戏 Agent（Minecraft）](architecture/minecraft-agent.md)
 - [主播 Agent 总述](architecture/streamer-agent.md)
@@ -41,6 +43,7 @@
 - [虚拟形象（Avatar）](architecture/avatar-platform.md)
 - [主播上下文构成](architecture/streamer-context.md)
 - [主播记忆](architecture/memory/README.md)（承诺表 + 场次档案；下播整理 / 快照 / 记忆摘要 / 线索 / 回忆 / 审核删除 / 游戏侧各一篇）
+- [配置系统](architecture/config.md)（七文件 / 加载管线 / 版本钩子 / 热生效）
 
 ## 架构决策记录
 
