@@ -258,7 +258,7 @@ def test_agent_memo_snapshot_three_states(client, manager: AgentManager) -> None
 
 
 def test_agent_memo_is_read_only_surface(client) -> None:
-    # 架构红线：备忘录观测面只有 GET，任何写方法都不存在
+    # 架构红线：备忘录只读观察者只有 GET，任何写方法都不存在
     assert client.post("/api/v1/agents/sample_agent/memo").status_code in (404, 405)
     assert client.put("/api/v1/agents/sample_agent/memo", json={}).status_code in (404, 405)
     assert client.delete("/api/v1/agents/sample_agent/memo").status_code in (404, 405)

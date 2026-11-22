@@ -515,7 +515,7 @@ async def test_speech_event_precedes_round_end_events() -> None:
 
 
 # 登记（只读穿透，合并时进底账）：Agent 侧接线断言读取发言管线槽位
-# （agent._speech 及其内部依赖句柄）；发言管线尚无公开观测面。
+# （agent._speech 及其内部依赖句柄）；发言管线尚无公开只读观察者。
 
 
 async def test_agent_decision_round_completes_with_tts_disabled() -> None:

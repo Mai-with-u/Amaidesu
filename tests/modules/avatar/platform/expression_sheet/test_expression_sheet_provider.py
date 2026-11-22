@@ -51,7 +51,7 @@ def _provider(
 
 
 def test_connection_summary_mirrors_readiness(sheet_dir: Path) -> None:
-    """观测面契约：就绪态即 connected；目录未配置时 False。"""
+    """只读观察者契约：就绪态即 connected；目录未配置时 False。"""
     assert _provider(sheet_dir).connection_summary() == {"is_connected": True, "stats": {}}
     unconfigured = _provider(sheet_dir, config={"image_dir": ""})
     assert unconfigured.connection_summary()["is_connected"] is False

@@ -14,7 +14,7 @@ from tests.agents.streamer.helpers import make_streamer_agent
 
 
 # 登记（只读穿透，合并时进底账）：接线断言读取内建 Planner 的冷场阈值
-# （agent._planner._cold_silence_ms）；"配置确实传到了 Planner"暂无公开观测面。
+# （agent._planner._cold_silence_ms）；"配置确实传到了 Planner"暂无公开只读观察者。
 
 
 class _Danmaku:

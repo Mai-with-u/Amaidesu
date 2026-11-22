@@ -43,7 +43,7 @@ flowchart LR
         AG[StreamerAgent]
     end
 
-    subgraph 观察面
+    subgraph 只读观察者
         OB[EventRecorder（订阅 #） / Broadcaster / Widget]
     end
 
@@ -76,7 +76,7 @@ flowchart LR
 src/modules/events/
 ├── __init__.py           # 模块导出
 ├── event_bus.py          # EventBus 核心实现（emit / on / off / 通配匹配 / 拦截器链）
-├── event_history.py      # EventHistoryService（纯内存环形缓冲，运行周期观察窗）
+├── event_history.py      # EventHistoryService（纯内存环形缓冲，运行期诊断用）
 ├── event_recorder.py     # EventHistoryRecorder（订阅 # 全部事件 → 记录）
 ├── event_type_map.py     # WS 类型名（room.message 折叠例外，唯一非直通映射）
 ├── names.py              # CoreEvents 事件名常量（具名 + 通配占位符）
@@ -185,23 +185,23 @@ event_bus.reset_stats(event_name=None)
 
 ## 事件事实表与拓扑
 
-> **单一事实源（代码导出）**：所有事件名（具名 + 通配占位符）以 `src/modules/events/names.py` 的 `CoreEvents` 常量为唯一权威定义。`CoreEvents.get_all_events()`（或 `CoreEvents.ALL_EVENTS`）枚举全部具名事件；启动期 `ensure_registry_consistency()` 守护 `EVENT_REGISTRY` 与 `CoreEvents` 具名事件集合完全一致——漂移在启动期暴露，拒启。Payload 类与字段语义写在 `src/modules/events/payloads/*.py` 与 `CoreEvents` 常量 docstring 里，以代码为准。
+> **单一事实源**：所有事件名（具名 + 通配占位符）以 `src/modules/events/names.py` 的 `CoreEvents` 常量为唯一权威定义。`CoreEvents.get_all_events()`（或 `CoreEvents.ALL_EVENTS`）枚举全部具名事件；启动期 `ensure_registry_consistency()` 守护 `EVENT_REGISTRY` 与 `CoreEvents` 具名事件集合完全一致——漂移在启动期暴露，拒启。Payload 类与字段语义写在 `src/modules/events/payloads/*.py` 与 `CoreEvents` 常量 docstring 里，以代码为准。
 
-事件名清单 / 发布者 / 订阅者拓扑**从代码导出**，本节不再手抄：
+事件名清单 / 发布者 / 订阅者拓扑**在代码里一查便知**，本节不再手抄：
 
 - **事件名 + Payload + 字段语义**：`src/modules/events/names.py` 的 `CoreEvents` 常量与 `src/modules/events/payloads/*.py`
 - **发布拓扑**：`grep -rn "event_bus.emit(" src/`
-- **订阅拓扑**：`grep -rn "event_bus.on(" src/`（每个 `on(...)` 即一处订阅关系；观察面组件订阅 `CoreEvents` 中的通配常量一站式监听）
+- **订阅拓扑**：`grep -rn "event_bus.on(" src/`（每个 `on(...)` 即一处订阅关系；只读观察者订阅 `CoreEvents` 中的通配常量一站式监听）
 
-不可导出的关键不变量（散落各处，列出防遗忘）：
+查代码查不出来的关键约定（散落各处，列出防遗忘）：
 
-- **`room.message.enter`**：规划器不消费（仅观察面 / 进房统计）
+- **`room.message.enter`**：规划器不消费（仅只读观察者 / 进房统计）
 - **`room.state.watched_count`**：状态子层（非行为流），不落明细表——主播侧 RoomState 承接为内存快照，经后台记账写 `live_sessions.audience_total`。数据源是 B 站 WATCHED_CHANGE 推送（累计观看人次，UV 口径）；open-live 协议无"当前在线人数"推送，`live_sessions.viewer_count` 暂无数据源、维持 0
-- **`rundown.changed`**：唯一变更边界（工具 / Dashboard / 编辑写穿 / 装配层 load 四路同径）；`by` 区分 agent/human/system；finish 时 `segment_id=""` 且 `index==total`；写穿后游标重置时 `index==-1`
+- **`rundown.changed`**：唯一变更边界（工具 / Dashboard / 编辑界面直写 / 装配层 load，四路同径）；`by` 区分 agent/human/system；finish 时 `segment_id=""` 且 `index==total`；直写后游标重置时 `index==-1`
 - **`tts.utterance.*`**：终点广播，消费者不得触发新一轮决策（防环；与 TTS 是否启用正交）
 - **`streamer.speech`**：业务信号，与 TTS 启用正交；`utterance_id` 与 `tts.utterance.*` 共用关联键；`emotion`（17 枚举值）+ `emotion_intensity` 必选（生产者保证必有值），面捕合成器订阅它，等这句开始播放（`tts.utterance.started`）时让表情浮现
 - **`tool.result.<tool_name>`**：事件名 emit 时动态填（`ToolSpec.result_event` 可定制）；工具执行完成即广播（无论成败）
-- **`game.body.*`**（9 类，判别字段 `kind`）：`attacked` / `attack_ended` / `died` / `respawned` / `reflex_started` / `reflex_finished` / `dimension_changed` / `need_unhandled` / `unknown`。发布方是 `maicraft_attention` 采集器：它常驻长轮询 Mod 的任务事件流，**分类**后只把"值得向观众叙述的遭遇"转成事件——血量数值、坐标、游标这类遥测留在上游（主播要时用工具直读），未知上游类型归 `unknown` 并保留 `source_event_type`，所以事件面不随上游漂移。分类表与摘要生成在 `src/agents/minecraft/attention_matrix.py`；订阅方用 `CoreEvents.GAME_BODY_WILDCARD`（`game.body.#`）一站式监听。事件说到某位玩家时带 `player_uuid` / `player_name`：肢体动作是冲它做动作的人，主播据此推他的玩家线索；跟随状况是它跟着的人，只透传，主播不推卡。用三层名而非 `game.*`：单层通配是游戏 Agent 的低频里程碑通道（落 `game_events`、进主播只留 10 条的叙事缓冲），身体事件是流，不与之混层
+- **`game.body.*`**（9 类，判别字段 `kind`）：`attacked` / `attack_ended` / `died` / `respawned` / `reflex_started` / `reflex_finished` / `dimension_changed` / `need_unhandled` / `unknown`。发布方是 `maicraft_attention` 采集器：它常驻长轮询 Mod 的任务事件流，**分类**后只把"值得向观众叙述的遭遇"转成事件——血量数值、坐标、游标这类遥测留在上游（主播要时用工具直读），未知上游类型归 `unknown` 并保留 `source_event_type`，所以事件面不随上游漂移。分类表与摘要生成在 `src/agents/minecraft/attention_matrix.py`；订阅方用 `CoreEvents.GAME_BODY_WILDCARD`（`game.body.#`）一站式监听。事件说到某位玩家时带 `player_uuid` / `player_name`：肢体动作是冲它做动作的人，主播据此推他的玩家线索；跟随状况是它跟着的人，只透传，主播不推卡。用三层名而非 `game.*`：单层通配是游戏 Agent 的低频里程碑通道（落 `game_events`、进主播参考的短名单有上限，见存储侧代码），身体事件是流，不与之混层
 - **`game.chat.received`**（`kind` = `player` / `system`）：游戏里别人说的话。发布方是 `maicraft_chat` 采集器：它常驻长轮询 Mod 的聊天事件流（`events(topic=chat)`），按流编号与游标找出新消息转出；AI 玩家自己说的话 Mod 已经滤掉；别人私聊角色的话标 `private`，主播只拿它做决定，不交给回复器、不在直播里念出或转述；`content` 是不可信的外部原话，不带任何授权。没有发言人 UUID 的"玩家消息"名字只是聊天栏上显示的：显示名就是角色自己时，它是模组借角色名义发的机器消息（如车万女仆在女仆死后发的坐标），Mod 改记为系统消息并标出借的名字；显示名是别人时照记为玩家消息。两种都在 `note` 里附一句归属说明，主播侧写在发言人后面。`mentions` 是消息里点到的实体（名字、类型、游戏里的唯一编号，按出现先后），`message_key` 是消息模板编号（Minecraft 的翻译键）：Minecraft Agent 据此认出死亡播报里死的是生物名册里哪一只，再以 `game.milestone` 讲给主播。主播侧把它们放进【游戏里的聊天】参考段，玩家聊天促发一轮决策，系统消息只作参考。另一个订阅方是存储侧的游戏玩家落库器：只把游戏公屏上玩家说的话落进 `game_chat`，带 UUID、`sender_online` 核对过的发言人才建玩家（私聊、系统消息不落库，见 [ADR-075：游戏里的人](../decisions/075-game-players-by-uuid.md)）。订阅方用 `CoreEvents.GAME_CHAT_WILDCARD`（`game.chat.#`）；同样用三层名，不混进 `game.*` 里程碑通道
 - **`game.place.noted`**（`kind` = `remembered` / `forgotten` / `near` / `left`）：游戏里一个记住的地点的动静——记住、忘掉（世界记忆改了），速览时走近、离开（角色眼下在哪，走近带水平距离）。发布方是游戏 Agent（Minecraft：记地点、忘掉地点成功时，速览读到位置时）。唯一订阅方是存储台账：落成 `game_events` 里 `place_*` 类型的行，只给下播整理认"这句话是在哪个地点说的"；按场读游戏进展、复盘页按类型计数都不含这几类。主播**不订阅**：不进对话时间线、不促发决策，免得她念叨"我记住了某某地方"。三层名避开 `game.*` 单层通配
 - **`game.player.interacted`**（`kind` = `greet` / `gift` / `spar`）：别的玩家和 AI 玩家的一次互动——打招呼（冲它蹲起、挥手、拍一下，带做了哪几种动作）、送东西（朝它扔东西，事实是那半句话）、切磋（谁赢、各打中几下）。发布方是 `maicraft_attention` 采集器（肢体动作事件带玩家 UUID 时，叙事那条发完再发）与 Minecraft 游戏 Agent（切磋收手时：按结果里 Mod 认出的对手 UUID，按观察编号点的对手也认得出；旧版 Mod 不带对手时只有下令点的名字）。唯一订阅方是存储台账：按 UUID 认人、记进玩家表与互动表，只有名字时按本场见过的同名玩家去对。主播**不订阅**：同一个动作她已从 `game.body.player_body_language` 知道了，不进对话时间线、不促发决策。三层名避开 `game.*` 单层通配，也不放在主播订阅的 `game.chat.#` 下
@@ -317,7 +317,7 @@ event_bus.get_interceptor_names()            # 已挂载拦截器（按执行顺
 **谁可以订阅**
 
 - Agent 订阅语义域事件驱动决策（如 `StreamerAgent` 订阅 `room.message.danmaku`）；Agent 内部的 Planner / Replyer 本体代码直连，不经事件订阅
-- 观察面组件（记录器 / Broadcaster / Widget）订阅只读，不得反向触发表演类副作用
+- 只读观察者（记录器 / Broadcaster / Widget）订阅只读，不得反向触发表演类副作用
 
 **防环约束**
 

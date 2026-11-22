@@ -176,7 +176,7 @@ class SpeechDispatcher:
             except Exception as exc:  # noqa: BLE001 - 旁路记录失败不挡发言
                 self._logger.warning(f"带来源发言回调失败（已忽略）: {exc}", exc=True)
 
-    # -----只读状态（观察面 / 测试）-----
+    # -----只读状态（只读观察者 / 测试）-----
 
     @property
     def tts_enabled(self) -> bool:
@@ -190,7 +190,7 @@ class SpeechDispatcher:
 
     @property
     def utterance_seq(self) -> int:
-        """utterance_id 计数器当前值（观察面）。"""
+        """utterance_id 计数器当前值（只读观察者用）。"""
         return self._utterance_seq
 
     # ==================================================================

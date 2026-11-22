@@ -215,7 +215,7 @@ class LipSyncAnalyzer:
         self._analysis_task: Optional[asyncio.Task] = None
         self._buffer_sample_rate: int = self._sample_rate
 
-        # 最近一帧信号（观察面 / 测试）
+        # 最近一帧信号（只读观察者 / 测试）
         self.last_signal = MouthSignal()
         self._last_emit_time = 0.0
         # 低音量持续起点（None = 当前不处于低音量）；用于静音闭嘴的持续判定

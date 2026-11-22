@@ -89,7 +89,7 @@ async def test_chatbox_off_or_closed_sends_nothing() -> None:
 
 
 def test_connection_summary_reflects_connection_flag() -> None:
-    """观测面契约：摘要连接态取自身标志，stats 透传 get_stats。"""
+    """只读观察者契约：摘要连接态取自身标志，stats 透传 get_stats。"""
     provider = VRChatProvider(config={})
     provider._is_connected = True
     summary = provider.connection_summary()

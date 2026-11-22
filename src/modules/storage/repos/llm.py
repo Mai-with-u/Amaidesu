@@ -304,7 +304,7 @@ class LLMRepo(BaseRepo):
     async def get_llm_request_stats(self, request_ids: List[str]) -> List[Dict[str, Any]]:
         """按 id 批量取请求统计列（不含正文）。
 
-        观察面统计胶囊合批懒取专用：只回统计列，避免逐卡取详情时回传整段
+        只读观察者统计胶囊合批懒取专用：只回统计列，避免逐卡取详情时回传整段
         请求正文。未命中的 id 不在结果中。
         """
 

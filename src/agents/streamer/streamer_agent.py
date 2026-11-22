@@ -483,7 +483,7 @@ class StreamerAgent(BaseAgent):
         # RundownCoordinator 直接收取，不在 Agent 身上落字段；聊天仓储进
         # SessionScope 作只读事实源）
         self._session_manager = session_manager
-        # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
+        # 思考流旁路出口（可选；只读观察者专用，不进 EventBus 不落库）
         self._thinking_sink = thinking_sink
         # 观众统计仓储（Planner 注入画像时实时取昵称用；None 时回退 platform/user_id）
         self._viewer_repo = viewer_repo
@@ -1214,7 +1214,7 @@ class StreamerAgent(BaseAgent):
         return {"status": record.status, "updated_at_ms": record.updated_at_ms, "snapshot": dict(record.snapshot)}
 
     # ==================================================================
-    # 观测面（只读快照，供 dashboard REST 查询；无任何写入口）
+    # 只读观察者（只读快照，供 dashboard REST 查询；无任何写入口）
     # ==================================================================
 
     def list_tools(self) -> Iterable[ToolSpec]:
@@ -2388,7 +2388,7 @@ class StreamerAgent(BaseAgent):
         """续播恢复：上一进程在途的委派重登记进任务记录表（轻量半补）。
 
         与 ``_restore_interrupted_delegations``（续播认领，记回手头的事）分工：
-        认领管规划器的"她手头有事"，本方法管任务记录表（看板/观察面的委派账）。
+        认领管规划器的"她手头有事"，本方法管任务记录表（看板与只读观察者展示的委派账）。
         记录表只在内存里，进程重启后整本清空；库里的委派账在启动期把上一进程
         没等到终态的受理统一记成"被打断"（StorageLedger 启动收尾），这些被打断
         的行就是要恢复的集合。重登记标注来源，不伪造终态。失败只记日志，不挡续播。
@@ -4203,7 +4203,7 @@ class StreamerAgent(BaseAgent):
         return self._proactive_trigger.is_enabled()
 
     def is_live_active(self) -> bool:
-        """场次进行位当前状态（live.started 置位 / live.ended 复位；只读观测面）。"""
+        """场次进行位当前状态（live.started 置位 / live.ended 复位；只读只读观察者）。"""
         return self._live_active
 
     def set_proactive_enabled(self, enabled: bool) -> None:
@@ -4264,7 +4264,7 @@ class StreamerAgent(BaseAgent):
 
     @property
     def is_game_lead_active(self) -> bool:
-        """当前是否处于游戏自主主控态（只读观测面）。"""
+        """当前是否处于游戏自主主控态（只读只读观察者）。"""
         return self._is_game_lead_active()
 
     def _is_game_lead_active(self) -> bool:

@@ -24,7 +24,7 @@ THINKING_STREAM_TYPE = "thinking.delta"
 
 
 class StreamPreviewHub:
-    """思考流旁路 hub（观察面专用）。
+    """思考流旁路 hub（只读观察者专用）。
 
     Agent 侧经 ``ThinkingStreamSink`` Protocol 注入；dashboard 侧实现。
     """

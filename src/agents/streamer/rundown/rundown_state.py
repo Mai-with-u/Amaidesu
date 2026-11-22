@@ -115,7 +115,7 @@ _RESTART_VALID_BY: frozenset[str] = frozenset({"human", "system"})
 #: 导演也可手动预演起算（human）。Agent 无权——何时开播不是它说了算
 _BEGIN_VALID_BY: frozenset[str] = frozenset({"system", "human"})
 
-#: append 的独立白名单：追加是 Agent 的计划扩展权（导演改单走编辑写穿通道）
+#: append 的独立白名单：追加是 Agent 的计划扩展权（导演改单走编辑界面直写通道）
 _APPEND_VALID_BY: frozenset[str] = frozenset({"agent"})
 
 #: insert 的独立白名单：插话题是导演的应急编排权（冷场时在当前环节后插一次性环节）
@@ -652,7 +652,7 @@ class RundownState:
         """尾部追加环节（Agent 的计划扩展权）。
 
         ``by`` 用独立白名单，仅接受 ``"agent"``（与 ``restart`` 对称：导演
-        改单走编辑写穿通道，不在此处）；非法值抛 ``ValueError``。
+        改单走编辑界面直写通道，不在此处）；非法值抛 ``ValueError``。
 
         - 未加载 / ``seg_id`` 与现有环节冲突 / 环节总数达 :data:`SEGMENTS_MAX`
           → 结构化拒绝（不变更、不发事件）。
@@ -761,7 +761,7 @@ class RundownState:
         *,
         now_ms: Optional[int] = None,
     ) -> Optional[RundownReject]:
-        """替换运行中流程单的定义（直播中编辑写穿），尽量保留当前进度。
+        """替换运行中流程单的定义（直播中编辑界面直写），尽量保留当前进度。
 
         只更新"同一份流程单"的内容，换单走 :meth:`load`：
 

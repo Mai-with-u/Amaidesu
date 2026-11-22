@@ -704,7 +704,7 @@ async def create_app_components(
         # tts_engine 是否在位为判据，跟随播放事件 / 派发直出两模式互斥，
         # 组合根永远传入 subtitle_service，不做参数塑形。
 
-        # 思考流旁路 hub（观察面专用：只读通道，把 Agent 思考流增量推给 dashboard
+        # 思考流旁路 hub（只读观察者专用：只读通道，把 Agent 思考流增量推给 dashboard
         # 展示，不参与决策回路）：Agent 装配先于 dashboard 启动，
         # ws 通道延迟绑定（dashboard 就绪后 attach_ws）；未绑定期间 delta 丢弃。
         # 配置从 [agents.streamer.thinking_stream] 子段读取（嵌套结构）。

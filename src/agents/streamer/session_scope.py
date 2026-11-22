@@ -74,7 +74,7 @@ class WindowMaterials:
     - ``history``：``None`` = 读库失败，宁可本轮无历史，不拿残缺冒充完整；
       空列表 = 真的无历史。
     - ``game_batch``：空批次 = 本回合无新游戏事件（不用 None 表达）。
-    - ``timeline_notes``：本回合开窗时点的时间线 notes 累积快照（只读观察面，
+    - ``timeline_notes``：本回合开窗时点的时间线 notes 累积快照（只读观察者，
       写入仍只经本模块动词）。
     """
 

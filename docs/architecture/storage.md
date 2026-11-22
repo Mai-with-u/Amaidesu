@@ -72,7 +72,7 @@
 - 主要写入方：
   - **StorageLedger**：订阅 `room.message.#` 落明细表与观众计数、订阅 `streamer.speech` 写主播发言行（带回复关联与回应的玩家、落库前遮名）、订阅 `tts.utterance.dropped` 写没送达标记、订阅 `game.*` 写游戏事件、订阅 `game.place.noted` 写地点动静；观众四类消息在判场次之前先过隐私入口（遗忘命令、撤回短语、不记录名单）。不建场次行（归 LiveSessionManager）。
   - **GamePlayerLedger**：订阅 `game.chat.received`、`game.self.chatted`、`game.player.interacted`，按 UUID 认人写玩家表、互动表与游戏公屏表；只给带 UUID、核对过在线的发言人建档，玩家的游戏公屏消息先过玩家那一套隐私入口（"忘了我"、撤回短语、不记录名单）。
-  - **LLM 观察面**：`src/modules/llm/observation.py` 每次调用同事务写 usage 与 requests 两表。
+  - **LLM 用量记录**：`src/modules/llm/observation.py` 每次调用同事务写 usage 与 requests 两表。
   - **收播整理**：承诺表与场次档案由主播 Agent 的下播整理写入（跨场次表的一次性写入口是 `SessionRepo.apply_settlement`，一个事务写档案行、档案快照、新承诺、旧承诺了结、本场待审候选与整理完成时刻；失败与整理报告写在 `live_sessions` 的整理三列）。旧的场次档案、观众印象与长期笔记写入器已随阶段 3b 移除。
   - **场内摘要**：timeline_summary / topics 由后台维护者写入。
 

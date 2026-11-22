@@ -90,7 +90,7 @@ def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> Non
             # 游戏侧解说提交与建议转达事实（控制台解说卡/建议卡）
             "agent.lead.commentary",
             "agent.lead.suggestion",
-            # 两级语音打断观测面（台词未送达标记）
+            # 两级语音打断只读观察者（台词未送达标记）
             "tts.utterance.dropped",
         }
     )

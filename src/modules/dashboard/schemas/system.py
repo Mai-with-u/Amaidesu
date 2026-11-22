@@ -50,7 +50,7 @@ DomainHealthState = Literal["ok", "degraded", "offline", "unknown", "disabled"]
 
 #: 状态语义（前端样式与排序同源）：
 #: ok=正常 / degraded=降级（连着但有残留故障）/ offline=不可用 /
-#: unknown=探不到（无观测面）/ disabled=未启用（配置上就没开，非故障）
+#: unknown=探不到（无只读观察者）/ disabled=未启用（配置上就没开，非故障）
 
 
 class DomainHealthItem(BaseModel):

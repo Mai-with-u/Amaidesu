@@ -389,7 +389,7 @@ class AgentManager:
             return False
         new_agent = self.get_agent_by_name(name)
         if new_agent is not None:
-            # 累计次数 + 1 写到新实例（观测面跨重建连续）
+            # 累计次数 + 1 写到新实例（只读观察者跨重建连续）
             new_agent.carry_restart_count(carried_restart_count + 1)
         return True
 

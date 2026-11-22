@@ -99,7 +99,7 @@ class RequestHistoryManager:
     async def get_request_stats_by_ids(self, request_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """按 id 批量取请求统计（仅统计列，不含正文大字段）。
 
-        观察面统计胶囊合批懒取的数据面：返回 ``id → 统计字典``，未命中的
+        只读观察者统计胶囊合批懒取的数据面：返回 ``id → 统计字典``，未命中的
         id 不在结果中（前端按缺渲染不取数）。
         """
         unique = [rid for rid in dict.fromkeys(request_ids) if rid]

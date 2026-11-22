@@ -77,7 +77,7 @@ def test_same_segment_redeclaration_and_reset_keeps_open() -> None:
         _t(1, "load", BASE + 0, seg_id="s1", seg_index=0, expected_ms=600_000),
         # renew/restore 重复声明同段：不重开
         _t(2, "renew", BASE + 50_000, seg_id="s1", seg_index=0, expected_ms=600_000),
-        # 游标重置（编辑写穿，index=-1 无环节）：关闭当前段
+        # 游标重置（编辑界面直写，index=-1 无环节）：关闭当前段
         _t(3, "restore", BASE + 100_000, seg_index=-1),
         _t(4, "load", BASE + 200_000, seg_id="s2", seg_index=0, expected_ms=900_000),
     ]

@@ -2,7 +2,7 @@
 
 回看时间线的事件事实源：``EventHistoryRecorder`` 订阅全部事件并经
 ``DiagnosticsWriter`` 逐小时落盘（``logs/events/YYYY-MM-DD/HH.jsonl``），
-覆盖重启前的完整场次；内存环形缓冲只保留本次运行的观察窗。本模块把两个
+覆盖重启前的完整场次；内存环形缓冲只保留本次运行的一段，作诊断用。本模块把两个
 来源按记录 id 去重合并、按白名单过滤后交给时间线装配，使回看与实时视图
 呈现同一卡面。
 
@@ -49,7 +49,7 @@ _WILDCARD_TO_PREFIX = {
 }
 
 # 对应物表：实时订阅词汇里不属于回看时间线卡面的条目（每族一句理由）。
-# 注意 task.changed **不在此列**：它本身不出卡，但任务是观察面推导「游戏侧记录」
+# 注意 task.changed **不在此列**：它本身不出卡，但任务是只读观察者推导「游戏侧记录」
 # （任务区间、终态、时长）的唯一数据源，回看必须收进归档才能复现那层分组。
 # 注意 room.message 先折叠为诊断 record type "room.message" 再比对。
 _REPLAY_EXCLUDED = frozenset(

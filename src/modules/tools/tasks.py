@@ -132,7 +132,7 @@ class TaskRecord:
 
 
 def owner_agent_of(*, source: str, initiator: str, executor: str) -> str:
-    """任务归属 Agent（观察面按它过滤"这个 Agent 的账"）。
+    """任务归属 Agent（只读观察者按它过滤"这个 Agent 的账"）。
 
     executor 是执行侧标识（provider 型 = 提供者名，路由/通知用），不表归属：
     - agent 型（委派）：活归执行的 Agent → executor
@@ -210,7 +210,7 @@ class TaskLedger:
             f"执行者={executor} source={source} status={status}"
         )
         # 两种来源都播报受理：委派型的受理是"派活"，provider 型的受理就是这次工具调用
-        # 真正开始的时刻。没有这条起点，观察面只拿得到终态回执，任务区间与时长无从谈起。
+        # 真正开始的时刻。没有这条起点，只读观察者只拿得到终态回执，任务区间与时长无从谈起。
         self._emit_changed(
             TaskChangedPayload(
                 task_id=task_id,

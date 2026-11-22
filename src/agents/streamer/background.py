@@ -103,7 +103,7 @@ class BackgroundMaintainer:
                 提供 ``async resolve_pk() -> Optional[int]``）。心跳、话题快照
                 与话题摘要的场次归属经它解析（与 live_chat 写路径同源）；
                 ``None`` 时相关路径整体降级跳过。
-            event_bus: 可选 ``EventBus``（观察面预留；本类当前不订阅事件——
+            event_bus: 可选 ``EventBus``（只读观察者预留；本类当前不订阅事件——
                 付费/话题数据的权威表是明细三表与 topics，不做二次副本）。
             chat_repo: 可选 ``ChatRepo``；提供时话题摘要读取 live_chat
                 最近观众行（``sender_role="viewer"``）。

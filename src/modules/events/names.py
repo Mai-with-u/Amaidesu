@@ -147,7 +147,7 @@ class CoreEvents:
 
     # ========== v2 语义域事件（streamer 递话到达事实） ==========
     # 主播 Agent 的 receive_prompt 受理递话成功即发一条（含全文原文，不截断——
-    # 应用日志只留 60 字符，全文以本事件为准）。与 agent.prompted（观测面）互补：
+    # 应用日志只留 60 字符，全文以本事件为准）。与 agent.prompted（只读观察者）互补：
     # 本事件兼作续播重放的数据源——进程重启接回场次时，从诊断事件流文件回读
     # 上一进程窗口的递话补进提醒队列，重启不再吞掉运营留言。
     STREAMER_PROMPT_RECEIVED = "streamer.prompt_received"
@@ -225,16 +225,16 @@ class CoreEvents:
 
     # ========== v2 语义域事件（agent 控制面事实） ==========
     # 递话受理即发一条（运营 REST 与跨 Agent 原语两条调用面同点收口）：
-    # 观察面据此渲染递话行与最近递话。递话不进任务账本（记账分家），
+    # 只读观察者据此渲染递话行与最近递话。递话不进任务账本（记账分家），
     # 本事件只做观测，不承载唤醒语义。
     AGENT_PROMPTED = "agent.prompted"
     # 命令驱动型 Agent 每步推理产生响应正文即发一条（中间工具调用步骤；
     # 自然终止轮的正文走 game.report 交付卡，不重复发）。正文无其它事件
     # 通道（思考流只转发 reasoning），本事件是"游戏 Agent 每步说了什么"
-    # 的唯一观测面；llm_request_id 供观察面懒取缓存/Token/上下文统计。
+    # 的唯一只读观察者；llm_request_id 供只读观察者懒取缓存/Token/上下文统计。
     AGENT_REPLIED = "agent.replied"
     # 动态主从切换事实：主控权在主播（"streamer"）与自主游戏 Agent 之间发生交接或
-    # 收回时发一条。由 LeadCoordinator 唯一发布，供观察面（Dashboard 时间线 / 状态栏）
+    # 收回时发一条。由 LeadCoordinator 唯一发布，供只读观察者（Dashboard 时间线 / 状态栏）
     # 与复盘记录消费；不作为跨 Agent 决策唤醒总线（跨 Agent 联动走 LeadCoordinator 回调）。
     AGENT_LEAD_CHANGED = "agent.lead.changed"
     # 游戏侧实况解说提交事实：游戏 Agent 向 LeadCoordinator 提交一条实况解说并得到

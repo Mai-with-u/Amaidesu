@@ -16,7 +16,7 @@ from tests.agents.streamer.helpers import make_streamer_agent
 
 
 # 登记（只读穿透，合并时进底账）：接线断言读取 Agent 内建 Planner 的画面依赖槽位
-# （agent._planner._frame_provider）；接线正确性暂无公开观测面可查。
+# （agent._planner._frame_provider）；接线正确性暂无公开只读观察者可查。
 
 
 def _slot(ref: str, at_ms: int) -> LatestFrame:

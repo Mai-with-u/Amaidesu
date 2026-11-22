@@ -68,7 +68,7 @@ class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
 
     发布者：``maicraft_attention`` 采集器
-    订阅者：主播 Agent（叙事素材）、Dashboard 观察面
+    订阅者：主播 Agent（叙事素材）、Dashboard 只读观察者
 
     Attributes:
         live_session_id: 场次主键（int）。发布方不填（保持默认 0），

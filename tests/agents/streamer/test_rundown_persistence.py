@@ -21,7 +21,7 @@ from tests.agents.streamer.helpers import make_streamer_agent
 
 # 登记（只读/驱动穿透，合并时进底账）：断言读取流程单状态机的内部态
 # （agent._rundown_coord._state / _bg_tasks），并直接驱动协调器的内部发布
-# 例程（_emit_rundown_changed）以编排变更事实；协调器尚无对应公开观测面。
+# 例程（_emit_rundown_changed）以编排变更事实；协调器尚无对应公开只读观察者。
 
 
 class _StubSessionManager:

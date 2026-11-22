@@ -2,7 +2,7 @@
 事件 Payload 定义：streamer 递话到达与送达事实
 
 - ``streamer.prompt_received``：主播 Agent 受理递话成功即发一条（含全文原文）。
-  与 ``agent.prompted``（观测面，两条调用面在 AgentControl 收口）互补：本事件
+  与 ``agent.prompted``（只读观察者，两条调用面在 AgentControl 收口）互补：本事件
   在递话进入提醒队列的单一受理点发出，兼作续播重放的数据源——进程重启接回
   场次时，从诊断事件流文件回读上一进程窗口的递话补进提醒队列，重启不再吞掉
   运营留言。

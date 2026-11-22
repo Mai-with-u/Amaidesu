@@ -22,7 +22,7 @@ from src.modules.tools import ToolRegistry
 from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
 
 # 登记（只读/种子穿透，合并时进底账）：主动发言 pending 信号（agent._proactive_signals
-# 的 set_* / *_pending）尚无 Agent 级公开种子/观测面——external 有 trigger_external_proactive
+# 的 set_* / *_pending）尚无 Agent 级公开种子/只读观察者——external 有 trigger_external_proactive
 # 可用，rundown/game 只能直打组件；信号状态断言同理。接缝补齐后清除。
 
 

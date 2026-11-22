@@ -30,7 +30,7 @@ class _FakeRegistry:
 
 
 class _ConnectedProvider:
-    """已连接平台 Provider 替身：契约方法 + 观测面 connection_summary。"""
+    """已连接平台 Provider 替身：契约方法 + 只读观察者 connection_summary。"""
 
     PROVIDER_NAME = "vts"
 

@@ -289,7 +289,7 @@ def test_engine_conforms_to_protocol_and_has_no_retired_entrypoints(provider: An
 
 @pytest.mark.parametrize("provider", _instances(), ids=lambda p: type(p).__name__)
 def test_engine_conforms_to_observation_protocol(provider: Any) -> None:
-    """观测面契约：六个引擎都满足 TtsObservation（dashboard 只读依赖按它收窄）。"""
+    """只读观察者契约：六个引擎都满足 TtsObservation（dashboard 只读依赖按它收窄）。"""
     assert isinstance(provider, TtsObservation)
 
 

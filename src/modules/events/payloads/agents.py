@@ -8,7 +8,7 @@
   自然终止轮的正文走 game.report 交付卡）——前端时间线响应卡的数据源，
   llm_request_id 供懒取缓存/Token/上下文统计。
 - ``agent.lead.changed``：动态主从切换事实（主播与自主游戏 Agent 之间交权/收权时发一条）
-  ——观察面与复盘记录的数据源。
+  ——只读观察者与复盘记录的数据源。
 - ``agent.lead.commentary``：游戏侧实况解说提交事实（提交即发一条，受理成功与每种失败都算事实）
   ——直播控制台解说卡的数据源。
 - ``agent.lead.suggestion``：非强杀建议转达事实（转达即发一条，含拒收）——直播控制台建议卡的数据源。
@@ -61,7 +61,7 @@ class AgentRepliedPayload(BasePayload):
         round_id: ReAct 轮次关联键（与思考流/工具卡同键；空串=无思考流注入）
         step: ReAct 步号（轮内从 1 递增）
         model: 本步请求实际使用的模型标识
-        llm_request_id: 请求历史指针（观察面懒取缓存/Token/上下文统计的键）
+        llm_request_id: 请求历史指针（只读观察者懒取缓存/Token/上下文统计的键）
         live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """

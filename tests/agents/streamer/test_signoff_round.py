@@ -48,7 +48,7 @@ from tests.config.helpers import wait_until
 from tests.modules.llm.fakes import FakeLLMManager
 
 # 登记（驱动/只读穿透，合并时进底账）：队尾用例与"场次行已删不排整理"用例直接驱动下播回调
-# （agent._on_live_ended），并等后台整理任务收尾（agent._memory_tasks）；二者均无公开观测面。
+# （agent._on_live_ended），并等后台整理任务收尾（agent._memory_tasks）；二者均无公开只读观察者。
 
 FAREWELL = "今天就到这儿啦，下次直播继续炸TNT！"
 GREETING = "晚上好呀，正式场开始啦！"

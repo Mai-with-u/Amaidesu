@@ -605,7 +605,7 @@ class BaseAgent(abc.ABC):
         """继承前实例的重启计数（AgentManager.rebuild 换实例后调用）。
 
         重建产出的是全新实例（计数归零）；由 manager 把累计次数搬运到
-        新实例上，保证 restart_count 观测面跨重建连续。
+        新实例上，保证 restart_count 只读观察者跨重建连续。
         """
         self._restart_count = max(0, count)
 

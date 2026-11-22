@@ -6,7 +6,7 @@ MaiCraft v1 的 ``events`` 按 ``topic`` 分两条流：``self`` 是角色身上
 不补发）、读失败游标不动并重连、服务端没按要求等就空手返回时停一下；不一样的只有读哪条流、一条事件怎么转出去，
 由子类给出 ``topic`` 与 ``_forward``。
 
-代码归属：读的是 Minecraft 的事件流，是**游戏相关**的外部世界适配器，故放在 Minecraft Agent 包内。
+代码归属：读的是 Minecraft 的事件流，是**游戏相关**的外部世界接入，故放在 Minecraft Agent 包内。
 它们是 Minecraft Agent 的**附属采集器**：不在 ``collectors.toml`` 里单独开关，Minecraft Agent 启用就装上、
 停用就停掉（声明见 ``companions.py``）；连接参数直接取 ``[agents.minecraft.mcp]``，等待与重试间隔取
 ``[agents.minecraft]`` 的 ``events_wait_ms`` / ``events_retry_interval_ms``。开关跟的是"Agent 在不在启用名单里"，

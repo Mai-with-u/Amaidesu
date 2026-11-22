@@ -290,7 +290,7 @@ async def test_execute_finishing_inline_still_lands_in_the_ledger() -> None:
         for call in ledger_bus.emit.await_args_list
         if call.args and getattr(call.args[1], "task_id", "") == "maicraft-goal-1"
     ]
-    # 受理与终态各一条：观察面靠这两条才推得出这次调用的起点与时长
+    # 受理与终态各一条：只读观察者靠这两条才推得出这次调用的起点与时长
     assert [payload.status for payload in changed] == ["accepted", "succeeded"], "受理与终态各广播一次 task.changed"
     assert agent.tracked_goal_ids == [], "当场完成的目标不进跟踪名单"
     await agent.stop()

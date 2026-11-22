@@ -1121,7 +1121,7 @@ class MinecraftAgent(BaseAgent):
         self._paused.set()
 
     # ==================================================================
-    # 观测面（只读快照，供 dashboard REST 查询；无任何写入口）
+    # 只读观察者（只读快照，供 dashboard REST 查询；无任何写入口）
     # ==================================================================
 
     def memo_snapshot(self) -> Dict[str, Any]:
@@ -1193,7 +1193,7 @@ class MinecraftAgent(BaseAgent):
 
     @property
     def in_lead_mode(self) -> bool:
-        """当前是否处于游戏自主主控态（只读观测面）。"""
+        """当前是否处于游戏自主主控态（只读只读观察者）。"""
         return self._in_lead_mode
 
     def _llm_available_for_lead(self) -> bool:
@@ -2312,7 +2312,7 @@ class MinecraftAgent(BaseAgent):
             # 中间工具调用步骤的正文记成名下委派的最近一句判断：主播每回合决策前从任务账本读，不靠订阅
             if tool_calls and (response.content or "").strip():
                 self._delegations.note_reply(response.content or "", now_ms())
-            # 中间工具调用步骤的正文进观察面响应卡；自然终止轮的正文由交付卡承载，不重复发。
+            # 中间工具调用步骤的正文进只读观察者响应卡；自然终止轮的正文由交付卡承载，不重复发。
             if tool_calls and (response.content or "").strip() and self._event_bus is not None:
                 await self.emit_event(
                     CoreEvents.AGENT_REPLIED,
@@ -5226,21 +5226,21 @@ class MinecraftAgent(BaseAgent):
 
     @property
     def tracked_goal_ids(self) -> List[int]:
-        """在跟踪的后台目标编号（只读观测面：仪表盘与测试读，不提供写入口）。"""
+        """在跟踪的后台目标编号（只读只读观察者：仪表盘与测试读，不提供写入口）。"""
         return self._goals.tracked_ids()
 
     @property
     def queued_messages(self) -> List[Tuple[str, Any]]:
-        """还没被模型读到的消息队列快照（只读观测面）。"""
+        """还没被模型读到的消息队列快照（只读只读观察者）。"""
         return list(self._message_queue)
 
     @property
     def batch_active(self) -> bool:
-        """本批 ReAct 是否正在跑（只读观测面）。"""
+        """本批 ReAct 是否正在跑（只读只读观察者）。"""
         return self._batch_active
 
     def observation(self) -> Dict[str, Any]:
-        """任务推进状态快照（只读观测面）：批状态、任务状态、站桩计时、身体故障说法、本批身体事件与攒着的互动通知数。"""
+        """任务推进状态快照（只读只读观察者）：批状态、任务状态、站桩计时、身体故障说法、本批身体事件与攒着的互动通知数。"""
         return {
             "batch_active": self._batch_active,
             "in_lead_mode": self._in_lead_mode,

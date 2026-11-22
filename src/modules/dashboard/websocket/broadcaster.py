@@ -182,7 +182,7 @@ class EventBroadcaster:
         CoreEvents.AGENT_LEAD_COMMENTARY: (None, AgentLeadCommentaryPayload),
         # 非强杀建议转达事实（直播控制台建议卡：内容、来源、受理结果实时推送，含拒收）
         CoreEvents.AGENT_LEAD_SUGGESTION: (None, AgentLeadSuggestionPayload),
-        # 两级语音打断的观测面：hard_interrupted（二级硬打断掐断在播句）与
+        # 两级语音打断的只读观察者：hard_interrupted（二级硬打断掐断在播句）与
         # priority_preempted（跨来源低优句被高优抢占）要在控制台可见，
         # 否则运营者看不到"这句话为什么没播出来"
         CoreEvents.TTS_UTTERANCE_DROPPED: (None, UtteranceDroppedPayload),

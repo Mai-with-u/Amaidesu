@@ -17,7 +17,7 @@ from src.agents.streamer.speech_guard import fit_to_budget, guard
 
 
 # 登记（只读穿透，合并时进底账）：接线断言读取内建 Replyer 的台词长度预算
-# （agent._replyer._speech_max_chars）；"配置确实传到了回复器"暂无公开观测面。
+# （agent._replyer._speech_max_chars）；"配置确实传到了回复器"暂无公开只读观察者。
 from src.modules.llm.payload import Response
 from tests.agents.streamer.helpers import make_streamer_agent
 

@@ -115,7 +115,7 @@ def test_wire_connection_tools_refreshes_registry() -> None:
 
 
 def test_connection_summary_reflects_marked_state_without_stats() -> None:
-    """观测面契约：无 get_stats 的子类摘要带连接标志与空 stats。"""
+    """只读观察者契约：无 get_stats 的子类摘要带连接标志与空 stats。"""
     provider = _StubProvider()
     assert provider.connection_summary() == {"is_connected": False, "stats": {}}
     provider.mark_connected()

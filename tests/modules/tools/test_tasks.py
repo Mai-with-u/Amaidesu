@@ -105,7 +105,7 @@ async def test_state_transitions_drive_events_idempotently_and_remove_on_termina
     assert "t1" not in ledger
     final = received[-1]
     assert final.snapshot == {"done": True} and (final.initiator, final.executor) == ("minecraft", "game")
-    assert final.source == "provider"  # 事件带事实源归属，观察面据此推导任务归属
+    assert final.source == "provider"  # 事件带事实源归属，只读观察者据此推导任务归属
 
 
 async def test_register_broadcasts_accepted_for_both_sources() -> None:

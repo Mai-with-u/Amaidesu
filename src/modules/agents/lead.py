@@ -97,7 +97,7 @@ class CommentaryAck(BaseModel):
 
 
 class LeadStateSnapshot(BaseModel):
-    """动态主从运行态只读快照（供观测面与 REST API 序列化）。"""
+    """动态主从运行态只读快照（供只读观察者与 REST API 序列化）。"""
 
     mode: LeadMode
     lead_agent: str

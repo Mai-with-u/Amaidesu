@@ -42,7 +42,7 @@ class TaskCard(BaseModel):
     initiator: str = ""
     executor: str = ""
     # 任务归属 Agent（agent 型 = 执行 Agent；provider 型 = 发起 Agent）——
-    # 观察面按它过滤"这个 Agent 的账"；executor 是执行侧标识，不表归属
+    # 只读观察者按它过滤"这个 Agent 的账"；executor 是执行侧标识，不表归属
     owner_agent: str = ""
     summary: str = ""  # 最近一次变化摘要（仅事件聚合侧有；账本侧为空）
     created_at_ms: int = 0
@@ -147,7 +147,7 @@ async def get_tasks(server: ServerDep, tracker: TaskTrackerDep) -> TaskSnapshotR
     """游戏 Agent 委派任务全景。
 
     进行中 = 任务记录表当前账面（含 accepted/running/waiting_for_decision）；
-    已完结 = 事件历史环按 task_id 聚合的终态末次 payload——纯内存观察窗，
+    已完结 = 事件历史环按 task_id 聚合的终态末次 payload——纯内存，诊断用，
     仅本次运行内成立。已完结按更新时间倒序。
     """
     ledger = tracker.ledger

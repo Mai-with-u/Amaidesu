@@ -101,7 +101,7 @@ class _FakeTtsEngine:
 
 
 class _FakeProvider:
-    """模拟工具提供者：category/连接态可调；连接态一律走观测面契约。
+    """模拟工具提供者：category/连接态可调；连接态一律走只读观察者契约。
 
     ``contract_connected=False``（缺省 None）时本替身不实现
     ``connection_summary``——覆盖迁移未完成的非契约 Provider（健康墙按
@@ -185,7 +185,7 @@ def test_health_wall_shape_and_unknown_placeholder(mount, config_service: Config
 
 
 def test_health_wall_tts_and_provider_states(mount, config_service: ConfigService) -> None:
-    """TTS 走引擎 get_stats；提供者按分类归域（avatar/obs/其余），连接态走观测面契约。"""
+    """TTS 走引擎 get_stats；提供者按分类归域（avatar/obs/其余），连接态走只读观察者契约。"""
     registry = _FakeRegistry(
         [
             _FakeProvider("vts", "avatar", contract_connected=True, supports_reconnect=True),

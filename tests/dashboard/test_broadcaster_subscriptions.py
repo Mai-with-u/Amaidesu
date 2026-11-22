@@ -275,7 +275,7 @@ async def test_lead_commentary_and_suggestion_pass_through(started) -> None:
 
 
 async def test_tts_utterance_dropped_passes_through(started) -> None:
-    """两级语音打断观测面直通转发：hard_interrupted / priority_preempted 控制台可见。"""
+    """两级语音打断只读观察者直通转发：hard_interrupted / priority_preempted 控制台可见。"""
     bus, _ws, deliver = started
     _handler, model_cls = bus.subscribed[CoreEvents.TTS_UTTERANCE_DROPPED]
     assert model_cls is UtteranceDroppedPayload, "模型类必须是 UtteranceDroppedPayload"
