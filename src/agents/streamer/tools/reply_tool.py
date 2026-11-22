@@ -339,7 +339,7 @@ class ReplyToolProvider(BaseToolProvider):
 
         契约：
         - 接收 invocation.arguments：topic_summary / reply_guidance / target / emotion / intensity
-        - 本窗交接材料（思考流回调/弹幕批/游戏聊天/状态事实块/闸豁免）从
+        - 本窗交接稿（思考流回调/弹幕批/游戏聊天/状态事实块/闸豁免）从
           ``invocation.attachment`` 取（``ReplyRoundAttachment``；None 按空材料处理，
           attachment 为其他类型属编程错误，返回失败结果暴露）
         - 把意图参数适配为 DecisionPlan(should_reply=True)（Replyer.generate 接口形态）

@@ -66,7 +66,7 @@ def replace_session_candidates(
 ) -> int:
     """在整理事务里写本场的待审候选：先删本场还在待审的，再写这一轮的；返回写了几条。
 
-    已批、已驳回的不动（驳回的留作去重依据）。同一句回应按候选类型各自至多保留一条，允许同一句既定下游戏名字又记一句熟客近况。
+    已批、已驳回的不动（驳回的留作去重依据）。同一句回应按候选类型各自至多保留一条，允许同一句既定下游戏名字又记一句老观众近况。
     """
     conn.execute("DELETE FROM viewer_candidates WHERE live_session_id=? AND status='pending'", (int(live_session_id),))
     written = 0
@@ -154,7 +154,7 @@ class ViewerCandidateRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def rejected_keys(self) -> Tuple[List[int], List[str]]:
-        """驳回过的全局候选（不含熟客个人近况）挂的弹幕与标题：整理时同一条弹幕或同样标题的不再列。"""
+        """驳回过的全局候选（不含老观众个人近况）挂的弹幕与标题：整理时同一条弹幕或同样标题的不再列。"""
 
         def _exec() -> Tuple[List[int], List[str]]:
             with self._manager.transaction() as conn:
@@ -169,10 +169,10 @@ class ViewerCandidateRepo(BaseRepo):
     async def approve(
         self, *, candidate_id: int, title: Optional[str] = None, lasting: bool = False, at_ms: int
     ) -> ViewerCandidate:
-        """批准一条候选，返回批准后的候选（带生成的档案行或承诺编号；熟客近况原地留在候选表）。
+        """批准一条候选，返回批准后的候选（带生成的档案行或承诺编号；老观众近况原地留在候选表）。
 
         观众定下的写成一行观众来源的档案行并放进最新快照；她说欠着的登记成一条未了结承诺；
-        熟客近况不写档案与承诺，仅在该熟客场内发言时进熟客卡。
+        老观众近况不写档案与承诺，仅在该老观众场内发言时进老观众卡。
         """
 
         def _exec() -> ViewerCandidate:
@@ -183,7 +183,7 @@ class ViewerCandidateRepo(BaseRepo):
                 commitment_id: Optional[int] = None
                 is_self_note = row["kind"] == VIEWER_SELF
                 if is_self_note:
-                    # 熟客近况：只按观众在场内熟客卡里读取，不写全局档案行、快照或承诺
+                    # 老观众近况：只按观众在场内老观众卡里读取，不写全局档案行、快照或承诺
                     pass
                 elif row["kind"] == CLAIMED_MISSING:
                     # 她说欠着的：登记成未了结承诺，证据是她说欠着的那一句（同一句只登记一次）
@@ -240,7 +240,7 @@ class ViewerCandidateRepo(BaseRepo):
                     " commitment_id=? WHERE id=?",
                     (final, int(at_ms), line_id, commitment_id, int(candidate_id)),
                 )
-                # 熟客近况改动日志不落自述文本，保证删除观众后审计表零自述残留
+                # 老观众近况改动日志不落自述文本，保证删除观众后审计表零自述残留
                 record_edit(
                     conn,
                     live_session_id=int(row["live_session_id"]),
@@ -286,13 +286,13 @@ class ViewerCandidateRepo(BaseRepo):
         await self._run_in_executor(_exec)
 
     async def revoke(self, *, candidate_id: int, at_ms: int) -> ViewerCandidate:
-        """撤销已批准的熟客近况：撤下熟客卡、回到待审，14 天待审期从撤销时刻重算。"""
+        """撤销已批准的老观众近况：撤下老观众卡、回到待审，14 天待审期从撤销时刻重算。"""
 
         def _exec() -> ViewerCandidate:
             with self._manager.transaction(immediate=True) as conn:
                 row = _row_or_not_found(conn, candidate_id)
                 if row["kind"] != VIEWER_SELF or row["status"] != "approved":
-                    raise MemoryReviewError("conflict", "只有已批准的熟客近况才能撤销批准")
+                    raise MemoryReviewError("conflict", "只有已批准的老观众近况才能撤销批准")
                 conn.execute(
                     "UPDATE viewer_candidates SET status='pending', decided_at_ms=NULL, created_at_ms=? WHERE id=?",
                     (int(at_ms), int(candidate_id)),

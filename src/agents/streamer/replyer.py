@@ -1122,7 +1122,7 @@ def _unresolved_target(target: Optional[str]) -> str:
 
 
 def _familiarity_line(target_familiarity: str) -> str:
-    """被回应弹幕的发言人为熟客时，紧跟 target 原文附一行关系语气说明；陌生人或空串返回空串。"""
+    """被回应弹幕的发言人为老观众时，紧跟 target 原文附一行关系语气说明；陌生人或空串返回空串。"""
     if target_familiarity == "close":
         return "发言人关系: 常来的老熟人（语气自然松弛、像老朋友接茬调侃，少客套寒暄，起手引话时可自然直呼名字）\n"
     if target_familiarity == "regular":

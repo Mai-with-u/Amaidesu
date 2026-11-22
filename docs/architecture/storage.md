@@ -19,16 +19,16 @@
 - `viewer_names`：观众用过的昵称（含曾用名），只在新建、改名、合并时写入。
 - `forget_list`：不记录名单，只存 `HMAC-SHA256(库外密钥, 种类|外部ID)` 摘要与登记时刻，不落明文外部 ID；密钥在库外文件（默认 `secrets/forget.key`）。文件丢失而名单非空时存储启动硬报错，避免被遗忘的观众静默恢复记录。
 
-**主播记忆账本**
+**主播承诺表**
 
-- `commitments`：承诺账本，一行是她当众答应过、还没了结的一件事。带 `quote`（她播出原句的逐字片段，登记时对着台词行校验过）与 `evidence_chat_id`（那句台词的行号，场次被删后成空引用）；`viewer_id` 记对谁说的、`game` 记挂在哪个游戏、`save_id`/`save_name` 记答应时角色在哪个存档（空串 = 不分存档或存档不明）；状态三分：`open` 未了结 / `closed` 已了结（做完或放弃，看了结原话）/ `void` 运营者判误记。判误记留墓碑而不删行，之后整理遇到同一件事才认得出、不重复登记。
+- `commitments`：承诺表，一行是她当众答应过、还没了结的一件事。带 `quote`（她播出原句的逐字片段，登记时对着台词行校验过）与 `evidence_chat_id`（那句台词的行号，场次被删后成空引用）；`viewer_id` 记对谁说的、`game` 记挂在哪个游戏、`save_id`/`save_name` 记答应时角色在哪个存档（空串 = 不分存档或存档不明）；状态三分：`open` 未了结 / `closed` 已了结（做完或放弃，看了结原话）/ `void` 运营者判误记。判误记留墓碑而不删行，之后整理遇到同一件事才认得出、不重复登记。
 - `archive_lines`：场次档案，每场只写本场的事，标题加她播出原句的逐字片段，游戏里的事另记 `game` 与存档两列，写完不改（运营者可删单行）。`archive_snapshots` / `archive_snapshot_lines`：每个整理过的正式场一份档案快照，每行引用一条 `archive_lines`（外键级联，原行删掉就从所有快照撤掉），另记位置、是否稳定的事与最近被提起的时刻；删除场次或改成彩排时连同它的快照一起删。两者是"她记得前几场干了什么"的唯一来源。文档与运维面见 [主播记忆](streamer-memory.md)。
 - 复盘页的"删除单句"走 `ChatRepo.delete_speech_and_references`：同一个事务里删那句主播台词、删引用它的档案行、清空引用它的承诺的原话（承诺行保留）。
 - 档案行与承诺另有 `keywords`（被动想起的触发词，JSON 字符串列表）；档案行另有 `place`（挂在哪个记住的地点）。
 - `memory_vectors_*` / `memory_fts_*`：记忆检索的派生索引，档案行、承诺、她播出的台词、游戏事件各一张向量表、一张 FTS5 全文表，行号即来源行主键。正本始终是来源行，这些表随时能重算。向量表外键级联；全文表是虚表，靠触发器跟着来源行删除，来源正文被改（删观众替换昵称、台词标成没播出、清空承诺原话）时连同向量一起删掉等重算；全文表打开了 FTS5 的 `secure-delete`，删掉的词元不留在影子表里。收什么由 `MemoryIndexRepo` 一处定：台词只收正式场里她播出满 30 秒的正文（不带她回应的弹幕），游戏事件只收里程碑与阶段汇报（白名单，游戏聊天与玩家肢体动作不收），判了误记的承诺不收；场次改成彩排时来源行不变，在改类型的同一个事务里删掉那一场的台词与事件索引。
 - `memory_cue_log`：每张推给她的线索卡一行（哪一场、什么卡、被哪几路命中、分数、用上的时刻），只记条目编号、不记观众身份；条目或场次被删时外键级联删除。
 - 记忆页人工审核：`live_sessions.reviewed_at_ms`（标已审的时刻，空即待审）、`archive_lines.human_locked`（运营者改过或新增的行，之后的整理不能去掉或替换）、`archive_snapshot_lines.pinned`（运营者放回快照或新增的行，接进新快照时跟着带过去；一份快照至多 4 行，可以取消放回）。整理照旧自动生效，人只在事后改。`memory_edits` 记每次操作（场次、对象、动作、改前改后、时刻；批准、驳回候选时另记候选编号，不记观众身份），与档案同寿命：场次被删时级联删除；档案行或候选被删时记录留着、改前改后的文本由触发器清空；删观众与"忘了我"把提到 ta 昵称的记录文本整段清空；挂在 ta 自己弹幕上的候选随弹幕整条删，挂在别人弹幕上、只是原话或标题里提到 ta 的候选不删，只把昵称换成"一位观众"（驳回过的仍是驳回，同一条以后不再列）。按昵称匹配时 `%`、`_` 按原字比。
-- `viewer_candidates`：待审候选，一条一行，类型分"观众定下的"（`viewer_defined`）、"她说欠着的"（`claimed_missing`）与"熟客近况"（`viewer_self`），挂在观众那条弹幕、她那句回应两条 `live_chat` 记录及 `viewer_id`（`viewers`）上（外键级联：删观众、"忘了我"、按句删、删场次一起删；改彩排时由场次仓储撤掉本场候选）；状态待审 / 已批 / 已驳回，前两类批准后记下生成的档案行或承诺，熟客近况批准后原地留在本表供场内熟客卡按 `viewer_id` 只读查询（不进全局档案与承诺，改动记录不落自述文本，支持撤销批准回待审）；观众定下的一类另存观众定下的那个词（`word`），批准时抄到生成的档案行上（`archive_lines.viewer_word`），渲染时原话里这一段不遮；读档案的仓储不碰候选表。待审的列出后 14 天没人审自动删掉。保留期清理不删批准进档案或已批熟客近况挂着的那条源弹幕，否则对应档案行或已批近况会被外键级联删掉。`archive_lines` 另有来源（主播 / 观众）与观众那条弹幕两列，批准来的行挂着那条弹幕。决策见 [观众定下的事经人批准](../decisions/074-viewer-defined-memory-needs-approval.md)。
+- `viewer_candidates`：待审候选，一条一行，类型分"观众定下的"（`viewer_defined`）、"她说欠着的"（`claimed_missing`）与"老观众近况"（`viewer_self`），挂在观众那条弹幕、她那句回应两条 `live_chat` 记录及 `viewer_id`（`viewers`）上（外键级联：删观众、"忘了我"、按句删、删场次一起删；改彩排时由场次仓储撤掉本场候选）；状态待审 / 已批 / 已驳回，前两类批准后记下生成的档案行或承诺，老观众近况批准后原地留在本表供场内老观众卡按 `viewer_id` 只读查询（不进全局档案与承诺，改动记录不落自述文本，支持撤销批准回待审）；观众定下的一类另存观众定下的那个词（`word`），批准时抄到生成的档案行上（`archive_lines.viewer_word`），渲染时原话里这一段不遮；读档案的仓储不碰候选表。待审的列出后 14 天没人审自动删掉。保留期清理不删批准进档案或已批老观众近况挂着的那条源弹幕，否则对应档案行或已批近况会被外键级联删掉。`archive_lines` 另有来源（主播 / 观众）与观众那条弹幕两列，批准来的行挂着那条弹幕。决策见 [观众定下的事经人批准](../decisions/074-viewer-defined-memory-needs-approval.md)。
 
 **游戏里的人**（决策见 [游戏里的人](../decisions/075-game-players-by-uuid.md)）
 
@@ -73,7 +73,7 @@
   - **StorageLedger**：订阅 `room.message.#` 落明细表与观众计数、订阅 `streamer.speech` 写主播发言行（带回复关联与回应的玩家、落库前遮名）、订阅 `tts.utterance.dropped` 写没送达标记、订阅 `game.*` 写游戏事件、订阅 `game.place.noted` 写地点动静；观众四类消息在判场次之前先过隐私入口（遗忘命令、撤回短语、不记录名单）。不建场次行（归 LiveSessionManager）。
   - **GamePlayerLedger**：订阅 `game.chat.received`、`game.self.chatted`、`game.player.interacted`，按 UUID 认人写玩家表、互动表与公屏聊天表；只给带 UUID、核对过在线的发言人建档，玩家的公屏消息先过玩家那一套隐私入口（"忘了我"、撤回短语、不记录名单）。
   - **LLM 观察面**：`src/modules/llm/observation.py` 每次调用同事务写 usage 与 requests 两表。
-  - **收播整理**：承诺账本与场次档案由主播 Agent 的下播整理写入（跨场次表的一次性写入口是 `SessionRepo.apply_settlement`，一个事务写档案行、档案快照、新承诺、旧承诺了结、本场待审候选与整理完成时刻；失败与整理报告写在 `live_sessions` 的整理三列）。旧的场次回顾、观众印象与长期笔记写入器已随阶段 3b 移除。
+  - **收播整理**：承诺表与场次档案由主播 Agent 的下播整理写入（跨场次表的一次性写入口是 `SessionRepo.apply_settlement`，一个事务写档案行、档案快照、新承诺、旧承诺了结、本场待审候选与整理完成时刻；失败与整理报告写在 `live_sessions` 的整理三列）。旧的场次档案、观众印象与长期笔记写入器已随阶段 3b 移除。
   - **场内摘要**：timeline_summary / topics 由后台维护者写入。
 
 ## 隐私与保留期
@@ -117,7 +117,7 @@
 - [整理结果的人工审核](../decisions/073-settlement-human-review.md)
 - [观众定下的事经人批准进记忆](../decisions/074-viewer-defined-memory-needs-approval.md)
 - [游戏里的人按 UUID 认](../decisions/075-game-players-by-uuid.md)
-- [场次档案改为滚动快照](../decisions/071-rolling-session-archive.md)
+- [场次档案改为档案快照](../decisions/071-rolling-session-archive.md)
 - [常驻简报分区与场内更正](../decisions/077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
 - [游戏社交事实边界治理](../decisions/078-game-social-facts-boundaries-and-governance.md)
 - [检索抗干扰、双侧桥接与名场面分层](../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)

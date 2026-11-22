@@ -54,7 +54,7 @@ _MASK_MARK = "***"
 _USER_ID_EXPR = "COALESCE(account_id, open_id, '')"
 _SELECT_VIEWER = f"SELECT *, {_USER_ID_EXPR} AS user_id FROM viewers"
 _MATCH_EXTERNAL = "platform=? AND (account_id=? OR open_id=?)"
-# 展示曾用名时最多带几个（最近用过的在前）；在场认人与熟客卡最多带 2 个且过滤单字昵称
+# 展示曾用名时最多带几个（最近用过的在前）；在场认人与老观众卡最多带 2 个且过滤单字昵称
 _FORMER_NAMES_LIMIT = 2
 _MIN_FORMER_NAME_LEN = 2
 
@@ -574,7 +574,7 @@ class ViewerRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def approved_viewer_notes(self, *, viewer_ids: Sequence[int], limit: int = 2) -> List[ViewerSelfNote]:
-        """场内熟客卡用：读取同人簇内已批准的熟客近况（最近批准的在前；待审与已驳回绝不返回）。"""
+        """场内老观众卡用：读取同人簇内已批准的老观众近况（最近批准的在前；待审与已驳回绝不返回）。"""
         ids = sorted({int(vid) for vid in viewer_ids})
         if not ids or limit <= 0:
             return []

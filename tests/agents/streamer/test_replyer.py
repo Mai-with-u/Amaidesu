@@ -392,7 +392,7 @@ async def test_replyer_verbatim_repeat_rephrases_once_and_delivers_new_wording()
 async def test_reply_tool_passes_target_familiarity_into_replyer_plan_text(
     tier: str, expected_snippet: Optional[str]
 ) -> None:
-    """ReplyToolProvider 按 target 解析出消息 ID 并把熟客档位透传给 Replyer，紧跟 target 原文渲染发言人关系。"""
+    """ReplyToolProvider 按 target 解析出消息 ID 并把老观众档位透传给 Replyer，紧跟 target 原文渲染发言人关系。"""
     replyer, _, prompt = _replyer("来啦来啦")
     msg = make_room_message(
         message_id="m_ajie",

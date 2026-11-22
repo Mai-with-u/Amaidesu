@@ -675,7 +675,7 @@ async def test_inside_joke_card_only_when_a_viewer_brings_it_up(store: SQLiteDat
 async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_persists_after_reply(
     store: SQLiteDatabase, privacy: PrivacyService
 ) -> None:
-    """熟客发言：有已批准近况或共同造梗时推熟客卡（cue_log 不落昵称、压制重复在场行）；本场回复后卡停推但熟悉度映射照常保留，发忘了我立即清空。"""
+    """老观众发言：有已批准近况或共同造梗时推老观众卡（cue_log 不落昵称、压制重复在场行）；本场回复后卡停推但熟悉度映射照常保留，发忘了我立即清空。"""
     old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 200_000_000, kind="live")
     await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 190_000_000)
 
@@ -754,10 +754,10 @@ async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_pe
             _message(external_id="u_new", name="小夏", content="第一次来", message_id="m_new_1"),
         ]
     )
-    assert "[熟客·阿杰]" in first.text
+    assert "[老观众·阿杰]" in first.text
     assert "ta 跟你说过：ta 平时爱拼木模型。" in first.text
     assert "当初「小羊取名绒球」就是和 ta 一起定的。" in first.text
-    assert "老观众在场" not in first.text, "已推熟客卡时不再叠重复的老观众在场行"
+    assert "老观众在场" not in first.text, "已推老观众卡时不再叠重复的老观众在场行"
     assert dict(first.familiarity_by_message_id) == {"m_ajie_1": "close", "m_ajie_2": "close"}
 
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
@@ -768,7 +768,7 @@ async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_pe
     )
     assert "阿杰" not in str(entry.model_dump()), "cue_log 绝不落观众昵称"
 
-    # 本场主播已回应过阿杰后：熟客卡停推，但 familiarity_by_message_id 依然把阿杰的新弹幕标为 close
+    # 本场主播已回应过阿杰后：老观众卡停推，但 familiarity_by_message_id 依然把阿杰的新弹幕标为 close
     await store.chat.insert_live_chat(
         live_session_id=session_id,
         timestamp_ms=clock.value,
@@ -790,12 +790,12 @@ async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_pe
     after_reply = await provider.collect(
         batch=[_message(external_id="u_ajie", name="阿杰", content="绒球还在吗", message_id="m_ajie_3")]
     )
-    assert "[熟客·阿杰]" not in after_reply.text
+    assert "[老观众·阿杰]" not in after_reply.text
     assert dict(after_reply.familiarity_by_message_id) == {"m_ajie_3": "close"}
 
-    # 一旦发送"忘了我"命令，当场清掉缓存，不再输出熟悉度映射也不推熟客卡
+    # 一旦发送"忘了我"命令，当场清掉缓存，不再输出熟悉度映射也不推老观众卡
     forget_round = await provider.collect(
         batch=[_message(external_id="u_ajie", name="阿杰", content="忘了我吧", message_id="m_ajie_forget")]
     )
     assert dict(forget_round.familiarity_by_message_id) == {}
-    assert "[熟客·阿杰]" not in forget_round.text
+    assert "[老观众·阿杰]" not in forget_round.text

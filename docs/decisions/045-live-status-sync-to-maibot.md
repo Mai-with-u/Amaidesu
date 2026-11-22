@@ -8,7 +8,7 @@
 
 MaiBot 7×24 常驻 QQ，Amaidesu 开播时才启动。两边定位为"一个身份、两个身体"：各自保有决策循环，不让 MaiBot 当主播的大脑（以 MaiBot 为决策核心的桥接早已放弃）。第一步已让主播经 MaiBot 上的适配器插件（MCP 工具）读写 QQ 群；反方向还缺一条：在 QQ 上和麦麦聊天时，它不知道自己"正在直播 / 刚播完一场"。
 
-要同步的近况有四类：开播、换环节、收播、场次回顾。前三类已有事实事件（`live.started` / `rundown.changed` / `live.ended`）。场次回顾是收播后由后台调模型写成的，写完的时刻只有写入方知道，没有事件。
+要同步的近况有四类：开播、换环节、收播、场次档案。前三类已有事实事件（`live.started` / `rundown.changed` / `live.ended`）。场次档案是收播后由后台调模型写成的，写完的时刻只有写入方知道，没有事件。
 
 ## 决策（Decision）
 
@@ -48,4 +48,4 @@ MaiBot 7×24 常驻 QQ，Amaidesu 开播时才启动。两边定位为"一个身
 ## 关联
 
 - [ADR-031：组件间通信通道指派学说](031-communication-channel-doctrine.md)
-- [ADR-067：清掉旧记忆的存储面](067-irreversible-memory-cleanup.md)——本篇的场次回顾推送随回顾退役（部分取代）
+- [ADR-067：清掉旧记忆的存储面](067-irreversible-memory-cleanup.md)——本篇的场次档案推送随回顾退役（部分取代）

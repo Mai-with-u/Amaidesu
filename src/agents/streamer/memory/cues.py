@@ -3,8 +3,8 @@
 线索按优先级取，每批至多两张卡：
 
 1. 对象开口：本批发言人按外部 ID 精确解析出观众编号（只读，不建观众；有待执行删除请求
-   的不算），名下有未了结承诺 → 推那张对 ta 的承诺卡，只给动作标题；本场未回应过的熟客
-   → 推熟客卡；本窗在游戏公屏开口或冲她做动作、以前和她有过往来的玩家 → 推玩家卡。
+   的不算），名下有未了结承诺 → 推那张对 ta 的承诺卡，只给动作标题；本场未回应过的老观众
+   → 推老观众卡；本窗在游戏公屏开口或冲她做动作、以前和她有过往来的玩家 → 推玩家卡。
 2. 游戏地点（被动想起）：角色从远处走到某个记住的地点跟前 → 推挂在这个地点上的档案行；
 3. 规则（被动想起）：本批观众弹幕或她最近 3 句台词提到了档案行的触发词或老梗 → 推那一条；
 4. 向量（被动想起）：本批观众弹幕或游戏情境的意思和某行档案、某条不针对具体观众的承诺相近 → 推那一条。
@@ -23,7 +23,7 @@
 越说越多。每推一张卡记一行线索卡记录（只记条目编号和分数，不记观众身份），检测到她用上时
 回填用上的时刻。
 
-线索块里有三种输出：卡（承诺卡、熟客卡、玩家卡、档案卡、老梗卡）、老观众在场一行
+线索块里有三种输出：卡（承诺卡、老观众卡、玩家卡、档案卡、老梗卡）、老观众在场一行
 （本批开口、本场之前来过至少三场正式场、这一批没有承诺卡、她本场还没回应过、没有待删
 请求的观众合成一行），以及本批遗忘命令的回执行。回执只认记账侧真正处理过的命令：弹幕里的
 「忘了我」记账侧一定受理；撤回短语要记账侧确认那次撤回已经生效
@@ -122,7 +122,7 @@ _MAX_COMMITMENTS_PER_GAME = 20
 _MAX_PROMISES_PER_PLAYER = 2
 # 玩家卡上至多写几条他说过、人批准过的自述
 _MAX_STATEMENTS_PER_PLAYER = 2
-# 熟客卡上至多写几条已批准近况、至多写几条共同造梗归属
+# 老观众卡上至多写几条已批准近况、至多写几条共同造梗归属
 _MAX_NOTES_PER_FAMILIAR_VIEWER = 2
 _MAX_AUTHORED_PER_FAMILIAR_VIEWER = 2
 # 规则一路看她最近几句播出的台词
@@ -131,7 +131,7 @@ RECENT_SPEECH_LINES = 3
 
 @dataclass(frozen=True)
 class MemoryCues:
-    """一批的线索结果：拼好的参考段文本 + 本批出现的承诺与档案行编号（供点名校验）+ 熟客弹幕熟悉度映射。"""
+    """一批的线索结果：拼好的参考段文本 + 本批出现的承诺与档案行编号（供点名校验）+ 老观众弹幕熟悉度映射。"""
 
     text: str = ""
     commitment_ids: Tuple[int, ...] = ()
@@ -233,7 +233,7 @@ class _Round:
 
 
 def _label(key: ItemKey) -> str:
-    """日志里认条目用的写法：约#7 / 档#41 / 熟客#3 / 玩家#2 / 老梗「倒立洗头」。"""
+    """日志里认条目用的写法：约#7 / 档#41 / 老观众#3 / 玩家#2 / 老梗「倒立洗头」。"""
     kind, value = key
     if kind == "commitment":
         return render_commitment_number(int(value))
@@ -241,7 +241,7 @@ def _label(key: ItemKey) -> str:
         return render_archive_number(int(value))
     if kind == "viewer_familiar":
         # 只记观众编号，不写昵称（日志与线索卡记录同口径）
-        return f"熟客#{int(value)}"
+        return f"老观众#{int(value)}"
     if kind == "player":
         # 只记玩家编号，不写名字（日志与线索卡记录同口径）
         return f"玩家#{int(value)}"
@@ -362,7 +362,7 @@ class MemoryCueProvider:
             commitment_progress=commitment_progress,
         )
         self._round_labels = {}
-        # 对象开口（观众承诺、熟客卡、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
+        # 对象开口（观众承诺、老观众卡、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
         await self._viewer_cards(senders, state)
         if replied is not None:
             await self._familiar_viewer_cards(senders, replied, state)
@@ -749,7 +749,7 @@ class MemoryCueProvider:
 
     @staticmethod
     def _build_familiarity_map(senders: Sequence[_Sender]) -> Dict[str, str]:
-        """提取本批非遗忘熟客弹幕的 message_id → 熟悉度档位（仅 close 与 regular 入表）。"""
+        """提取本批非遗忘老观众弹幕的 message_id → 熟悉度档位（仅 close 与 regular 入表）。"""
         mapping: Dict[str, str] = {}
         for sender in senders:
             if _forgetting(sender) or sender.familiarity_tier not in ("close", "regular"):
@@ -995,7 +995,7 @@ class MemoryCueProvider:
                 break
 
     async def _familiar_viewer_cards(self, senders: Sequence[_Sender], replied: Set[int], state: _Round) -> None:
-        """熟客开口：本场尚未回应过的熟客若名下有已批准近况或共同造梗归属，推一张熟客卡（记录不带昵称）。"""
+        """老观众开口：本场尚未回应过的老观众若名下有已批准近况或共同造梗归属，推一张老观众卡（记录不带昵称）。"""
         if self._viewers is None:
             return
         notes_fn = getattr(self._viewers, "approved_viewer_notes", None)
@@ -1019,13 +1019,13 @@ class MemoryCueProvider:
                 try:
                     notes = await notes_fn(viewer_ids=cluster_ids, limit=_MAX_NOTES_PER_FAMILIAR_VIEWER)
                 except Exception as exc:  # noqa: BLE001 - 读取失败只少这一部分，不挡其余线索
-                    logger.warning(f"读熟客近况失败（跳过该部分）: {exc}", exc=exc)
+                    logger.warning(f"读老观众近况失败（跳过该部分）: {exc}", exc=exc)
             authored = []
             if callable(authored_fn):
                 try:
                     authored = await authored_fn(viewer_ids=cluster_ids, limit=_MAX_AUTHORED_PER_FAMILIAR_VIEWER)
                 except Exception as exc:  # noqa: BLE001 - 读取失败只少这一部分，不挡其余线索
-                    logger.warning(f"读熟客共同造梗归属失败（跳过该部分）: {exc}", exc=exc)
+                    logger.warning(f"读老观众共同造梗归属失败（跳过该部分）: {exc}", exc=exc)
             if not notes and not authored:
                 continue
             text = render_familiar_viewer_card(
@@ -1559,7 +1559,7 @@ class MemoryCueProvider:
             active_cluster_ids.update(cluster_ids)
             if sender.user_name:
                 active_names_lower.add(sender.user_name.strip().lower())
-            # 只跳过这一批拿了对 ta 本人承诺卡或熟客卡的观众；别人拿卡不压 ta 这一行
+            # 只跳过这一批拿了对 ta 本人承诺卡或老观众卡的观众；别人拿卡不压 ta 这一行
             if carded_viewers.intersection(cluster_ids):
                 continue
             if sender.earlier_sessions is not None:

@@ -1,4 +1,4 @@
-"""Planner - 主播 Agent 决策核心（ReAct 循环）
+"""Planner - 主播 Agent 规划器（ReAct 循环）
 
 职责（Agent 内部件，**不是工具**）：
 - 决策主体：每个决策窗内跑一次有界 ReAct 循环——查信息（registry 工具）
@@ -14,7 +14,7 @@
    在回复指引里定下她对这件事的态度；措辞风格 ``$style_constraints`` 仍只注入 Replyer。
    身份仍是房管：交接稿的事实部分保持客观可核对，态度与语气只写在回复指引里。
 3. **高质量模型**：Planner profile 默认 ``planner``（StreamerAgent 装配期硬编码
-   传入 `_PROFILE_PLANNER`）——ReAct 决策核心做工具编排与表达意图构思，
+   传入 `_PROFILE_PLANNER`）——ReAct 规划器做工具编排与表达意图构思，
    质量敏感（乱调工具/意图偏差的代价高于延迟）。
 4. **工具列表**：全局 ToolRegistry 动态拉取 + reply 局部工具 function 定义；
    过滤 provider=="streamer" 的 spec（Agent 内部协议防重入）。
@@ -292,7 +292,7 @@ class RoundContext:
     # 本窗开窗时刻（毫秒）与是否已因嘴带来的新事实推翻退回过一次（每窗最多退一次重想）
     started_ms: int = 0
     mouth_bounced: bool = False
-    # 本窗非遗忘熟客弹幕 message_id → 熟悉度档位，随 reply 调用单交回复器
+    # 本窗非遗忘老观众弹幕 message_id → 熟悉度档位，随 reply 调用单交回复器
     familiarity_by_msg_id: Dict[str, str] = field(default_factory=dict)
     # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
     game_players: Tuple[Tuple[str, str], ...] = ()
@@ -358,7 +358,7 @@ class PlannerEnv:
     recent_speeches_provider: Optional[Callable[[], Sequence[str]]] = None
     # 出声前与嘴对账（候选台词, 起始时刻 -> 裁决）：本轮开窗后嘴说过话或命中已欢迎名单时做核对
     mouth_reconciler: Optional[Callable[[str, int], Awaitable[ReconcileVerdict]]] = None
-    # 对账判定矛盾作废、需要退回 Planner 重想一步时，拉取本窗开窗后的最新现场快照（嘴说的话、新游戏事件、一句话现场）
+    # 对账判定矛盾作废、需要退回 Planner 重想一步时，拉取本窗开窗后的最新现场卡（嘴说的话、新游戏事件、一句话现场）
     fresh_context_since: Optional[Callable[[int], Awaitable[Dict[str, Any]]]] = None
     # 可注入时钟（缺省为真实毫秒时钟）
     clock: Callable[[], int] = now_ms
@@ -479,7 +479,7 @@ def _missing_game_chat_error(player_name: str) -> str:
 
 
 class Planner:
-    """主播 Agent 决策核心：ReAct 循环（查→想→说）。
+    """主播 Agent 规划器：ReAct 循环（查→想→说）。
 
     非线程安全；仅在 StreamerAgent 的单一 asyncio 事件循环内使用。
     通过 ``plan()`` 方法驱动，**不订阅 EventBus**——它是 Agent 内部子组件。
@@ -1480,14 +1480,14 @@ class Planner:
                 "保持沉默完全合适，不必硬聊或反复展开静态背景设定。"
             )
         elif proactive:
-            # 主动窗按当前实际装配说明触发来源与可选行动：没接委派游戏时不提派单与游戏工作日志，
+            # 主动窗按当前实际装配说明触发来源与可选行动：没接委派游戏时不提委派与游戏工作日志，
             # 纯杂谈场不会对着空气找游戏工具
             has_game_activity = self._has_any_game() or bool(
                 game_events or fresh_game_chat or private_game_chat or ctx.player_notes
             )
             sources = "定时、环节推进或游戏里有新动静" if has_game_activity else "定时或环节推进"
             delegate_actions = (
-                "安排游戏里的活（framework_delegate 派单、framework_prompt 补要求、"
+                "安排游戏里的活（framework_delegate 委派、framework_prompt 补要求、"
                 "framework_task_settle 结单/搁下/撤单）、查游戏那边的工作日志、"
                 if self._has_delegable_game()
                 else ""
@@ -1905,7 +1905,7 @@ class Planner:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出并进 outcome 并返回 (观察, 更新后 outcome, replied=True)。
 
         统一调用路径：reply 与其他工具一样经 ``registry.invoke``（观测/停用/
-        熔断复用既有机制，tool.result 事件照发）。本窗交接材料（thinking 回调/
+        熔断复用既有机制，tool.result 事件照发）。本窗交接稿（thinking 回调/
         弹幕批/游戏聊天/状态事实块/她刚说过的台词）打包进 ``ReplyRoundAttachment``、
         随 ``ToolInvocation.attachment`` 传入——材料生命周期 = 调用生命周期，
         调用即弃，无跨轮残留。

@@ -211,7 +211,7 @@ class EventRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_session_game_events(self, *, live_session_id: int, limit: int = 60) -> List[GameEventRecord]:
-        """取指定场次的游戏事件（时间正序，最多 ``limit`` 条最近的）——场次回顾的游戏进展原料；不含地点动静与委派账。"""
+        """取指定场次的游戏事件（时间正序，最多 ``limit`` 条最近的）——场次档案的游戏进展原料；不含地点动静与委派账。"""
         page_limit = max(1, min(int(limit), 500))
 
         def _exec() -> List[GameEventRecord]:

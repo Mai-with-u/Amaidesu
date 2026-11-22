@@ -402,7 +402,7 @@ async def test_agent_injects_wrapup_for_at_most_two_windows_or_until_first_deleg
             timestamp_ms=_NOW + 11_000,
             initiator=PLANNER_CALL_SOURCE,
         )
-        agent.receive_prompt(content="派单后第二窗", source="test")
+        agent.receive_prompt(content="委派后第二窗", source="test")
         await wait_until(lambda: len(_planner_refs()) >= 2, what="新场第2窗决策完成")
         next_refs = _planner_refs()
         assert "【上次收尾】" in next_refs[0]

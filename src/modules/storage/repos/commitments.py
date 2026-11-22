@@ -1,4 +1,4 @@
-"""CommitmentRepo —— 承诺账本仓储（commitments）。
+"""CommitmentRepo —— 承诺表仓储（commitments）。
 
 承诺 = 她当众答应过、还没了结的事。行由三条路径写入：
 

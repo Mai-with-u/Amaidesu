@@ -51,7 +51,7 @@ class DecisionPlan(BaseModel):
 
 @dataclass(slots=True)
 class ReplyRoundAttachment(ToolCallAttachment):
-    """reply 调用的本窗交接材料（``ToolCallAttachment`` 的 streamer 域子类）。
+    """reply 调用的本窗交接稿（``ToolCallAttachment`` 的 streamer 域子类）。
 
     Planner（宿主代码）在每次 reply 调用前构造、随 ``ToolInvocation.attachment``
     传入 reply 工具；生命周期 = 单次调用，不经 LLM、模型不可伪造。
@@ -87,7 +87,7 @@ class ReplyRoundAttachment(ToolCallAttachment):
     reply_to: str = ""
     #: 本轮说话档位（"play" 边玩边说 / "talk" 杂谈唠嗑），由宿主按环节与游戏态势判定
     speech_mode: str = "play"
-    #: 本轮观众弹幕 message_id → 熟悉度档位（"close" / "regular"），供回复器对熟客放轻松语气
+    #: 本轮观众弹幕 message_id → 熟悉度档位（"close" / "regular"），供回复器对老观众放轻松语气
     familiarity_by_message_id: Dict[str, str] = field(default_factory=dict)
 
 

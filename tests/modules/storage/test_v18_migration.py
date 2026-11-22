@@ -30,7 +30,7 @@ def _make_v17() -> sqlite3.Connection:
         (3, "bilibili", OPEN_ID, "开放用户", 1, 500),
         (4, "", "bili_路人甲", "路人甲", 1, 400),  # 昵称兜底身份，没有真实 ID
         (5, "console", "console_user", "控制台", 3, 600),
-        (6, "bilibili", "sim_veteran_01", "模拟老粉", 2, 700),
+        (6, "bilibili", "sim_veteran_01", "模拟老观众", 2, 700),
     ]
     conn.executemany(
         "INSERT INTO viewers(id, platform, user_id, user_name, message_count, last_active_ms) VALUES (?,?,?,?,?,?)",
@@ -42,7 +42,7 @@ def _make_v17() -> sqlite3.Connection:
         ("", "viewer", "1001", "老王", 2_000, 0),
         ("bilibili", "viewer", OPEN_ID, "开放用户", 500, 0),
         ("", "viewer", "bili_路人甲", "路人甲", 400, 0),
-        ("bilibili", "viewer", "sim_veteran_01", "模拟老粉", 700, 1),
+        ("bilibili", "viewer", "sim_veteran_01", "模拟老观众", 700, 1),
         ("bilibili", "assistant", None, "主播", 800, 0),
     ]
     conn.executemany(

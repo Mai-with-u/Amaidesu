@@ -3,7 +3,7 @@
 
 本模块是全部 SQLite 表的**单一事实源**：26 张业务表（12 张核心直播表 +
 2 张模拟器运行时表 + 5 张流程单域表 + 1 张 LLM 请求历史表 +
-1 张游戏生物名册表 + 1 张不记录名单表 + 2 张记忆账本表 +
+1 张游戏生物名册表 + 1 张不记录名单表 + 2 张承诺表 +
 1 张游戏社交事实表）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
@@ -137,7 +137,7 @@ def build_schema_sql() -> str:
         # forget_list —— 不记录名单
         + _FORGET_LIST_SQL
         + "\n"
-        # commitments —— 承诺账本（她当众答应过、还没了结的事）
+        # commitments —— 承诺表（她当众答应过、还没了结的事）
         + _COMMITMENTS_SQL
         + "\n"
         # archive_lines —— 场次档案（每场几行，供下次开播回想上一场）
@@ -490,7 +490,7 @@ CREATE TABLE IF NOT EXISTS forget_list (
 """.strip()
 
 
-# --- commitments —— 承诺账本 ---
+# --- commitments —— 承诺表 ---
 # 她当众答应过、还没了结的事：每个正式场下播后由整理找新的、了结旧的。
 # quote 是她播出原句的逐字片段（整理时对着台词行校验子串），台账因此自带证据，
 # 不依赖台词行还在不在；evidence_chat_id 指向那句台词的 live_chat 行，原话所在
@@ -924,14 +924,14 @@ END;
 # --- viewer_candidates —— 观众候选 ---
 # 下播整理列出的、要人批准才生效的三类事：viewer_defined 是观众定下、她当场接受却没复述的名字、设定、
 # 梗（标题不写昵称）；claimed_missing 是她说"上次答应过""欠着的"、承诺账上却找不到的事；viewer_self 是
-# 熟客主动说起并被她当场接住的持续性日常或喜好（标题以"ta "开头，批准后仍留在本表，仅在该熟客场内发言时
-# 经 viewer_id 读取进熟客线索卡，不进档案与承诺）。批准前对她完全不可见：简报、回想、检索索引不读这张表。
+# 老观众主动说起并被她当场接住的持续性日常或喜好（标题以"ta "开头，批准后仍留在本表，仅在该老观众场内发言时
+# 经 viewer_id 读取进老观众线索卡，不进档案与承诺）。批准前对她完全不可见：简报、回想、检索索引不读这张表。
 # 每条挂在两条台词记录上：观众那条弹幕（viewer_chat_id；她说欠着的一类只在她是回应某条弹幕时才有）
 # 与她那句回应（reply_chat_id），并经 viewer_id 关联观众行，三处均按外键级联——删观众、忘了我、按句删
 # 弹幕或台词、删场次时候选随之删除（viewer_id 列的索引由 v47 迁移建）。status 是 pending 待审 /
 # approved 已批 / rejected 已驳回（驳回的留着，同一条以后不再列）；前两类批准后生成的档案行或承诺记在
 # archive_line_id / commitment_id，那一行再被删时置空。待审的按时间过期。
-# word 是观众定下的名字/梗词或熟客近况关键词（整理时核对过在标题与那条弹幕原文里都原样出现；她说欠着的一类为空）：
+# word 是观众定下的名字/梗词或老观众近况关键词（整理时核对过在标题与那条弹幕原文里都原样出现；她说欠着的一类为空）：
 # 观众定下的候选批准成档案行渲染时，她那句回应里和它相同的那一段不遮成"那位观众"。
 
 _VIEWER_CANDIDATES_SQL = """
@@ -1041,7 +1041,7 @@ CREATE INDEX IF NOT EXISTS idx_viewer_player_links_player ON viewer_player_links
 
 
 # --- game_social_facts —— 游戏社交事实 ---
-# 一行 = 一条"当前游戏环境里人与人怎么相处"的可核对事实，与承诺账本同构：行级状态、证据可核、
+# 一行 = 一条"当前游戏环境里人与人怎么相处"的可核对事实，与承诺表同构：行级状态、证据可核、
 # 人工锁。六类：setting 环境形态 / members 成员关系 / sharing 共享惯例 / works 进行中的事 /
 # her_role 她的角色 / open_question 待弄清。
 # 依据行按消息号查回：模型填它看得见的消息号（弹幕 live_chat.message_id；公屏 game_chat.message_id，

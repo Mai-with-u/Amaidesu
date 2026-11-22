@@ -72,7 +72,7 @@ def _config(db_path: Path, agents: Dict[str, Any]) -> Dict[str, Any]:
 
 @pytest.mark.parametrize("agents", [{"enabled": []}, {}], ids=["agents_section", "no_agents_section"])
 async def test_dashboard_receives_viewer_repos(tmp_path: Path, agents: Dict[str, Any]) -> None:
-    """组合根把观众域、身份处理与记忆账本仓储原样交给 Dashboard（页面读面与写面共用同一批仓储）。"""
+    """组合根把观众域、身份处理与承诺表仓储原样交给 Dashboard（页面读面与写面共用同一批仓储）。"""
     config_service = ConfigService(base_dir=str(tmp_path))
     config_service._main_config = _config(tmp_path / "wiring.db", agents)  # 绕开真实 TOML 加载
     config_service._initialized = True

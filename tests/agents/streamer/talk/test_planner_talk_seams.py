@@ -151,7 +151,7 @@ def test_framework_delegation_tools_hidden_from_planner_when_no_game_agent_enabl
 
 
 async def test_no_game_stage_mode_keeps_avatar_guide_and_cleans_proactive_reference(prompts: Any) -> None:
-    """只挂舞台形象不挂游戏时：系统提示词仍带舞台杂谈模式说明与形象说明，主动窗不提派单与游戏日志。"""
+    """只挂舞台形象不挂游戏时：系统提示词仍带舞台杂谈模式说明与形象说明，主动窗不提委派与游戏日志。"""
     mgr = AgentManager()
     mgr.register(_StreamerStubAgent())
     reg = ToolRegistry()

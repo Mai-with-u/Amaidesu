@@ -1056,7 +1056,7 @@ class ChatRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_session_guards(self, *, live_session_id: int, limit: int = 100) -> List[GuardRecord]:
-        """取指定场次的上舰明细行（时间正序），场次回顾的付费原料。"""
+        """取指定场次的上舰明细行（时间正序），场次档案的付费原料。"""
         page_limit = max(1, min(int(limit), 500))
 
         def _exec() -> List[GuardRecord]:

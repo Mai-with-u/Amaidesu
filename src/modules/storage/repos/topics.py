@@ -71,7 +71,7 @@ class TopicRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_session_summaries(self, *, live_session_id: int, limit: int = 120) -> List[TimelineSummaryEntry]:
-        """取指定场次的话题摘要轨迹（时间正序，最多 ``limit`` 条最近的）——场次回顾的话题原料。"""
+        """取指定场次的话题摘要轨迹（时间正序，最多 ``limit`` 条最近的）——场次档案的话题原料。"""
         page_limit = max(1, min(int(limit), 1000))
 
         def _exec() -> List[TimelineSummaryEntry]:

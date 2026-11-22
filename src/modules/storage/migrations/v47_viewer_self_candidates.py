@@ -1,8 +1,8 @@
-"""v46 → v47：观众候选补 ``viewer_id`` 外键列与熟客近况查询索引。
+"""v46 → v47：观众候选补 ``viewer_id`` 外键列与老观众近况查询索引。
 
 ``viewer_candidates`` 新增 ``viewer_id``（引用 ``viewers(id) ON DELETE CASCADE``）：
-- 下播整理列出的熟客近况候选（``kind = 'viewer_self'``）批准后原地留在 ``viewer_candidates``，
-  场内按 ``(viewer_id, kind, status)`` 查询已批准近况生成熟客卡，不写进全局档案与承诺；
+- 下播整理列出的老观众近况候选（``kind = 'viewer_self'``）批准后原地留在 ``viewer_candidates``，
+  场内按 ``(viewer_id, kind, status)`` 查询已批准近况生成老观众卡，不写进全局档案与承诺；
 - 存量候选若挂着观众弹幕（``viewer_chat_id``），顺带从 ``live_chat.viewer_id`` 回填；
 - 观众行被删除或执行"忘了我"时，挂在该观众上的候选随外键级联一并清除。
 

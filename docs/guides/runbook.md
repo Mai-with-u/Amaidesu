@@ -112,7 +112,7 @@ Ctrl+C 走优雅关停：采集器 → Agent → Dashboard → 场次结账（�
 对账与评测用；只读查询，不改库。先 `uv run python -c "import sqlite3;..."` 或任意只读 SQLite 工具连 `data/amaidesu.db`。
 
 ```sql
--- 承诺账本：状态分布与总数
+-- 承诺表：状态分布与总数
 SELECT status, COUNT(*) FROM commitments GROUP BY status;
 
 -- 每场新登记的承诺与判误记条数（人工判误记占比的分子分母）

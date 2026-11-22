@@ -384,7 +384,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 3. `make_provider_from_specs` 组装 Provider，装配处一行
    `registry.register_provider(provider, visible_to=...)` 注册
 
-样板：`src/agents/streamer/memory/recall.py`（主播记忆工具——无连接、无状态，按键读账本、档案与台词）。
+样板：`src/agents/streamer/memory/recall.py`（主播回想工具——无连接、无状态，按键读账本、档案与台词）。
 
 **升级为手写 Provider 类的判据**（出现任一条才升级）：需要连接重连
 （覆写 `connect`/`health_check`）/ 共享状态 / 动态工具表 / 任务适配器
@@ -394,7 +394,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 
 ### 最小骨架代码（正典路径）
 
-参考样板：`src/agents/streamer/memory/recall.py`（主播记忆工具——无连接、无状态，按键读账本、档案与台词）。
+参考样板：`src/agents/streamer/memory/recall.py`（主播回想工具——无连接、无状态，按键读账本、档案与台词）。
 
 ```python
 # my_tool.py —— 简单工具正典路径样板
@@ -613,7 +613,7 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 
 典型用例：
 
-- **业务 Agent**（如 `streamer`）——主播决策核心
+- **业务 Agent**（如 `streamer`）——主播规划器
 - **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作。与主播的交互分两种形态：委派型（主播交代目标，覆写 `receive_delegation`）与遥控型（主播直接调它的工具，不接委派）；形态由它的工具面说明（`guide_for`）告诉主播，见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
 - **自定义 Agent**（如 `custom`）——任何不归属业务/游戏的特殊决策体
 

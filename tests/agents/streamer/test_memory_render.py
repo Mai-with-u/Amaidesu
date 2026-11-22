@@ -796,7 +796,7 @@ def test_zatsudan_mode_expands_cross_save_highlights_with_save_names_and_used_ma
 
 
 def test_presence_line_and_familiar_viewer_card_include_tier_former_names_and_zero_raw_numbers() -> None:
-    """老观众在场行与熟客卡：区分常来老熟人与眼熟老观众、附曾用名与近况/共创梗，绝不透出场次数或日期数字。"""
+    """老观众在场行与老观众卡：区分常来老熟人与眼熟老观众、附曾用名与近况/共创梗，绝不透出场次数或日期数字。"""
     presence = render_presence_line(
         [
             ("阿杰", _NOW - 60_000, "close", ("阿杰在摸鱼",)),
@@ -818,7 +818,7 @@ def test_presence_line_and_familiar_viewer_card_include_tier_former_names_and_ze
         self_notes=("ta 周末常去夜跑",),
         authored_titles=("水獭取名圆圆",),
     )
-    assert card.startswith("[熟客·阿杰] 阿杰（以前叫「阿杰在摸鱼」）是常来的老熟人。")
+    assert card.startswith("[老观众·阿杰] 阿杰（以前叫「阿杰在摸鱼」）是常来的老熟人。")
     assert "ta 跟你说过：ta 周末常去夜跑。" in card
     assert "当初「水獭取名圆圆」就是和 ta 一起定的。" in card
     assert "只在话题沾边时顺嘴聊起" in card

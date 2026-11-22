@@ -1,6 +1,6 @@
 """主播 Agent 的记忆接线：账本仓储接上时才注册回想工具，开播拼常驻简报，点名用上即停推。
 
-旧的场次回顾 / 长期记忆 / 观众画像已停写停注入，这里只测账本这条线。点名链路的用例用真实的
+旧的场次档案 / 长期记忆 / 观众画像已停写停注入，这里只测账本这条线。点名链路的用例用真实的
 场次管理器、场次盖章拦截器、记账器与 SQLite 临时库串起来，等待落库用共享等待助手，不用
 ``EventBus.wait_until_drained``（原因见道别窗用例的模块说明）。
 """
@@ -123,7 +123,7 @@ def _build_agent(
 
 
 async def test_agent_registers_memory_recall_and_retired_tools_stay_gone(store: SQLiteDatabase) -> None:
-    """阶段 3b 起只有一个记忆工具 memory_recall；旧的三个工具不再注册。"""
+    """阶段 3b 起只有一个回想工具 memory_recall；旧的三个工具不再注册。"""
     registry = ToolRegistry()
     agent = _build_agent(store, FakeLLMManager(), tool_registry=registry)
     agent._register_tools()

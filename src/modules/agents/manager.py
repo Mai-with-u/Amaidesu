@@ -59,7 +59,7 @@ class AgentManager:
         social_fact_repo: 游戏社交事实仓储（主播的社交事实工具、参考段与回想；动态启用时同样回退到它）
         creature_repo: 构造时注入的默认生物名册仓储（Minecraft Agent 跨场次记得同伴）
         work_docs_repo: 构造时注入的默认游戏工作文档仓储（Minecraft Agent 跨重启按存档保留笔记与待办）
-        privacy_service: 删除/遮蔽服务（回忆工具与线索推送按它遮名、核对遗忘命令）
+        privacy_service: 删除/遮蔽服务（回想工具与线索推送按它遮名、核对遗忘命令）
     """
 
     def __init__(

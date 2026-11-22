@@ -455,7 +455,7 @@ async def create_app_components(
     # CoreService 构造走内置默认。
 
     # --- 启动期不进行任何上下文重新写入（每次启动 = 干净测试环境）---
-    # 跨场次记忆由主播 Agent 的场次回顾 / 观众画像承载，不在组合根做 live_chat 重新写入。
+    # 跨场次记忆由主播 Agent 的场次档案 / 观众画像承载，不在组合根做 live_chat 重新写入。
     # 无显式场次期间消息仅在内存流转，落库路径依据 0 值跳过。
 
     register_event_interceptors(event_bus, config, session_manager=session_manager)
@@ -611,7 +611,7 @@ async def create_app_components(
             sessions_repo=database.sessions,
             topic_repo=database.topics,
             viewer_repo=database.viewers,
-            # 记忆账本两仓储（承诺与场次档案）：下播整理写入，WebUI 查看与纠错
+            # 承诺表两仓储（承诺与场次档案）：下播整理写入，WebUI 查看与纠错
             commitments_repo=database.commitments,
             archive_repo=database.archive,
             # 记忆检索索引：主播的索引任务后台补算；嵌入没配时只补全文
@@ -773,7 +773,7 @@ async def create_app_components(
                 sessions_repo=database.sessions,
                 topic_repo=database.topics,
                 viewer_repo=database.viewers,
-                # 记忆账本两仓储 + 游戏事件查询（场次档案的游戏进展原料）
+                # 承诺表两仓储 + 游戏事件查询（场次档案的游戏进展原料）
                 commitments_repo=database.commitments,
                 archive_repo=database.archive,
                 memory_index_repo=database.memory_index,
@@ -1009,7 +1009,7 @@ async def create_app_components(
             # 直播切片编排（WebUI 切片页业务面）
             clipping_service=clipping_service,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
-            # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看与纠错）
+            # 承诺表：承诺与场次档案（下播整理写入；WebUI 查看与纠错）
             commitments_repo=database.commitments,
             archive_repo=database.archive,
             # 复盘页「本场线索卡」：被动想起推了什么、用上没有
@@ -1487,7 +1487,7 @@ async def _start_dashboard(
             privacy_service=privacy_service,
             # 场次复盘面：game_events 计数仓储与 db 快照路径（/api/v1/review*）
             event_repo=event_repo,
-            # 记忆账本：承诺与场次档案的查看、纠错与整理状态
+            # 承诺表：承诺与场次档案的查看、纠错与整理状态
             commitments_repo=commitments_repo,
             archive_repo=archive_repo,
             memory_cue_log_repo=memory_cue_log_repo,

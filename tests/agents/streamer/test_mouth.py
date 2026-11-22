@@ -382,7 +382,7 @@ async def test_accidental_death_triggers_both_mouth_and_planner_while_chosen_sui
 
 
 async def test_routine_hurt_and_sky_stay_silent_while_rare_sighting_reacts_and_wakes_planner() -> None:
-    """摔伤、挨打、天色、装备坏只留进即时反应的近期背景不叫唤；视野撞见稀有矿或强敌时即时反应惊呼并同步唤醒 Planner 派单。"""
+    """摔伤、挨打、天色、装备坏只留进即时反应的近期背景不叫唤；视野撞见稀有矿或强敌时即时反应惊呼并同步唤醒 Planner 委派。"""
     mouth = MagicMock()
     reactions: List[tuple] = []
     mouth.react.side_effect = lambda key, text, **kw: reactions.append((key, text, kw))

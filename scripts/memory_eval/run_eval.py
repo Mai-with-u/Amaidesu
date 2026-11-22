@@ -409,7 +409,7 @@ class _SessionsRepoStub(_UnusedRepo):
         return [], []
 
     async def decided_viewer_self_keys(self) -> tuple[dict[int, list[str]], list[int]]:
-        # 用例里没有熟客近况的已批或已驳回记录
+        # 用例里没有老观众近况的已批或已驳回记录
         return {}, []
 
 

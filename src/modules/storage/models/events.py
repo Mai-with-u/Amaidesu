@@ -2,7 +2,7 @@
 
 ``game_events`` 一行 = 一条游戏里程碑/安全阀/异常记录（StorageLedger 从
 ``game.*`` 事件落库）。本文件是该表读取结果的持久化契约，被主播 Agent
-（场次回顾的游戏进展原料）与 Dashboard 复盘聚合（按类型计数与明细列表）
+（场次档案的游戏进展原料）与 Dashboard 复盘聚合（按类型计数与明细列表）
 共同消费。
 
 ``GameEventTypeCount`` 是聚合行（GROUP BY 派生，非表行）。

@@ -108,7 +108,7 @@ class InfraRootConfig(BaseConfig):
     maibot_sync: MaiBotSyncConfigSchema = Field(
         default_factory=MaiBotSyncConfigSchema,
         title="MaiBot 近况同步",
-        description="把开播、换环节、收播与场次回顾推给 MaiBot 适配器插件（MaiBot-Amaidesu-Adapter）",
+        description="把开播、换环节、收播与场次档案推给 MaiBot 适配器插件（MaiBot-Amaidesu-Adapter）",
     )
 
 

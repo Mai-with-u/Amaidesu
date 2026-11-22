@@ -51,7 +51,7 @@ __all__ = [
 
 # 一场至多列几条观众定下类候选（只是候选，宁缺毋滥）
 MAX_VIEWER_CANDIDATES = 5
-# 一场至多列几条熟客近况候选
+# 一场至多列几条老观众近况候选
 MAX_VIEWER_SELF_CANDIDATES = 3
 # 一场至多列几条"她说欠着的"
 MAX_CLAIMED_MISSING = 3
@@ -62,7 +62,7 @@ _QUOTE_CHARS = 80
 # 观众定下的那个名字或梗词：两个字以上（单字太容易碰巧出现在弹幕里）、不超过 16 字
 _WORD_MIN_CHARS = 2
 _WORD_CHARS = 16
-_VIEWER_CODE = re.compile(r"(?:熟客)?观众\s*\d+")
+_VIEWER_CODE = re.compile(r"(?:老观众|观众)\s*\d+")
 _PLAYER_CODE = re.compile(r"玩家\s*\d+")
 # 观众个人信息的模式：手机号或长串数字、年龄、住址、学校、工作单位、就医病历、联系方式
 _PERSONAL = re.compile(
@@ -160,11 +160,11 @@ def validate_viewer_candidates(
     decided_self_titles: Optional[Mapping[int, Iterable[str]]] = None,
     rejected_self_chats: Iterable[int] = (),
 ) -> CandidateCheck:
-    """把模型列的 ``viewer_candidates``（观众定下的 ``viewer_defined`` 与熟客近况 ``viewer_self``）逐条核成待审候选。
+    """把模型列的 ``viewer_candidates``（观众定下的 ``viewer_defined`` 与老观众近况 ``viewer_self``）逐条核成待审候选。
 
     ``taken_evidence`` / ``taken_titles`` 是本场新写与上一份档案里的行（作证据的台词、标题）；
-    ``rejected_*`` 是驳回过的观众定下类候选挂的弹幕与标题；``familiar_viewer_ids`` 是代码认定的本场熟客主键集合，
-    非熟客行上报的 ``viewer_self`` 一律硬门禁拦截记入 ``missed``。
+    ``rejected_*`` 是驳回过的观众定下类候选挂的弹幕与标题；``familiar_viewer_ids`` 是代码认定的本场老观众主键集合，
+    非老观众行上报的 ``viewer_self`` 一律硬门禁拦截记入 ``missed``。
     """
     check = CandidateCheck()
     seen_by_kind: Set[Tuple[str, int]] = {("viewer_defined", int(item)) for item in taken_evidence}
@@ -212,7 +212,7 @@ def validate_viewer_candidates(
                         kind="candidate",
                         what=title,
                         quote=quote,
-                        reason="熟客近况：引用的不是她回复真实观众弹幕的那一行",
+                        reason="老观众近况：引用的不是她回复真实观众弹幕的那一行",
                     )
                 )
             if line.reply_viewer_id is None or int(line.reply_viewer_id) not in familiar_set:
@@ -221,7 +221,7 @@ def validate_viewer_candidates(
                         kind="candidate",
                         what=title,
                         quote=quote,
-                        reason="熟客近况只认标注了熟客观众的那一行，普通观众弹幕不列入",
+                        reason="老观众近况只认标注了老观众的那一行，普通观众弹幕不列入",
                     )
                 )
             viewer_quote = verbatim_quote(raw.get("viewer_quote"), line.reply_content, _QUOTE_CHARS)
@@ -232,7 +232,7 @@ def validate_viewer_candidates(
                         kind="candidate",
                         what=title,
                         quote=quote,
-                        reason=f"熟客近况：没有标题，或弹幕与她那句的原话不是第 {raw.get('line')} 行的逐字片段",
+                        reason=f"老观众近况：没有标题，或弹幕与她那句的原话不是第 {raw.get('line')} 行的逐字片段",
                     )
                 )
             if not _word_from_speaker(word, title, line.reply_content):
@@ -242,9 +242,9 @@ def validate_viewer_candidates(
                         what=title,
                         quote=quote,
                         reason=(
-                            f"熟客近况：关键词「{word}」不在标题里，或不在第 {raw.get('line')} 行回复的那条弹幕原文里"
+                            f"老观众近况：关键词「{word}」不在标题里，或不在第 {raw.get('line')} 行回复的那条弹幕原文里"
                             if word
-                            else "熟客近况：没写弹幕里的近况或喜好关键词"
+                            else "老观众近况：没写弹幕里的近况或喜好关键词"
                         ),
                     )
                 )

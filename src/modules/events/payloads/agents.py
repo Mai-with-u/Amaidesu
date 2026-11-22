@@ -95,7 +95,7 @@ class LeadHandoverBrief(BaseModel):
     segment_goal: str = Field(default="", description="环节目标")
     expected_ms: int = Field(default=0, description="环节预期时长（毫秒）")
     save_name: str = Field(default="", description="存档名")
-    memory_brief: str = Field(default="", description="记忆简报")
+    memory_brief: str = Field(default="", description="常驻简报")
     operator_notes: List[str] = Field(default_factory=list, description="运营备忘条目")
     recent_speech: List[str] = Field(default_factory=list, description="最近台词条目")
 

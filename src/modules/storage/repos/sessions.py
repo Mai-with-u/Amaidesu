@@ -498,7 +498,7 @@ class SessionRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def decided_viewer_self_keys(self) -> Tuple[Dict[int, List[str]], List[int]]:
-        """整理去重用：每位熟客已批、已驳回的近况标题，以及驳回过的那条弹幕编号。"""
+        """整理去重用：每位老观众已批、已驳回的近况标题，以及驳回过的那条弹幕编号。"""
 
         def _exec() -> Tuple[Dict[int, List[str]], List[int]]:
             titles: Dict[int, List[str]] = {}

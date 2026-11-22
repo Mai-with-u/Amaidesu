@@ -192,7 +192,7 @@ class DashboardServer:
         # 未注入时相应分节/打包项按缺数据降级
         self.event_repo = event_repo
         self.storage_db_path = storage_db_path
-        # 注入承诺账本与场次档案仓储让 /api/v1/memory/commitments|archive 查看与纠错；
+        # 注入承诺表与场次档案仓储让 /api/v1/memory/commitments|archive 查看与纠错；
         # 未注入（极简启动/测试）时这些端点返回 503
         self.commitments_repo = commitments_repo
         self.archive_repo = archive_repo

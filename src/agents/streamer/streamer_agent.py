@@ -1,6 +1,6 @@
 """StreamerAgent - 主播 Agent（BaseAgent 子类）
 
-主播 Agent = Planner（决策核心）+ reply 工具（入口）+ Replyer（回复器），一体。
+主播 Agent = Planner（规划器）+ reply 工具（入口）+ Replyer（回复器），一体。
 协议六项（最小契约）：
 - 生命周期：start/stop/cleanup + 可重建性
 - 工具提供：list_tools() → 暴露 reply（streamer_reply）；rundown_control 由 rundown 注册项声明
@@ -380,7 +380,7 @@ class StreamerAgent(BaseAgent):
                 工具、参考段常驻【游戏社交事实】、回想工具多查这一类；缺失时三处都没有。
             memory_cue_log_repo: 可选 ``MemoryCueLogRepo``（线索卡记录）——被动想起每推一张卡记一行，
                 复盘面板读；None 时只记日志
-            event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
+            event_repo: 可选 ``EventRepo``（游戏事件）——场次档案的游戏进展原料；
                 None 时回顾少这一类原料
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关；None 时 Planner 走内置默认）
@@ -421,7 +421,7 @@ class StreamerAgent(BaseAgent):
                 Agent 托管：等道别轮落库、队尾台词播完、本场整理跑完，再由本 Agent
                 调它执行到期清理与清空遮名。``None`` 时记账器按自己的时机清理，
                 行为与注入前一致。
-            planner: 可选 ``Planner`` 替身（决策核心）。``None`` 时按配置内建；
+            planner: 可选 ``Planner`` 替身（规划器）。``None`` 时按配置内建；
                 注入时决策轮执行器与 Agent 共用同一实例（测试替 LLM/规划器
                 写测试的注入面，不必穿透内部组装链）。
             round_executor: 可选 ``DecisionRoundExecutor`` 替身（决策执行半）。
@@ -590,7 +590,7 @@ class StreamerAgent(BaseAgent):
         # 单槽跨轮工作便签（进程内内存态，带自然过期与场次清空；只记等待意图与下一步打算）
         self._working_note = WorkingNoteStore(clock=self._clock)
 
-        # Planner（决策核心，Agent 内部件——非工具）；测试可注入替身
+        # Planner（规划器，Agent 内部件——非工具）；测试可注入替身
         if planner is not None:
             self._planner = planner
         else:
@@ -1250,7 +1250,7 @@ class StreamerAgent(BaseAgent):
 
         名单口径（注册处声明）：
         - ``streamer_reply``：LLM 可调的真工具，注册 + 名单 ``["streamer"]``
-          （自己的工具填自己）；Planner 经 registry 统一调用，本窗交接材料
+          （自己的工具填自己）；Planner 经 registry 统一调用，本窗交接稿
           随 ``ToolInvocation.attachment`` 传入（不经实例槽位）。
         - ``rundown_control``：注册（provider="rundown"，可见名单动态计算：
           主播恒可见，游戏主控态并入当前主控游戏 Agent——环节推进归当场主控）
@@ -1290,7 +1290,7 @@ class StreamerAgent(BaseAgent):
             )
             self.register_tool_provider(self._rundown_tool_provider, registry=self._tool_registry)
             registered = "streamer_reply / streamer_note / rundown_control"
-            # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕（唯一的记忆工具）
+            # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕（唯一的回想工具）
             if self._memory_recall is not None:
                 recall_kwargs: Dict[str, Any] = {}
                 # 当回想工具工厂支持扩展可见名单时，动态传入具备自主领航能力的游戏 Agent 查询回调（零硬编码游戏名）
@@ -3097,7 +3097,7 @@ class StreamerAgent(BaseAgent):
         return self._scope.ledger
 
     async def _consume_opening_wrapup(self) -> Optional[Any]:
-        """开播头两窗（且本场尚未受理任何委派）返回上一正式场的【上次收尾】；超出窗口或已派单后收闸。"""
+        """开播头两窗（且本场尚未受理任何委派）返回上一正式场的【上次收尾】；超出窗口或已委派后收闸。"""
         if not self._opening_wrapup_active or self._sessions_repo is None:
             return None
         if self._opening_wrapup_windows >= OPENING_WRAPUP_MAX_WINDOWS:
@@ -4289,7 +4289,7 @@ class StreamerAgent(BaseAgent):
 
         触发条件：游戏侧在 live.started 后置位就绪或 MCP 重连恢复后经 LeadCoordinator 广播；
         若主播自身尚在执行 _on_live_started 初始化则直接返回，由初始化末尾统一调用 _sync_lead_mode，
-        确保交权简报必定包含最新流程单与记忆简报，且全路径严守 live_active/lead_mode/override/in_talk/in_closing 门禁。
+        确保交权简报必定包含最新流程单与常驻简报，且全路径严守 live_active/lead_mode/override/in_talk/in_closing 门禁。
         """
         del agent_name
         if not self._running or not self._lead_hooks_bound or self._live_start_in_progress:
@@ -4493,7 +4493,7 @@ class StreamerAgent(BaseAgent):
                 )
 
     async def _build_lead_handover_context(self, target_agent: str) -> LeadHandoverContext:
-        """构建交给自主领航游戏 Agent 的只读现场简报（复用现有记忆简报与社交事实视图，零游戏名硬编码）。"""
+        """构建交给自主领航游戏 Agent 的只读现场简报（复用现有常驻简报与社交事实视图，零游戏名硬编码）。"""
         segment = self._rundown_coord.current_segment()
         segment_id = segment.id if segment is not None else ""
         segment_title = segment.title if segment is not None else ""
@@ -4505,7 +4505,7 @@ class StreamerAgent(BaseAgent):
         save = self._current_saves.get(target_agent)
         save_name = save.name if save is not None and save.name else ""
 
-        # 复用现有常驻记忆简报（未了结承诺、上一场档案、运营备注）+ 该游戏当前存档的社交事实
+        # 复用现有常驻简报（未了结承诺、上一场档案、运营备注）+ 该游戏当前存档的社交事实
         if not self._memory_brief_text and self._commitments_repo is not None and self._archive_repo is not None:
             await self._refresh_memory_brief()
         brief_parts: List[str] = []

@@ -1,4 +1,4 @@
-"""记忆账本接口的数据契约：承诺、场次档案、整理状态。"""
+"""承诺表接口的数据契约：承诺、场次档案、整理状态。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from src.modules.storage.models.memory import SettleReport
 
 
 class CommitmentItem(BaseModel):
-    """承诺账本的一行：动作标题、她说的原话，以及对谁、挂哪个游戏。"""
+    """承诺表的一行：动作标题、她说的原话，以及对谁、挂哪个游戏。"""
 
     id: int = Field(description="承诺主键")
     what: str = Field(description="动作标题")
@@ -142,13 +142,13 @@ class NearCommitment(BaseModel):
 
 
 class CandidateItem(BaseModel):
-    """观众候选的一行：观众定下的事、她说欠着的事或熟客近况，人批准才生效。"""
+    """观众候选的一行：观众定下的事、她说欠着的事或老观众近况，人批准才生效。"""
 
     id: int = Field(description="候选主键")
     live_session_id: int = Field(description="列出它的场次")
-    kind: str = Field(description="viewer_defined 观众定下的 / claimed_missing 她说欠着的 / viewer_self 熟客近况")
+    kind: str = Field(description="viewer_defined 观众定下的 / claimed_missing 她说欠着的 / viewer_self 老观众近况")
     title: str = Field(description="标题（不写观众昵称）")
-    viewer_name: Optional[str] = Field(default=None, description="熟客近况所属观众当前昵称；其余候选为空")
+    viewer_name: Optional[str] = Field(default=None, description="老观众近况所属观众当前昵称；其余候选为空")
     viewer_quote: str = Field(default="", description="观众那条弹幕里对应的那一段（已知昵称已遮成某位观众）")
     reply_quote: str = Field(description="她那句回应（或说欠着的那句）的逐字片段")
     game: Optional[str] = Field(default=None, description="关于哪个游戏世界的事")

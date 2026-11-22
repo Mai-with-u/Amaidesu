@@ -1,4 +1,4 @@
-"""下播整理：把一场正式直播整理成承诺账本与场次档案。
+"""下播整理：把一场正式直播整理成承诺表与场次档案。
 
 触发与调度
 ----------
@@ -288,7 +288,7 @@ class SettleMaterial:
     corrections_text: str = ""
     # 已知观众昵称（小写，排除本场游戏玩家名且至少 3 字符）：防止模型把念观众昵称误写成给动物/物件起名进标题
     viewer_names_guard: Set[str] = field(default_factory=set)
-    # 本场被她回应过的非模拟熟客观众主键集合：仅这些观众的回复行标"回复熟客观众N"并允许产出熟客近况候选
+    # 本场被她回应过的非模拟老观众主键集合：仅这些观众的回复行标"回复老观众N"并允许产出老观众近况候选
     familiar_viewer_ids: Set[int] = field(default_factory=set)
 
 
@@ -644,7 +644,7 @@ def _clip(text: str, limit: int) -> str:
 
 
 # "对谁"字段的已知取值：对具体观众 / 对全体观众。提示词只要求这两个值，
-# 其余取值（含缺失、空串）一律不登记——认不出是谁就不能写进承诺账本
+# 其余取值（含缺失、空串）一律不登记——认不出是谁就不能写进承诺表
 _TARGET_PERSON = frozenset({"person", "viewer", "观众"})
 _TARGET_EVERYONE = frozenset({"everyone", "all", "全体", "所有人", "大家"})
 _TARGET_PLAYER = frozenset({"player", "玩家"})
@@ -1548,7 +1548,7 @@ class SessionSettler:
             raise SettleError(f"取人批准过的观众来源行失败：{exc}") from exc
 
     async def _load_familiar_viewer_ids(self, session: LiveSession, delivered: Sequence[SettleSpeechLine]) -> Set[int]:
-        """解析本场被她回应过的非模拟观众里属于熟客（close / regular）且未请求遗忘的观众主键集合。"""
+        """解析本场被她回应过的非模拟观众里属于老观众（close / regular）且未请求遗忘的观众主键集合。"""
         if self._viewers is None:
             return set()
         resolver = getattr(self._viewers, "resolve_presence_stats", None)
@@ -1563,7 +1563,7 @@ class SessionSettler:
         for vid in replied_vids:
             try:
                 stats = await resolver(viewer_id=vid, current_session_id=int(session.id))
-            except Exception as exc:  # noqa: BLE001 - 熟客判定失败时按普通观众处理，不挡整理
+            except Exception as exc:  # noqa: BLE001 - 老观众判定失败时按普通观众处理，不挡整理
                 logger.debug(f"场次 {session.id} 解析观众 {vid} 熟悉度失败: {exc}", exc=exc)
                 return set()
             if (
@@ -1581,7 +1581,7 @@ class SessionSettler:
         player_codes: Optional[Mapping[int, str]] = None,
         familiar_viewer_ids: AbstractSet[int] = frozenset(),
     ) -> Tuple[str, Dict[int, SettleSpeechLine], Optional[str]]:
-        """台词渲染成带编号的行；回应弹幕的把那句原文与发言人代号附在前面（熟客标注"回复熟客观众N"）。
+        """台词渲染成带编号的行；回应弹幕的把那句原文与发言人代号附在前面（老观众标注"回复老观众N"）。
 
         编号是模型输出用来指回具体台词的键：整场台词超过模型窗口预算时只保留一部分，
         按保留顺序重新编号，台词行本身仍指向原行。返回的第三项是裁剪说明（未裁剪为 None），
@@ -1598,7 +1598,7 @@ class SessionSettler:
             if line.reply_content and reply_viewer_id is not None:
                 code = codes.setdefault(int(reply_viewer_id), f"{_VIEWER_CODE_PREFIX}{len(codes) + 1}")
                 speaker_label = (
-                    f"熟客{code}"
+                    f"老观众{code.removeprefix(_VIEWER_CODE_PREFIX)}"
                     if (not line.reply_simulated and int(reply_viewer_id) in familiar_viewer_ids)
                     else code
                 )
@@ -2019,7 +2019,7 @@ class SessionSettler:
             try:
                 decided_self_titles, rejected_self_chats = await decided_self_fn()
             except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
-                logger.warning(f"读审过的熟客近况候选失败，本次不按审过的记录去重: {exc}", exc=exc)
+                logger.warning(f"读审过的老观众近况候选失败，本次不按审过的记录去重: {exc}", exc=exc)
         # 去重依据：上一份档案、本场留下的观众来源行（重新整理时批准过的不再列）、本场新写的行
         base = [*(material.previous.lines if material.previous is not None else []), *material.carried]
         new_evidence, new_titles = taken_from(new_lines)

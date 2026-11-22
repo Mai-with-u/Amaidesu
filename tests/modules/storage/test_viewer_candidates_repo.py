@@ -453,7 +453,7 @@ async def test_forget_me_compares_percent_and_underscore_literally(store: SQLite
 async def test_viewer_self_candidate_lifecycle_coexists_revokes_deletes_and_stays_out_of_archive(
     store: SQLiteDatabase,
 ) -> None:
-    """熟客近况候选：可与观众定下共享同一句回应；批准后留在候选表、不写档案与承诺；支持撤回待审与删除，驳回不影响全局去重。"""
+    """老观众近况候选：可与观众定下共享同一句回应；批准后留在候选表、不写档案与承诺；支持撤回待审与删除，驳回不影响全局去重。"""
     session_id, _said, _reply, _owed = await _settled_session(store)
     viewer = await store.viewers.resolve_viewer(
         platform="bilibili",
@@ -572,7 +572,7 @@ async def test_viewer_self_candidate_lifecycle_coexists_revokes_deletes_and_stay
     assert (revoked.status, revoked.decided_at_ms, revoked.created_at_ms) == ("pending", None, 13_000)
     assert await store.viewers.approved_viewer_notes(viewer_ids=[viewer.viewer_id]) == []
 
-    # 再次批准一条、驳回另一条：验证全局去重键与熟客个人去重键互不串扰
+    # 再次批准一条、驳回另一条：验证全局去重键与老观众个人去重键互不串扰
     await store.viewer_candidates.approve(candidate_id=approved.id, at_ms=14_000)
     await store.viewer_candidates.reject(candidate_id=by_title["ta 周末常去徒步"].id, at_ms=14_500)
     assert await store.viewer_candidates.rejected_keys() == ([], [])
@@ -592,7 +592,7 @@ async def test_viewer_self_candidate_lifecycle_coexists_revokes_deletes_and_stay
 async def test_viewer_presence_stats_tiers_former_names_and_authored_archive_lines(
     store: SQLiteDatabase,
 ) -> None:
-    """熟客分层（close/regular/none）、曾用名过滤与观众共同造梗档案行归属查询。"""
+    """老观众分层（close/regular/none）、曾用名过滤与观众共同造梗档案行归属查询。"""
     s1 = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     await store.sessions.close_live_session(live_session_id=s1, ended_at_ms=2_000)
     s2 = await store.sessions.insert_live_session(started_at_ms=3_000, kind="live")

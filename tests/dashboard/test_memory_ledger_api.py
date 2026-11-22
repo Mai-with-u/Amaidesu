@@ -1,4 +1,4 @@
-"""记忆账本端点：承诺增删改了结、档案行、整理状态与重新整理。"""
+"""承诺表端点：承诺增删改了结、档案行、整理状态与重新整理。"""
 
 from __future__ import annotations
 
@@ -408,7 +408,7 @@ async def test_claimed_missing_candidates_come_with_the_nearest_ledger_entries(c
 async def test_viewer_self_candidates_expose_viewer_name_and_support_revoke_and_delete(
     client, store: SQLiteDatabase
 ) -> None:
-    """熟客近况候选：仅 viewer_self 带观众昵称、原文照旧遮名；批准不落档案，支持撤销批准与删除。"""
+    """老观众近况候选：仅 viewer_self 带观众昵称、原文照旧遮名；批准不落档案，支持撤销批准与删除。"""
     session_id = await _ended_session(store)
     await _settled(store, session_id, [])
     viewer = await store.viewers.resolve_viewer(

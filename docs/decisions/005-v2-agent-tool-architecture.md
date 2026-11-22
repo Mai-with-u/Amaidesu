@@ -19,7 +19,7 @@ Amaidesu v1 采用 Input → Decision → Output 三阶段架构：InputCollecto
 
 ## 决策（Decision）
 
-重构为 **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）** 架构：
+重构为 **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 流程单）** 架构：
 
 1. **主体性判据为最高约束**——Agent 与工具的唯一判别是"谁驱动谁"：
    - Agent：自我驱动、有循环/目标、没人调也在跑（主播 Planner 决策循环、游戏代理 AI 玩家）

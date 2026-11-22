@@ -1783,7 +1783,7 @@ async def test_archive_call_input_carries_open_commitment_ledger(
 async def test_viewer_self_candidates_require_familiar_viewer_and_drop_personal_privacy(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """熟客近况提取：仅熟客标『回复熟客观众N』并允许进待审；新观众硬门禁拦进 unregistered；隐私词计入 personal_dropped 不落库。"""
+    """老观众近况提取：仅老观众标『回复老观众N』并允许进待审；新观众硬门禁拦进 unregistered；隐私词计入 personal_dropped 不落库。"""
     s1 = await _ended_session(store, started_at_ms=1_000)
     familiar = await store.viewers.resolve_viewer(
         platform="bilibili",
@@ -1846,7 +1846,7 @@ async def test_viewer_self_candidates_require_familiar_viewer_and_drop_personal_
 
     llm = _reply(
         '{"archive": [], "viewer_candidates": ['
-        '{"kind": "viewer_self", "line": 1, "title": "熟客观众1平时喜欢手冲咖啡", "word": "手冲咖啡",'
+        '{"kind": "viewer_self", "line": 1, "title": "老观众1平时喜欢手冲咖啡", "word": "手冲咖啡",'
         ' "viewer_quote": "平时喜欢手冲咖啡", "quote": "手冲咖啡很香呀"},'
         '{"kind": "viewer_self", "line": 2, "title": "ta 周末常去攀岩", "word": "攀岩",'
         ' "viewer_quote": "周末常去攀岩", "quote": "攀岩很锻炼核心"},'
@@ -1869,7 +1869,7 @@ async def test_viewer_self_candidates_require_familiar_viewer_and_drop_personal_
     assert await settler.settle_session(session_id) is True
 
     archive_input = llm.calls[0]["input"]
-    assert "（回复熟客观众1「我平时喜欢手冲咖啡」）" in archive_input
+    assert "（回复老观众1「我平时喜欢手冲咖啡」）" in archive_input
     assert "（回复观众2「我周末常去攀岩」）" in archive_input
 
     candidates = await store.viewer_candidates.list_candidates(status=None)

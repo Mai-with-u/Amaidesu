@@ -278,7 +278,7 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
                 return self._bounce(tool_name, f"档#{target_id} 不在本场常驻简报里，无需场内更正")
         else:
             if self._commitments is None:
-                return self._bounce(tool_name, "承诺账本未接入，无法更正承诺")
+                return self._bounce(tool_name, "承诺表未接入，无法更正承诺")
             commitment = await self._commitments.get_commitment(commitment_id=target_id)
             if commitment is None or commitment.status != "open":
                 return self._bounce(tool_name, f"约#{target_id} 不存在或已了结，无需重复更正")

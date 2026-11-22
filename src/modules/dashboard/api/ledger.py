@@ -1,6 +1,6 @@
-"""记忆账本端点：承诺、场次档案与整理状态（WebUI 记忆页的数据接口）
+"""承诺表端点：承诺、场次档案与整理状态（WebUI 记忆页的数据接口）
 
-下播整理把每个正式场整理成承诺账本与场次档案，本模块只提供查看与人工纠错：
+下播整理把每个正式场整理成承诺表与场次档案，本模块只提供查看与人工纠错：
 标了结、判误记、删除、手建、删档案行、把失败场次排进重试。
 
 - GET    /memory/commitments                  承诺列表（按状态 / 对象 / 游戏筛选）
@@ -19,9 +19,9 @@
 - POST   /memory/settle/{session_id}/reviewed 标已审
 - POST   /memory/settle/{session_id}/resettle 重新排进整理队列（清整理完成时刻与重试次数）
 - GET    /memory/candidates                   观众候选（待审 / 已批 / 已驳回）与待审数
-- POST   /memory/candidates/{id}/approve      批准（观众定下的写成档案行，她说欠着的登记成承诺，熟客近况进熟客卡）
+- POST   /memory/candidates/{id}/approve      批准（观众定下的写成档案行，她说欠着的登记成承诺，老观众近况进老观众卡）
 - POST   /memory/candidates/{id}/reject       驳回（同一条以后不再列）
-- POST   /memory/candidates/{id}/revoke       撤销已批准的熟客近况（回到待审）
+- POST   /memory/candidates/{id}/revoke       撤销已批准的老观众近况（回到待审）
 - DELETE /memory/candidates/{id}              删除一条候选
 
 人改过的行之后的整理不能去掉或替换，人放回、新增的行整理不挤掉；每次改动都记进改动记录。
@@ -83,7 +83,7 @@ router = APIRouter()
 
 # 组件访问声明：账本仓储未装配（极简启动 / 部分测试）时统一 503
 CommitmentRepoDep = Annotated[
-    "CommitmentRepo", Depends(server_component("commitments_repo", missing_detail="承诺账本不可用"))
+    "CommitmentRepo", Depends(server_component("commitments_repo", missing_detail="承诺表不可用"))
 ]
 ArchiveRepoDep = Annotated["ArchiveRepo", Depends(server_component("archive_repo", missing_detail="场次档案不可用"))]
 SessionRepoDep = Annotated["SessionRepo", Depends(server_component("session_repo", missing_detail="场次表不可用"))]
@@ -471,7 +471,7 @@ def _candidate_item(
     *,
     viewer_name: Optional[str] = None,
 ) -> CandidateItem:
-    """候选转响应行：弹幕原文里的已知观众昵称遮成"某位观众"；熟客近况附观众当前昵称；待审的"她说欠着的"附参照。"""
+    """候选转响应行：弹幕原文里的已知观众昵称遮成"某位观众"；老观众近况附观众当前昵称；待审的"她说欠着的"附参照。"""
     nearest: List[NearCommitment] = []
     if row.kind == "claimed_missing" and row.status == "pending":
         nearest = _nearest_commitments(f"{row.title} {row.reply_quote}", ledger)
@@ -523,7 +523,7 @@ async def list_candidates(
     commitments: CommitmentRepoDep,
     status: Annotated[str, Query(description="pending / approved / rejected / all")] = "pending",
 ) -> CandidateListResponse:
-    """观众候选列表（新的在前）与待审数；熟客近况附观众当前昵称，待审的"她说欠着的"附上账上最接近的几条承诺。"""
+    """观众候选列表（新的在前）与待审数；老观众近况附观众当前昵称，待审的"她说欠着的"附上账上最接近的几条承诺。"""
     value = status.strip().lower()
     if value not in ("pending", "approved", "rejected", "all"):
         raise HTTPException(status_code=422, detail=f"未知的候选状态: {status}")
@@ -556,7 +556,7 @@ async def approve_candidate(
     viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
     request: Optional[CandidateApproveRequest] = None,
 ) -> CandidateItem:
-    """批准：观众定下的写成档案行并放进最新快照，她说欠着的登记成未了结承诺，熟客近况留供场内熟客卡读取。"""
+    """批准：观众定下的写成档案行并放进最新快照，她说欠着的登记成未了结承诺，老观众近况留供场内老观众卡读取。"""
     body = request or CandidateApproveRequest()
     title = body.title if body.title is not None and body.title.strip() else None
     try:
@@ -593,7 +593,7 @@ async def revoke_candidate(
     candidates: CandidateRepoDep,
     viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
 ) -> CandidateItem:
-    """撤销已批准的熟客近况：撤下熟客卡并回到待审，14 天待审期重算。"""
+    """撤销已批准的老观众近况：撤下老观众卡并回到待审，14 天待审期重算。"""
     try:
         row = await candidates.revoke(candidate_id=int(candidate_id), at_ms=now_ms())
     except MemoryReviewError as exc:

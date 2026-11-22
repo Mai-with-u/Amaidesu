@@ -26,7 +26,7 @@ ADR 记录已经作出的决定，不替代实现文档，也不用于记录迁�
 
 ## 现有 ADR
 
-ADR 编号按创建时间递增，不因条目删除而重排——001~004 因对应系统（管道 / 三阶段输出）已移除而不再列出，从 005 起保留编号语义（被删除条目的编号空缺以避免交叉引用失锚）；030（观众画像系统）因被当时的主播记忆改造（场次回顾 + 观众画像）取代而删除，编号空缺同理保留；042（场次回顾 + 观众画像）、051（长期笔记 MEMORY.md）、058（长期记忆条目化与淡出）因被 [ADR-065](065-memory-ledger-shadow-run.md)、[ADR-066](066-memory-injection-switch.md)、[ADR-067](067-irreversible-memory-cleanup.md) 整篇取代而删除，编号空缺同理保留；059（与 MaiBot 共用长期笔记、正本放插件）因被 [ADR-063](063-maibot-interop-published-views.md) 整篇取代而删除，编号空缺同理保留。
+ADR 编号按创建时间递增，不因条目删除而重排——001~004 因对应系统（管道 / 三阶段输出）已移除而不再列出，从 005 起保留编号语义（被删除条目的编号空缺以避免交叉引用失锚）；030（观众画像系统）因被当时的主播记忆改造（场次档案 + 观众画像）取代而删除，编号空缺同理保留；042（场次档案 + 观众画像）、051（长期笔记 MEMORY.md）、058（长期记忆条目化与淡出）因被 [ADR-065](065-memory-ledger-shadow-run.md)、[ADR-066](066-memory-injection-switch.md)、[ADR-067](067-irreversible-memory-cleanup.md) 整篇取代而删除，编号空缺同理保留；059（与 MaiBot 共用长期笔记、正本放插件）因被 [ADR-063](063-maibot-interop-published-views.md) 整篇取代而删除，编号空缺同理保留。
 
 - [ADR-005：v2.0.0 采用 Agent + 工具 + 存储 + 编排架构](005-v2-agent-tool-architecture.md)
 - [ADR-006：LLM 模拟器是官方开发基础设施，mock 采集器仅承担确定性回放](006-simulator-is-dev-infrastructure.md)
@@ -89,7 +89,7 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-068：观众数据可自行删除与保留期（忘了我命令 / 宽限删除 / 不记录名单 / 保留期默认不删）](068-memory-privacy-retention-and-forget.md)
 - [ADR-069：游戏里的记忆按存档分开（细化 ADR-066 的挂游戏口径：游戏 Agent 报眼下的存档 / 整理时按台词时刻记下存档 / 别的存档里的事不催、不当成眼前的事）](069-game-memory-per-save.md)
 - [ADR-070：MC 上下文由模型在后台主动折叠（扩展 ADR-040 的工作层整理：同前缀整理请求 / 原文进块库可取回 / 到预算线先收起不等摘要）](070-minecraft-background-fold.md)
-- [ADR-071：场次档案改为滚动快照（修改 ADR-066 常驻简报的档案口径：快照只引用原行 / 模型只挑不改写 / 超出上限按固定规则取舍 / 冷启动接住升级前几场）](071-rolling-session-archive.md)
+- [ADR-071：场次档案改为档案快照（修改 ADR-066 常驻简报的档案口径：快照只引用原行 / 模型只挑不改写 / 超出上限按固定规则取舍 / 冷启动接住升级前几场）](071-rolling-session-archive.md)
 - [ADR-072：直播记忆的混合检索与被动想起（取代主播记忆边界里"不做语义检索、不做 embedding"：派生索引 / 关键词与语义两路按名次融合 / 每批决策前按地点、触发词、意思相近推线索卡 / 语义一路配置了才开）](072-memory-hybrid-search-and-passive-recall.md)
 - [ADR-073：整理结果的人工审核（整理照旧自动生效 / 人改过的行只有人能动 / 放回的行排在快照最前 / 每次改动留记录 / 整理单独一个模型档位）](073-settlement-human-review.md)
 - [ADR-074：观众定下的事经人批准进记忆（修改设计公理 1：观众的话只有经人批准、且她当场接受过，才进跨场记忆 / 她说欠着、账上找不到的事同样只列候选）](074-viewer-defined-memory-needs-approval.md)

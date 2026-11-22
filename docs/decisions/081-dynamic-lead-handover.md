@@ -24,7 +24,7 @@
 
 ### 一、四条架构底线
 
-1. **直播间唯一骨架永归 `StreamerAgent`**：直播场次生命周期（开播 / 下播）、流程单（Rundown，导演预写的直播环节清单）、观众身份与直播间长期记忆、下播整理（`settle.py`，直播结束后从台词与事件提炼记忆账本的后台流程），以及面向观众的唯一出声出口（TTS 播音、字幕与虚拟形象情绪/口型驱动），永久由 `StreamerAgent` 持有，游戏 Agent 绝不接管或旁路。
+1. **直播间唯一骨架永归 `StreamerAgent`**：直播场次生命周期（开播 / 下播）、流程单（Rundown，导演预写的直播环节清单）、观众身份与直播间长期记忆、下播整理（`settle.py`，直播结束后从台词与事件提炼承诺表的后台流程），以及面向观众的唯一出声出口（TTS 播音、字幕与虚拟形象情绪/口型驱动），永久由 `StreamerAgent` 持有，游戏 Agent 绝不接管或旁路。
 2. **严守游戏无关边界，扩展三种游戏交互形态**：框架层（`src/modules/`、`main.py`）与主播侧（`src/agents/streamer/`）继续严守 [ADR-018](018-game-agnostic-boundary.md)，不写死任何具体游戏名，不做按游戏名的特判分支。在 [ADR-043](043-game-agent-interaction-shapes.md) 的**遥控型**（游戏侧无 LLM、主播直调按键类工具）与**委派型**（主播派自然语言目标、游戏侧有界执行）之外，新增第三种形态——**自主领航型**：游戏 Agent 通过协议声明自身支持自主领航，在游玩期接管游戏内持续目标规划、执行与公屏社交，不再被动等待委派单。
 3. **数据平面单向防环**：遵循[数据流规则](../architecture/data-flow.md)——输入采集单向流入各自归属方；游戏侧请求播音只经框架同步工具面单向提交给即时反应通路，不触发主播重型 Planner，杜绝"口播输出 → 再次决策 → 回流指令"的闭环；主播口播同步回游戏侧采用零唤醒只读写入，不反向拉起游戏 LLM。
 4. **灰度与一键回退开关**：配置新增 `lead_mode = "dynamic" | "streamer_only"`。切为 `streamer_only` 时关闭动态移交，系统 100% 退回既有由主播常驻主控的委派模式（[ADR-076](076-delegation-one-in-hand-and-settle-on-switch.md) 原链路保持兼容）。
@@ -55,7 +55,7 @@
 
 **越界禁令（硬约束）**：
 - 游戏主控态下，主播侧**禁止**向该游戏派发 `framework_delegate`（含 `replace` 强杀）、**禁止**调用 `framework_task_settle` 干预在途任务、**禁止**直发游戏公屏（如 `minecraft_chat_send`）替角色表态。
-- 任何状态下，游戏侧**禁止**直接连接 TTS 或字幕出声、**禁止**直接订阅直播间观众弹幕、**禁止**编辑流程单内容或观众记忆账本；游戏主控态下环节推进（`next`/`renew`）经 `rundown_control` 授权执行，跳段（`goto`）与流程单内容编辑仍归主播侧；非主控态下**禁止**通过 `framework_commentary` 发解说意图。
+- 任何状态下，游戏侧**禁止**直接连接 TTS 或字幕出声、**禁止**直接订阅直播间观众弹幕、**禁止**编辑流程单内容或观众承诺表；游戏主控态下环节推进（`next`/`renew`）经 `rundown_control` 授权执行，跳段（`goto`）与流程单内容编辑仍归主播侧；非主控态下**禁止**通过 `framework_commentary` 发解说意图。
 - 2026-11-21 扩展：明确游戏段的开场白、过程解说与环节推进全部归当场主控（游戏 Agent），主播侧触发器按段类型门禁、`rundown_control` 可见名单跟随主控切换——补全本矩阵时刻 4/5 的职责缺口（场 73/74 实测主播侧在游戏主控期产开场白与过程解说的越位修正）；实现提交 `db9b7520f4bb6e9bb902bcd6ac5b85c52a68a494`、`e208af3e33e78fd1a892e95acea13e49b0385dd6`。
 
 ### 三、五束连线契约
@@ -85,7 +85,7 @@ flowchart LR
 2. **主控交接与协作线**：
    - **框架中枢 `LeadCoordinator` 单例**：装配于组合根，持有 `AgentManager` 与 `EventBus`，对具体游戏名零感知。通过 `BaseAgent` 新增协议成员（`supports_autonomous_lead`、`can_take_lead()`、`enter_lead(context)`、`yield_lead(reason)`、`receive_suggestion(...)`、`receive_spoken_echo(...)`）完成探测与切换；未覆写这些成员的既有 Agent 默认不支持自主领航，100% 向下兼容。
    - **状态变更事件 `agent.lead.changed`**：新增 `CoreEvents.AGENT_LEAD_CHANGED` 与 `AgentLeadChangedPayload`（含 `lead_agent`、`previous_lead`、`mode`、`reason`、`manual_override`、`handover_summary`、`live_session_id`、`timestamp_ms`），作为主控态切换的唯一观测事件。
-   - **交权简报与收权摘要**：交权瞬间，主播侧通过绑定的构造回调一次性生成只读交接简报 `LeadHandoverContext`（当前流程单环节标题/目标/预期时长、当前存档名、该游戏/存档级精简记忆简报、运营备忘与最近几句已播台词）传给 `enter_lead`；收权时 `yield_lead` 返回简短收尾摘要（当前进度与未完事项），由主播接住话头。
+   - **交权简报与收权摘要**：交权瞬间，主播侧通过绑定的构造回调一次性生成只读交接简报 `LeadHandoverContext`（当前流程单环节标题/目标/预期时长、当前存档名、该游戏/存档级精简常驻简报、运营备忘与最近几句已播台词）传给 `enter_lead`；收权时 `yield_lead` 返回简短收尾摘要（当前进度与未完事项），由主播接住话头。
    - **游戏 → 主播单向实况解说（`framework_commentary`）**：在框架工具提供者登记 `framework_commentary(summary, mood, urgency, about_player)`，仅对支持自主领航的游戏 Agent 可见，对 `streamer` 隐藏；调用时校验调用方确为当前主控者，经 `LeadCoordinator` 直通主播侧轻量 `Replyer` 按人设口语化润色并送入发言管线，**完全绕过重型 Planner**。
    - **主播 → 游戏非强杀建议（`framework_suggest`）**：登记 `framework_suggest(content, agent?)`，仅对 `streamer` 可见且用于游戏主控态。调用不创建委派账本、不调用 `release_delegation`、不强杀任何在跑目标，只将观众建议（可附来源原话）送达游戏侧 `receive_suggestion`，由游戏代理自主安排。
    - **游戏主控态工具隔离**：当某游戏处于主控态时，主播侧隐藏或执行期拒绝指向该游戏的 `framework_delegate`（含 `replace`）、`framework_task_settle` 及游戏直发公屏工具（如 `minecraft_chat_send`）；同时工具说明（`guide_for("streamer")`）自动由委派强杀守则切换为"游戏主控态观众建议守则"。

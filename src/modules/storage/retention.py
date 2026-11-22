@@ -3,7 +3,7 @@
 清理范围：
 - 到期的"忘了我"宽限删除请求（始终检查，不受保留期为 0 影响）
 - ``raw_days > 0`` 时（从场次结束时刻算起）：
-  1. 删除 ``live_chat`` 到期的观众行（保留主播台词行；人批准进记忆的观众候选或熟客近况挂着的那条弹幕也保留，
+  1. 删除 ``live_chat`` 到期的观众行（保留主播台词行；人批准进记忆的观众候选或老观众近况挂着的那条弹幕也保留，
      删了它档案行或已批近况会随外键级联消失——保留期只清工作数据，不清记忆）；公屏游戏聊天同一口径，删到期场次里
      玩家说的与认不出是谁的占位行，她自己在公屏说的留着
   2. 清空付费三表（``gifts`` / ``super_chats`` / ``guards``）到期行的观众身份、昵称、留言与原始消息，保留金额、类型、时刻
@@ -73,7 +73,7 @@ _CLEANUP_RULES: Tuple[_CleanupRule, ...] = (
             "DELETE FROM live_chat WHERE sender_role = 'viewer'"
             " AND (live_session_id IN ({expired_sessions})"
             "      OR (live_session_id NOT IN ({orphan_sessions}) AND timestamp_ms <= ?))"
-            # 批准进记忆的观众候选或熟客近况挂着的弹幕留着：删了它，那一行档案或已批近况会被外键级联删掉
+            # 批准进记忆的观众候选或老观众近况挂着的弹幕留着：删了它，那一行档案或已批近况会被外键级联删掉
             " AND id NOT IN (SELECT viewer_chat_id FROM archive_lines WHERE viewer_chat_id IS NOT NULL)"
             " AND id NOT IN ("
             "SELECT viewer_chat_id FROM viewer_candidates"

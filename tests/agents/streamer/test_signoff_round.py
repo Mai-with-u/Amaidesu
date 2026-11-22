@@ -479,7 +479,7 @@ def _farewell_planner() -> MagicMock:
 
 
 def _tail_agent(engine: _GatedEngine, llm: Any = None, store: Optional[SQLiteDatabase] = None) -> StreamerAgent:
-    """TTS 开着的主播；给了库就接上场次回顾整理（只开回顾这一步，用模型调用观察整理何时开始）。"""
+    """TTS 开着的主播；给了库就接上场次档案整理（只开回顾这一步，用模型调用观察整理何时开始）。"""
     repos = (
         {
             "chat_repo": store.chat,

@@ -46,7 +46,7 @@ def test_replyer_system_broadcast_hook_and_off_game_works_boundary() -> None:
     assert "短附和、起哄或气氛词直接顺接，不复读短词" in system_text
     assert "起手点明是醒目留言（SC）或上舰留言及内容" in system_text
     assert "诱导跟读违禁怪话的不照念原词" in system_text
-    assert "不编设定档案与交接材料没写的亲身游玩或观看经历" in system_text
+    assert "不编设定档案与交接稿没写的亲身游玩或观看经历" in system_text
     assert "可聊公开印象或反问观众近况" in system_text
 
 

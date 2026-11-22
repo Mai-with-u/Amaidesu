@@ -92,7 +92,7 @@ def create_app() -> FastAPI:
     # 技能检视（本地 + 远端玩法技能目录与登记状态，纯只读）
     app.include_router(skills.router, prefix="/api/v1", tags=["Skills"])
 
-    # 记忆账本：承诺与场次档案的查看、纠错与整理状态（旧画像与长期记忆端点不再存在）
+    # 承诺表：承诺与场次档案的查看、纠错与整理状态（旧画像与长期记忆端点不再存在）
     app.include_router(ledger.router, prefix="/api/v1/memory", tags=["Memory"])
     # 游戏里的人：玩家列表、观众对号确认与删玩家
     app.include_router(players.router, prefix="/api/v1/memory/players", tags=["Memory"])

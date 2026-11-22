@@ -82,7 +82,7 @@ name = "deepseek-chat"              # 模型唯一名（被 model_list 引用）
 model_identifier = "deepseek-chat"  # 传给 API 的 model 字段
 api_provider = "deepseek"           # 关联上方 provider
 
-[llm_profiles.planner]              # 决策核心（质量敏感）
+[llm_profiles.planner]              # 规划器（质量敏感）
 model_list = ["deepseek-chat"]
 
 [llm_profiles.planner.selection_strategy]

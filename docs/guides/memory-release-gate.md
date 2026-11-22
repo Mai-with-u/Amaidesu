@@ -1,6 +1,6 @@
 # 主播记忆重设计：发版前门槛清单
 
-把记忆重设计（承诺账本、场次档案与旧记忆清理）发到真实直播间之前，由发布负责人**本人**执行本文全部步骤。任何一项没过：**不发版、直播机不升级**，把报告与差条样本留下，修提示词或代码后重跑。
+把记忆重设计（承诺表、场次档案与旧记忆清理）发到真实直播间之前，由发布负责人**本人**执行本文全部步骤。任何一项没过：**不发版、直播机不升级**，把报告与差条样本留下，修提示词或代码后重跑。
 
 门槛的由来与取舍见 [ADR-065](../decisions/065-memory-ledger-shadow-run.md) 的状态行与 [ADR-067](../decisions/067-irreversible-memory-cleanup.md)；评测器的口径与样本格式见 [评测器说明](../../scripts/memory_eval/README.md)。
 
@@ -111,14 +111,14 @@ uv run python main.py --dry
 - `config/` 下 agents.toml、infra.toml（以及带变更的文件）版本号已推进，`config/old/` 下有改前备份；日志有配置写回记录；
 - 完整性：`uv run python -c "import sqlite3;print(sqlite3.connect('data/amaidesu.db').execute('PRAGMA integrity_check').fetchone())"` 输出 `ok`；
 - 二次启动幂等：再跑一次 `uv run python main.py --dry`，没有重复迁移、没有再次搬目录、没有新的 pre-v25 备份；
-- 补整理留的那一场：`uv run python -c "import sqlite3;print(sqlite3.connect('data/amaidesu.db').execute('SELECT id, (ended_at_ms-started_at_ms)/60000 FROM live_sessions WHERE settled_at_ms IS NULL').fetchall())"` 列出的应是升级前最后一场正式场（时长至少 5 分钟）；去掉 `--dry` 启动一次后它被整理掉，记忆账本页能看到这一场的档案；
+- 补整理留的那一场：`uv run python -c "import sqlite3;print(sqlite3.connect('data/amaidesu.db').execute('SELECT id, (ended_at_ms-started_at_ms)/60000 FROM live_sessions WHERE settled_at_ms IS NULL').fetchall())"` 列出的应是升级前最后一场正式场（时长至少 5 分钟）；去掉 `--dry` 启动一次后它被整理掉，承诺表页能看到这一场的档案；
 - 想在隔离副本里额外看隐私密钥生成与保留期清理，去掉 `--dry` 再启动一次（会尝试连外部服务，连不上只会告警；默认保留期 0，不会删数据）。
 
 ## 4. 至少 3 个真实正式场由运营者人工判误记
 
 每场正式场下播整理完成后（WebUI 的"下播整理"面板显示已整理）：
 
-1. 打开 WebUI「记忆账本」页（`/memory`）→「承诺账本」→ 状态筛选选「全部」；
+1. 打开 WebUI「承诺表」页（`/memory`）→「承诺表」→ 状态筛选选「全部」；
 2. 按每行"登记于 … · 场次 #N"确认是本场新登记的承诺；
 3. 逐条核对：她真的当众答应过、而且做得到吗？不是的点「判误记」（会留墓碑，之后整理不会重新登记）；
 4. 统计本场：新登记条数、判误记条数，误记率 = 判误记 ÷ 新登记，要求 **每场 ≤ 10%**，连续至少 3 个真实正式场。

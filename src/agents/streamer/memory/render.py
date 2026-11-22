@@ -1002,7 +1002,7 @@ def render_familiar_viewer_card(
     self_notes: Sequence[str] = (),
     authored_titles: Sequence[str] = (),
 ) -> str:
-    """场内熟客发言时的熟客线索卡：汇总关系定位、曾用名、已批准近况与共同造梗归属；两项内容皆空时返回空串。"""
+    """场内老观众发言时的老观众线索卡：汇总关系定位、曾用名、已批准近况与共同造梗归属；两项内容皆空时返回空串。"""
     notes = [item.strip() for item in self_notes if item and item.strip()]
     titles = [item.strip() for item in authored_titles if item and item.strip()]
     if not notes and not titles:
@@ -1014,7 +1014,7 @@ def render_familiar_viewer_card(
     notes_part = f"ta 跟你说过：{'；'.join(notes)}。" if notes else ""
     authored_part = f"当初{'、'.join(f'「{item}」' for item in titles)}就是和 ta 一起定的。" if titles else ""
     return (
-        f"[熟客·{label}] {label}{former_part}是{role}。"
+        f"[老观众·{label}] {label}{former_part}是{role}。"
         f"{notes_part}{authored_part}"
         "只在话题沾边时顺嘴聊起，像熟人接话不背档案、不报场次或日期。"
     )

@@ -2,7 +2,7 @@
 
 ``timeline_summary`` 一行 = 一段摘要历史（BackgroundMaintainer 摘要成功后
 写入）。``TimelineSummaryEntry`` 是该表按场读取的持久化契约，消费方为
-主播 Agent 的场次回顾（话题轨迹原料）。
+主播 Agent 的场次档案（话题轨迹原料）。
 
 时间字段统一毫秒（Unix epoch 毫秒）。
 """
