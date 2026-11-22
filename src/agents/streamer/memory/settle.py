@@ -157,6 +157,8 @@ SETTLE_PROFILE = "settle"
 # 下播整理默认思考强度：整理任务是按规则抽取与核对，当 model.toml 未为 settle 档位配置思考强度时
 # 兜底压到 low 避免推理模型单笔狂想数万字超时；若配置了显式档位（如 none/high），优先尊重配置
 DEFAULT_SETTLE_REASONING_EFFORT = "low"
+# 高思考慢档位集合：单场整理并行发起多笔调用，若显式配置这些档位仅打一次中文告警提醒风险，不篡改配置
+_SLOW_REASONING_EFFORTS: frozenset[str] = frozenset({"high", "max", "xhigh"})
 # 构造参数哨兵：区分"调用方未传 reasoning_effort（优先读 profile 配置、为空再兜底 low）"与"显式传 None 禁用覆写"
 _UNSET_REASONING_EFFORT: Any = object()
 
@@ -885,6 +887,8 @@ class SessionSettler:
         self._checkpoint_lock: asyncio.Lock = asyncio.Lock()
         # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
         self._inflight: Dict[int, asyncio.Task[bool]] = {}
+        # 单次整理高思考强度告警去重开关：并行多笔调用最多告警一次，避免刷屏
+        self._slow_reasoning_warned: bool = False
 
     # ------------------------------------------------------------------
     # 调度
@@ -1759,6 +1763,8 @@ class SessionSettler:
         再建新承诺，再算快照与候选）。
         """
         live = progress is not None
+        # 每次场次整理重置慢档思考告警标记，确保本次整理的多笔并行调用至多告警一次不刷屏
+        self._slow_reasoning_warned = False
         if progress is None:
 
             async def progress(text: str, *, output_chars: int = 0, output_tail: str = "") -> None:
@@ -2146,6 +2152,15 @@ class SessionSettler:
             try:
                 configured = getter(SETTLE_PROFILE)
                 if isinstance(configured, str) and configured.strip():
+                    # 显式配置高思考慢档位（high/max/xhigh）时，单次整理仅告警一次提醒耗时长与停机中断风险，
+                    # 仍尊重运营者在 model.toml 的显式配置，不做篡改
+                    cleaned = configured.strip()
+                    if cleaned.lower() in _SLOW_REASONING_EFFORTS and not self._slow_reasoning_warned:
+                        self._slow_reasoning_warned = True
+                        logger.warning(
+                            f"下播整理档位 {SETTLE_PROFILE} 显式配置了高思考强度 reasoning_effort={cleaned!r}，"
+                            "单场整理可能耗时数分钟并导致停机中断；建议将该档位留空或设为 'low'"
+                        )
                     # 运营者已在 model.toml 的 [llm_profiles.settle] 显式设定思考档位（如 none/minimal/high），
                     # 不再用代码默认值覆写，直接交由 LLMManager 按档位配置下发
                     return None

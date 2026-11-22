@@ -274,8 +274,12 @@ class Replyer:
             return None
 
         mode = "talk" if speech_mode == "talk" else "play"
+        # 付费事件（礼物/醒目留言/上舰）自带观众昵称，连同显式传入的 keep_names 一并列为必填观众称呼，
+        # 保证初稿、缩句与复读重说均保留观众昵称且绝不走游戏同伴模板
+        paid_names = _paid_viewer_names(batch)
+        explicit_keep_names = _collect_keep_names("", [*keep_names, *paid_names])
         # 汇总本轮必须硬保的观众/玩家称呼（支持多位进房观众合并称呼如 "A、B" 与显式 keep_names）
-        required_names = _collect_keep_names(reply_to, keep_names)
+        required_names = _collect_keep_names(reply_to, explicit_keep_names)
         has_target = bool(plan.target or reply_to or required_names)
         budget = self._budget_for(mode, has_target=has_target)
         system_prompt = self._render_system_prompt(mode)
@@ -293,6 +297,7 @@ class Replyer:
             mode=mode,
             budget=budget,
             target_familiarity=target_familiarity,
+            keep_names=explicit_keep_names,
         )
         messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
@@ -332,6 +337,18 @@ class Replyer:
                 keep_hook=has_target,
                 keep_names=required_names,
             )
+
+        # 显式观众称呼（进房欢迎、付费礼物/醒目留言/上舰）：即使初稿未超预算，
+        # 若模型漏掉昵称也补回句首，避免欢迎或致谢沦为泛称
+        if explicit_keep_names:
+            missing_explicit = _missing_keep_names(speech, explicit_keep_names)
+            if missing_explicit:
+                speech = _restore_names_budget_safe(
+                    speech,
+                    missing_explicit,
+                    budget=budget,
+                    keep_names=required_names,
+                )
 
         # 近逐字复读机械兜底：初稿把更早某句话几乎原样又说了一遍时，打回让回复器换个说法重说一次，
         # 不直接吞掉这轮发言；重说仍撞车才退回给规划器换话题
@@ -536,6 +553,7 @@ class Replyer:
         mode: str = "play",
         budget: Optional[int] = None,
         target_familiarity: str = "",
+        keep_names: Sequence[str] = (),
     ) -> str:
         """她更早说过的话、最近几条聊天记录与本轮材料合并成一条 user。
 
@@ -584,6 +602,7 @@ class Replyer:
                 # 回应对象这一窗在游戏公屏开过口：说"他刚在游戏公屏跟你说话"；只冲她做了事的说"刚在游戏里找过你"
                 reply_to_spoke=any(note.said and note.who == reply_to for note in game_people),
                 target_familiarity=target_familiarity,
+                keep_names=keep_names,
             ),
             # 游戏里最近找她的人：玩家的话与举动单列，谁说的、谁做的一眼分清（较早的截短、整段封顶）
             game_people_section=_game_people_section(people_lines) if self._game_enabled() else "",
@@ -625,7 +644,7 @@ class Replyer:
             length_rule=_length_rule(
                 self._speech_max_chars if budget is None else budget,
                 mode,
-                has_target=bool(plan.target or reply_to),
+                has_target=bool(plan.target or reply_to or keep_names),
             ),
         )
 
@@ -714,6 +733,29 @@ _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 _EXAMPLE_MARKS = "-*•· \t"
 #: 合并称呼分隔符（如多位进房观众 "A、B" 或逗号分隔名单）
 _NAME_SPLIT_RE = re.compile(r"[、，,]+")
+#: 付费事件消息类型（礼物/醒目留言/上舰）：批次含此类事件时自动提取送礼/付费观众昵称进保名名单
+_PAID_MESSAGE_TYPES: frozenset[str] = frozenset({"gift", "super_chat", "guard"})
+
+
+def _paid_viewer_names(batch: Sequence[Any]) -> List[str]:
+    """从本轮消息批提取付费事件（礼物/醒目留言/上舰）的观众昵称（保序去重），供初稿与缩句硬保称呼。"""
+    names: List[str] = []
+    seen: set[str] = set()
+    for msg in batch or ():
+        msg_type = str(getattr(msg, "message_type", "") or "").strip()
+        if msg_type not in _PAID_MESSAGE_TYPES:
+            continue
+        user = getattr(msg, "user", None)
+        raw_name = getattr(user, "name", None) if user is not None else None
+        cleaned = raw_name.strip() if isinstance(raw_name, str) else ""
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(cleaned)
+    return names
 
 
 def _collect_keep_names(reply_to: str, keep_names: Sequence[str] = ()) -> List[str]:
@@ -1137,14 +1179,18 @@ def _render_plan_text(
     reply_to: str = "",
     reply_to_spoke: bool = True,
     target_familiarity: str = "",
+    keep_names: Sequence[str] = (),
 ) -> str:
     """把 DecisionPlan 渲染为发言要点文本；查到要回应的原话时直接给原话，不再给消息 ID。
 
     原话找不到时按 :func:`_unresolved_target` 给出 target（昵称或片段照旧，ID 写法不给）。
     没在回弹幕、在回应游戏里的某位玩家时，先写回应对象：写明是哪位玩家——不写的话，她会把这句
     游戏公屏话安到聊天记录里刚点过名的女仆、宠物头上。Planner 另填了 target（如游戏公屏原话片段）时照旧跟在后面。
+    当 ``reply_to`` 为空且传入显式观众保名名单 ``keep_names``（如进房欢迎或无消息 ID 的付费礼物）时，
+    仅标明直播间观众昵称要求，绝不渲染「提及的游戏同伴」。
     """
     unresolved = _unresolved_target(plan.target)
+    explicit_keep = _collect_keep_names("", keep_names)
     if target_text:
         target_line = f"target 原文: {target_text}\n{_familiarity_line(target_familiarity)}"
     elif reply_to:
@@ -1155,6 +1201,10 @@ def _render_plan_text(
             target_line += f"target: {unresolved}\n"
     else:
         target_line = f"target: {unresolved}\n"
+        if explicit_keep:
+            target_line += (
+                f"须点名的直播间观众: {'、'.join(explicit_keep)}（直播间观众，台词必须保留这些昵称，不省成泛称）\n"
+            )
     return (
         f"{target_line}"
         f"topic_summary: {plan.topic_summary or '（无特定话题）'}\n"

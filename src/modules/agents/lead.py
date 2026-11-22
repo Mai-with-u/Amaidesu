@@ -86,6 +86,7 @@ class CommentaryRequest(BaseModel):
     about_player: str = ""
     correction: bool = False
     timestamp_ms: int = 0
+    round_id: str = ""
 
 
 class CommentaryAck(BaseModel):
@@ -187,6 +188,8 @@ class LeadCoordinator:
         # 流程单超时提醒节流状态（上次推送时刻与对应环节 id；切段或主控变更时自动清零）
         self._last_rundown_nudge_ms: Optional[int] = None
         self._last_rundown_nudge_segment_id: str = ""
+        # 同轮普通解说防抖锚点：游戏名 → 最近一次已出声解说所属 round_id（切主控时清零）
+        self._last_spoken_commentary_round: Dict[str, str] = {}
 
     # -------------------- 只读状态与候选发现 --------------------
 
@@ -560,9 +563,10 @@ class LeadCoordinator:
         self._active_lead_agent = target_name
         self._since_ms = ts
         self._reason = reason
-        # 进入新游戏主控时重置流程单超时提醒节流，避免受上一任主控节流窗口影响
+        # 进入新游戏主控时重置流程单超时提醒与同轮解说去重状态，避免受上一任主控残留影响
         self._last_rundown_nudge_ms = None
         self._last_rundown_nudge_segment_id = ""
+        self._last_spoken_commentary_round.clear()
         handover_summary = handover_ctx.segment_goal or handover_ctx.segment_title or ""
         emitted.append(
             AgentLeadChangedPayload(
@@ -604,9 +608,10 @@ class LeadCoordinator:
         self._active_lead_agent = None
         self._since_ms = ts
         self._reason = reason
-        # 收回主播主控时重置流程单超时提醒节流状态
+        # 收回主播主控时重置流程单超时提醒与同轮解说去重状态
         self._last_rundown_nudge_ms = None
         self._last_rundown_nudge_segment_id = ""
+        self._last_spoken_commentary_round.clear()
         emitted.append(
             AgentLeadChangedPayload(
                 lead_agent=STREAMER_AGENT_NAME,
@@ -751,6 +756,15 @@ class LeadCoordinator:
             return ack
 
         req = request if request.timestamp_ms > 0 else request.model_copy(update={"timestamp_ms": self._clock()})
+        round_id = (req.round_id or "").strip()
+        bypass_round_guard = req.urgency == "high" or req.correction
+        # 同轮二连发防抖：同一游戏推理轮次已播报过解说时，紧随其后的普通解说不再进入主播解说管线，
+        # 避免短时间内重复记账并产生无意义的 throttled_recorded 噪音；高紧急度与纠偏照常穿透
+        if not bypass_round_guard and round_id and self._last_spoken_commentary_round.get(caller_name) == round_id:
+            logger.debug(f"主控游戏 '{caller_name}' 同轮重复提交普通解说（round_id={round_id}），已防抖忽略")
+            ack = CommentaryAck(accepted=True, spoken=False, reason="same_round_deduped")
+            await self._emit_commentary_event(caller_name, req, ack)
+            return ack
         try:
             ack = await handler(req)
             if not isinstance(ack, CommentaryAck):
@@ -758,6 +772,8 @@ class LeadCoordinator:
         except Exception as exc:  # noqa: BLE001 - 解说处理器异常隔离
             logger.exception(f"解说处理器执行异常（game={caller_name}）: {exc}")
             ack = CommentaryAck(accepted=False, spoken=False, reason=f"handler_error: {type(exc).__name__}")
+        if ack.spoken and round_id:
+            self._last_spoken_commentary_round[caller_name] = round_id
         await self._emit_commentary_event(caller_name, req, ack)
         return ack
 

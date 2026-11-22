@@ -456,6 +456,9 @@ class StreamerAgent(BaseAgent):
         # 实况解说串行锁与被防抖压下的解说摘要缓冲（避免短时间内两笔解说同时调 Replyer 撞词）
         self._commentary_lock = asyncio.Lock()
         self._commentary_buffer: deque[str] = deque(maxlen=12)
+        self._last_commentary_round_id: str = ""
+        self._last_commentary_summary: str = ""
+        self._last_commentary_spoken_ms: Optional[int] = None
         # 游戏主控态独立轻量进房欢迎通道（短合并窗防抖 + 串行生成锁 + 待迎队列 + 在途任务）
         self._enter_welcome_debounce_ms: int = max(0, int(enter_welcome_debounce_ms))
         self._enter_welcome_wait: Optional[Callable[[int], Awaitable[None]]] = enter_welcome_wait
@@ -1536,6 +1539,9 @@ class StreamerAgent(BaseAgent):
             self._game_activity_ms.clear()
             self._session_games.clear()
             self._commentary_buffer.clear()
+            self._last_commentary_round_id = ""
+            self._last_commentary_summary = ""
+            self._last_commentary_spoken_ms = None
             await self._cancel_enter_welcome_task()
             self._last_silence_nudge_ms = None
             # 仅在当前未处于游戏主控态时清空进入锚点，防止合法主控的冷场兜底基线被清零
@@ -1841,6 +1847,9 @@ class StreamerAgent(BaseAgent):
         self._live_active = False
         self._opening_wrapup_active = False
         self._commentary_buffer.clear()
+        self._last_commentary_round_id = ""
+        self._last_commentary_summary = ""
+        self._last_commentary_spoken_ms = None
         self._last_silence_nudge_ms = None
         await self._cancel_enter_welcome_task()
         self._pace_wakeup.set()
@@ -3597,6 +3606,8 @@ class StreamerAgent(BaseAgent):
             recent_speeches = self._spoken_log.recent_texts(limit=8)
             rundown_text = self._rundown_coord.build_text_sync()
             try:
+                # 进房欢迎对象是直播间观众而非游戏同伴：必须置 reply_to=""、通过 keep_names 保留观众昵称，
+                # 防止 Replyer 在 batch=[] 且 reply_to 非空时渲染成「提及的游戏同伴」诱发编造游戏里见过面
                 generated = await self._replyer.generate(
                     plan=plan,
                     batch=[],
@@ -3604,7 +3615,8 @@ class StreamerAgent(BaseAgent):
                     rundown=rundown_text,
                     state_facts=state_facts,
                     recent_speeches=recent_speeches,
-                    reply_to=joined_names,
+                    reply_to="",
+                    keep_names=names,
                     speech_mode="play",
                 )
             except Exception as exc:  # noqa: BLE001 - Replyer 异常隔离，保留未欢迎状态待下次进房补迎
@@ -3619,7 +3631,7 @@ class StreamerAgent(BaseAgent):
 
             final_speech = self._guard_replyer_speech(
                 raw_speech,
-                reply_to=joined_names,
+                reply_to="",
                 required_names=names,
                 log_label="轻量进房欢迎",
             )
@@ -3677,12 +3689,13 @@ class StreamerAgent(BaseAgent):
         log_label: str,
     ) -> Optional[str]:
         """对直通 Replyer 的输出做外层预算与敏感词兜底；真实 Replyer 已保名补全时不因二次截断误丢称呼。"""
+        has_target = bool(reply_to or required_names)
         budget_fn = getattr(self._replyer, "budget_for", None)
         if callable(budget_fn):
-            budget = int(budget_fn("play", has_target=bool(reply_to)))
+            budget = int(budget_fn("play", has_target=has_target))
         else:
             base_budget = int(self.typed_config.speech_max_chars)
-            budget = 0 if base_budget <= 0 else (base_budget + TARGET_EXTRA_CHARS if reply_to else base_budget)
+            budget = 0 if base_budget <= 0 else (base_budget + TARGET_EXTRA_CHARS if has_target else base_budget)
 
         verdict = guard(raw_speech, speech_max_chars=budget, word_filter=self._word_filter)
         if verdict.text is None:
@@ -4545,13 +4558,29 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"构建交权记忆摘要读取 '{target_agent}' 社交事实失败（已省略）: {exc}", exc=True)
             return ""
 
+    @staticmethod
+    def _commentary_summaries_duplicate(incoming: str, reference: str) -> bool:
+        """判断两条短间隔解说摘要是否属于实质重复（归一化相等或双字切分重合度达到阈值）。"""
+        left = "".join(ch for ch in (incoming or "").lower() if ch.isalnum())
+        right = "".join(ch for ch in (reference or "").lower() if ch.isalnum())
+        if not left or not right:
+            return False
+        if left == right or left in right or right in left:
+            return True
+        if len(left) < 4 or len(right) < 4:
+            return False
+        left_bg = {left[i : i + 2] for i in range(len(left) - 1)}
+        right_bg = {right[i : i + 2] for i in range(len(right) - 1)}
+        smaller = min(len(left_bg), len(right_bg))
+        return smaller > 0 and (len(left_bg & right_bg) / smaller) >= 0.6
+
     async def _handle_game_commentary(self, req: CommentaryRequest) -> CommentaryAck:
         """受理主控游戏侧发来的实况解说素材，直通轻量 Replyer 润色并送入统一发言管线（严禁走重型 Planner）。
 
-        执行顺序：校验摘要 -> 串行锁保护 -> 记入游戏近况 -> normal 档按最小出声间隔防抖入缓冲
-        -> high 档或间隔满足时合并近期缓冲构造轻量 DecisionPlan -> Replyer.generate -> speech_guard
-        -> SpeechDispatcher.dispatch（同步发射 streamer.speech 落库、字幕、面捕与 spoken echo）
-        -> 刷新 RoomState.last_speech_ms 复位冷场兜底计时器。
+        执行顺序：校验摘要 -> 串行锁保护 -> 同轮二连发与短间隔重复摘要防抖 -> 记入游戏近况
+        -> normal 档按最小出声间隔防抖入缓冲 -> high 档或间隔满足时合并近期缓冲构造轻量 DecisionPlan
+        -> Replyer.generate -> speech_guard -> SpeechDispatcher.dispatch
+        -> 刷新 RoomState.last_speech_ms 复位冷场兜底计时器并记录同轮防抖锚点。
         """
         summary = (req.summary or "").strip()
         if not summary:
@@ -4561,15 +4590,37 @@ class StreamerAgent(BaseAgent):
             now = self._clock()
             game_name = (req.game or "").strip() or "game"
             self._note_game_activity(game_name)
+            min_interval_ms = self.typed_config.game_lead_commentary_min_interval_ms
+            bypass_debounce = req.urgency == "high" or req.correction
+            req_round_id = (req.round_id or "").strip()
+
+            # 同轮二连发防抖：同一游戏推理轮次已播报过解说时，后续普通解说不再入账也不触发 throttled_recorded；
+            # 未带 round_id 但仍在短防抖窗内重复提交与刚播报/已缓冲内容实质重复的普通解说，同样直接去重忽略
+            if not bypass_debounce and req_round_id and req_round_id == self._last_commentary_round_id:
+                self._logger.debug(f"实况解说命中同轮二连发防抖（round_id={req_round_id}），跳过重复入账与播报")
+                return CommentaryAck(accepted=True, spoken=False, reason="same_round_deduped")
+            if (
+                not bypass_debounce
+                and min_interval_ms > 0
+                and self._last_commentary_spoken_ms is not None
+                and (now - self._last_commentary_spoken_ms) < min_interval_ms
+                and (
+                    self._commentary_summaries_duplicate(summary, self._last_commentary_summary)
+                    or any(self._commentary_summaries_duplicate(summary, item) for item in self._commentary_buffer)
+                )
+            ):
+                self._logger.debug(
+                    f"实况解说命中短间隔重复摘要防抖（{now - self._last_commentary_spoken_ms}ms < {min_interval_ms}ms），已去重忽略"
+                )
+                return CommentaryAck(accepted=True, spoken=False, reason="same_round_deduped")
+
             self._game_ledger.record_event(game_name, "commentary", summary, req.timestamp_ms or now)
             if self._mouth is not None:
                 self._mouth.note_game(summary)
 
             # 普通实况解说防抖：距上次任意出声不足最小间隔时记入缓冲合并，避免刷屏抢戏；
             # 突发高优（urgency == "high"）或即时纠偏（correction=True）直接穿透防抖立即播报
-            min_interval_ms = self.typed_config.game_lead_commentary_min_interval_ms
             last_speech_ms = self._room_state.last_speech_ms
-            bypass_debounce = req.urgency == "high" or req.correction
             if (
                 not bypass_debounce
                 and min_interval_ms > 0
@@ -4657,8 +4708,12 @@ class StreamerAgent(BaseAgent):
                 return CommentaryAck(accepted=True, spoken=False, reason="dispatch_empty")
 
             spoken_at = self._clock()
-            # 推进全局最近发声时刻：同步复位冷场兜底与静默提醒冷却，并更新下一条普通解说的防抖基准
+            # 推进全局最近发声时刻：同步复位冷场兜底与静默提醒冷却，并更新下一条普通解说的防抖与同轮去重基准
             self._room_state.record_speech(spoken_at)
+            self._last_commentary_spoken_ms = spoken_at
+            self._last_commentary_summary = summary
+            if req_round_id:
+                self._last_commentary_round_id = req_round_id
             self._last_silence_nudge_ms = None
             await self._scope.remember_round([], speech=dispatched[0], batch_persisted=True)
             return CommentaryAck(accepted=True, spoken=True, reason="dispatched")

@@ -269,6 +269,8 @@ class RoundContext:
     reply_player: Tuple[str, str] = ("", "")
     # 本回合的弹幕（编号, 原文）：她这句的回应目标对得上其中一条时，这句在回那条弹幕，不记成在回应玩家
     danmaku: Tuple[Tuple[str, str], ...] = ()
+    # 本回合批次是否含付费事件（礼物/醒目留言/上舰）：付费礼物常无 message_id，含付费事件时直接判回观众、禁绑游戏玩家
+    has_paid_event: bool = False
     # 本回合付过费的观众身份键集合：这些观众的弹幕行加「（付费观众）」标注，
     # 她据此权衡"谁的要求优先满足"（事实基础，见 paid_viewers 模块）
     paid_identities: Set[str] = field(default_factory=set)
@@ -404,6 +406,15 @@ def _observation_error(observation: str) -> Optional[str]:
     if not isinstance(data, dict) or data.get("ok") is not False:
         return None
     return str(data.get("error") or "（回执没写理由）")
+
+
+#: 付费事件消息类型（礼物/醒目留言/上舰）：本批含此类事件时直接判回应观众，避免无 message_id 回退错绑游戏同伴
+_PAID_MESSAGE_TYPES: frozenset[str] = frozenset({"gift", "super_chat", "guard"})
+
+
+def _has_paid_event(batch: Optional[Sequence[Any]]) -> bool:
+    """判断本轮消息批是否包含付费事件（礼物/醒目留言/上舰）。"""
+    return any(str(getattr(msg, "message_type", "") or "").strip() in _PAID_MESSAGE_TYPES for msg in (batch or ()))
 
 
 def _answers_danmaku(target: Any, danmaku: Sequence[Tuple[str, str]]) -> bool:
@@ -743,6 +754,7 @@ class Planner:
             danmaku=tuple(
                 (str(getattr(msg, "message_id", "") or ""), str(getattr(msg, "content", "") or "")) for msg in batch
             ),
+            has_paid_event=_has_paid_event(batch),
             history=list(history or []),
             # 本批付过费的观众：查一次（三表只读查询），标注挂在给规划器的消息行上
             paid_identities=await self._collect_paid_identities(batch),
@@ -1923,8 +1935,11 @@ class Planner:
         # 这句的回应目标对得上本回合一条弹幕（编号或原文）：对象是那位观众。即使本回合只有一位玩家在游戏公屏开口，
         # 也不记成在回应他——否则答应观众的事会被整理记到玩家头上。对不上的（拿游戏公屏原话当目标）照旧在回玩家
         answers_danmaku = _answers_danmaku(args.get("target"), ctx.danmaku)
+        # 本批含付费事件（礼物/醒目留言/上舰）时直接判回应观众：付费礼物常无 message_id，
+        # 绝不能因未命中弹幕编号而回退匹配游戏同伴名或绑定游戏玩家 UUID
+        has_paid_event = ctx.has_paid_event or _has_paid_event(batch)
         # 回的是本场更早一窗的观众弹幕（上一窗问的、这一窗才回）同样是在回观众，不是在回游戏里的玩家
-        answers_viewer = answers_danmaku or _viewer_message_in(args.get("target"), ctx.history)
+        answers_viewer = answers_danmaku or has_paid_event or _viewer_message_in(args.get("target"), ctx.history)
         answering_player = "" if answers_viewer else self._reply_player_name(args, ctx)
         # 本场已经提过的旧事又被点名、这句又不是在回人：先退回一次，让她换个话题。第 58 场 14 条旧事里
         # 8 条各提了两次，第二次全是冷场时主动点名的。每回合只退一次：退过还点名就照常说出去，免得一窗里

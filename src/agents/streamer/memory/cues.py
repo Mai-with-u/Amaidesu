@@ -33,6 +33,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -82,6 +83,7 @@ from .render import (
     render_viewer_card,
 )
 from .saves import SavePlace, place_note, place_of
+from .textmatch import is_stopword_token, normalize
 
 if TYPE_CHECKING:
     from src.modules.storage.models.memory import ArchiveLine, Commitment
@@ -143,6 +145,250 @@ _INTENT_RECENT_ARCHIVE_SESSIONS = 5
 # 截断带省略号的排除规矩前缀最小长度与类别前缀长度上限（防止极短前缀误杀无关事实）
 _EXCLUDED_TRUNCATED_PREFIX_MIN_CHARS = 12
 _EXCLUDED_CATEGORY_PREFIX_MAX_CHARS = 12
+# 查询已结案/作废承诺用于阻断过时档案条借地标名返祖推送的读取上限
+_MAX_CLOSED_COMMITMENTS_CHECK = 100
+_CLOSED_COMMITMENT_STATUSES: Tuple[str, ...] = ("closed", "void")
+_TERMINAL_CORRECTION_VERDICTS: frozenset[str] = frozenset({"done", "invalid", "wrong"})
+
+# [脑中闪过] 补充中文口语虚词与高频副词表：在意图关键词提取、FTS 检索与规则词过滤前剥离，
+# 防止"主要是""直接""根本没"等高频副词或连接虚词跨句拼出伪重合误命中无关归档条目
+_INTENT_EXTRA_STOP_PHRASES: Tuple[str, ...] = tuple(
+    sorted(
+        {
+            "主要是",
+            "主要",
+            "直接",
+            "根本没",
+            "根本不",
+            "根本",
+            "压根没",
+            "压根不",
+            "压根",
+            "完全没",
+            "完全不",
+            "完全",
+            "几乎没",
+            "从来没",
+            "从来不",
+            "从来",
+            "一直没",
+            "一直不",
+            "反正",
+            "毕竟",
+            "基本上",
+            "基本",
+            "干脆",
+            "索性",
+            "特意",
+            "专门",
+            "特地",
+            "故意",
+            "居然",
+            "竟然",
+            "简直",
+            "显然",
+            "明显",
+            "肯定",
+            "绝对",
+            "的确",
+            "确实",
+            "实在",
+            "稍微",
+            "略微",
+            "有点",
+            "有些",
+            "尤其",
+            "格外",
+            "赶紧",
+            "赶快",
+            "顿时",
+            "突然",
+            "忽然",
+            "慢慢",
+            "渐渐",
+            "逐步",
+            "逐渐",
+            "反复",
+            "重新",
+            "再次",
+            "依然",
+            "仍然",
+            "照样",
+            "照旧",
+            "反而",
+            "不如",
+            "宁可",
+            "哪怕",
+            "即使",
+            "就算",
+            "既然",
+            "除非",
+            "只要",
+            "只有",
+            "无论",
+            "尽管",
+            "否则",
+            "不然",
+            "因此",
+            "于是",
+            "从而",
+            "另外",
+            "此外",
+            "同时",
+            "至少",
+            "至多",
+            "最多",
+            "最少",
+            "几乎",
+            "差点",
+            "暂时",
+            "暂且",
+            "临时",
+            "早就",
+            "早已",
+            "最近",
+            "近期",
+            "眼下",
+            "当下",
+            "回头",
+            "总算",
+            "结果",
+            "最后",
+            "最终",
+            "首先",
+            "其次",
+            "随后",
+            "实际上",
+            "事实上",
+            "说白了",
+            "说实话",
+            "老实说",
+            "总之",
+            "简单来说",
+            "感觉",
+            "觉得",
+            "以为",
+            "似乎",
+            "看起来",
+            "看上去",
+            "听起来",
+            "显得",
+            "罢了",
+            "而已",
+            "之类的",
+            "什么的",
+            "之类",
+            "这样",
+            "那样",
+            "这么",
+            "那么",
+            "如此",
+            "这种",
+            "那种",
+            "各种",
+            "各类",
+            "各种各样",
+            "只是",
+            "只不过",
+            "不仅",
+            "不只是",
+            "不仅仅是",
+            "算不上",
+            "大概是",
+            "应该是",
+            "可能是",
+            "好像是",
+            "一般",
+            "普通",
+            "正常",
+            "大约",
+            "大致",
+            "左右",
+        },
+        key=len,
+        reverse=True,
+    )
+)
+_INTENT_EXTRA_STOP_PHRASES_RE = re.compile("|".join(re.escape(phrase) for phrase in _INTENT_EXTRA_STOP_PHRASES))
+
+
+def _strip_intent_stop_phrases(text: str) -> str:
+    """在意图关键词提取与匹配前剥离高频口语虚词/副词（如「主要是」「直接」「根本没」）。"""
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    return " ".join(_INTENT_EXTRA_STOP_PHRASES_RE.sub(" ", cleaned).split())
+
+
+def _score_intent_match(query: str, document: str) -> Tuple[float, Tuple[str, ...]]:
+    """剥离高频虚词/副词后计算意图关键词重合得分，防止纯虚词命中无关归档与社交事实。"""
+    cleaned_query = _strip_intent_stop_phrases(query)
+    cleaned_doc = _strip_intent_stop_phrases(document)
+    if not cleaned_query or not cleaned_doc:
+        return 0.0, ()
+    return score_intent_keyword_match(cleaned_query, cleaned_doc)
+
+
+def _is_filler_only_phrase(phrase: str) -> bool:
+    """判断单个规则触发词是否全由虚词/副词构成（如「主要是」「直接」「根本没」），避免误触发归档条目。"""
+    stripped = _strip_intent_stop_phrases(phrase)
+    norm = normalize(stripped)
+    if not norm:
+        return True
+    return is_stopword_token(norm)
+
+
+def _archive_linked_to_closed_commitment(line: "ArchiveLine", commitment: "Commitment") -> bool:
+    """判断一条档案行是否对应已结案/作废承诺的过时记录，防止借地标名或关键词返祖推送。
+
+    触发条件：线索推送评估档案行候选且存在 ``status != 'open'`` 的已结案承诺时调用；
+    执行顺序：核对同游戏同存档 -> 核对同句发言证据编号 -> 核对标题/引文直接包含
+    -> 剥离地标名与虚词后核对核心实词高度重合（不因仅共享地标名误伤独立的正常往事记忆）。
+    """
+    if getattr(commitment, "status", "open") == "open":
+        return False
+    c_game = (getattr(commitment, "game", None) or "").strip()
+    l_game = (getattr(line, "game", None) or "").strip()
+    if c_game and l_game and c_game != l_game:
+        return False
+    c_save = (getattr(commitment, "save_id", "") or "").strip()
+    l_save = (getattr(line, "save_id", "") or "").strip()
+    if c_save and l_save and c_save != l_save:
+        return False
+    # 证据 1：来自同一句主播台词（evidence_chat_id 相同）
+    c_chat_id = getattr(commitment, "evidence_chat_id", None)
+    l_chat_id = getattr(line, "evidence_chat_id", None)
+    if c_chat_id is not None and l_chat_id is not None and int(c_chat_id) == int(l_chat_id):
+        return True
+    # 证据 2：已结案承诺的动作标题或逐字引文直接包含在档案行标题/引文中
+    c_what_raw = str(getattr(commitment, "what", "") or "")
+    l_text_raw = str(getattr(line, "text", "") or "")
+    c_what_norm = normalize(c_what_raw)
+    l_text_norm = normalize(l_text_raw)
+    if len(c_what_norm) >= 4 and c_what_norm in l_text_norm:
+        return True
+    c_quote_norm = normalize(str(getattr(commitment, "quote", "") or ""))
+    l_quote_norm = normalize(str(getattr(line, "quote", "") or ""))
+    if len(c_quote_norm) >= 6 and l_quote_norm and (c_quote_norm in l_quote_norm or l_quote_norm in c_quote_norm):
+        return True
+    # 证据 3：剥离地标名与虚词后，承诺核心实词几乎全部落在档案行标题中（防仅凭地标名误伤独立往事）
+    place = (getattr(line, "place", "") or "").strip()
+    shared_place = bool(place and place in c_what_raw)
+    c_what_body = c_what_raw.replace(place, " ") if place else c_what_raw
+    l_text_body = l_text_raw.replace(place, " ") if place else l_text_raw
+    c_tokens = intent_content_tokens(_strip_intent_stop_phrases(c_what_body))
+    if not c_tokens:
+        return False
+    l_tokens = set(intent_content_tokens(_strip_intent_stop_phrases(l_text_body)))
+    if not l_tokens:
+        return False
+    matched = [token for token in c_tokens if token in l_tokens]
+    if len(c_tokens) == 1:
+        if not shared_place:
+            return False
+        score, _ = _score_intent_match(c_what_body, l_text_body)
+        return score >= 1.0 and len(matched) == 1
+    return len(matched) >= 2 and (len(matched) / len(c_tokens)) >= 0.8
 
 
 def _compact_text(text: str) -> str:
@@ -285,6 +531,9 @@ class _Round:
     earliest_recent_ms: int = 0
     self_trigger_cutoff_ms: Optional[int] = None
     commitment_progress: Dict[int, str] = field(default_factory=dict)
+    closed_commitments: Tuple[Any, ...] = ()
+    closed_commitment_ids: Set[int] = field(default_factory=set)
+    superseded_archive_ids: Set[int] = field(default_factory=set)
     cards: List[_Card] = field(default_factory=list)
     probes: List[NewCueLogEntry] = field(default_factory=list)
     carded_viewers: Set[int] = field(default_factory=set)
@@ -436,7 +685,9 @@ class MemoryCueProvider:
         await self._mark_used(sid, used_archive, used)
         del open_games  # 游戏承诺不再按"游戏开着"轮播，只在对象开口、走到地点或情境命中时单推
         recent_ids, earliest_ms, self_cutoff_ms = await self._recent_session_bounds(sid)
-        commitment_progress = await self._load_commitment_progress(sid)
+        commitment_progress, closed_correction_ids, superseded_archive_ids = await self._load_session_corrections(sid)
+        closed_commitments = await self._closed_commitments()
+        closed_commitment_ids = closed_correction_ids | {int(item.id) for item in closed_commitments}
         state = _Round(
             used=used,
             used_archive=used_archive,
@@ -448,6 +699,9 @@ class MemoryCueProvider:
             earliest_recent_ms=earliest_ms,
             self_trigger_cutoff_ms=self_cutoff_ms,
             commitment_progress=commitment_progress,
+            closed_commitments=tuple(closed_commitments),
+            closed_commitment_ids=closed_commitment_ids,
+            superseded_archive_ids=superseded_archive_ids,
         )
         self._round_labels = {}
         # 对象开口（观众承诺、老观众线索、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
@@ -572,7 +826,9 @@ class MemoryCueProvider:
         used, used_archive = await load_used_refs(self._chat, sid)
         await self._mark_used(sid, used_archive, used)
         recent_ids, earliest_ms, self_cutoff_ms = await self._recent_session_bounds(sid)
-        commitment_progress = await self._load_commitment_progress(sid)
+        commitment_progress, closed_correction_ids, superseded_archive_ids = await self._load_session_corrections(sid)
+        closed_commitments = await self._closed_commitments(game=normalized_game)
+        closed_commitment_ids = closed_correction_ids | {int(item.id) for item in closed_commitments}
         state = _Round(
             used=used,
             used_archive=used_archive,
@@ -584,6 +840,9 @@ class MemoryCueProvider:
             earliest_recent_ms=earliest_ms,
             self_trigger_cutoff_ms=self_cutoff_ms,
             commitment_progress=commitment_progress,
+            closed_commitments=tuple(closed_commitments),
+            closed_commitment_ids=closed_commitment_ids,
+            superseded_archive_ids=superseded_archive_ids,
             max_cards=effective_limit,
         )
         self._round_labels = {}
@@ -819,8 +1078,10 @@ class MemoryCueProvider:
         intent_queries: List[str] = []
         for raw_text in texts[-VECTOR_MAX_QUERIES:]:
             masked = mask_names_in_text(raw_text, self._known_names, "玩家")
-            if intent_content_tokens(masked):
-                intent_queries.append(masked)
+            # 先剥离"主要是""直接""根本没"等口语副词与虚词再取意图实词，防止纯虚词驱动 FTS 或实词误命中
+            cleaned_intent = _strip_intent_stop_phrases(masked)
+            if cleaned_intent and intent_content_tokens(cleaned_intent):
+                intent_queries.append(cleaned_intent)
         if not intent_queries:
             return
 
@@ -907,11 +1168,11 @@ class MemoryCueProvider:
             best_phrases: Tuple[str, ...] = ()
             quote_text = (fact.quote or "").strip()
             for query_text in intent_queries:
-                s_text, p_text = score_intent_keyword_match(query_text, fact.text)
+                s_text, p_text = _score_intent_match(query_text, fact.text)
                 if s_text > best_score:
                     best_score, best_phrases = s_text, p_text
                 if quote_text:
-                    s_full, p_full = score_intent_keyword_match(query_text, f"{fact.text} {quote_text}")
+                    s_full, p_full = _score_intent_match(query_text, f"{fact.text} {quote_text}")
                     weighted = s_full * 0.85
                     if weighted > best_score:
                         best_score, best_phrases = weighted, p_full
@@ -963,6 +1224,8 @@ class MemoryCueProvider:
             key: ItemKey = ("archive", int(line.id))
             if self._skip(key, state, self._other_save(line.game, line.save_id, state)):
                 continue
+            if self._skip(key, state, self._archive_superseded_reason(line, state)):
+                continue
             if _is_excluded_text(line.text, excluded_compact):
                 self._skip(key, state, "已在常驻规矩")
                 continue
@@ -977,11 +1240,11 @@ class MemoryCueProvider:
             best_score = 0.0
             best_phrases: Tuple[str, ...] = ()
             for query_text in intent_queries:
-                s_text, p_text = score_intent_keyword_match(query_text, line.text)
+                s_text, p_text = _score_intent_match(query_text, line.text)
                 if s_text > best_score:
                     best_score, best_phrases = s_text, p_text
                 if safe_quote:
-                    s_full, p_full = score_intent_keyword_match(query_text, f"{line.text} {safe_quote}")
+                    s_full, p_full = _score_intent_match(query_text, f"{line.text} {safe_quote}")
                     weighted = s_full * 0.85
                     if weighted > best_score:
                         best_score, best_phrases = weighted, p_full
@@ -1399,6 +1662,8 @@ class MemoryCueProvider:
                 continue
             for commitment in await self._open_commitments(viewer_id=sender.viewer_id):
                 key: ItemKey = ("commitment", int(commitment.id))
+                if self._skip(key, state, self._commitment_closed_reason(commitment, state)):
+                    continue
                 if self._skip(key, state, "搁了很久" if self._dormant_commitment(commitment, state) else None):
                     continue
                 if self._blocked(key, state) is not None:
@@ -1493,11 +1758,13 @@ class MemoryCueProvider:
             if self._skip(key, state, "本场说上话了" if player.id in replied else self._blocked(key, state)):
                 continue
             history = await self._players.list_history(player_id=player.id, exclude_session_id=session_id)
-            # 答应过他的事：本场已经点名用上或已搁了很久的不再写，其余至多两条
+            # 答应过他的事：本场已经点名用上、已结案或已搁了很久的不再写，其余至多两条
             promises = [
                 item
                 for item in await self._open_commitments(player_id=int(player.id), limit=_MAX_PROMISES_PER_PLAYER)
-                if int(item.id) not in state.used and not self._dormant_commitment(item, state)
+                if int(item.id) not in state.used
+                and self._commitment_closed_reason(item, state) is None
+                and not self._dormant_commitment(item, state)
             ]
             # 别的存档里答应的照样提，但写明是在哪个存档答应的
             notes = [(item, place_note(item.game, item.save_id, item.save_name, state.saves)) for item in promises]
@@ -1567,6 +1834,8 @@ class MemoryCueProvider:
         for game, place, distance in arrivals:
             for line in self._pool.lines_at(game, place, state.saves):
                 key: ItemKey = ("archive", int(line.id))
+                if self._skip(key, state, self._archive_superseded_reason(line, state)):
+                    continue
                 if self._skip(key, state, self._passive_blocked(key, state)):
                     continue
                 # 地点一路的线索用提示语气，不替她断言眼下在哪：位置可能是几分钟前读到的，存档也只说"记录上"
@@ -1590,6 +1859,8 @@ class MemoryCueProvider:
                 if place not in f"{commitment.what} {commitment.quote}":
                     continue
                 key = ("commitment", int(commitment.id))
+                if self._skip(key, state, self._commitment_closed_reason(commitment, state)):
+                    continue
                 if self._skip(key, state, "搁了很久" if self._dormant_commitment(commitment, state) else None):
                     continue
                 if self._skip(key, state, self._other_save(game, commitment.save_id, state)):
@@ -1672,6 +1943,9 @@ class MemoryCueProvider:
         kind, value = hit.key
         if kind == "joke":
             return render_joke_card(str(value), message_id=hit.message_id)
+        if hit.keywords and all(_is_filler_only_phrase(kw) for kw in hit.keywords):
+            self._skip(hit.key, state, "虚词触发")
+            return ""
         keyword = hit.keywords[0] if hit.keywords else ""
         if SOURCE_DANMAKU in hit.sources:
             who = f"弹幕 {hit.message_id} " if hit.message_id else "观众"
@@ -1682,6 +1956,8 @@ class MemoryCueProvider:
             why = f"你刚说到「{keyword}」"
         line = self._pool.archive_line(int(value))
         if line is None or self._skip(hit.key, state, self._other_save(line.game, line.save_id, state)):
+            return ""
+        if self._skip(hit.key, state, self._archive_superseded_reason(line, state)):
             return ""
         if excluded_compact and _is_excluded_text(line.text, excluded_compact):
             self._skip(hit.key, state, "已在常驻规矩")
@@ -1790,6 +2066,8 @@ class MemoryCueProvider:
                 return ""
             if self._skip(hit.key, state, self._other_save(line.game, line.save_id, state)):
                 return ""
+            if self._skip(hit.key, state, self._archive_superseded_reason(line, state)):
+                return ""
             if excluded_compact and _is_excluded_text(line.text, excluded_compact):
                 self._skip(hit.key, state, "已在常驻规矩")
                 return ""
@@ -1802,6 +2080,8 @@ class MemoryCueProvider:
         commitment = await self._recallable_commitment(int(value))
         if commitment is None:
             self._skip(hit.key, state, "不是未了结的公开承诺")
+            return ""
+        if self._skip(hit.key, state, self._commitment_closed_reason(commitment, state)):
             return ""
         if game and commitment.game and (commitment.game or "").strip() != game:
             self._skip(hit.key, state, "别的游戏")
@@ -1946,26 +2226,75 @@ class MemoryCueProvider:
             return None
         return int(value) if value is not None else None
 
-    async def _load_commitment_progress(self, session_id: int) -> Dict[int, str]:
-        """读取本场各未了结承诺的最新进展摘要（未注入更正仓储或查询异常时降级返回空）。"""
+    @staticmethod
+    def _commitment_closed_reason(commitment: Any, state: _Round) -> Optional[str]:
+        """承诺状态已非 open 或本场已被场内更正结案时返回阻断原因，防止已结案承诺返祖推送。"""
+        if getattr(commitment, "status", "open") != "open":
+            return "承诺已结案"
+        if int(commitment.id) in state.closed_commitment_ids:
+            return "承诺已结案"
+        return None
+
+    @staticmethod
+    def _archive_superseded_reason(line: "ArchiveLine", state: _Round) -> Optional[str]:
+        """档案行本场已被更正作废/完成，或关联已结案承诺且非运营锁定行时返回阻断原因。"""
+        if int(line.id) in state.superseded_archive_ids:
+            return "场内已更正"
+        if not getattr(line, "human_locked", False) and any(
+            _archive_linked_to_closed_commitment(line, commitment) for commitment in state.closed_commitments
+        ):
+            return "关联承诺已结案"
+        return None
+
+    async def _load_session_corrections(self, session_id: int) -> Tuple[Dict[int, str], Set[int], Set[int]]:
+        """读取本场生效中的记忆更正，返回（未了结承诺进展摘要, 本场已结案承诺号, 本场已作废/完成档案行号）。"""
         if self._corrections is None:
-            return {}
+            return {}, set(), set()
         try:
-            if hasattr(self._corrections, "list_commitment_updates_by_session"):
+            if hasattr(self._corrections, "list_active_by_session"):
+                items = await self._corrections.list_active_by_session(live_session_id=int(session_id))
+            elif hasattr(self._corrections, "list_commitment_updates_by_session"):
                 items = await self._corrections.list_commitment_updates_by_session(live_session_id=int(session_id))
             else:
-                all_active = await self._corrections.list_active_by_session(live_session_id=int(session_id))
-                items = [item for item in all_active if item.target_kind == "commitment"]
-        except Exception as exc:  # noqa: BLE001 - 本场进展读不到不挡其余线索推送
-            logger.warning(f"读本场承诺进展失败（线索暂不附进展注记）: {exc}", exc=exc)
-            return {}
+                items = []
+        except Exception as exc:  # noqa: BLE001 - 本场更正读不到不挡其余线索推送
+            logger.warning(f"读本场记忆更正失败（线索暂不附进展与结案过滤）: {exc}", exc=exc)
+            return {}, set(), set()
         progress: Dict[int, str] = {}
+        closed_commitments: Set[int] = set()
+        superseded_archives: Set[int] = set()
         for item in items:
-            if item.verdict == "progress" and item.commitment_id is not None:
-                cleaned = " ".join(str(item.summary or "").split())
-                if cleaned:
-                    progress[int(item.commitment_id)] = cleaned
-        return progress
+            target_kind = getattr(item, "target_kind", "")
+            verdict = getattr(item, "verdict", "")
+            if target_kind == "commitment" and item.commitment_id is not None:
+                cid = int(item.commitment_id)
+                if verdict == "progress":
+                    cleaned = " ".join(str(item.summary or "").split())
+                    if cleaned:
+                        progress[cid] = cleaned
+                elif verdict in _TERMINAL_CORRECTION_VERDICTS:
+                    closed_commitments.add(cid)
+                    progress.pop(cid, None)
+            elif target_kind == "archive" and item.archive_line_id is not None:
+                if verdict in _TERMINAL_CORRECTION_VERDICTS:
+                    superseded_archives.add(int(item.archive_line_id))
+        return progress, closed_commitments, superseded_archives
+
+    async def _closed_commitments(self, *, game: Optional[str] = None) -> List[Any]:
+        """读取已结案/作废承诺（status != 'open'），供归档与地标联想路径过滤对应过时条。"""
+        list_fn = getattr(self._commitments, "list_commitments", None)
+        if not callable(list_fn):
+            return []
+        try:
+            rows = await list_fn(
+                statuses=list(_CLOSED_COMMITMENT_STATUSES),
+                game=game,
+                limit=_MAX_CLOSED_COMMITMENTS_CHECK,
+            )
+        except Exception as exc:  # noqa: BLE001 - 查不到已结案承诺时不阻断其余线索
+            logger.debug(f"读已结案承诺失败（跳过过时档案对照）: {exc}", exc=exc)
+            return []
+        return [row for row in (rows or ()) if getattr(row, "status", "open") != "open"]
 
     async def _open_commitments(
         self,
@@ -1977,13 +2306,14 @@ class MemoryCueProvider:
     ) -> List[Any]:
         """名下（某位观众、某位游戏玩家或某个游戏）的未了结承诺（新的在前）；查不到就当没有。"""
         try:
-            return await self._commitments.list_commitments(
+            rows = await self._commitments.list_commitments(
                 statuses=["open"],
                 viewer_id=viewer_id,
                 game=game,
                 target_player_id=player_id,
                 limit=limit,
             )
+            return [row for row in (rows or ()) if getattr(row, "status", "open") == "open"]
         except Exception as exc:  # noqa: BLE001 - 查不到这条线索，不挡本批其余线索
             logger.warning(f"读未了结承诺失败（本批少一条线索）: {exc}", exc=exc)
             return []
