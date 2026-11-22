@@ -18,6 +18,7 @@ from src.agents.streamer.speech_guard import fit_to_budget, guard
 
 # 登记（只读穿透，合并时进底账）：接线断言读取内建 Replyer 的台词长度预算
 # （agent._replyer._speech_max_chars）；"配置确实传到了回复器"暂无公开只读观察者。
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -291,3 +292,55 @@ async def test_shorten_restored_names_survive_outer_fit_to_budget_guard() -> Non
     for name in ("星辰", "小橘", "阿杰"):
         assert name in result["speech"]
         assert name in verdict.text
+
+
+async def test_keep_names_without_reply_to_omits_game_companion_and_guards_short_draft() -> None:
+    """仅传 keep_names 而 reply_to 为空时，提示词绝不渲染「提及的游戏同伴」，且初稿漏名亦自动补回。"""
+    replyer, _, prompt = _modal_replyer(
+        Response(success=True, content="欢迎ViewerA来到直播间一起玩呀！", request_id="req_short_draft"),
+        speech_max_chars=30,
+    )
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="欢迎新观众ViewerA、ViewerB"),
+        [],
+        reply_to="",
+        keep_names=("ViewerA", "ViewerB"),
+    )
+    assert result is not None
+    rendered_plan = prompt.render.call_args.kwargs["plan"]
+    assert "提及的游戏同伴" not in rendered_plan
+    assert "刚在游戏里找过她" not in rendered_plan
+    assert "ViewerA、ViewerB" in rendered_plan
+    assert "ViewerA" in result["speech"] and "ViewerB" in result["speech"]
+
+
+async def test_paid_event_batch_keeps_viewer_name_on_shorten_without_game_companion_label() -> None:
+    """批次含无 message_id 的付费礼物时，Replyer 自动把送礼观众昵称纳入保名且不渲染游戏同伴模板。"""
+    long_thanks = (
+        "非常感谢观众送出的大礼物呀！"
+        "今天咱们在工坊旁边折腾水车和齿轮箱，刚刚还把传送带、漏斗、储物箱和照明火把全部重新摆了一遍，"
+        "等会儿继续一起看看这台机器能不能顺利转起来吧！"
+    )
+    replyer, llm, prompt = _modal_replyer(
+        Response(success=True, content=long_thanks, request_id="req_gift_orig"),
+        Response(success=True, content="非常感谢小伙伴送的礼物呀，今天继续折腾水车！", request_id="req_gift_short"),
+        speech_max_chars=25,
+    )
+    gift_msg = RoomMessagePayload(
+        message_type="gift",
+        message_id="",
+        user=RoomMessageUser(id="v_gift_1", name="ViewerAlpha"),
+        content="送出 小心心 x1",
+    )
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="感谢ViewerAlpha送的小心心"),
+        [gift_msg],
+        reply_to="",
+    )
+    assert result is not None
+    rendered_plan = prompt.render.call_args.kwargs["plan"]
+    assert "提及的游戏同伴" not in rendered_plan
+    assert "ViewerAlpha" in rendered_plan
+    shorten_text = llm.generate.await_args_list[1].args[0][0]["content"]
+    assert "ViewerAlpha" in shorten_text
+    assert "ViewerAlpha" in result["speech"]

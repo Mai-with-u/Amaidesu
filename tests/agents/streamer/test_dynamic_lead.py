@@ -1736,7 +1736,8 @@ async def test_game_lead_enter_welcome_batches_unwelcomed_viewers_via_replyer_wi
 
         assert planner_stub.plan.await_count == 0
         assert len(replyer_calls) == 1
-        assert replyer_calls[0]["reply_to"] == "小明、小红、小蓝"
+        assert replyer_calls[0]["reply_to"] == ""
+        assert list(replyer_calls[0]["keep_names"]) == ["小明", "小红", "小蓝"]
         assert "小明、小红、小蓝" in replyer_calls[0]["state_facts"]
         assert len(speech_events) == 1
         assert speech_events[0].text == "欢迎小明和小红来直播间坐坐呀！"
@@ -2651,3 +2652,233 @@ async def test_danmaku_quiet_window_flushes_single_fast_and_merges_burst_with_fa
         assert [m.content for m in round_exec.calls[0]["batch"]] == ["这波操作好秀", "能不能再演示一遍"]
     finally:
         await agent.stop()
+
+
+async def test_enter_welcome_with_real_replyer_never_renders_game_companion_and_preserves_names(
+    prompts: Any,
+) -> None:
+    """轻量进房欢迎接入真实 Replyer 时，绝不渲染「提及的游戏同伴」，且初稿与缩句重试均必保观众昵称。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_events: List[StreamerSpeechPayload] = []
+    speech_emitted = asyncio.Event()
+
+    async def _capture(_name: str, payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_events.append(payload)
+        speech_emitted.set()
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    # 首稿超长触发缩句，缩句故意丢掉观众昵称，验证真实 Replyer 仍完整保留 ViewerA 与 ViewerB
+    long_draft = (
+        "欢迎ViewerA和ViewerB来到直播间一起玩呀！"
+        "今天咱们在工坊旁边搭水车和齿轮箱，刚刚还在研究怎么把传送带接起来，顺便把箱子里的矿石整理干净呢！"
+    )
+    llm_calls: List[Dict[str, Any]] = []
+    responses = iter(
+        [
+            Response(success=True, content=long_draft, request_id="req_w_orig"),
+            Response(success=True, content="欢迎新来的朋友们进来一起看造水车呀！", request_id="req_w_short"),
+        ]
+    )
+
+    class _InspectLLM(FakeLLMManager):
+        async def generate(self, input: Any, **kwargs: Any) -> Response:
+            llm_calls.append({"messages": input, **kwargs})
+            return next(responses)
+
+    real_replyer = Replyer(
+        config={"bot_name": "麦麦", "speech_max_chars": 25},
+        llm_service=_InspectLLM(),
+        prompt_service=prompts,
+    )
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "speech_max_chars": 25},
+        prompt=prompts,
+        replyer=real_replyer,
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        enter_welcome_debounce_ms=0,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=806, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        for uid, uname in (("u_a", "ViewerA"), ("u_b", "ViewerB")):
+            await bus.emit(
+                CoreEvents.ROOM_MESSAGE_ENTER,
+                RoomMessagePayload(
+                    message_type="enter",
+                    message_id=f"enter_{uid}",
+                    content="",
+                    user=RoomMessageUser(id=uid, name=uname),
+                    timestamp_ms=clock(),
+                ),
+                source="test",
+            )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        assert len(llm_calls) == 2
+        initial_prompt = llm_calls[0]["messages"][0]["content"]
+        assert "提及的游戏同伴" not in initial_prompt
+        assert "刚在游戏里找过她" not in initial_prompt
+        assert "ViewerA" in initial_prompt and "ViewerB" in initial_prompt
+        shorten_prompt = llm_calls[1]["messages"][0]["content"]
+        assert "ViewerA" in shorten_prompt and "ViewerB" in shorten_prompt
+        assert len(speech_events) == 1
+        assert "ViewerA" in speech_events[0].text and "ViewerB" in speech_events[0].text
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_framework_commentary_same_round_dedupes_without_blocking_cross_round_or_high_urgency(
+    prompts: Any,
+) -> None:
+    """同轮普通解说二连发在协调器与主播侧均静默去重，不产 throttled_recorded；跨轮与高紧急度正常播报。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_events: List[StreamerSpeechPayload] = []
+
+    async def _capture(_name: str, payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_events.append(payload)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    replyer_calls: List[Dict[str, Any]] = []
+    speeches = iter(
+        [
+            "先把矿车轨道铺到矿洞门口啦！",
+            "哇前面突然刷出一只苦力怕，赶紧撤！",
+            "新一轮继续把水车齿轮接上吧！",
+        ]
+    )
+
+    class _CountingReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode, has_target
+            return 60
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            replyer_calls.append(dict(kwargs))
+            return {"speech": next(speeches), "llm_request_id": f"req_c_{len(replyer_calls)}"}
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "game_lead_commentary_min_interval_ms": 8_000,
+        },
+        prompt=prompts,
+        replyer=_CountingReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=807, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 1) 同轮首次普通解说正常播出
+        ack1 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure", summary="矿车轨道已经铺到矿洞门口", urgency="normal", round_id="mc_round_1"
+            ),
+        )
+        await bus.wait_until_drained()
+        assert ack1.accepted is True and ack1.spoken is True and ack1.reason == "dispatched"
+        assert len(replyer_calls) == 1
+
+        # 2) 3 秒后同轮二连发普通解说 → 直接同轮去重，不调 Replyer，不产出 throttled_recorded
+        clock.advance(3_000)
+        ack2 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure", summary="矿车轨道铺完了准备下矿", urgency="normal", round_id="mc_round_1"
+            ),
+        )
+        assert ack2.accepted is True and ack2.spoken is False and ack2.reason == "same_round_deduped"
+        assert len(replyer_calls) == 1
+
+        # 3) 即使已超过 8 秒间隔，同轮普通解说仍防抖拦截；但同轮 high 紧急度穿透播报
+        clock.advance(10_000)
+        ack3 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="还在同一轮补充一句", urgency="normal", round_id="mc_round_1"),
+        )
+        assert ack3.accepted is True and ack3.spoken is False and ack3.reason == "same_round_deduped"
+        assert len(replyer_calls) == 1
+
+        ack_high = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure", summary="前方突发苦力怕贴脸", urgency="high", mood="scared", round_id="mc_round_1"
+            ),
+        )
+        await bus.wait_until_drained()
+        assert ack_high.accepted is True and ack_high.spoken is True and ack_high.reason == "dispatched"
+        assert len(replyer_calls) == 2
+
+        # 4) 跨轮新 round_id 且过间隔 → 正常播出；随后短间隔内无 round_id 重复摘要亦去重不积压缓冲
+        clock.advance(9_000)
+        ack_next_round = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure", summary="新一轮把水车齿轮接好了", urgency="normal", round_id="mc_round_2"
+            ),
+        )
+        await bus.wait_until_drained()
+        assert ack_next_round.accepted is True and ack_next_round.spoken is True
+        assert len(replyer_calls) == 3
+
+        clock.advance(3_000)
+        ack_dup_text = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="新一轮把水车齿轮接好了", urgency="normal"),
+        )
+        assert (
+            ack_dup_text.accepted is True
+            and ack_dup_text.spoken is False
+            and ack_dup_text.reason == "same_round_deduped"
+        )
+        assert len(speech_events) == 3
+    finally:
+        await agent.stop()
+        await game.stop()

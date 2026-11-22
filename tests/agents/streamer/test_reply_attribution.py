@@ -415,3 +415,61 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
     # 第 66 场回归：回复器归属规矩不再默认"玩家游戏公屏说的事多半在说你"，明确游戏公屏全服可见、不在身边别往自己脚下套
     assert "玩家游戏公屏说的事多半在说你" not in people
     assert "游戏公屏全服可见" in people and "没说在你身边就别往自己脚下套" in people
+
+
+@pytest.mark.parametrize("message_type", ["gift", "super_chat", "guard"])
+async def test_paid_event_without_message_id_answers_viewer_never_binds_game_player(
+    prompts: Any, message_type: str
+) -> None:
+    """付费事件（gift/super_chat/guard）即便无 message_id 且摘要提及游戏玩家，也必判回应观众、不绑玩家 UUID 并保观众昵称。"""
+    long_thanks = (
+        "哇非常感谢刚刚送来的支持呀，顺便提一句今天咱们在矿洞里和旁边工坊忙活了半天，"
+        "把齿轮、传送带、漏斗和水车都重新调顺手了呢，大家快坐下来一起看吧！"
+    )
+    llm_reply = FakeLLMManager(
+        responses=[
+            Response(success=True, content=long_thanks, request_id="r_orig"),
+            Response(success=True, content="非常感谢大家的支持呀，继续修水车！", request_id="r_short"),
+        ]
+    )
+    real_replyer = Replyer(
+        config={"bot_name": "麦麦", "speech_max_chars": 25},
+        llm_service=llm_reply,
+        prompt_service=prompts,
+    )
+    planner = _planner(
+        real_replyer,
+        [_reply(target=None, topic_summary="感谢ViewerGift送的礼物，顺便提一下刚跟PlayerAlpha在矿洞挖矿")],
+    )
+    player_chat = PlayerNote(
+        who="PlayerAlpha",
+        said=True,
+        line="[00:10 minecraft 游戏公屏] 玩家 PlayerAlpha：矿洞这边铁矿很多",
+        game="minecraft",
+        uuid="uuid-alpha",
+        timestamp_ms=now_ms(),
+    )
+    game_batch = GameEventBatch(
+        chat_speakers=(("minecraft", "uuid-alpha"),),
+        player_notes=(player_chat,),
+    )
+    paid_batch = [
+        RoomMessagePayload(
+            message_type=message_type,
+            message_id="",
+            user=RoomMessageUser(id="viewer-paid-1", name="ViewerGift"),
+            content="送出礼物支持主播",
+        )
+    ]
+
+    outcome = await planner.plan(paid_batch, forced=True, game_batch=game_batch)
+
+    assert outcome.replied is True
+    # 绝不回退绑定游戏玩家 UUID
+    assert outcome.reply_player == ("", "")
+    # Replyer 输入不得出现游戏同伴归因行，且缩句后必须保留送礼观众昵称、不硬插游戏玩家名
+    initial_user_text = llm_reply.calls[0]["input"][0]["content"]
+    assert "提及的游戏同伴: PlayerAlpha" not in initial_user_text
+    assert outcome.speech is not None
+    assert "ViewerGift" in outcome.speech
+    assert "PlayerAlpha" not in outcome.speech

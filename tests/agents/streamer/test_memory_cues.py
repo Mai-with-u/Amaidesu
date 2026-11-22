@@ -1433,3 +1433,161 @@ async def test_game_lead_intent_preserves_recall_for_real_action_intents(
         limit=2,
     )
     assert any(expected_snippet in item for item in cues)
+
+
+@pytest.mark.parametrize(
+    "filler_text",
+    [
+        "我主要是直接过去看看，根本没带别的",
+        "主要是根本没必要再折腾了，直接这样吧",
+        "反正基本上就是直接转一圈",
+    ],
+)
+async def test_game_lead_intent_filters_filler_adverbs_while_keeping_domain_recall(
+    store: SQLiteDatabase, filler_text: str
+) -> None:
+    """[脑中闪过] 过滤「主要是」「直接」「根本没」等口语虚词/副词，防止误命中归档条目且不损实质词召回。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+
+    await store.archive.insert_line(
+        live_session_id=old_session,
+        text="上次主要是想直接修好结果根本没弄完",
+        quote="当时主要是想直接修好但根本没来得及",
+        evidence_chat_id=1,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        keywords=["主要是", "直接", "根本没"],
+    )
+    await store.archive.insert_line(
+        live_session_id=old_session,
+        text="今天在北岸修好了水车",
+        quote="北岸水车总算转起来了",
+        evidence_chat_id=2,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+    )
+
+    provider = _passive(store, current_session, _Clock(), social_fact_repo=store.social_facts)
+    assert (
+        await provider.cues_for_game_lead(
+            game=game,
+            texts=(filler_text,),
+            current_saves=saves,
+            limit=2,
+        )
+        == []
+    )
+    domain_cues = await provider.cues_for_game_lead(
+        game=game,
+        texts=("主要是直接去修北岸水车，根本没忘",),
+        current_saves=saves,
+        limit=2,
+    )
+    assert any("北岸修好了水车" in item for item in domain_cues)
+
+
+async def test_closed_commitment_and_linked_archive_do_not_resurrect_via_landmark(
+    store: SQLiteDatabase,
+) -> None:
+    """已结案承诺及其关联过时档案不再借地标名返祖推送，同地标的正常往事与进行中承诺照常召回。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+
+    # 1) 已结案承诺（closed）与同地标关联的过时档案行
+    closed_cid = await store.commitments.insert_commitment(
+        what="给风车磨坊搭楼梯",
+        quote="下次一定给风车磨坊搭好楼梯",
+        evidence_chat_id=101,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        created_session_id=old_session,
+        now_ms_value=_NOW - 85_000_000,
+    )
+    assert closed_cid is not None
+    await store.commitments.close_commitment(commitment_id=closed_cid, close_source="correction")
+    await store.archive.insert_line(
+        live_session_id=old_session,
+        text="答应给风车磨坊搭楼梯",
+        quote="下次一定给风车磨坊搭好楼梯",
+        evidence_chat_id=101,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        place="风车磨坊",
+    )
+
+    # 2) 本场经 memory_corrections 标为 invalid 的过时档案行
+    invalid_aid = await store.archive.insert_line(
+        live_session_id=old_session,
+        text="风车磨坊缺小麦种子",
+        quote="风车磨坊这边种子不够",
+        evidence_chat_id=102,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        place="风车磨坊",
+    )
+    await store.memory_corrections.insert_and_apply(
+        live_session_id=current_session,
+        target_kind="archive",
+        archive_line_id=invalid_aid,
+        verdict="invalid",
+        summary="仓库已补满小麦种子",
+        evidence_kind="self_seen",
+    )
+
+    # 3) 同地标的正常独立往事 + 仍在进行中的公开承诺（必须正常召回）
+    await store.archive.insert_line(
+        live_session_id=old_session,
+        text="风车磨坊建成投产名场面",
+        quote="风车磨坊终于转起来了",
+        evidence_chat_id=103,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        place="风车磨坊",
+    )
+    await store.commitments.insert_commitment(
+        what="在风车磨坊周围补插火把",
+        quote="下次顺手在风车磨坊周围插满火把",
+        evidence_chat_id=104,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        created_session_id=old_session,
+        now_ms_value=_NOW - 84_000_000,
+    )
+
+    provider = _passive(
+        store,
+        current_session,
+        _Clock(),
+        social_fact_repo=store.social_facts,
+        correction_repo=store.memory_corrections,
+    )
+    cues = await provider.cues_for_game_lead(
+        game=game,
+        arrived_places=("风车磨坊",),
+        current_saves=saves,
+        limit=2,
+    )
+
+    joined = "\n".join(cues)
+    assert "搭楼梯" not in joined
+    assert "缺小麦种子" not in joined
+    assert "风车磨坊建成投产名场面" in joined
+    assert "下次顺手在风车磨坊周围插满火把" in joined

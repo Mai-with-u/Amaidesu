@@ -2204,6 +2204,78 @@ async def test_settle_respects_profile_reasoning_effort_and_falls_back_to_low_wh
     ]
 
 
+@pytest.mark.parametrize("slow_effort", ["high", "max", "xhigh", "HIGH"])
+async def test_settle_warns_once_for_slow_profile_reasoning_effort_without_overriding(
+    store: SQLiteDatabase,
+    prompt_manager: PromptManager,
+    loguru_capture: Any,
+    slow_effort: str,
+) -> None:
+    """settle 档位显式配置高思考慢档位（high/max/xhigh）时，单次整理仅告警一次且不篡改用户配置。"""
+    session = await _ended_session(store, started_at_ms=2_000)
+    await _speech(store, session, "今天把工坊收拾好了", timestamp_ms=2_100)
+    await store.commitments.insert_commitment(
+        what="下次把水车接通",
+        quote="下次把水车接通",
+        created_session_id=session - 1 if session > 1 else None,
+        now_ms_value=1_000,
+    )
+
+    class _SlowProfileLLM(FakeLLMManager):
+        def get_profile_reasoning_effort(self, profile: str) -> Optional[str]:
+            return slow_effort if profile == "settle" else None
+
+    llm = _SlowProfileLLM(
+        responses=[
+            Response(success=True, content='{"archive": []}'),
+            Response(success=True, content='{"commitments": []}'),
+            Response(success=True, content='{"closed": []}'),
+        ]
+    )
+    settler = _settler(store, llm, prompt_manager)
+    assert await settler.settle_session(session) is True
+
+    # 3 笔并行调用均尊重用户显式档位（不覆盖成 low），且慢档告警单次整理仅记录 1 次不刷屏
+    assert len(llm.calls) == 3
+    assert all("reasoning_effort" not in call for call in llm.calls)
+    slow_warnings = [
+        r["message"] for r in loguru_capture.records if r["level"] == "WARNING" and "高思考强度" in r["message"]
+    ]
+    assert len(slow_warnings) == 1
+    assert slow_effort in slow_warnings[0]
+    assert "停机中断" in slow_warnings[0] and "low" in slow_warnings[0]
+
+
+@pytest.mark.parametrize("fast_effort", ["low", "none", ""])
+async def test_settle_does_not_warn_for_fast_or_unset_reasoning_effort(
+    store: SQLiteDatabase,
+    prompt_manager: PromptManager,
+    loguru_capture: Any,
+    fast_effort: str,
+) -> None:
+    """settle 档位配置 low/none 或留空时不产生高思考强度告警。"""
+    session = await _ended_session(store, started_at_ms=3_000)
+    await _speech(store, session, "今天播得很开心", timestamp_ms=3_100)
+
+    class _FastProfileLLM(FakeLLMManager):
+        def get_profile_reasoning_effort(self, profile: str) -> Optional[str]:
+            return fast_effort if profile == "settle" else None
+
+    llm = _FastProfileLLM(
+        responses=[
+            Response(success=True, content='{"archive": []}'),
+            Response(success=True, content='{"commitments": []}'),
+        ]
+    )
+    settler = _settler(store, llm, prompt_manager)
+    assert await settler.settle_session(session) is True
+
+    slow_warnings = [
+        r["message"] for r in loguru_capture.records if r["level"] == "WARNING" and "高思考强度" in r["message"]
+    ]
+    assert slow_warnings == []
+
+
 async def test_settle_cancel_reaps_parallel_step_tasks_cleanly(tmp_path: Path, prompt_manager: PromptManager) -> None:
     """外层取消 _extract 并发阶段时，所有在途子任务被显式取消并回收，关闭 SQLite 不会触发残留写库异常。"""
     db = SQLiteDatabase(tmp_path / "cancel_reap.db")
