@@ -85,7 +85,7 @@ from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
 from src.modules.storage.models.social_facts import is_social_fact_resident, is_works_downgraded
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.storage.repos.memory_corrections import MemoryCorrectionRepo
+from src.modules.storage.repos.memory_corrections import CORRECTION_VERDICT_LABELS, MemoryCorrectionRepo
 from src.modules.tools import ToolSpec
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.tasks import (
@@ -113,10 +113,12 @@ from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .session_scope import ClosingSession, SessionScope
 from .memory.brief import build_brief
+from .memory.commitment_ttl import effective_mentioned_session_id, is_commitment_dormant
 from .memory.cues import MemoryCueProvider
 from .memory.index import MemoryIndexer
 from .memory.last_wrapup import OPENING_WRAPUP_MAX_WINDOWS, build_last_wrapup
 from .memory.recall import SCOPE_THIS_STREAM, MemoryRecallService, RecallEntry, build_memory_recall_provider
+from .memory.render import render_commitment_number
 from .memory.search import MemorySearch
 from .memory.settle import SessionSettler
 from .session_overview import SessionOverviewWriter
@@ -822,6 +824,7 @@ class StreamerAgent(BaseAgent):
                 archive_repo=archive_repo,
                 cue_log_repo=memory_cue_log_repo,
                 game_player_repo=game_player_repo,
+                correction_repo=self._memory_correction_repo,
                 inside_jokes=config.persona.inside_jokes,
                 passive_enabled=self.typed_config.memory_passive_recall_enabled,
                 search=self._memory_search,
@@ -932,6 +935,8 @@ class StreamerAgent(BaseAgent):
         self._reply_provider: Optional[ReplyToolProvider] = reply_provider
         # rundown_control 注册 Provider 槽位：持有实例以便主控切换回调刷新动态可见名单
         self._rundown_tool_provider: Optional[RundownControlToolProvider] = None
+        # streamer_memory_correct 注册 Provider 槽位：跟随主控权动态开放给当前主控游戏 Agent
+        self._memory_correct_tool_provider: Optional[MemoryCorrectionToolProvider] = None
 
         # ===== 发言管线（speech → TTS / 字幕）=====
         # 队列生命周期由 dispatcher 自持（start/stop）；未启用时决策循环
@@ -1075,6 +1080,8 @@ class StreamerAgent(BaseAgent):
                 self._lead_coordinator.bind_ready_listener(self._on_lead_agent_ready)
             if self._memory_cues is not None and hasattr(self._lead_coordinator, "set_passive_cue_provider"):
                 self._lead_coordinator.set_passive_cue_provider(self._fetch_passive_cues_for_game_lead)
+            if self._commitments_repo is not None and hasattr(self._lead_coordinator, "set_commitment_ledger_provider"):
+                self._lead_coordinator.set_commitment_ledger_provider(self._build_game_commitment_ledger)
             self._lead_hooks_bound = True
             if not self._spoken_echo_registered:
                 self._speech.add_spoken_listener(self._on_spoken_echo)
@@ -1107,6 +1114,8 @@ class StreamerAgent(BaseAgent):
                 self._lead_coordinator.unbind_ready_listener(self._on_lead_agent_ready)
             if hasattr(self._lead_coordinator, "set_passive_cue_provider"):
                 self._lead_coordinator.set_passive_cue_provider(None)
+            if hasattr(self._lead_coordinator, "set_commitment_ledger_provider"):
+                self._lead_coordinator.set_commitment_ledger_provider(None)
             if self._lead_coordinator.is_game_lead:
                 try:
                     await self._lead_coordinator.reclaim_streamer_lead(reason="streamer_stop")
@@ -1224,7 +1233,10 @@ class StreamerAgent(BaseAgent):
         if self._social_fact_repo is not None:
             extra.append(build_social_fact_tool_spec())
         if self._memory_correction_repo is not None:
-            extra.append(build_memory_correct_tool_spec())
+            if self._memory_correct_tool_provider is not None:
+                extra.extend(self._memory_correct_tool_provider.list_tools())
+            else:
+                extra.append(build_memory_correct_tool_spec())
         if self._reply_provider is not None:
             return [*self._reply_provider.list_tools(), *extra]
 
@@ -1304,18 +1316,20 @@ class StreamerAgent(BaseAgent):
                 )
                 registered += " / streamer_social_fact"
             if self._memory_correction_repo is not None:
+                self._memory_correct_tool_provider = MemoryCorrectionToolProvider(
+                    correction_repo=self._memory_correction_repo,
+                    session_provider=self._current_session_pk,
+                    brief_archive_ids_provider=lambda: self._memory_brief_archive_ids,
+                    commitments_repo=self._commitments_repo,
+                    event_repo=self._event_repo,
+                    game_player_repo=self._game_player_repo,
+                    chat_repo=self._chat_repo,
+                    overview_provider=lambda: getattr(self._planner, "last_overview_text", ""),
+                    on_written=self._refresh_memory_brief,
+                    lead_agent_provider=self._active_game_lead_agent,
+                )
                 self.register_tool_provider(
-                    MemoryCorrectionToolProvider(
-                        correction_repo=self._memory_correction_repo,
-                        session_provider=self._current_session_pk,
-                        brief_archive_ids_provider=lambda: self._memory_brief_archive_ids,
-                        commitments_repo=self._commitments_repo,
-                        event_repo=self._event_repo,
-                        game_player_repo=self._game_player_repo,
-                        chat_repo=self._chat_repo,
-                        overview_provider=lambda: getattr(self._planner, "last_overview_text", ""),
-                        on_written=self._refresh_memory_brief,
-                    ),
+                    self._memory_correct_tool_provider,
                     registry=self._tool_registry,
                 )
                 registered += " / streamer_memory_correct"
@@ -2600,6 +2614,8 @@ class StreamerAgent(BaseAgent):
                 event_repo=self._event_repo,
                 current_saves=self._current_saves,
                 correction_repo=self._memory_correction_repo,
+                game_player_repo=self._game_player_repo,
+                privacy_service=self._privacy_service,
                 speaking_mode=resolved_mode,
             )
         except Exception as exc:  # noqa: BLE001 - 简报拼不出来只省这一段，不挡开播
@@ -2703,6 +2719,234 @@ class StreamerAgent(BaseAgent):
             current_saves=self._current_saves,
             limit=limit,
         )
+
+    async def _build_game_commitment_ledger(
+        self,
+        *,
+        game: str,
+        save_id: str = "",
+        player_uuids: Sequence[str] = (),
+        limit: int = 8,
+    ) -> Dict[str, Any]:
+        """为自主主控游戏 Agent 组装当前存档与在场玩家的权威承诺账本（只读、零观众隐私泄漏）。
+
+        执行顺序：
+        1. 解析当前存档 ID（显式入参优先，缺失时从只读存档快照补齐）与最近三场边界（排除搁了很久的旧账）；
+        2. 读取本场未撤回的承诺更正，提取最新 ``progress`` 附注与本场刚结案的承诺；
+        3. 解析 ``player_uuids``（排除遗忘名单与待删玩家），优先拉取在场玩家未了结承诺，再补本游戏当前存档公开承诺；
+        4. 过滤其他存档与过期旧账并截断至 ``limit``，附带至多 5 条本场刚结案承诺；两者皆空返回 ``{}``。
+        """
+        normalized_game = (game or "").strip()
+        effective_limit = int(limit)
+        if self._commitments_repo is None or not normalized_game or effective_limit <= 0:
+            return {}
+
+        effective_save_id = (save_id or "").strip()
+        if not effective_save_id:
+            snap_save = self._current_saves_snapshot().get(normalized_game)
+            if snap_save is not None and snap_save.known:
+                effective_save_id = snap_save.id
+
+        def _matches_save(item_save_id: str) -> bool:
+            c_sid = (item_save_id or "").strip()
+            if not effective_save_id or not c_sid:
+                return True
+            return c_sid == effective_save_id
+
+        session_id = self._current_session_pk()
+        recent_session_ids: List[int] = []
+        earliest_recent_ms = 0
+        if self._archive_repo is not None:
+            try:
+                bounds = await self._archive_repo.recent_ended_session_bounds(
+                    kind=self._current_session_kind(),
+                    min_duration_ms=self.typed_config.memory_brief_min_session_ms,
+                    exclude_session_id=session_id,
+                    limit=3,
+                )
+                recent_session_ids = [int(item[0]) for item in bounds]
+                earliest_recent_ms = int(bounds[2][1]) if len(bounds) >= 3 else 0
+            except Exception as exc:  # noqa: BLE001 - 查不到场次边界时不挡承诺账本返回
+                self._logger.warning(f"拉取承诺账本场次边界失败（暂不做搁置过滤）: {exc}", exc=exc)
+
+        progress_by_id: Dict[int, str] = {}
+        closed_summary_by_id: Dict[int, str] = {}
+        if self._memory_correction_repo is not None and session_id is not None:
+            try:
+                if hasattr(self._memory_correction_repo, "list_commitment_updates_by_session"):
+                    updates = await self._memory_correction_repo.list_commitment_updates_by_session(
+                        live_session_id=int(session_id)
+                    )
+                else:
+                    active = await self._memory_correction_repo.list_active_by_session(live_session_id=int(session_id))
+                    updates = [item for item in active if item.target_kind == "commitment"]
+                for item in updates:
+                    if item.commitment_id is None:
+                        continue
+                    cid = int(item.commitment_id)
+                    cleaned = " ".join(str(item.summary or "").split())
+                    if item.verdict == "progress":
+                        if cleaned:
+                            progress_by_id[cid] = cleaned
+                    elif item.verdict in ("done", "invalid", "wrong"):
+                        closed_summary_by_id.pop(cid, None)
+                        closed_summary_by_id[cid] = cleaned or CORRECTION_VERDICT_LABELS.get(item.verdict, item.verdict)
+            except Exception as exc:  # noqa: BLE001 - 更正读不到不影响基础未了结账本
+                self._logger.warning(f"读本场承诺更正失败（账本暂不附进展与本场结案）: {exc}", exc=exc)
+
+        player_id_to_name: Dict[int, str] = {}
+        if self._game_player_repo is not None and player_uuids:
+            seen_uuids: set[str] = set()
+            for raw_uid in player_uuids:
+                uid = str(raw_uid or "").strip().lower()
+                if not uid or uid in seen_uuids:
+                    continue
+                seen_uuids.add(uid)
+                if self._privacy_service is not None:
+                    try:
+                        if await self._privacy_service.is_player_forgotten(game=normalized_game, uuid=uid):
+                            continue
+                    except Exception as exc:  # noqa: BLE001 - 查不了遗忘名单时保守跳过该玩家
+                        self._logger.warning(f"核对承诺账本玩家遗忘名单失败（跳过该玩家）: {exc}", exc=exc)
+                        continue
+                try:
+                    player = await self._game_player_repo.find_player(game=normalized_game, uuid=uid)
+                except Exception as exc:  # noqa: BLE001 - 单个玩家查库失败跳过
+                    self._logger.warning(f"按 UUID 查玩家失败（跳过）: {exc}", exc=exc)
+                    continue
+                if player is not None and player.forget_requested_at_ms is None:
+                    player_id_to_name[int(player.id)] = (player.name or "").strip() or "玩家"
+
+        player_rows: List[Tuple[Any, str]] = []
+        seen_open_ids: set[int] = set()
+        for pid, pname in player_id_to_name.items():
+            try:
+                rows = await self._commitments_repo.list_commitments(
+                    statuses=["open"],
+                    target_player_id=pid,
+                    limit=max(effective_limit, 20),
+                )
+            except Exception as exc:  # noqa: BLE001 - 单个玩家承诺读取失败跳过
+                self._logger.warning(f"读玩家 #{pid} 未了结承诺失败（跳过）: {exc}", exc=exc)
+                continue
+            for row in rows:
+                if row.viewer_id is not None:
+                    continue
+                if row.game and row.game != normalized_game:
+                    continue
+                if not _matches_save(row.save_id):
+                    continue
+                if not (row.what or "").strip():
+                    continue
+                if is_commitment_dormant(
+                    row,
+                    recent_session_ids=recent_session_ids,
+                    earliest_recent_ms=earliest_recent_ms,
+                ):
+                    continue
+                cid = int(row.id)
+                if cid in seen_open_ids:
+                    continue
+                seen_open_ids.add(cid)
+                player_rows.append((row, pname))
+
+        public_rows: List[Tuple[Any, str]] = []
+        try:
+            game_open = await self._commitments_repo.list_commitments(
+                statuses=["open"],
+                game=normalized_game,
+                limit=100,
+            )
+        except Exception as exc:  # noqa: BLE001 - 公共承诺读取失败降级
+            self._logger.warning(f"读游戏 '{normalized_game}' 未了结承诺失败: {exc}", exc=exc)
+            game_open = []
+        for row in game_open:
+            if row.has_target:
+                continue
+            if not _matches_save(row.save_id):
+                continue
+            if not (row.what or "").strip():
+                continue
+            if is_commitment_dormant(
+                row,
+                recent_session_ids=recent_session_ids,
+                earliest_recent_ms=earliest_recent_ms,
+            ):
+                continue
+            cid = int(row.id)
+            if cid in seen_open_ids:
+                continue
+            seen_open_ids.add(cid)
+            public_rows.append((row, "公共"))
+
+        player_rows.sort(
+            key=lambda pair: (effective_mentioned_session_id(pair[0]) or 0, int(pair[0].id)),
+            reverse=True,
+        )
+        public_rows.sort(
+            key=lambda pair: (effective_mentioned_session_id(pair[0]) or 0, int(pair[0].id)),
+            reverse=True,
+        )
+
+        open_entries: List[Dict[str, str]] = []
+        for row, target_label in [*player_rows, *public_rows][:effective_limit]:
+            cid = int(row.id)
+            entry: Dict[str, str] = {
+                "id": render_commitment_number(cid),
+                "target": target_label,
+                "what": " ".join(str(row.what or "").split()),
+            }
+            latest_progress = progress_by_id.get(cid, "")
+            if latest_progress:
+                entry["progress"] = latest_progress
+            open_entries.append(entry)
+
+        closed_entries: List[Dict[str, str]] = []
+        for cid, summary in closed_summary_by_id.items():
+            try:
+                comm = await self._commitments_repo.get_commitment(commitment_id=cid)
+            except Exception as exc:  # noqa: BLE001 - 单条回查失败跳过
+                self._logger.warning(f"回查本场结案承诺 约#{cid} 失败（跳过）: {exc}", exc=exc)
+                continue
+            if comm is None or comm.status == "open":
+                continue
+            if comm.viewer_id is not None:
+                continue
+            if comm.game and comm.game != normalized_game:
+                continue
+            if not _matches_save(comm.save_id):
+                continue
+            if comm.target_player_id is not None and self._game_player_repo is not None:
+                try:
+                    player = await self._game_player_repo.get_player(player_id=int(comm.target_player_id))
+                except Exception as exc:  # noqa: BLE001 - 查不到玩家时保守跳过
+                    self._logger.warning(f"核对结案承诺玩家 #{comm.target_player_id} 失败（跳过）: {exc}", exc=exc)
+                    continue
+                if player is not None:
+                    if player.forget_requested_at_ms is not None:
+                        continue
+                    if self._privacy_service is not None:
+                        try:
+                            if await self._privacy_service.is_player_forgotten(
+                                game=(player.game or normalized_game),
+                                uuid=player.uuid,
+                            ):
+                                continue
+                        except Exception as exc:  # noqa: BLE001 - 查不了遗忘名单时保守跳过
+                            self._logger.warning(f"核对结案承诺玩家遗忘名单失败（跳过）: {exc}", exc=exc)
+                            continue
+            closed_entries.append(
+                {
+                    "id": render_commitment_number(cid),
+                    "what": " ".join(str(comm.what or "").split()),
+                    "summary": summary,
+                }
+            )
+        closed_entries = closed_entries[-5:]
+
+        if not open_entries and not closed_entries:
+            return {}
+        return {"open": open_entries, "closed_this_session": closed_entries}
 
     async def _query_active_short_term_recall(
         self,
@@ -4192,11 +4436,21 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 名单刷新失败不阻断主控切换
             self._logger.warning(f"刷新 rundown_control 可见名单失败: {exc}", exc=True)
 
+    def _refresh_memory_correct_tool_visibility(self) -> None:
+        """主控切换后刷新 streamer_memory_correct 的可见名单（场内记忆更正跟随当场主控）。"""
+        if self._tool_registry is None or self._memory_correct_tool_provider is None:
+            return
+        try:
+            self._tool_registry.refresh_provider_tools(self._memory_correct_tool_provider)
+        except Exception as exc:  # noqa: BLE001 - 名单刷新失败不阻断主控切换
+            self._logger.warning(f"刷新 streamer_memory_correct 可见名单失败: {exc}", exc=True)
+
     def _on_lead_changed(self, payload: AgentLeadChangedPayload) -> None:
         """动态主从状态变更监听：记录进入时刻、落账收权摘要，并在游戏故障被动降级时唤醒主播圆场。"""
         ts = payload.timestamp_ms or self._clock()
-        # 环节推进工具跟随主控：名单切换（游戏主控态并入主控游戏 Agent、收权后移除）
+        # 环节推进与场内记忆更正工具跟随主控：名单切换（游戏主控态并入主控游戏 Agent、收权后移除）
         self._refresh_rundown_tool_visibility()
+        self._refresh_memory_correct_tool_visibility()
         if payload.mode == "game":
             self._game_lead_entered_ms = ts
             self._last_silence_nudge_ms = None

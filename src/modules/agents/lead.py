@@ -11,6 +11,7 @@
   - 主播发声 → 游戏回声：``publish_spoken_echo``（同步直转，零唤醒）
   - 主播/观众 → 游戏非强杀建议：``send_suggestion``
   - 交权简报按需构建：``bind_handover_builder``
+  - 权威承诺账本只读拉取：``set_commitment_ledger_provider`` + ``fetch_commitment_ledger``
 """
 
 from __future__ import annotations
@@ -129,6 +130,19 @@ class PassiveCueProvider(Protocol):
     ) -> Union[Awaitable[Sequence[str]], Sequence[str]]: ...
 
 
+class CommitmentLedgerProvider(Protocol):
+    """跨场权威承诺账本只读提供回调协议（由记忆持有方注册，供主控游戏按需拉取当前存档与在场玩家的承诺账本）。"""
+
+    def __call__(
+        self,
+        *,
+        game: str,
+        save_id: str = "",
+        player_uuids: Sequence[str] = (),
+        limit: int = 8,
+    ) -> Union[Awaitable[Mapping[str, Any]], Mapping[str, Any]]: ...
+
+
 class LeadCoordinator:
     """动态主从协调器（组合根单例）。
 
@@ -166,6 +180,7 @@ class LeadCoordinator:
         self._commentary_handler: Optional[CommentaryHandler] = None
         self._handover_builder: Optional[HandoverBuilder] = None
         self._passive_cue_provider: Optional[PassiveCueProvider] = None
+        self._commitment_ledger_provider: Optional[CommitmentLedgerProvider] = None
         self._lead_changed_listeners: List[LeadChangedListener] = []
         self._ready_listeners: List[AgentReadyListener] = []
         # 流程单超时提醒节流状态（上次推送时刻与对应环节 id；切段或主控变更时自动清零）
@@ -264,6 +279,10 @@ class LeadCoordinator:
     def set_passive_cue_provider(self, callback: Optional[PassiveCueProvider]) -> None:
         """绑定跨场被动记忆线索提供回调（供自主游戏 Agent 在主控态按需只读拉取；传 None 解绑）。"""
         self._passive_cue_provider = callback
+
+    def set_commitment_ledger_provider(self, provider: Optional[CommitmentLedgerProvider]) -> None:
+        """绑定跨场权威承诺账本只读提供回调（供自主游戏 Agent 在主控态按需拉取；传 None 解绑）。"""
+        self._commitment_ledger_provider = provider
 
     def bind_lead_changed_listener(self, listener: LeadChangedListener) -> None:
         """注册主控切换监听器（重复注册自动去重）。"""
@@ -1040,6 +1059,75 @@ class LeadCoordinator:
                 break
         return result
 
+    async def fetch_commitment_ledger(
+        self,
+        *,
+        game: str,
+        save_id: str = "",
+        player_uuids: Sequence[str] = (),
+        limit: int = 8,
+    ) -> Dict[str, Any]:
+        """供主控游戏 Agent 按当前存档与在场玩家只读拉取权威承诺账本（异常降级为空字典，零硬编码游戏名）。
+
+        触发条件：游戏主控侧组装尾部动态任务状态前按需调用；
+        动作与边界：透传 ``game`` / ``save_id`` / 去重后的 ``player_uuids`` / ``limit`` 给已注册回调，
+        对返回结果按紧凑结构归一化（``open`` 与 ``closed_this_session``）；两者皆空或回调异常时
+        一律返回 ``{}``，避免向尾部状态输出空结构浪费上下文。
+        """
+        provider = self._commitment_ledger_provider
+        normalized_game = (game or "").strip()
+        effective_limit = int(limit)
+        if provider is None or not normalized_game or effective_limit <= 0:
+            return {}
+        clean_save_id = (save_id or "").strip()
+        clean_uuids = tuple(dict.fromkeys(uid for raw in (player_uuids or ()) if (uid := str(raw or "").strip())))
+        try:
+            raw = provider(
+                game=normalized_game,
+                save_id=clean_save_id,
+                player_uuids=clean_uuids,
+                limit=effective_limit,
+            )
+            if inspect.isawaitable(raw):
+                raw = await raw
+        except Exception as exc:  # noqa: BLE001 - 承诺账本查询属只读增强，异常隔离不阻断游戏决策
+            logger.warning(f"拉取跨场权威承诺账本失败（game={normalized_game}，已忽略）: {exc}", exc=True)
+            return {}
+        if not isinstance(raw, Mapping):
+            return {}
+
+        open_items: List[Dict[str, str]] = []
+        for item in raw.get("open") or ():
+            if not isinstance(item, Mapping):
+                continue
+            cid = str(item.get("id") or "").strip()
+            what = " ".join(str(item.get("what") or "").split())
+            target = " ".join(str(item.get("target") or "").split()) or "公共"
+            progress = " ".join(str(item.get("progress") or "").split())
+            if not cid or not what:
+                continue
+            entry: Dict[str, str] = {"id": cid, "target": target, "what": what}
+            if progress:
+                entry["progress"] = progress
+            open_items.append(entry)
+            if len(open_items) >= effective_limit:
+                break
+
+        closed_items: List[Dict[str, str]] = []
+        for item in raw.get("closed_this_session") or ():
+            if not isinstance(item, Mapping):
+                continue
+            cid = str(item.get("id") or "").strip()
+            what = " ".join(str(item.get("what") or "").split())
+            summary = " ".join(str(item.get("summary") or "").split())
+            if not cid or (not what and not summary):
+                continue
+            closed_items.append({"id": cid, "what": what, "summary": summary})
+
+        if not open_items and not closed_items:
+            return {}
+        return {"open": open_items, "closed_this_session": closed_items}
+
 
 __all__ = [
     "STREAMER_AGENT_NAME",
@@ -1055,5 +1143,6 @@ __all__ = [
     "LeadChangedListener",
     "AgentReadyListener",
     "PassiveCueProvider",
+    "CommitmentLedgerProvider",
     "LeadCoordinator",
 ]

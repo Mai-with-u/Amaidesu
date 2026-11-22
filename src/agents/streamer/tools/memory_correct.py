@@ -1,15 +1,16 @@
-"""streamer_memory_correct —— 主播场内更正记忆的工具（D2-4，Planner 规划器调用）。
+"""streamer_memory_correct —— 场内更正与更新记忆的工具（跟随当场主控动态开放）。
 
-给规划器一个当场纠错出口：对常驻简报里的某一行档案（``档#N``）或某条惦记的承诺（``约#N``）
-标记 ``done``（做完了）/ ``invalid``（不成立了）/ ``wrong``（记错了），并附本场证据：
-- ``game_receipt``：本场委派终态摘要或游戏事件/速览原文的逐字片段；
+给当场主控（主播规划器或当前自主主控游戏 Agent）一个场内实时纠错与同步出口：对常驻简报里的
+某一行档案（``档#N``）或某条惦记的承诺（``约#N``）标记 ``done``（做完了）/ ``progress``（本场有进展
+但尚未了结，仅适用于承诺）/ ``invalid``（不成立了）/ ``wrong``（记错了），并附本场证据：
+- ``game_receipt``：本场委派终态摘要、游戏事件（含物品交付回执，如存进对方箱子或朝对方扔出）或速览原文的逐字片段；
 - ``player_chat``：本场玩家在游戏公屏所说原文的逐字片段（挂外键，删玩家随之级联删除）；
 - ``operator``：本场运营提醒原文的逐字片段；
-- ``self_seen``：她自己在游戏画面或速览里亲眼确认的事实（当场生效，跨场整理时仍须台词或记录佐证）。
+- ``self_seen``：自己在游戏画面或速览里亲眼确认的事实（当场生效，跨场整理时仍须台词或记录佐证）。
 
 观众弹幕一律不收作场内更正依据（回执提示观众的话进跨场记忆须经人工批准）。
-更正只在本场生效：档案行当场附注"（本场更正：……）"，未了结承诺当场标了结或作废（记来源，人工可撤），
-下播整理把本场更正作为必须处理的输入。
+更正只在本场生效：档案行当场附注"（本场更正：……）"，承诺 ``progress`` 保持未了结并记录本场进展，
+``done / invalid / wrong`` 当场标了结或作废（记来源，人工可撤），下播整理把本场更正作为必须处理的输入。
 """
 
 from __future__ import annotations
@@ -59,14 +60,15 @@ _SUMMARY_MAX_CHARS = 60
 _QUOTE_MAX_CHARS = 80
 _RECORD_SCAN_LIMIT = 500
 
-_VALID_VERDICTS = ("done", "invalid", "wrong")
+_VALID_VERDICTS = ("done", "progress", "invalid", "wrong")
 _VALID_EVIDENCE_KINDS = ("game_receipt", "player_chat", "operator", "self_seen")
 
 _DESCRIPTION = (
-    "场内更正一条常驻简报里的记忆（档#N）或惦记的承诺（约#N）：标明做完了（done）、"
-    "不成立了（invalid，如换了新世界或地形重置）或记错了（wrong），并给本场证据"
-    "（游戏回执、游戏玩家公屏的话、运营提醒，或你自己亲眼看到的画面/速览）。"
-    "当场生效：本场后续不再按旧说法犯错；观众弹幕不能直接当依据。"
+    "场内更正或更新一条常驻简报里的记忆（档#N）或惦记的承诺（约#N）：标明做完了（done）、"
+    "推进了一部分但尚未了结（progress，仅适用于 约#N）、不成立了（invalid，如换了新世界或地形重置）"
+    "或记错了（wrong），并给本场证据（游戏回执——含物品交付回执如存进对方箱子或朝对方扔出、"
+    "游戏玩家公屏的话、运营提醒，或你自己亲眼看到的画面/速览）。"
+    "当场生效：本场后续立即同步最新状态；观众弹幕不能直接当依据。"
 )
 
 _PARAMETERS: Dict[str, Any] = {
@@ -74,12 +76,15 @@ _PARAMETERS: Dict[str, Any] = {
     "properties": {
         "target": {
             "type": "string",
-            "description": "要更正的简报条目编号，写成 档#N 或 约#N",
+            "description": "要更正的简报或承诺账本条目编号，写成 档#N 或 约#N",
         },
         "verdict": {
             "type": "string",
             "enum": list(_VALID_VERDICTS),
-            "description": "done 做完了；invalid 不成立了（世界重置、墓碑消失等）；wrong 当初记错了",
+            "description": (
+                "done 做完了；progress 本场推进了一部分但尚未了结（仅适用于 约#N，保持 open）；"
+                "invalid 不成立了（世界重置、墓碑消失等）；wrong 当初记错了"
+            ),
         },
         "summary": {
             "type": "string",
@@ -89,13 +94,16 @@ _PARAMETERS: Dict[str, Any] = {
             "type": "string",
             "enum": list(_VALID_EVIDENCE_KINDS),
             "description": (
-                "证据来源：game_receipt 游戏交付/事件/速览回执；player_chat 游戏玩家公屏的话；"
-                "operator 运营提醒；self_seen 你在画面或速览里亲眼确认的现状"
+                "证据来源：game_receipt 游戏交付/物品交付回执（如存进对方箱子或朝对方扔出）/事件/速览回执；"
+                "player_chat 游戏玩家公屏的话；operator 运营提醒；self_seen 你在画面或速览里亲眼确认的现状"
             ),
         },
         "evidence_quote": {
             "type": "string",
-            "description": "依据里的逐字片段（80 字以内；game_receipt / player_chat / operator 必填）",
+            "description": (
+                "依据里的逐字片段（80 字以内；game_receipt / player_chat / operator 必填，"
+                "如物品交付回执里的存物或扔物原文、事件摘要或玩家公屏原话）"
+            ),
         },
         "evidence_message_id": {
             "type": "string",
@@ -106,14 +114,15 @@ _PARAMETERS: Dict[str, Any] = {
 }
 
 
-def build_memory_correct_tool_spec() -> ToolSpec:
-    """构造场内更正工具定义（全名 streamer_memory_correct，仅对主播可见）。"""
+def build_memory_correct_tool_spec(visible_to: Optional[Sequence[str]] = None) -> ToolSpec:
+    """构造场内更正工具定义（全名 streamer_memory_correct；支持按主控权动态指定可见名单）。"""
     return ToolSpec(
         name=_TOOL_NAME,
         description=_DESCRIPTION,
         parameters_schema=_PARAMETERS,
         kind="sync",
         provider=_PROVIDER,
+        visible_to=list(visible_to) if visible_to is not None else None,
     )
 
 
@@ -155,6 +164,7 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
         chat_repo: Optional["ChatRepo"] = None,
         overview_provider: Optional[Callable[[], str]] = None,
         on_written: Optional[Callable[[], Awaitable[None]]] = None,
+        lead_agent_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self._repo = correction_repo
         self._session_provider = session_provider
@@ -165,14 +175,32 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
         self._chat = chat_repo
         self._overview_provider = overview_provider
         self._on_written = on_written
+        self._lead_agent_provider = lead_agent_provider
         self._logger = get_logger("MemoryCorrectionTool")
 
     @property
     def name(self) -> str:
         return _PROVIDER
 
+    def _visible_agents(self) -> List[str]:
+        """构造可见名单：始终含主播，游戏主控态下并入当前主控游戏 Agent 注册名（保序去重）。"""
+        visible: List[str] = ["streamer"]
+        if self._lead_agent_provider is None:
+            return visible
+        try:
+            lead_agent = (self._lead_agent_provider() or "").strip()
+        except Exception as exc:  # noqa: BLE001 - 动态名单回调异常降级为仅主播可见
+            self._logger.warning(
+                f"streamer_memory_correct 读取当前主控游戏 Agent 失败（仅保留 streamer 可见）: {exc}",
+                exc=True,
+            )
+            return visible
+        if lead_agent and lead_agent != "*" and lead_agent not in visible:
+            visible.append(lead_agent)
+        return visible
+
     def list_tools(self) -> Iterable[ToolSpec]:
-        return [build_memory_correct_tool_spec()]
+        return [build_memory_correct_tool_spec(visible_to=self._visible_agents())]
 
     def _bounce(self, tool_name: str, reason: str) -> ToolExecutionResult:
         self._logger.info(f"场内更正打回：{reason}")
@@ -212,7 +240,12 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
         verdict_raw = str(args.get("verdict") or "").strip().lower()
         if verdict_raw not in _VALID_VERDICTS:
             return self._bounce(tool_name, f"verdict 必须是 {' / '.join(_VALID_VERDICTS)} 之一")
-        verdict: Literal["done", "invalid", "wrong"] = verdict_raw  # type: ignore[assignment]
+        verdict: Literal["done", "progress", "invalid", "wrong"] = verdict_raw  # type: ignore[assignment]
+        if target_kind == "archive" and verdict == "progress":
+            return self._bounce(
+                tool_name,
+                "verdict='progress' 仅适用于承诺（约#N），档案行（档#N）请使用 done / invalid / wrong",
+            )
 
         summary = " ".join(str(args.get("summary") or "").split())
         if not summary or len(summary) > _SUMMARY_MAX_CHARS:
@@ -300,12 +333,13 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
                 self._logger.warning(f"场内更正后刷新常驻简报失败: {exc}", exc=exc)
 
         target_label = f"档#{target_id}" if target_kind == "archive" else f"约#{target_id}"
-        verdict_label = CORRECTION_VERDICT_LABELS.get(verdict, verdict)
-        effect = (
-            f"本场简报已为 {target_label} 附注「本场更正：{format_correction_note(verdict, summary)}」"
-            if target_kind == "archive"
-            else f"{target_label} 已在本场标为{verdict_label}，不再留在【还惦记的事】"
-        )
+        if target_kind == "archive":
+            effect = f"本场简报已为 {target_label} 附注「本场更正：{format_correction_note(verdict, summary)}」"
+        elif verdict == "progress":
+            effect = f"{target_label} 已记录本场进展（仍未了结）：{summary}"
+        else:
+            verdict_label = CORRECTION_VERDICT_LABELS.get(verdict, verdict)
+            effect = f"{target_label} 已在本场标为{verdict_label}，不再留在【还惦记的事】"
         return ToolExecutionResult(
             tool_name=tool_name,
             success=True,

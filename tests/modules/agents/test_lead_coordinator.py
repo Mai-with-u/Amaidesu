@@ -1282,3 +1282,71 @@ async def test_publish_rundown_nudge_throttles_per_segment_and_resets_on_update(
     assert len(game.nudges) == 4
 
     await mgr.stop_all()
+
+
+async def test_fetch_commitment_ledger_normalizes_and_isolates_errors() -> None:
+    """fetch_commitment_ledger 按紧凑结构归一化、去重 player_uuids、全空或异常一律返回空字典。"""
+    mgr = AgentManager()
+    coord = LeadCoordinator(mgr)
+
+    # 未注册回调时返回空字典
+    assert await coord.fetch_commitment_ledger(game="beta_game", save_id="s1", player_uuids=("u1",)) == {}
+
+    seen_calls: List[Dict[str, Any]] = []
+
+    async def _ledger_cb(
+        *,
+        game: str,
+        save_id: str = "",
+        player_uuids: Any = (),
+        limit: int = 8,
+    ) -> Dict[str, Any]:
+        seen_calls.append({"game": game, "save_id": save_id, "player_uuids": tuple(player_uuids), "limit": limit})
+        return {
+            "open": [
+                {"id": "约#43", "target": "PlayerA", "what": "补还 3 颗钻石", "progress": "已还 2 颗，还欠 1 颗"},
+                {"id": "约#44", "target": "", "what": "修好河边木桥"},
+                {"id": "约#45", "target": "公共", "what": "扩建仓库"},
+            ],
+            "closed_this_session": [
+                {"id": "约#40", "what": "还回铁镐", "summary": "已放进 PlayerA 箱子"},
+            ],
+        }
+
+    coord.set_commitment_ledger_provider(_ledger_cb)
+    ledger = await coord.fetch_commitment_ledger(
+        game="beta_game",
+        save_id="save-1",
+        player_uuids=("uuid-a", "uuid-a", " ", "uuid-b"),
+        limit=2,
+    )
+    assert seen_calls[-1] == {
+        "game": "beta_game",
+        "save_id": "save-1",
+        "player_uuids": ("uuid-a", "uuid-b"),
+        "limit": 2,
+    }
+    assert ledger == {
+        "open": [
+            {"id": "约#43", "target": "PlayerA", "what": "补还 3 颗钻石", "progress": "已还 2 颗，还欠 1 颗"},
+            {"id": "约#44", "target": "公共", "what": "修好河边木桥"},
+        ],
+        "closed_this_session": [
+            {"id": "约#40", "what": "还回铁镐", "summary": "已放进 PlayerA 箱子"},
+        ],
+    }
+
+    # 两者皆空时返回 {}（避免尾部状态输出空结构）
+    coord.set_commitment_ledger_provider(lambda **_kwargs: {"open": [], "closed_this_session": []})
+    assert await coord.fetch_commitment_ledger(game="beta_game", save_id="save-1") == {}
+
+    # 回调抛异常安全降级返回 {}
+    async def _boom_ledger(**_kwargs: Any) -> Dict[str, Any]:
+        raise RuntimeError("ledger boom")
+
+    coord.set_commitment_ledger_provider(_boom_ledger)
+    assert await coord.fetch_commitment_ledger(game="beta_game", save_id="save-1") == {}
+
+    # 解绑后返回 {}
+    coord.set_commitment_ledger_provider(None)
+    assert await coord.fetch_commitment_ledger(game="beta_game", save_id="save-1") == {}
