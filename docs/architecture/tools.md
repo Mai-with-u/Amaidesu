@@ -1,6 +1,10 @@
 # 工具层
 
-> 工具层是所有 Agent 可调用能力的统一契约面：把看屏幕、查旧事、切直播场景、让虚拟形象做动作、向游戏 Agent 委派这类**被调才干活**的能力做成同一种形状，注册进一张表，供模型按 function calling 调用。它解决三件事：让模型能调（契约翻译）、让每个 Agent 只看到自己该用的（可见名单）、让单个能力故障不扩散成全局停摆（调用永不抛异常 + 熔断摘除）。
+> 工具层是所有 Agent 可调用能力的统一契约面：把看屏幕、查旧事、切直播场景、让虚拟形象做动作、向游戏 Agent 委派这类**被调才干活**的能力做成同一种形状，注册进一张表，供模型按 function calling 调用。它解决三件事：
+>
+> - **让模型能调**：契约翻译。
+> - **让每个 Agent 只看到自己该用的**：可见名单。
+> - **让单个能力故障不扩散成全局停摆**：调用永不抛异常 + 熔断摘除。
 >
 > 系统里现在有哪些工具（工具清单）以代码为事实源（`ToolRegistry`），文档不抄录；写一个新工具的实操步骤见[组件开发指南的"添加工具"](../guides/component/README.md)。
 
@@ -12,7 +16,10 @@
 | 提供者 | `ToolProvider` / `BaseToolProvider`（`src/modules/tools/provider.py`） | 一组工具的来源，持有实现；注册时声明归属分类 |
 | 工具注册表 | `ToolRegistry`（`src/modules/tools/registry.py`） | 全局唯一一张表：聚合所有提供者，按名分发调用 |
 
-**全名派生**：工具的注册键与对外名字 = `<提供者名>_<工具声明名>`（如提供者 `minecraft` + 工具 `glance` → `minecraft_glance`）。全名由 `ToolSpec.full_name` 一处现算，代码里禁止手拼前缀或反向剥离。提供者名、归属分类（category，Dashboard 分组用）、tools.toml 配置段（开关地址）三者正交。
+**全名派生**：工具的注册键与对外名字 = `<提供者名>_<工具声明名>`（如提供者 `minecraft` + 工具 `glance` → `minecraft_glance`）。
+
+- 全名由 `ToolSpec.full_name` 一处现算，代码里禁止手拼前缀或反向剥离。
+- 提供者名、归属分类（category，Dashboard 分组用）、tools.toml 配置段（开关地址）三者正交。
 
 ## 工具声明（ToolSpec）
 
@@ -27,7 +34,12 @@
 | `result_event` | 异步工具的结果事件名，默认 `tool.result.<全名>` |
 | `result_section` | 结果在上下文计量中另记的分段（如技能正文记入技能段）；空串计入对话消息 |
 
-调用请求是 `ToolInvocation`（`src/modules/tools/models.py`）：工具全名、参数、调用方标识、关联决策回合号等。另有一个 `attachment` 字段承载宿主代码构造的交接材料——它不经模型（模型不可见也不可伪造），形状由调用方与具体提供者约定；模型生成的参数走 `arguments`，两条通道不混。
+调用请求是 `ToolInvocation`（`src/modules/tools/models.py`）：工具全名、参数、调用方标识、关联决策回合号等。
+
+参数有两条通道，不混用：
+
+- 模型生成的参数走 `arguments`。
+- 宿主代码构造的随附材料走 `attachment`——它不经模型（模型不可见也不可伪造），形状由调用方与具体提供者约定。
 
 ## 管控三维度
 
@@ -49,7 +61,9 @@
 
 三条路，都在启动期完成，互不感知：
 
-- **核心提供者**：`bind_core_tools`（`src/modules/tools/bootstrap.py`）按配置域开关装配内置能力（虚拟形象动作、演播控制、联网搜索等）。成员表来自组件目录单一源表（`src/modules/component_catalog.py`），无目录扫描；单个成员装配失败只记日志，不阻断其他。
+- **核心提供者**：`bind_core_tools`（`src/modules/tools/bootstrap.py`）按配置域开关装配内置能力（虚拟形象动作、演播控制、联网搜索等）。
+  - 成员表来自组件目录单一源表（`src/modules/component_catalog.py`），无目录扫描。
+  - 单个成员装配失败只记日志，不阻断其他。
 - **MCP 提供者**：`bind_mcp_tools` 把外部 MCP server 的工具映射进注册表（见下文 [MCP 集成](#mcp-集成)）。
 - **Agent 自带**：各 Agent 在自己的启动钩子里注册自家提供者（如 `streamer_reply`、`minecraft_todo`）。加内容 = 加 Agent 包 + 配置，框架零改动。
 
@@ -83,7 +97,10 @@ flowchart TB
 
 `list_tools(for_agent=...)` 是全体消费方统一的取表入口，过滤维度：配置停用、熔断中、可见名单、提供者运行期装配态。
 
-**可见名单是注册处的生产侧声明**：每个工具出生时声明它给谁看（Agent 注册名列表或 `["*"]` 全员）。决策依据见 [ADR-012：工具可见名单机制](../decisions/012-tool-visibility-list.md)——工具的生产者最清楚它给谁用，消费侧清单会要求每个 Agent 持有全局工具知识。
+**可见名单是注册处的生产侧声明**：每个工具出生时声明它给谁看（Agent 注册名列表或 `["*"]` 全员）。
+
+- 工具的生产者最清楚它给谁用；消费侧清单会要求每个 Agent 持有全局工具知识。
+- 决策依据见 [ADR-012：工具可见名单机制](../decisions/012-tool-visibility-list.md)。
 
 - 未声明的工具默认仅主播可见（fail-closed）：新工具不会意外泄漏给游戏 Agent，共享工具由注册处显式声明 `["*"]`。
 - 名单可以逐次现算：少数工具（流程单控制、回忆工具）的名单随运行态变化，如游戏 Agent 主控期间也能看到流程单控制。
@@ -115,9 +132,16 @@ flowchart TB
 
 每次调用完成（无论成败）广播 `tool.result.<全名>` 事件，携带入参回显与结果摘要，供 Dashboard 溯源；图片类大载荷不进事件正文，只记"带了几张图"。`invoke_many` 提供 gather 并发批量调用。
 
-结果进对话前经过一次**对话安全视图**（`src/modules/tools/conversation.py`）：超长的纯 base64 字符串替换为"图像 N KB 已省略"占位符，完整载荷仍走事件通道供工具卡展示——对话通道与 UI 通道分离。视觉调用方另行经 `extract_image_data_urls` 取图，挂到下一次请求尾部看一次，历史里不存内联大载荷。
+结果进对话前经过一次**对话安全视图**（`src/modules/tools/conversation.py`），对话通道与 UI 通道分离：
 
-`src/modules/tools/llm_defs.py` 把 `ToolSpec` 转成 OpenAI 风格 function calling 定义：名字用全名，参数取 `parameters_schema`；另附两个**只用于上下文计量的标注**（区分 MCP 工具与系统工具两段、结果归属分段），规整请求时收下、不发给模型。
+- 超长的纯 base64 字符串替换为"图像 N KB 已省略"占位符。
+- 完整载荷仍走事件通道供工具卡展示。
+- 视觉调用方另行经 `extract_image_data_urls` 取图，挂到下一次请求尾部看一次，历史里不存内联大载荷。
+
+`src/modules/tools/llm_defs.py` 把 `ToolSpec` 转成 OpenAI 风格 function calling 定义：
+
+- 名字用全名，参数取 `parameters_schema`。
+- 另附两个**只用于上下文计量的标注**（区分 MCP 工具与系统工具两段、结果归属分段），规整请求时收下、不发给模型。
 
 ## 熔断与探活
 
@@ -147,7 +171,7 @@ flowchart TB
 
 ## 手动重连与连接态刷新
 
-Dashboard 工具页可对提供者触发手动重连，编排集中在 `ToolOperations.reconnect_provider`（决策依据见 [ADR-010：工具可用性手动操作](../decisions/010-tool-availability-reconnect.md)）：
+Dashboard 工具页可对提供者触发手动重连，编排集中在 `ToolOperations.reconnect_provider`。决策依据见 [ADR-010：工具可用性手动操作](../decisions/010-tool-availability-reconnect.md)：
 
 1. `provider.reconnect()`（默认 = 先断开再连接；提供者覆写 `connect` 即自动获得重连支持，无需另打标）。
 2. 成功后刷新该提供者的工具集（降级登记的 0 工具补注册、清单变化整体刷新）。
@@ -164,11 +188,20 @@ Dashboard 工具页可对提供者触发手动重连，编排集中在 `ToolOper
 
 ## 运营面
 
-`ToolOperations`（`src/modules/tools/operations.py`）是注册表的只读伴生对象，供 Dashboard 工具页消费：提供者目录（含 0 工具的降级登记项，保证可见可重连）、健康快照（只含熔断中或近期有失败的工具）、工具归属投影（可见名单的单归属 Agent）、手动重连编排。写路径仍归注册表，本类只读。
+`ToolOperations`（`src/modules/tools/operations.py`）是注册表的只读伴生对象，供 Dashboard 工具页消费：
+
+- 提供者目录：含 0 工具的降级登记项，保证可见可重连。
+- 健康快照：只含熔断中或近期有失败的工具。
+- 工具归属投影：可见名单的单归属 Agent。
+- 手动重连编排。
+
+写路径仍归注册表，本类只读。
 
 ## 异步任务
 
-有一类工具调用拿到的不是结果，而是一张**受理回执**（"接了，任务号是 X"）：游戏里的执行动作、跨 Agent 委派、后台生成的图纸都属这类。这套"受理—跟踪—通知"基建的代码在 `src/modules/tools/tasks.py`；委派原语的决策依据见 [ADR-013：异步任务基建与 Agent 委派原语](../decisions/013-async-task-infrastructure-and-delegation.md)与 [ADR-076：委派改为一件在做、其余待办](../decisions/076-delegation-one-in-hand-and-settle-on-switch.md)。
+有一类工具调用拿到的不是结果，而是一张**受理回执**（"接了，任务号是 X"）：游戏里的执行动作、跨 Agent 委派、后台生成的图纸都属这类。
+
+这套"受理—跟踪—通知"基建的代码在 `src/modules/tools/tasks.py`。委派原语的决策依据见 [ADR-013：异步任务基建与 Agent 委派原语](../decisions/013-async-task-infrastructure-and-delegation.md)与 [ADR-076：委派改为一件在做、其余待办](../decisions/076-delegation-one-in-hand-and-settle-on-switch.md)。
 
 **受理约定**：回执型工具的成功结果携带结构化字段 `accepted=true` 与 `task_id`，调用回合不阻塞。任务的真实进展在执行侧（外部系统或执行 Agent），工具层只做三件事：登记账目、核实进展、把变化通知发起方。
 
@@ -198,7 +231,12 @@ Dashboard 工具页可对提供者触发手动重连，编排集中在 `ToolOper
 - provider 型任务终态后，结果保留在一个有界环形缓冲里，供只读观察者核对"最近几步到底成没成"。
 - 发起方每回合决策前可读记录表旁注当参考；旁注里的原始推理含坐标与工具名，进参考段前由消费方脱敏。
 
-跟踪循环（`TaskTracker`）对每个进行中的 provider 型任务双通道核实：执行侧通知触发一次核实（举旗级、可丢），周期兜底轮询保底。核实经提供者的**查询适配器**拉取快照写入记录表（真变化才发事件）。停滞告警：超过无进展时长（可配置）→ 经 `task.changed` 发一条告警（状态不变、`alert` 标记），不杀任务；排队等待出队的委派不算停滞。委派停着等定夺、连续多次告警仍无决断时，主播侧按配置自动撤单兜底。
+跟踪循环（`TaskTracker`）对每个进行中的 provider 型任务双通道核实：
+
+- 执行侧通知触发一次核实（举旗级、可丢），周期兜底轮询保底。
+- 核实经提供者的**查询适配器**拉取快照写入记录表（真变化才发事件）。
+- 停滞告警：超过无进展时长（可配置）→ 经 `task.changed` 发一条告警（状态不变、`alert` 标记），不杀任务；排队等待出队的委派不算停滞。
+- 委派停着等定夺、连续多次告警仍无决断时，主播侧按配置自动撤单兜底。
 
 两个可选适配器钩子挂在提供者上（默认不支持、不支持则退化为纯周期兜底）：
 
@@ -207,11 +245,16 @@ Dashboard 工具页可对提供者触发手动重连，编排集中在 `ToolOper
 | `query_task(task_id)` | 向事实源查任务快照，返回状态 + 快照 + 摘要 |
 | `subscribe_task_notifications(callback)` | 订阅执行侧提示；订阅按提供者复用，名下任务清空自动退订 |
 
-声明 server 特有映射（原始状态词 → 任务词表、通知资源地址）是绑定处的职责，通道层不含任何 server 语义。状态真变化（登记、决策点、终态、停滞告警）发 `task.changed`；订阅方按"发起方是自己"过滤后由 Agent 基类唤醒子类钩子——通知是提示，需要事实再查记录表与执行侧。跨 Agent 委派的委派/递话/结单原语（`framework_delegate` 等）挂在框架提供者上，记录表与跟踪循环为它共用。
+- 声明 server 特有映射（原始状态词 → 任务词表、通知资源地址）是绑定处的职责，通道层不含任何 server 语义。
+- 状态真变化（登记、决策点、终态、停滞告警）发 `task.changed`。
+- 订阅方按"发起方是自己"过滤后由 Agent 基类唤醒子类钩子——通知是提示，需要事实再查记录表与执行侧。
+- 跨 Agent 委派的委派/递话/结单原语（`framework_delegate` 等）挂在框架提供者上，记录表与跟踪循环为它共用。
 
 ## MCP 集成
 
-MCP（Model Context Protocol，模型上下文协议）是连接外部工具服务的标准协议。本模块（`src/modules/mcp/`）是**通道层**：把 MCP server 暴露的工具映射成本项目的统一工具契约，不含任何具体 server 的语义知识。Agent 私有 MCP 的归属限定见 [ADR-009：Agent 私有 MCP 与工具归属限定](../decisions/009-agent-owned-mcp.md)。
+MCP（Model Context Protocol，模型上下文协议）是连接外部工具服务的标准协议。
+
+本模块（`src/modules/mcp/`）是**通道层**：把 MCP server 暴露的工具映射成本项目的统一工具契约，不含任何具体 server 的语义知识。Agent 私有 MCP 的归属限定见 [ADR-009：Agent 私有 MCP 与工具归属限定](../decisions/009-agent-owned-mcp.md)。
 
 两种用法：
 
@@ -221,7 +264,10 @@ MCP（Model Context Protocol，模型上下文协议）是连接外部工具服�
 命名与映射：
 
 - `spec.name` 存 **server 原始名**；对外全名 = `<提供者名>_<原始名>`，提供者名默认 = server 名。调用时用原始名直呼 server，全程无名字解析。
-- 映射（`mapper.py`）是纯函数、类型层直传：协议的工具声明 → `ToolSpec`，调用回执（文本块 / 图片块）→ 统一结果类型；单份完整 JSON 文本额外解析为结构化事实供程序消费。工具清单在**连接时预拉缓存**——协议的清单接口是异步的，提供者的清单接口是同步的，缓存是两者的衔接点。
+- 映射（`mapper.py`）是纯函数、类型层直传：
+  - 协议的工具声明 → `ToolSpec`；调用回执（文本块 / 图片块）→ 统一结果类型。
+  - 单份完整 JSON 文本额外解析为结构化事实供程序消费。
+  - 工具清单在**连接时预拉缓存**——协议的清单接口是异步的，提供者的清单接口是同步的，缓存是两者的衔接点。
 - MCP 调用是请求-响应语义，映射出的工具一律 `sync`。
 
 失败分两类，与熔断记账联动：
@@ -239,21 +285,27 @@ server 连不上是常态（如 server 晚于本进程启动），装配与运�
 - 恢复成功走与初次装配同一个出口：标记连接建立 → 工具集刷新补注册，无需重启。
 - 生命周期自管理：MCP 提供者在装配期自行建连，退出注册表的批量启停，避免同一连接被建立两次。
 
-MCP 提供者可声明任务适配器（绑定处在连接拉到清单后赋值，通道层只认全名不认语义）：任务查询工具 + 状态映射（把 server 的任务查询工具与原始状态词映射进任务词表，供跟踪循环核实）、通知资源地址（订阅 server 的举旗级通知，多订阅方共用一条资源订阅，最后一个退订才断开）、注意流读取工具 + 固定入参（按游标**增量**读一页事件；返回空表示"这一轮没读到"，不能读成"没有事件"——等待与失败必须区分）。优雅停机经 `close_mcp_providers` 关闭仍在连接的 MCP 提供者（取消恢复循环、关底层连接），幂等；单个关闭失败不影响其余。
+MCP 提供者可声明任务适配器（绑定处在连接拉到清单后赋值，通道层只认全名不认语义）：
+
+- 任务查询工具 + 状态映射：把 server 的任务查询工具与原始状态词映射进任务词表，供跟踪循环核实。
+- 通知资源地址：订阅 server 的举旗级通知，多订阅方共用一条资源订阅，最后一个退订才断开。
+- 注意流读取工具 + 固定入参：按游标**增量**读一页事件；返回空表示"这一轮没读到"，不能读成"没有事件"——等待与失败必须区分。
+
+优雅停机经 `close_mcp_providers` 关闭仍在连接的 MCP 提供者（取消恢复循环、关底层连接），幂等；单个关闭失败不影响其余。
 
 ## 什么不是工具
 
-Agent 内部件的处置分三档（判据与细则见[组件开发指南的红线三分](../guides/component/tool.md#红线三分)）：
-
-| 类别 | 处置 |
-|---|---|
-| 模型可调的内部工具 | 注册进表 + 可见名单隔离（如 `streamer_reply`、`minecraft_todo`） |
-| 规划器 / 回复器类本体 | 留在 Agent 内部，不进表 |
-| 代码直连的内部件 | 不是工具，没有声明、不注册（如主动发言判定、命令解析原语） |
+Agent 内部件的处置分三档——模型可调的内部工具（注册进表 + 可见名单隔离）、规划器/回复器类本体（留在 Agent 内部）、代码直连的内部件（不是工具，不注册）。判据与细则见[组件开发指南的红线三分](../guides/component/tool.md#红线三分)。
 
 ## 相关配置与已知边界
 
-配置键与字段以代码为事实源（`src/modules/config/tools_schemas.py`）。方向上分五处：各域装配开关（`[tools.<域>.<键>].enabled` 与虚拟形象平台名单）、全局停用名单（`[tools].disabled_tools`，重启生效）、探活节拍（`[tools.health]`）、任务基建节拍（`[tools.tasks]`）、MCP server 清单（`[tools.mcp]`）。
+配置键与字段以代码为事实源（`src/modules/config/tools_schemas.py`）。方向上分五处：
+
+- 各域装配开关：`[tools.<域>.<键>].enabled` 与虚拟形象平台名单。
+- 全局停用名单：`[tools].disabled_tools`，重启生效。
+- 探活节拍：`[tools.health]`。
+- 任务基建节拍：`[tools.tasks]`。
+- MCP server 清单：`[tools.mcp]`。
 
 已知边界（有意取舍，勿当缺陷上报）：
 
