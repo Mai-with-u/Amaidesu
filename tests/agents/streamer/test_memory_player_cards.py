@@ -278,3 +278,80 @@ def test_self_statements_from_another_save_say_where() -> None:
         player, [], statements=[("他的基地在雪山脚下", "在 minecraft「生存一档」里，不是眼下这个存档")]
     )
     assert "他跟你说过：他的基地在雪山脚下（在 minecraft「生存一档」里，不是眼下这个存档）。" in text
+
+
+async def test_player_card_syncs_progress_and_drops_closed_promise(store: SQLiteDatabase) -> None:
+    """玩家卡同步本场最新 progress 附注；承诺在本场 done 结案后再次开口不再推送旧约卡片。"""
+    before, current = await _two_sessions(store)
+    player = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-pa", name="PlayerA", live_session_id=before, at_ms=_NOW - 85_000_000
+    )
+    promise = await store.commitments.insert_commitment(
+        what="补还 3 颗钻石",
+        quote="下次补还 3 颗钻石",
+        created_session_id=before,
+        now_ms_value=_NOW - 84_000_000,
+    )
+    assert promise is not None
+    with store.manager.transaction() as conn:
+        conn.execute("UPDATE commitments SET target_player_id=?, game='minecraft' WHERE id=?", (player.id, promise))
+
+    # 写入两次本场 progress，玩家卡应只展示最新进展且承诺仍保持 open
+    await store.memory_corrections.insert_and_apply(
+        live_session_id=current,
+        target_kind="commitment",
+        commitment_id=promise,
+        verdict="progress",
+        summary="已还 1 颗，还欠 2 颗",
+        evidence_kind="game_receipt",
+        evidence_quote="朝 PlayerA 扔出钻石 x1",
+        created_at_ms=_NOW + 1_000,
+    )
+    await store.memory_corrections.insert_and_apply(
+        live_session_id=current,
+        target_kind="commitment",
+        commitment_id=promise,
+        verdict="progress",
+        summary="已还 2 颗，还欠 1 颗",
+        evidence_kind="game_receipt",
+        evidence_quote="往箱子存入钻石 x1",
+        created_at_ms=_NOW + 2_000,
+    )
+
+    clock = _Clock()
+
+    async def previous_session() -> int:
+        return before
+
+    provider_with_corr = MemoryCueProvider(
+        commitments_repo=store.commitments,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        current_session_provider=lambda: current,
+        previous_session_provider=previous_session,
+        clock=clock,
+        archive_repo=store.archive,
+        cue_log_repo=store.memory_cue_log,
+        passive_enabled=False,
+        game_player_repo=store.game_players,
+        correction_repo=store.memory_corrections,
+    )
+    cues = await provider_with_corr.collect(batch=[], game_players=[("minecraft", "uuid-pa")])
+    assert cues.card_count == 1
+    assert f"补还 3 颗钻石（约#{promise}）（本场进展：已还 2 颗，还欠 1 颗）" in cues.text
+
+    # 同一承诺在本场结案（done）后，冷却结束再次开口不再推送已结案旧约卡片
+    await store.memory_corrections.insert_and_apply(
+        live_session_id=current,
+        target_kind="commitment",
+        commitment_id=promise,
+        verdict="done",
+        summary="已还清 3 颗钻石",
+        evidence_kind="game_receipt",
+        evidence_quote="朝 PlayerA 扔出钻石 x1",
+        created_at_ms=_NOW + 3_000,
+    )
+    clock.value += PUSH_COOLDOWN_MS + 1
+    cues_after_done = await provider_with_corr.collect(batch=[], game_players=[("minecraft", "uuid-pa")])
+    assert cues_after_done.card_count == 0
+    assert promise not in cues_after_done.commitment_ids

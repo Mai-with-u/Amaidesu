@@ -175,6 +175,8 @@ class BriefRenderContext:
     other_save_commitments: Tuple[Commitment, ...] = ()
     archive_corrections: Mapping[int, str] = field(default_factory=dict)
     operator_notes: Tuple[str, ...] = ()
+    commitment_progress: Mapping[int, str] = field(default_factory=dict)
+    closed_commitments_this_session: Tuple[Tuple[int, str, str], ...] = ()
     speaking_mode: str = "gameplay"
 
 

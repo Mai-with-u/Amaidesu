@@ -90,6 +90,7 @@ if TYPE_CHECKING:
         ChatRepo,
         CommitmentRepo,
         GamePlayerRepo,
+        MemoryCorrectionRepo,
         MemoryCueLogRepo,
         ViewerRepo,
     )
@@ -200,6 +201,7 @@ class _Round:
     recent_session_ids: Tuple[int, ...] = ()
     earliest_recent_ms: int = 0
     self_trigger_cutoff_ms: Optional[int] = None
+    commitment_progress: Dict[int, str] = field(default_factory=dict)
     cards: List[_Card] = field(default_factory=list)
     probes: List[NewCueLogEntry] = field(default_factory=list)
     carded_viewers: Set[int] = field(default_factory=set)
@@ -266,6 +268,7 @@ class MemoryCueProvider:
         search: Optional["MemorySearch"] = None,
         vector_enabled: bool = True,
         game_player_repo: Optional["GamePlayerRepo"] = None,
+        correction_repo: Optional["MemoryCorrectionRepo"] = None,
         min_session_ms: int = 0,
     ) -> None:
         """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
@@ -273,7 +276,8 @@ class MemoryCueProvider:
         ``previous_session_provider`` 给"上一场"的判定（承诺卡与档案卡的时间词）：缺省时
         一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有档案卡；
         ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时被动想起三路都不跑；``search`` 缺失、
-        没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。``game_player_repo`` 缺失时没有玩家卡。
+        没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。``game_player_repo`` 缺失时没有玩家卡；
+        ``correction_repo`` 缺失时不附本场进展注记（优雅降级）。
         """
         self._commitments = commitments_repo
         self._chat = chat_repo
@@ -288,6 +292,7 @@ class MemoryCueProvider:
         self._search = search
         self._vector_enabled = vector_enabled
         self._players = game_player_repo
+        self._corrections = correction_repo
         self._min_session_ms = max(0, int(min_session_ms))
         self._pool = RulePool(archive_repo=archive_repo, inside_jokes=inside_jokes, clock=clock)
         self._arrivals = PlaceArrivals()
@@ -343,6 +348,7 @@ class MemoryCueProvider:
         await self._mark_used(sid, used_archive, used)
         del open_games  # 游戏承诺不再按"游戏开着"轮播，只在对象开口、走到地点或情境命中时单推
         recent_ids, earliest_ms, self_cutoff_ms = await self._recent_session_bounds(sid)
+        commitment_progress = await self._load_commitment_progress(sid)
         state = _Round(
             used=used,
             used_archive=used_archive,
@@ -353,6 +359,7 @@ class MemoryCueProvider:
             recent_session_ids=recent_ids,
             earliest_recent_ms=earliest_ms,
             self_trigger_cutoff_ms=self_cutoff_ms,
+            commitment_progress=commitment_progress,
         )
         self._round_labels = {}
         # 对象开口（观众承诺、熟客卡、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
@@ -475,6 +482,7 @@ class MemoryCueProvider:
         used, used_archive = await load_used_refs(self._chat, sid)
         await self._mark_used(sid, used_archive, used)
         recent_ids, earliest_ms, self_cutoff_ms = await self._recent_session_bounds(sid)
+        commitment_progress = await self._load_commitment_progress(sid)
         state = _Round(
             used=used,
             used_archive=used_archive,
@@ -485,6 +493,7 @@ class MemoryCueProvider:
             recent_session_ids=recent_ids,
             earliest_recent_ms=earliest_ms,
             self_trigger_cutoff_ms=self_cutoff_ms,
+            commitment_progress=commitment_progress,
             max_cards=effective_limit,
         )
         self._round_labels = {}
@@ -978,6 +987,7 @@ class MemoryCueProvider:
                     message_id=sender.message_id,
                     is_previous=self._registered_in_previous_session(commitment, state.previous_session_id),
                     place=place_note(commitment.game, commitment.save_id, commitment.save_name, state.saves),
+                    progress_note=state.commitment_progress.get(int(commitment.id), ""),
                 )
                 self._push(state, _Card(key=key, text=text, kind="viewer", sources=(SOURCE_DANMAKU,)))
                 state.carded_viewers.add(int(sender.viewer_id))
@@ -1077,7 +1087,12 @@ class MemoryCueProvider:
                 (item.title, place_note(item.game, item.save_id, item.save_name, state.saves)) for item in statements
             ]
             text = render_player_card(
-                player, history, previous_session_id=state.previous_session_id, promises=notes, statements=said
+                player,
+                history,
+                previous_session_id=state.previous_session_id,
+                promises=notes,
+                statements=said,
+                commitment_progress=state.commitment_progress,
             )
             if not text:
                 continue
@@ -1164,6 +1179,7 @@ class MemoryCueProvider:
                     commitment,
                     why=f"游戏里的位置显示你可能走到了「{place}」附近",
                     unsure_save=save_place is SavePlace.UNSURE,
+                    progress_note=state.commitment_progress.get(int(commitment.id), ""),
                 )
                 self._push(
                     state,
@@ -1341,7 +1357,12 @@ class MemoryCueProvider:
         if self._skip(hit.key, state, self._other_save(commitment.game, commitment.save_id, state)):
             return ""
         place = place_of(commitment.game, commitment.save_id, state.saves)
-        return render_recalled_commitment_card(commitment, why=why, unsure_save=place is SavePlace.UNSURE)
+        return render_recalled_commitment_card(
+            commitment,
+            why=why,
+            unsure_save=place is SavePlace.UNSURE,
+            progress_note=state.commitment_progress.get(int(commitment.id), ""),
+        )
 
     async def _cue_line(self, line_id: int) -> Optional["ArchiveLine"]:
         """向量命中的档案行再核一次：只推正式场的；读不到当没有。"""
@@ -1470,6 +1491,27 @@ class MemoryCueProvider:
             logger.warning(f"线索推送取上一场失败（承诺卡时间词写「之前」）: {exc}", exc=exc)
             return None
         return int(value) if value is not None else None
+
+    async def _load_commitment_progress(self, session_id: int) -> Dict[int, str]:
+        """读取本场各未了结承诺的最新进展摘要（未注入更正仓储或查询异常时降级返回空）。"""
+        if self._corrections is None:
+            return {}
+        try:
+            if hasattr(self._corrections, "list_commitment_updates_by_session"):
+                items = await self._corrections.list_commitment_updates_by_session(live_session_id=int(session_id))
+            else:
+                all_active = await self._corrections.list_active_by_session(live_session_id=int(session_id))
+                items = [item for item in all_active if item.target_kind == "commitment"]
+        except Exception as exc:  # noqa: BLE001 - 本场进展读不到不挡其余线索推送
+            logger.warning(f"读本场承诺进展失败（卡片暂不附进展注记）: {exc}", exc=exc)
+            return {}
+        progress: Dict[int, str] = {}
+        for item in items:
+            if item.verdict == "progress" and item.commitment_id is not None:
+                cleaned = " ".join(str(item.summary or "").split())
+                if cleaned:
+                    progress[int(item.commitment_id)] = cleaned
+        return progress
 
     async def _open_commitments(
         self,

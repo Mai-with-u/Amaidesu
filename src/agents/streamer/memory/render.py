@@ -437,7 +437,7 @@ def _render_room_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
 
 
 def _render_commitments_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
-    """【还惦记的事】：最近三场内提起过的未了结承诺（想做再做的事），更早搁下的只给一句总数。"""
+    """【还惦记的事】：最近三场内提起过的未了结承诺（附本场进展），更早搁下的折成总数，末尾附本场已了结承诺。"""
     pending: List[str] = []
     for commitment in ctx.commitments:
         what = (commitment.what or "").strip()
@@ -462,14 +462,29 @@ def _render_commitments_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
             if quote
             else f"- [{render_commitment_number(commitment.id)}] {what}"
         )
-        pending.append(f"{body}（{'；'.join(notes)}）")
+        line = f"{body}（{'；'.join(notes)}）"
+        progress_note = ctx.commitment_progress.get(int(commitment.id), "")
+        if progress_note:
+            line = f"{line}（本场进展：{progress_note}）"
+        pending.append(line)
     extra = max(0, int(ctx.earlier_commitment_count))
-    if not pending and not extra:
+    closed_lines: List[str] = []
+    for cid, what, summary in ctx.closed_commitments_this_session:
+        num = render_commitment_number(cid)
+        if what and summary:
+            closed_lines.append(f"- [{num}] 本场已了结：{summary}（原约定：{what}）")
+        elif summary:
+            closed_lines.append(f"- [{num}] 本场已了结：{summary}")
+        elif what:
+            closed_lines.append(f"- [{num}] 本场已了结（原约定：{what}）")
+    if not pending and not extra and not closed_lines:
         return BriefZoneOutput()
     lines = [*pending]
     if extra:
         lines.append(f"- 另有 {extra} 件搁了很久，可以用 memory_recall 查")
-    lines.append(_COMMITMENTS_HINT)
+    if pending or extra:
+        lines.append(_COMMITMENTS_HINT)
+    lines.extend(closed_lines)
     return BriefZoneOutput(lines=tuple(lines))
 
 
@@ -593,6 +608,8 @@ def _build_render_context(
     used_archive_ids: AbstractSet[int] = frozenset(),
     archive_corrections: Optional[Mapping[int, str]] = None,
     operator_notes: Sequence[str] = (),
+    commitment_progress: Optional[Mapping[int, str]] = None,
+    closed_commitments_this_session: Sequence[Tuple[int, str, str]] = (),
     speaking_mode: str = "gameplay",
 ) -> BriefRenderContext:
     """把简报原始输入归一化为各分区共享的只读上下文（同句台词既写档案又记承诺时只留承诺）。"""
@@ -620,6 +637,14 @@ def _build_render_context(
         other_save_commitments=tuple(other_save_commitments),
         archive_corrections={int(k): str(v) for k, v in (archive_corrections or {}).items() if str(v).strip()},
         operator_notes=tuple(" ".join(str(note).split()) for note in operator_notes if str(note).strip()),
+        commitment_progress={
+            int(k): " ".join(str(v).split()) for k, v in (commitment_progress or {}).items() if str(v).strip()
+        },
+        closed_commitments_this_session=tuple(
+            (int(cid), " ".join(str(what).split()), " ".join(str(summary).split()))
+            for cid, what, summary in closed_commitments_this_session
+            if str(what).strip() or str(summary).strip()
+        ),
         speaking_mode=str(speaking_mode or "gameplay"),
     )
 
@@ -751,6 +776,8 @@ def render_brief(
     used_archive_ids: AbstractSet[int] = frozenset(),
     archive_corrections: Optional[Mapping[int, str]] = None,
     operator_notes: Sequence[str] = (),
+    commitment_progress: Optional[Mapping[int, str]] = None,
+    closed_commitments_this_session: Sequence[Tuple[int, str, str]] = (),
     speaking_mode: str = "gameplay",
     zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> str:
@@ -775,6 +802,8 @@ def render_brief(
         used_archive_ids=used_archive_ids,
         archive_corrections=archive_corrections,
         operator_notes=operator_notes,
+        commitment_progress=commitment_progress,
+        closed_commitments_this_session=closed_commitments_this_session,
         speaking_mode=speaking_mode,
     )
     folded_other_saves = _render_folded_other_saves(ctx)
@@ -836,15 +865,23 @@ def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = Fals
     return f"[{render_archive_number(line.id)}·{when}] {body}。想起它是因为{why}。"
 
 
-def render_recalled_commitment_card(commitment: Commitment, *, why: str, unsure_save: bool = False) -> str:
-    """按意思想起的承诺卡：不针对具体观众的未了结承诺，给原话，写为什么想起来。
+def render_recalled_commitment_card(
+    commitment: Commitment,
+    *,
+    why: str,
+    unsure_save: bool = False,
+    progress_note: str = "",
+) -> str:
+    """按意思想起的承诺卡：不针对具体观众的未了结承诺，给原话，写为什么想起来（可附本场最新进展）。
 
     承诺做没做是下播整理时判的，本场做了的还没记上——写"截至上一场还没做"，不替她断言眼下没做。
     """
     quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
     unsure = "不确定是在哪个存档里答应的，先对一对眼前的世界；" if unsure_save else ""
+    progress = " ".join(str(progress_note or "").split())
+    progress_part = f"（本场进展：{progress}）" if progress else ""
     return (
-        f"[{render_commitment_number(commitment.id)}] 你之前说过「{quote}」，截至上一场还没做。"
+        f"[{render_commitment_number(commitment.id)}] 你之前说过「{quote}」，截至上一场还没做{progress_part}。"
         f"想起它是因为{why}；{unsure}时机对再提。"
     )
 
@@ -862,8 +899,9 @@ def render_viewer_card(
     message_id: str,
     is_previous: bool = False,
     place: str = "",
+    progress_note: str = "",
 ) -> str:
-    """对某位观众的承诺卡：只给动作标题，不提当时的缘由与原话。
+    """对某位观众的承诺卡：只给动作标题，不提当时的缘由与原话（可附本场最新进展）。
 
     ``place`` 是挂了分存档游戏的承诺"在哪个存档里答应的"（见 ``saves.place_note``）：ta 开口时
     照推，但她得知道那件事是不是在眼下这个世界里。
@@ -874,9 +912,11 @@ def render_viewer_card(
     when = _when_word(is_previous=is_previous, spoken=False)
     target = f"{viewer_label}（弹幕 {message_id}）在" if message_id else f"{viewer_label} 在"
     detail = f"{when}；{place}" if place else when
+    progress = " ".join(str(progress_note or "").split())
+    progress_part = f"（本场进展：{progress}）" if progress else ""
     return (
         f"[{render_commitment_number(commitment.id)}·对{viewer_label}] "
-        f"{target}。你答应过 ta：{(commitment.what or '').strip()}（{detail}）。"
+        f"{target}。你答应过 ta：{(commitment.what or '').strip()}（{detail}）{progress_part}。"
         "只提答应的事，别提当时的缘由。"
     )
 
@@ -888,6 +928,7 @@ def render_player_card(
     previous_session_id: Optional[int] = None,
     promises: Sequence[Tuple[Commitment, str]] = (),
     statements: Sequence[Tuple[str, str]] = (),
+    commitment_progress: Optional[Mapping[int, str]] = None,
 ) -> str:
     """游戏玩家开口时的卡："这位是谁、和你有过什么"；以前没有往来、没答应过他什么、他也没说过什么的返回空串。
 
@@ -895,11 +936,13 @@ def render_player_card(
     不写他什么时间段上线、不写私聊。最近一次往来在上一场时写"上一场"，其余写"之前"。
     ``statements`` 是人批准过的他的自述（标题, 在哪个存档说的说明），写成"他跟你说过"：没批准的不写，
     自述也不进常驻简报，只在他找她时由这张卡提起。
-    ``promises`` 是答应过他、还没了结的事（承诺, 在哪个存档答应的说明），带承诺编号写在卡尾：
+    ``promises`` 是答应过他、还没了结的事（承诺, 在哪个存档答应的说明），带承诺编号写在卡尾；
+    若某条承诺有本场最新 ``commitment_progress``，顺带附注「（本场进展：…）」同步当前进度。
     对玩家的承诺不进常驻简报，只在他露面时由这张卡提醒。
     """
     promise_text = ""
     if promises:
+        progress_map = commitment_progress or {}
         items = []
         for commitment, place in promises:
             note = (
@@ -907,7 +950,11 @@ def render_player_card(
                 if place
                 else render_commitment_number(commitment.id)
             )
-            items.append(f"{(commitment.what or '').strip()}（{note}）")
+            item_text = f"{(commitment.what or '').strip()}（{note}）"
+            latest_progress = " ".join(str(progress_map.get(int(commitment.id), "") or "").split())
+            if latest_progress:
+                item_text = f"{item_text}（本场进展：{latest_progress}）"
+            items.append(item_text)
         promise_text = f"你答应过他：{'；'.join(items)}。"
     # 他自己说过的事：别的存档里说的照样提，但写明是在哪个存档说的（那座房子不一定在眼下这个世界里）
     said = "；".join(f"{title}（{place}）" if place else title for title, place in statements if title.strip())

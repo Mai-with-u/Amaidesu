@@ -29,12 +29,14 @@ from src.agents.streamer.memory.render import (
     render_familiar_viewer_card,
     render_forget_notice,
     render_game_card,
+    render_player_card,
     render_presence_line,
     render_retract_notice,
     render_spoken_archive,
     render_spoken_memory,
     render_viewer_card,
 )
+from src.modules.storage.models.game_players import GamePlayer
 from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotLine
 from src.modules.types.game_save import GameSave
 
@@ -821,3 +823,64 @@ def test_presence_line_and_familiar_viewer_card_include_tier_former_names_and_ze
     assert "当初「水獭取名圆圆」就是和 ta 一起定的。" in card
     assert "只在话题沾边时顺嘴聊起" in card
     assert not any(ch.isdigit() for ch in card)
+
+
+def test_render_brief_shows_commitment_progress_and_closed_this_session() -> None:
+    """常驻简报在未了结承诺行尾附本场进展，并在承诺段尾部展示本场已了结小行（即使无剩余未了结也可见）。"""
+    open_comm = Commitment(
+        id=43,
+        what="补还 3 颗钻石",
+        quote="下次进服补还 3 颗钻石",
+        game="minecraft",
+        save_id="s1",
+        save_name="主世界",
+        created_session_id=9,
+        created_at_ms=0,
+        updated_at_ms=0,
+    )
+    brief = render_brief(
+        commitments=[open_comm],
+        previous_session_id=9,
+        current_saves={"minecraft": GameSave(id="s1", name="主世界")},
+        commitment_progress={43: "已还 2 颗，还欠 1 颗"},
+        closed_commitments_this_session=[(40, "把河边木桥铺完", "木桥已全段铺通")],
+    )
+    assert "- [约#43] 「下次进服补还 3 颗钻石」（minecraft·上一场）（本场进展：已还 2 颗，还欠 1 颗）" in brief
+    assert "- [约#40] 本场已了结：木桥已全段铺通（原约定：把河边木桥铺完）" in brief
+
+    # 仅剩本场已了结承诺时仍渲染承诺段，方便回答观众弹幕确认已还清
+    closed_only = render_brief(
+        commitments=[],
+        closed_commitments_this_session=[(43, "补还 3 颗钻石", "已还清 3 颗钻石")],
+    )
+    assert "【还惦记的事】（想做再做的事，不用赶）：" in closed_only
+    assert "- [约#43] 本场已了结：已还清 3 颗钻石（原约定：补还 3 颗钻石）" in closed_only
+
+
+def test_render_player_card_attaches_in_session_commitment_progress() -> None:
+    """玩家卡在有本场进展的未了结承诺后附注（本场进展：…），无进展时保持原格式。"""
+    player = GamePlayer(
+        id=7,
+        game="minecraft",
+        uuid="uuid-pa",
+        name="PlayerA",
+        names=["PlayerA"],
+        first_seen_ms=0,
+        last_seen_ms=0,
+    )
+    promise = Commitment(
+        id=43,
+        what="补还 3 颗钻石",
+        quote="下次还你 3 颗钻石",
+        game="minecraft",
+        target_player_id=7,
+        created_at_ms=0,
+        updated_at_ms=0,
+    )
+    card = render_player_card(
+        player,
+        [],
+        promises=[(promise, "")],
+        commitment_progress={43: "已还 2 颗，还欠 1 颗"},
+    )
+    assert "你答应过他：补还 3 颗钻石（约#43）（本场进展：已还 2 颗，还欠 1 颗）。" in card

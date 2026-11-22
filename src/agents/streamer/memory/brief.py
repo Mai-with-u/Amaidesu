@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, AbstractSet, List, Mapping, Optional, Sequence
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.memory import Commitment, SnapshotLine
-from src.modules.storage.repos.memory_corrections import format_correction_note
+from src.modules.storage.repos.memory_corrections import CORRECTION_VERDICT_LABELS, format_correction_note
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
@@ -36,11 +36,26 @@ from .render import (
     memory_ref_numbers,
     render_brief,
 )
+from .saves import SavePlace, place_of
 
 if TYPE_CHECKING:
-    from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, EventRepo, MemoryCorrectionRepo
+    from src.modules.storage.privacy import PrivacyService
+    from src.modules.storage.repos import (
+        ArchiveRepo,
+        ChatRepo,
+        CommitmentRepo,
+        EventRepo,
+        GamePlayerRepo,
+        MemoryCorrectionRepo,
+    )
 
-__all__ = ["MAX_OPERATOR_NOTES_IN_BRIEF", "MemoryBrief", "build_brief", "load_used_refs"]
+__all__ = [
+    "MAX_CLOSED_COMMITMENTS_IN_BRIEF",
+    "MAX_OPERATOR_NOTES_IN_BRIEF",
+    "MemoryBrief",
+    "build_brief",
+    "load_used_refs",
+]
 
 logger = get_logger("MemoryBrief")
 
@@ -48,6 +63,8 @@ logger = get_logger("MemoryBrief")
 _CANDIDATE_LIMIT = 200
 # 常驻简报顶部最多保留最近几条本场运营提醒
 MAX_OPERATOR_NOTES_IN_BRIEF = 3
+# 常驻简报承诺段尾部最多保留最近几条本场已了结承诺
+MAX_CLOSED_COMMITMENTS_IN_BRIEF = 5
 
 
 @dataclass(frozen=True)
@@ -78,6 +95,8 @@ async def build_brief(
     event_repo: Optional["EventRepo"] = None,
     current_saves: Optional[Mapping[str, GameSave]] = None,
     correction_repo: Optional["MemoryCorrectionRepo"] = None,
+    game_player_repo: Optional["GamePlayerRepo"] = None,
+    privacy_service: Optional["PrivacyService"] = None,
     speaking_mode: str = "gameplay",
 ) -> MemoryBrief:
     """拼一份常驻简报；两段料都没取到时返回空简报（系统提示词里整段省略）。
@@ -107,7 +126,14 @@ async def build_brief(
         recent_session_ids=recent_session_ids,
         earliest_recent_ms=earliest_recent_ms,
     )
-    archive_corrections, operator_notes = await _load_session_corrections(correction_repo, live_session_id)
+    archive_corrections, operator_notes, commitment_progress, closed_commitments = await _load_session_corrections(
+        correction_repo,
+        live_session_id,
+        commitments_repo=commitments_repo,
+        current_saves=saves,
+        game_player_repo=game_player_repo,
+        privacy_service=privacy_service,
+    )
     text = render_brief(
         snapshot_lines=snapshot_lines,
         commitments=taken,
@@ -121,6 +147,8 @@ async def build_brief(
         used_archive_ids=used_archive,
         archive_corrections=archive_corrections,
         operator_notes=operator_notes,
+        commitment_progress=commitment_progress,
+        closed_commitments_this_session=closed_commitments,
         speaking_mode=speaking_mode,
     )
     return MemoryBrief(
@@ -251,20 +279,83 @@ async def _pending_commitments(
 async def _load_session_corrections(
     correction_repo: Optional["MemoryCorrectionRepo"],
     live_session_id: Optional[int],
-) -> Tuple[dict[int, str], List[str]]:
-    """读取本场生效中的档案行更正映射与最近几条运营常驻提醒；未开播或未注入时返回空。"""
+    *,
+    commitments_repo: Optional["CommitmentRepo"] = None,
+    current_saves: Optional[Mapping[str, GameSave]] = None,
+    game_player_repo: Optional["GamePlayerRepo"] = None,
+    privacy_service: Optional["PrivacyService"] = None,
+) -> Tuple[dict[int, str], List[str], dict[int, str], List[Tuple[int, str, str]]]:
+    """读取本场生效中的档案行更正、运营提醒、承诺最新进展与本场已了结承诺；未开播或未注入时返回空。"""
     if correction_repo is None or live_session_id is None:
-        return {}, []
+        return {}, [], {}, []
     try:
         items = await correction_repo.list_active_by_session(live_session_id=int(live_session_id))
     except Exception as exc:  # noqa: BLE001 - 更正读不到不挡常驻简报主干
         logger.warning(f"读取本场记忆更正失败（简报暂不附更正注记）: {exc}", exc=exc)
-        return {}, []
+        return {}, [], {}, []
     archive_map: dict[int, str] = {}
     operator_notes: List[str] = []
+    commitment_progress: dict[int, str] = {}
+    closed_summary_by_id: dict[int, str] = {}
     for item in items:
         if item.target_kind == "archive" and item.archive_line_id is not None:
             archive_map[int(item.archive_line_id)] = format_correction_note(item.verdict, item.summary)
         elif item.target_kind == "general" and item.source == "operator" and item.summary.strip():
             operator_notes.append(item.summary.strip())
-    return archive_map, operator_notes[-MAX_OPERATOR_NOTES_IN_BRIEF:]
+        elif item.target_kind == "commitment" and item.commitment_id is not None:
+            cid = int(item.commitment_id)
+            cleaned = " ".join(str(item.summary or "").split())
+            if item.verdict == "progress":
+                if cleaned:
+                    commitment_progress[cid] = cleaned
+            elif item.verdict in ("done", "invalid", "wrong"):
+                # 同一条承诺若先记进展后结案，按最新结案顺序排到末尾并保留结案说明
+                closed_summary_by_id.pop(cid, None)
+                closed_summary_by_id[cid] = cleaned or CORRECTION_VERDICT_LABELS.get(item.verdict, item.verdict)
+
+    saves = current_saves or {}
+    closed_commitments: List[Tuple[int, str, str]] = []
+    if closed_summary_by_id:
+        for cid, summary in closed_summary_by_id.items():
+            what = ""
+            if commitments_repo is not None:
+                try:
+                    commitment = await commitments_repo.get_commitment(commitment_id=cid)
+                except Exception as exc:  # noqa: BLE001 - 单条回查失败跳过该条，不挡简报主干
+                    logger.warning(f"回查本场已了结承诺 约#{cid} 失败（已跳过）: {exc}", exc=exc)
+                    continue
+                if commitment is None or commitment.status == "open":
+                    continue
+                # 观众私向承诺不进常驻简报，防止单人私事暴露给全场
+                if commitment.viewer_id is not None:
+                    continue
+                # 确认属于别的存档的承诺不混入当前存档承诺段
+                if commitment.game and place_of(commitment.game, commitment.save_id, saves) is SavePlace.OTHER:
+                    continue
+                # 挂游戏玩家的承诺若对方已申请遗忘或在遗忘名单中，立即隔离不入简报
+                if commitment.target_player_id is not None and game_player_repo is not None:
+                    try:
+                        player = await game_player_repo.get_player(player_id=int(commitment.target_player_id))
+                    except Exception as exc:  # noqa: BLE001 - 查不到关联玩家时保守跳过，避免误泄隐私
+                        logger.warning(f"核对已了结承诺 约#{cid} 关联玩家失败（已跳过）: {exc}", exc=exc)
+                        continue
+                    if player is not None:
+                        if player.forget_requested_at_ms is not None:
+                            continue
+                        if privacy_service is not None:
+                            player_game = (commitment.game or player.game or "").strip()
+                            try:
+                                if await privacy_service.is_player_forgotten(game=player_game, uuid=player.uuid):
+                                    continue
+                            except Exception as exc:  # noqa: BLE001 - 查不了遗忘名单时保守跳过
+                                logger.warning(f"核对已了结承诺 约#{cid} 玩家遗忘名单失败（已跳过）: {exc}", exc=exc)
+                                continue
+                what = " ".join(str(commitment.what or "").split())
+            closed_commitments.append((cid, what, summary))
+
+    return (
+        archive_map,
+        operator_notes[-MAX_OPERATOR_NOTES_IN_BRIEF:],
+        commitment_progress,
+        closed_commitments[-MAX_CLOSED_COMMITMENTS_IN_BRIEF:],
+    )
