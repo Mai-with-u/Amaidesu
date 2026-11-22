@@ -14,13 +14,15 @@ from src.agents.streamer.memory.brief import build_brief
 from src.agents.streamer.memory.settle import SessionSettler
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.tools.memory_correct import MemoryCorrectionToolProvider
+from src.modules.agents import AgentManager, BaseAgent, LeadCoordinator, LeadHandoverContext
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.llm.payload import Response
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import PendingArchiveLine
-from src.modules.tools import ToolInvocation
+from src.modules.storage.privacy import PrivacyService
+from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
@@ -242,7 +244,8 @@ async def test_memory_correct_tool_rejects_viewer_danmaku_and_applies_valid_evid
         assert comm_after is not None
         assert comm_after.status == "closed"
         assert comm_after.close_source == "correction"
-        assert f"[约#{comm_id}]" not in brief.text
+        assert comm_id not in brief.commitment_ids
+        assert f"- [约#{comm_id}] 本场已了结：玩家甲已帮铺完河边木桥（原约定：把河边木桥铺完）" in brief.text
 
         # 5. 人工撤回该承诺更正 → 承诺恢复 open、close_source 清空，并记入 memory_edits
         assert r_comm.structured_content is not None
@@ -262,7 +265,9 @@ async def test_memory_correct_tool_rejects_viewer_danmaku_and_applies_valid_evid
             current_saves=saves,
             correction_repo=db.memory_corrections,
         )
+        assert comm_id in brief_after_revert.commitment_ids
         assert f"[约#{comm_id}]" in brief_after_revert.text
+        assert "本场已了结" not in brief_after_revert.text
     finally:
         await db.close()
 
@@ -491,4 +496,591 @@ async def test_settler_accepts_backed_correction_drop_and_flags_unhandled_archiv
         assert se.get("corrections_made") == 2
         assert se.get("settle_lag_ms") is not None and se.get("settle_lag_ms") >= 0
     finally:
+        await db.close()
+
+
+def test_memory_correct_visibility_follows_lead_agent_and_degrades_on_error() -> None:
+    """streamer_memory_correct 默认仅主播可见；切游戏主控后刷新可见名单同步开放，回调异常降级为仅主播。"""
+    current_lead = ""
+    provider = MemoryCorrectionToolProvider(
+        correction_repo=MagicMock(),
+        session_provider=lambda: 1,
+        brief_archive_ids_provider=lambda: (),
+        lead_agent_provider=lambda: current_lead,
+    )
+    registry = ToolRegistry()
+    registry.register_provider(provider)
+
+    assert [s.full_name for s in registry.list_tools(for_agent="streamer")] == ["streamer_memory_correct"]
+    assert registry.list_tools(for_agent="demo_game") == []
+
+    current_lead = "demo_game"
+    registry.refresh_provider_tools(provider)
+    assert [s.full_name for s in registry.list_tools(for_agent="demo_game")] == ["streamer_memory_correct"]
+    assert [s.full_name for s in registry.list_tools(for_agent="streamer")] == ["streamer_memory_correct"]
+
+    current_lead = ""
+    registry.refresh_provider_tools(provider)
+    assert registry.list_tools(for_agent="demo_game") == []
+
+    def _boom() -> str:
+        raise RuntimeError("lead probe boom")
+
+    broken_provider = MemoryCorrectionToolProvider(
+        correction_repo=MagicMock(),
+        session_provider=lambda: 1,
+        brief_archive_ids_provider=lambda: (),
+        lead_agent_provider=_boom,
+    )
+    broken_reg = ToolRegistry()
+    broken_reg.register_provider(broken_provider)
+    assert [s.full_name for s in broken_reg.list_tools(for_agent="streamer")] == ["streamer_memory_correct"]
+    assert broken_reg.list_tools(for_agent="demo_game") == []
+
+
+async def test_memory_correct_progress_updates_brief_and_rejects_archive(tmp_path: Path) -> None:
+    """verdict=progress 仅适用于承诺（打回档案行），凭物品交付回执记录分期进展后保持 open 并在简报呈现，结案后转入本场已了结。"""
+    db = SQLiteDatabase(tmp_path / "corr_progress.db")
+    await db.initialize()
+    try:
+        seeded = await _seed_prev_and_current_sessions(db)
+        curr_session = seeded["curr_session"]
+        line_id = seeded["line_id"]
+        comm_id = seeded["commitment_id"]
+        saves = {"minecraft": GameSave(id="save-a", name="新世界")}
+
+        await db.events.insert_game_event(
+            live_session_id=curr_session,
+            timestamp_ms=10_020_000,
+            game="minecraft",
+            event_type="item_delivery",
+            message="已向河边桥头箱子存入橡木板 x32",
+            save_id="save-a",
+            save_name="新世界",
+        )
+
+        brief = await build_brief(
+            archive_repo=db.archive,
+            commitments_repo=db.commitments,
+            live_session_id=curr_session,
+            chat_repo=db.chat,
+            current_saves=saves,
+            correction_repo=db.memory_corrections,
+        )
+
+        async def _refresh() -> None:
+            nonlocal brief
+            brief = await build_brief(
+                archive_repo=db.archive,
+                commitments_repo=db.commitments,
+                live_session_id=curr_session,
+                chat_repo=db.chat,
+                current_saves=saves,
+                correction_repo=db.memory_corrections,
+            )
+
+        provider = MemoryCorrectionToolProvider(
+            correction_repo=db.memory_corrections,
+            session_provider=lambda: curr_session,
+            brief_archive_ids_provider=lambda: brief.archive_ids,
+            commitments_repo=db.commitments,
+            event_repo=db.events,
+            game_player_repo=db.game_players,
+            chat_repo=db.chat,
+            on_written=_refresh,
+        )
+
+        # 对档案行传 progress 必须清晰打回
+        r_arch = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": f"档#{line_id}",
+                    "verdict": "progress",
+                    "summary": "铺了一半",
+                    "evidence_kind": "self_seen",
+                },
+            )
+        )
+        assert not r_arch.success
+        assert "仅适用于承诺" in (r_arch.error_message or "")
+
+        # 凭物品交付回执记录本场进展：保持 open，返回清晰 effect，简报行尾附本场进展
+        r_prog = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": f"约#{comm_id}",
+                    "verdict": "progress",
+                    "summary": "已运送一半橡木板，待铺完",
+                    "evidence_kind": "game_receipt",
+                    "evidence_quote": "向河边桥头箱子存入橡木板 x32",
+                },
+            )
+        )
+        assert r_prog.success
+        assert r_prog.structured_content is not None
+        assert (
+            f"约#{comm_id} 已记录本场进展（仍未了结）：已运送一半橡木板，待铺完" == r_prog.structured_content["effect"]
+        )
+        comm_mid = await db.commitments.get_commitment(commitment_id=comm_id)
+        assert comm_mid is not None and comm_mid.status == "open"
+        assert comm_id in brief.commitment_ids
+        assert "（本场进展：已运送一半橡木板，待铺完）" in brief.text
+
+        # 随后标 done 结案：立即从 open 转入本场已了结
+        r_done = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": f"约#{comm_id}",
+                    "verdict": "done",
+                    "summary": "河边木桥已全段铺完",
+                    "evidence_kind": "self_seen",
+                },
+            )
+        )
+        assert r_done.success
+        comm_final = await db.commitments.get_commitment(commitment_id=comm_id)
+        assert comm_final is not None and comm_final.status == "closed"
+        assert comm_id not in brief.commitment_ids
+        assert f"- [约#{comm_id}] 本场已了结：河边木桥已全段铺完（原约定：把河边木桥铺完）" in brief.text
+    finally:
+        await db.close()
+
+
+async def test_streamer_agent_lead_syncs_memory_correct_visibility_and_commitment_ledger(tmp_path: Path) -> None:
+    """StreamerAgent 随主控切换刷新 streamer_memory_correct 可见性，并向 LeadCoordinator 暴露当前存档与在场玩家的权威承诺账本。"""
+
+    class _LeadStubGame(BaseAgent):
+        name = "demo_game"
+        description = "测主控承诺账本与更正工具开放"
+        supports_autonomous_lead = True
+
+        def __init__(self) -> None:
+            super().__init__(heartbeat_interval_ms=0)
+
+        def list_tools(self) -> list[ToolSpec]:
+            return []
+
+        def can_take_lead(self) -> bool:
+            return True
+
+        async def enter_lead(self, context: LeadHandoverContext) -> bool:
+            del context
+            return True
+
+        async def yield_lead(self, *, reason: str = "") -> str:
+            del reason
+            return ""
+
+    db = SQLiteDatabase(tmp_path / "lead_ledger.db")
+    await db.initialize()
+    bus = EventBus()
+    registry = ToolRegistry()
+    try:
+        # 铺上一场与本场：含 PlayerA 承诺、当前存档公开承诺、别的存档公开承诺、观众私向承诺
+        s1 = await db.sessions.insert_live_session(started_at_ms=1_000_000, kind=SESSION_KIND_LIVE)
+        await db.sessions.close_live_session(live_session_id=s1, ended_at_ms=5_000_000)
+        s2 = await db.sessions.insert_live_session(started_at_ms=10_000_000, kind=SESSION_KIND_LIVE)
+
+        player_a = await db.game_players.meet_player(
+            game="demo_game", uuid="uuid-pa", name="PlayerA", live_session_id=s1, at_ms=2_000_000
+        )
+        viewer = await db.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="v-1",
+            user_name="观众甲",
+            timestamp_ms=2_000_000,
+            name_match_window_ms=0,
+        )
+        c_player = await db.commitments.insert_commitment(
+            what="补还 3 颗钻石",
+            quote="下次补还 3 颗钻石",
+            game="demo_game",
+            save_id="save-a",
+            save_name="一档",
+            created_session_id=s1,
+            now_ms_value=2_100_000,
+        )
+        c_public = await db.commitments.insert_commitment(
+            what="修通北岸木桥",
+            quote="下次修通北岸木桥",
+            game="demo_game",
+            save_id="save-a",
+            save_name="一档",
+            created_session_id=s1,
+            now_ms_value=2_200_000,
+        )
+        c_other_save = await db.commitments.insert_commitment(
+            what="扩建二档谷仓",
+            quote="二档扩建谷仓",
+            game="demo_game",
+            save_id="save-b",
+            save_name="二档",
+            created_session_id=s1,
+            now_ms_value=2_300_000,
+        )
+        c_viewer = await db.commitments.insert_commitment(
+            what="给观众甲唱一首歌",
+            quote="下次给你唱歌",
+            viewer_id=viewer.viewer_id,
+            game="demo_game",
+            save_id="save-a",
+            created_session_id=s1,
+            now_ms_value=2_400_000,
+        )
+        assert c_player and c_public and c_other_save and c_viewer
+        with db.manager.transaction() as conn:
+            conn.execute("UPDATE commitments SET target_player_id=? WHERE id=?", (player_a.id, c_player))
+
+        mgr = AgentManager()
+        game_agent = _LeadStubGame()
+        mgr.register(game_agent)
+        await game_agent.start()
+        coord = LeadCoordinator(mgr, event_bus=bus, enabled=True)
+
+        session_mgr = MagicMock()
+        session_mgr.active_pk = s2
+        session_mgr.active_kind = SESSION_KIND_LIVE
+
+        agent = StreamerAgent(
+            config=StreamerConfig(lead_mode="dynamic"),
+            llm_manager=MagicMock(),
+            prompt_manager=stub_prompt(),
+            event_bus=bus,
+            tool_registry=registry,
+            sessions_repo=db.sessions,
+            chat_repo=db.chat,
+            commitments_repo=db.commitments,
+            archive_repo=db.archive,
+            event_repo=db.events,
+            game_player_repo=db.game_players,
+            viewer_repo=db.viewers,
+            session_manager=session_mgr,
+            lead_coordinator=coord,
+        )
+        await agent.start()
+        try:
+            # 1) 主播主控期：demo_game 看不到 streamer_memory_correct
+            assert "streamer_memory_correct" in [s.full_name for s in registry.list_tools(for_agent="streamer")]
+            assert "streamer_memory_correct" not in [s.full_name for s in registry.list_tools(for_agent="demo_game")]
+
+            # 2) 切到游戏主控后：demo_game 动态获得 streamer_memory_correct 权限
+            assert (
+                await coord.request_game_lead(LeadHandoverContext(segment_id="play"), target="demo_game") == "demo_game"
+            )
+            assert "streamer_memory_correct" in [s.full_name for s in registry.list_tools(for_agent="demo_game")]
+
+            # 3) 拉取权威承诺账本：含 PlayerA 承诺与同存档公开承诺，排除他档承诺与观众私向承诺
+            ledger_1 = await coord.fetch_commitment_ledger(
+                game="demo_game", save_id="save-a", player_uuids=("uuid-pa",)
+            )
+            open_ids = [item["id"] for item in ledger_1["open"]]
+            assert open_ids == [f"约#{c_player}", f"约#{c_public}"]
+            assert ledger_1["open"][0]["target"] == "PlayerA"
+            assert ledger_1["open"][1]["target"] == "公共"
+            assert ledger_1["closed_this_session"] == []
+
+            # 4) 记录分期进展 -> 账本 open 条目立即附带 progress
+            await db.memory_corrections.insert_and_apply(
+                live_session_id=s2,
+                target_kind="commitment",
+                commitment_id=c_player,
+                verdict="progress",
+                summary="已还 2 颗，还欠 1 颗",
+                evidence_kind="self_seen",
+                created_at_ms=10_010_000,
+            )
+            ledger_2 = await coord.fetch_commitment_ledger(
+                game="demo_game", save_id="save-a", player_uuids=("uuid-pa",)
+            )
+            assert ledger_2["open"][0]["progress"] == "已还 2 颗，还欠 1 颗"
+
+            # 5) 标 done 结案 -> 退出 open，进入 closed_this_session
+            await db.memory_corrections.insert_and_apply(
+                live_session_id=s2,
+                target_kind="commitment",
+                commitment_id=c_player,
+                verdict="done",
+                summary="已还清 3 颗钻石",
+                evidence_kind="self_seen",
+                created_at_ms=10_020_000,
+            )
+            ledger_3 = await coord.fetch_commitment_ledger(
+                game="demo_game", save_id="save-a", player_uuids=("uuid-pa",)
+            )
+            assert [item["id"] for item in ledger_3["open"]] == [f"约#{c_public}"]
+            assert ledger_3["closed_this_session"] == [
+                {"id": f"约#{c_player}", "what": "补还 3 颗钻石", "summary": "已还清 3 颗钻石"}
+            ]
+
+            # 6) 收权回主播后：demo_game 立即失去 streamer_memory_correct 可见性
+            await coord.reclaim_streamer_lead(reason="test_done")
+            assert "streamer_memory_correct" not in [s.full_name for s in registry.list_tools(for_agent="demo_game")]
+        finally:
+            await agent.cleanup()
+            await game_agent.stop()
+    finally:
+        await bus.cleanup()
+        await db.close()
+
+
+async def test_commitment_ledger_filters_forgotten_players_with_real_privacy_service(tmp_path: Path) -> None:
+    """真实 PrivacyService 下：写入 forget_list 或标记 forget_requested_at_ms 的玩家承诺在 open 与 closed_this_session 均严格隔离。"""
+    db = SQLiteDatabase(tmp_path / "data" / "ledger_privacy.db")
+    await db.initialize()
+    privacy = PrivacyService(db.manager, db_path=db.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    await privacy.initialize()
+    bus = EventBus()
+    registry = ToolRegistry()
+    try:
+        s1 = await db.sessions.insert_live_session(started_at_ms=1_000_000, kind=SESSION_KIND_LIVE)
+        await db.sessions.close_live_session(live_session_id=s1, ended_at_ms=5_000_000)
+        s2 = await db.sessions.insert_live_session(started_at_ms=10_000_000, kind=SESSION_KIND_LIVE)
+
+        player_a = await db.game_players.meet_player(
+            game="demo_game", uuid="uuid-pa", name="PlayerA", live_session_id=s1, at_ms=2_000_000
+        )
+        player_b = await db.game_players.meet_player(
+            game="demo_game", uuid="uuid-pb", name="PlayerB", live_session_id=s1, at_ms=2_000_000
+        )
+        player_c = await db.game_players.meet_player(
+            game="demo_game", uuid="uuid-pc", name="PlayerC", live_session_id=s1, at_ms=2_000_000
+        )
+
+        # 每位玩家各有一条 open 承诺和一条本场 done 结案承诺
+        async def _seed_player_pair(pid: int, tag: str) -> tuple[int, int]:
+            c_open = await db.commitments.insert_commitment(
+                what=f"补还 {tag} 钻石",
+                quote=f"下次补还 {tag} 钻石",
+                game="demo_game",
+                save_id="save-a",
+                save_name="一档",
+                created_session_id=s1,
+                now_ms_value=2_100_000,
+            )
+            c_done = await db.commitments.insert_commitment(
+                what=f"归还 {tag} 铁镐",
+                quote=f"下次归还 {tag} 铁镐",
+                game="demo_game",
+                save_id="save-a",
+                save_name="一档",
+                created_session_id=s1,
+                now_ms_value=2_200_000,
+            )
+            assert c_open and c_done
+            with db.manager.transaction() as conn:
+                conn.execute("UPDATE commitments SET target_player_id=? WHERE id IN (?, ?)", (pid, c_open, c_done))
+            await db.memory_corrections.insert_and_apply(
+                live_session_id=s2,
+                target_kind="commitment",
+                commitment_id=c_done,
+                verdict="done",
+                summary=f"已归还 {tag} 铁镐",
+                evidence_kind="self_seen",
+                created_at_ms=10_010_000,
+            )
+            return int(c_open), int(c_done)
+
+        pa_open, pa_done = await _seed_player_pair(player_a.id, "PlayerA")
+        await _seed_player_pair(player_b.id, "PlayerB")
+        await _seed_player_pair(player_c.id, "PlayerC")
+
+        # PlayerB：通过真实 PrivacyService 写入 forget_list，并显式清空 forget_requested_at_ms 验证 is_player_forgotten 单独兜底
+        disp = await privacy.process_incoming_player_chat(
+            game="demo_game", uuid="uuid-pb", name="PlayerB", content="忘了我", at_ms=10_020_000
+        )
+        assert disp == "forget_command"
+        with db.manager.transaction() as conn:
+            conn.execute("UPDATE game_players SET forget_requested_at_ms=NULL WHERE id=?", (player_b.id,))
+        assert await privacy.is_player_forgotten(game="demo_game", uuid="uuid-pb") is True
+
+        # PlayerC：仅标记 forget_requested_at_ms（未进 forget_list）验证宽限期字段兜底
+        with db.manager.transaction() as conn:
+            conn.execute("UPDATE game_players SET forget_requested_at_ms=? WHERE id=?", (10_025_000, player_c.id))
+
+        mgr = AgentManager()
+        coord = LeadCoordinator(mgr, event_bus=bus, enabled=True)
+        session_mgr = MagicMock()
+        session_mgr.active_pk = s2
+        session_mgr.active_kind = SESSION_KIND_LIVE
+
+        agent = StreamerAgent(
+            config=StreamerConfig(lead_mode="dynamic"),
+            llm_manager=MagicMock(),
+            prompt_manager=stub_prompt(),
+            event_bus=bus,
+            tool_registry=registry,
+            sessions_repo=db.sessions,
+            chat_repo=db.chat,
+            commitments_repo=db.commitments,
+            archive_repo=db.archive,
+            event_repo=db.events,
+            game_player_repo=db.game_players,
+            privacy_service=privacy,
+            session_manager=session_mgr,
+            lead_coordinator=coord,
+        )
+        await agent.start()
+        try:
+            ledger = await coord.fetch_commitment_ledger(
+                game="demo_game",
+                save_id="save-a",
+                player_uuids=("uuid-pa", "uuid-pb", "uuid-pc"),
+            )
+            assert [item["id"] for item in ledger["open"]] == [f"约#{pa_open}"]
+            assert [item["id"] for item in ledger["closed_this_session"]] == [f"约#{pa_done}"]
+        finally:
+            await agent.cleanup()
+    finally:
+        await privacy.close()
+        await bus.cleanup()
+        await db.close()
+
+
+async def test_brief_closed_commitments_isolates_viewer_other_save_and_forgotten_player(tmp_path: Path) -> None:
+    """常驻简报的本场已了结承诺严格隔离观众私向、他档与遗忘玩家，保留当前存档公开与未遗忘玩家承诺。"""
+    db = SQLiteDatabase(tmp_path / "data" / "brief_isolation.db")
+    await db.initialize()
+    privacy = PrivacyService(db.manager, db_path=db.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    await privacy.initialize()
+    try:
+        s1 = await db.sessions.insert_live_session(started_at_ms=1_000_000, kind=SESSION_KIND_LIVE)
+        await db.sessions.close_live_session(live_session_id=s1, ended_at_ms=5_000_000)
+        s2 = await db.sessions.insert_live_session(started_at_ms=10_000_000, kind=SESSION_KIND_LIVE)
+
+        player_a = await db.game_players.meet_player(
+            game="demo_game", uuid="uuid-pa", name="PlayerA", live_session_id=s1, at_ms=2_000_000
+        )
+        player_b = await db.game_players.meet_player(
+            game="demo_game", uuid="uuid-pb", name="PlayerB", live_session_id=s1, at_ms=2_000_000
+        )
+        player_c = await db.game_players.meet_player(
+            game="demo_game", uuid="uuid-pc", name="PlayerC", live_session_id=s1, at_ms=2_000_000
+        )
+        viewer = await db.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="v-99",
+            user_name="观众乙",
+            timestamp_ms=2_000_000,
+            name_match_window_ms=0,
+        )
+
+        # 1) 当前存档公开承诺；2) 当前存档未遗忘玩家承诺；3) 观众私向承诺；4) 别的存档承诺；5) 触发“忘了我”的玩家承诺；6) 仅在 forget_list 的玩家承诺
+        c_public = await db.commitments.insert_commitment(
+            what="修通东岸木桥",
+            game="demo_game",
+            save_id="save-a",
+            save_name="一档",
+            created_session_id=s1,
+            now_ms_value=2_100_000,
+        )
+        c_player_ok = await db.commitments.insert_commitment(
+            what="补还 PlayerA 3 颗钻石",
+            game="demo_game",
+            save_id="save-a",
+            save_name="一档",
+            created_session_id=s1,
+            now_ms_value=2_200_000,
+        )
+        c_viewer = await db.commitments.insert_commitment(
+            what="给观众乙点一首歌",
+            viewer_id=viewer.viewer_id,
+            game="demo_game",
+            save_id="save-a",
+            save_name="一档",
+            created_session_id=s1,
+            now_ms_value=2_300_000,
+        )
+        c_other_save = await db.commitments.insert_commitment(
+            what="扩建二档谷仓",
+            game="demo_game",
+            save_id="save-b",
+            save_name="二档",
+            created_session_id=s1,
+            now_ms_value=2_400_000,
+        )
+        c_player_forgotten = await db.commitments.insert_commitment(
+            what="帮 PlayerB 建塔楼",
+            game="demo_game",
+            save_id="save-a",
+            save_name="一档",
+            created_session_id=s1,
+            now_ms_value=2_500_000,
+        )
+        c_player_list_only = await db.commitments.insert_commitment(
+            what="帮 PlayerC 挖矿洞",
+            game="demo_game",
+            save_id="save-a",
+            save_name="一档",
+            created_session_id=s1,
+            now_ms_value=2_600_000,
+        )
+        assert c_public and c_player_ok and c_viewer and c_other_save and c_player_forgotten and c_player_list_only
+        with db.manager.transaction() as conn:
+            conn.execute("UPDATE commitments SET target_player_id=? WHERE id=?", (player_a.id, c_player_ok))
+            conn.execute("UPDATE commitments SET target_player_id=? WHERE id=?", (player_b.id, c_player_forgotten))
+            conn.execute("UPDATE commitments SET target_player_id=? WHERE id=?", (player_c.id, c_player_list_only))
+
+        for idx, (cid, summary) in enumerate(
+            [
+                (c_public, "东岸木桥已铺通"),
+                (c_player_ok, "已还清 PlayerA 3 颗钻石"),
+                (c_viewer, "已唱完点歌"),
+                (c_other_save, "二档谷仓已扩建"),
+                (c_player_forgotten, "塔楼已完工"),
+                (c_player_list_only, "矿洞已挖好"),
+            ],
+            start=1,
+        ):
+            await db.memory_corrections.insert_and_apply(
+                live_session_id=s2,
+                target_kind="commitment",
+                commitment_id=cid,
+                verdict="done",
+                summary=summary,
+                evidence_kind="self_seen",
+                created_at_ms=10_000_000 + idx * 1_000,
+            )
+
+        # PlayerB 本场发“忘了我”（同时写 forget_list 与 forget_requested_at_ms）
+        assert (
+            await privacy.process_incoming_player_chat(
+                game="demo_game", uuid="uuid-pb", name="PlayerB", content="忘了我", at_ms=10_020_000
+            )
+            == "forget_command"
+        )
+        # PlayerC 仅保留 forget_list 记录（清掉 forget_requested_at_ms），验证 is_player_forgotten 生效
+        assert (
+            await privacy.process_incoming_player_chat(
+                game="demo_game", uuid="uuid-pc", name="PlayerC", content="忘了我", at_ms=10_021_000
+            )
+            == "forget_command"
+        )
+        with db.manager.transaction() as conn:
+            conn.execute("UPDATE game_players SET forget_requested_at_ms=NULL WHERE id=?", (player_c.id,))
+
+        brief = await build_brief(
+            archive_repo=db.archive,
+            commitments_repo=db.commitments,
+            live_session_id=s2,
+            chat_repo=db.chat,
+            current_saves={"demo_game": GameSave(id="save-a", name="一档")},
+            correction_repo=db.memory_corrections,
+            game_player_repo=db.game_players,
+            privacy_service=privacy,
+        )
+        assert f"- [约#{c_public}] 本场已了结：东岸木桥已铺通（原约定：修通东岸木桥）" in brief.text
+        assert (
+            f"- [约#{c_player_ok}] 本场已了结：已还清 PlayerA 3 颗钻石（原约定：补还 PlayerA 3 颗钻石）" in brief.text
+        )
+        assert f"约#{c_viewer}" not in brief.text
+        assert f"约#{c_other_save}" not in brief.text
+        assert f"约#{c_player_forgotten}" not in brief.text
+        assert f"约#{c_player_list_only}" not in brief.text
+    finally:
+        await privacy.close()
         await db.close()
