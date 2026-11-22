@@ -435,3 +435,87 @@ def test_settle_prompts_enforce_persona_commitment_and_facility_rules(prompt_man
     social_prompt = prompt_manager.render("memory_social_fact_system")
     assert "服务器或存档环境限制、工具使用边界" in social_prompt
     assert "共用设施操作惯例" in social_prompt
+
+
+async def test_item_delivery_event_proves_archive_and_commitment_closure_in_settle(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """物品交付事件 item_delivery 纳入游戏记录（标签「交付」、proves=True），可撑起档案与了结旧承诺核验。"""
+    records = game_records(
+        [
+            _event("item_delivery", "往 PlayerA 放的木桶存进了 3 个钻石", 4 * _MINUTE),
+            _event("item_delivery", "朝 PlayerB 扔出钻石失败", 5 * _MINUTE),
+        ],
+        [],
+    )
+    assert [(r.number, r.kind, r.text, r.proves) for r in records] == [
+        (1, "交付", "往 PlayerA 放的木桶存进了 3 个钻石", True),
+    ]
+    assert proof_for("记录#1", records, game="minecraft", at_ms=6 * _MINUTE) is not None
+
+    session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=30 * _MINUTE)
+    comm_id = await store.commitments.insert_commitment(
+        what="补还 PlayerA 三颗钻石",
+        quote="下次还你三颗钻石",
+        game="Minecraft",
+        now_ms_value=100,
+    )
+    assert comm_id is not None
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="item_delivery",
+        message="往 PlayerA 放的木桶存进了 3 个钻石",
+        timestamp_ms=4 * _MINUTE,
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=6 * _MINUTE,
+        sender_role="assistant",
+        content="三颗钻石已经放好进 PlayerA 的木桶里，这笔账搞定啦",
+        message_type="speech",
+    )
+    archive = [
+        {
+            "line": 1,
+            "title": "Minecraft：把三颗钻石放好进木桶",
+            "quote": "三颗钻石已经放好进 PlayerA 的木桶里",
+            "game": "Minecraft",
+            "evidence": "记录#1",
+        }
+    ]
+    closed = [
+        {
+            "id": comm_id,
+            "line": 1,
+            "quote": "三颗钻石已经放好进 PlayerA 的木桶里，这笔账搞定啦",
+            "evidence": "记录#1",
+        }
+    ]
+    llm = FakeLLMManager(
+        responses=[
+            Response(success=True, content=json.dumps({"archive": archive}, ensure_ascii=False)),
+            Response(success=True, content='{"commitments": []}'),
+            Response(success=True, content=json.dumps({"closed": closed}, ensure_ascii=False)),
+        ]
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 9_500,
+    )
+
+    assert await settler.settle_session(session_id) is True
+    assert "交付：往 PlayerA 放的木桶存进了 3 个钻石" in str(llm.calls[0]["input"])
+    assert "交付：往 PlayerA 放的木桶存进了 3 个钻石" in str(llm.calls[2]["input"])
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [line.text for line in lines] == ["Minecraft：把三颗钻石放好进木桶"]
+    comm_after = await store.commitments.get_commitment(commitment_id=comm_id)
+    assert comm_after is not None and comm_after.status == "closed"

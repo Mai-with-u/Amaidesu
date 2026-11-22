@@ -24,7 +24,7 @@ from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.models.memory import NewCueLogEntry, SettleReport
+from src.modules.storage.models.memory import NewCueLogEntry, PendingArchiveLine, SettleReport
 from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
 from tests.modules.llm.fakes import FakeLLMManager, FakeStream, chunk, engine_with, make_openai_client, usage
 
@@ -2244,3 +2244,117 @@ async def test_settle_cancel_reaps_parallel_step_tasks_cleanly(tmp_path: Path, p
         assert cancelled_count == 2
     finally:
         await db.close()
+
+
+async def test_settle_progress_correction_not_flagged_unhandled_and_feeds_closure_context(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """verdict='progress' 的更正既不会在下播报假 unhandled 告警，也会与本场已结案更正一并注入了结旧承诺上下文。"""
+    s1 = await _ended_session(store, started_at_ms=1_000)
+    prev_chat = await _speech(store, s1, "营地东门还没封顶", timestamp_ms=1_500)
+    await store.sessions.apply_settlement(
+        live_session_id=s1,
+        settled_at_ms=2_100,
+        now_ms_value=2_100,
+        archive_lines=[
+            PendingArchiveLine(
+                text="Minecraft：营地东门还没封顶",
+                quote="营地东门还没封顶",
+                evidence_chat_id=int(prev_chat),
+                game="Minecraft",
+                in_snapshot=True,
+            )
+        ],
+        commitments=[],
+        closures=[],
+        settle_report=None,
+    )
+    snap = await store.archive.latest_snapshot(kind="live", min_duration_ms=0)
+    assert snap is not None and len(snap.lines) == 1
+    arch_id = int(snap.lines[0].line.id)
+
+    comm_open = await store.commitments.insert_commitment(
+        what="补还 PlayerA 三颗钻石",
+        quote="下次还你三颗钻石",
+        game="Minecraft",
+        created_session_id=s1,
+        now_ms_value=1_600,
+    )
+    comm_closed = await store.commitments.insert_commitment(
+        what="帮 PlayerB 修木桥",
+        quote="帮你修好木桥",
+        game="Minecraft",
+        created_session_id=s1,
+        now_ms_value=1_700,
+    )
+    assert comm_open is not None and comm_closed is not None
+
+    s2 = await _ended_session(store, started_at_ms=5_000_000)
+    await _speech(store, s2, "今天先往 PlayerA 箱子里放了两颗钻石，还差一颗下次补上", timestamp_ms=5_015_000)
+
+    # 1. 对档案行记录一条 progress（模拟异常/边界情况）→ 不应被误判 unhandled，也不能当 drop 依据
+    corr_arch_prog = await store.memory_corrections.insert_and_apply(
+        live_session_id=s2,
+        target_kind="archive",
+        archive_line_id=arch_id,
+        verdict="progress",
+        summary="东门搭了一半框架",
+        evidence_kind="game_receipt",
+        evidence_quote="搭好框架",
+        source="streamer",
+        created_at_ms=14_000,
+    )
+    # 2. 对 comm_open 记录一条 progress（仍保持 open）
+    corr_comm_prog = await store.memory_corrections.insert_and_apply(
+        live_session_id=s2,
+        target_kind="commitment",
+        commitment_id=comm_open,
+        verdict="progress",
+        summary="已存进 2 颗钻石，还欠 1 颗",
+        evidence_kind="game_receipt",
+        evidence_quote="往 PlayerA 放的木桶存进了 2 个钻石",
+        source="streamer",
+        created_at_ms=15_100,
+    )
+    # 3. 对 comm_closed 当场结案 done（已改为 closed）
+    corr_comm_done = await store.memory_corrections.insert_and_apply(
+        live_session_id=s2,
+        target_kind="commitment",
+        commitment_id=comm_closed,
+        verdict="done",
+        summary="木桥已经修完并验收",
+        evidence_kind="game_receipt",
+        evidence_quote="木桥完工",
+        source="streamer",
+        created_at_ms=16_000,
+    )
+
+    llm = _reply(
+        '{"previous": [{"old": 1, "op": "keep"}], "archive": []}',
+        '{"commitments": []}',
+        '{"closed": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(s2) is True
+
+    # 了结旧承诺调用（第 3 笔）的提示词同时看见 progress 进展与本场已通过 correction 结案的承诺
+    closure_prompt = str(llm.calls[2]["input"])
+    assert "【本场承诺场内更正与进展" in closure_prompt
+    assert f"约#{comm_open} [本场进展·仍未了结] 已存进 2 颗钻石，还欠 1 颗" in closure_prompt
+    assert f"约#{comm_closed} [场内已结案·做完了] 木桥已经修完并验收" in closure_prompt
+
+    # 三条更正全部标为 applied，不产生任何 unhandled 假告警
+    corrs = {row.id: row for row in await store.memory_corrections.list_by_session(live_session_id=s2)}
+    assert corrs[corr_arch_prog.id].settled_disposition == "applied"
+    assert corrs[corr_comm_prog.id].settled_disposition == "applied"
+    assert corrs[corr_comm_done.id].settled_disposition == "applied"
+
+    sess2 = await store.sessions.get_live_session(live_session_id=s2)
+    assert sess2 is not None
+    unregistered = json.loads(sess2.settle_report)["unregistered"] if sess2.settle_report else []
+    assert unregistered == []
+
+    # comm_open 仍为 open，comm_closed 仍为 closed
+    assert (await store.commitments.get_commitment(commitment_id=comm_open)).status == "open"
+    assert (await store.commitments.get_commitment(commitment_id=comm_closed)).status == "closed"

@@ -155,11 +155,12 @@ def game_records(events: Sequence[Any], delegations: Sequence[Any]) -> List[Game
         at_ms = int(getattr(delegation, "ended_ms", 0) or 0)
         staged.append(_Staged(at_ms, str(getattr(delegation, "game", "") or ""), "委派", text, status == "succeeded"))
     for event in events:
-        # 里程碑、阶段上报与真实跨维度迁移（下界/末地等）均可作为游戏内完成说法的核实证源
+        # 里程碑、阶段上报、真实跨维度迁移与物品交付（存进他人容器/朝玩家扔出）均可作为游戏内完成说法的核实证源
         kind = {
             "milestone": "里程碑",
             "report": "上报",
             "dimension_changed": "跨维度",
+            "item_delivery": "交付",
         }.get(str(getattr(event, "event_type", "") or ""))
         message = " ".join(str(getattr(event, "message", "") or "").split())
         if kind is None or not message or any(word in message for word in _FAILED_WORDS):

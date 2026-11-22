@@ -427,16 +427,38 @@ def parse_commitment_output(text: str) -> Tuple[Dict[str, Any], bool]:
         return data, True
 
 
+def _render_commitment_corrections(corrections: Sequence[MemoryCorrection]) -> str:
+    """将本场针对承诺的场内更正与进展渲染为紧凑参考段，供下播「了结旧承诺」核对进展与已结案状态。"""
+    lines: List[str] = []
+    for item in corrections:
+        if item.target_kind != "commitment" or item.commitment_id is None:
+            continue
+        quote_part = f"（依据「{item.evidence_quote}」）" if item.evidence_quote else ""
+        if item.verdict == "progress":
+            lines.append(f"- 约#{item.commitment_id} [本场进展·仍未了结] {item.summary}{quote_part}")
+        else:
+            label = CORRECTION_VERDICT_LABELS.get(item.verdict, item.verdict)
+            lines.append(f"- 约#{item.commitment_id} [场内已结案·{label}] {item.summary}{quote_part}")
+    if not lines:
+        return ""
+    return (
+        "【本场承诺场内更正与进展（供核对：标「本场进展」的仍未了结；标「场内已结案」的已当场处理无需重复了结）】\n"
+        + "\n".join(lines)
+    )
+
+
 def close_user_prompt(material: SettleMaterial) -> str:
-    """了结那次调用的用户提示词：账上还没了结的承诺 + 本场台词 + 一句问法。
+    """了结那次调用的用户提示词：账上还没了结的承诺 + 本场承诺进展/结案记录 + 本场台词 + 一句问法。
 
     问法列全四种了结（做完了、不做了、坦白做不到、换个方式兑现），与了结系统提示词的口径一致：
     只问"做完或不做了"的话，她当众说"那个我真弄不来"之后这条承诺了结不了，会一直留在简报里，
     她要么反复道歉，要么硬说做完了。离线评测按同一个函数拼提示词，量的就是生产实际发出去的文字。
     """
+    commitment_notes = _render_commitment_corrections(material.corrections)
     return (
         f"【还没了结的承诺】\n{material.open_text}\n\n"
-        f"【本场她说的话】\n{material.speech_text}\n\n"
+        + (f"{commitment_notes}\n\n" if commitment_notes else "")
+        + f"【本场她说的话】\n{material.speech_text}\n\n"
         + (f"{material.records_text}\n\n" if material.records_text else "")
         + "请判断这些承诺里有哪些在这一场被她当众交代了结果：做完了、不做了、坦白做不到，或者换了个方式兑现。"
     )
@@ -1325,11 +1347,19 @@ class SessionSettler:
                 target_desc = "运营本场纠正"
             verdict_label = CORRECTION_VERDICT_LABELS.get(item.verdict, item.verdict)
             backed = item.evidence_kind in ("game_receipt", "player_chat", "operator")
-            proof_tag = (
-                f'有本场依据（{item.evidence_kind}），drop 时可填 "correction": {idx}'
-                if backed
-                else "主播自述观察（跨场去掉仍须本场台词或游戏记录）"
-            )
+            if item.verdict == "progress":
+                # 阶段性进展不要求下播移除旧档案行，明示其仅作进展参考
+                proof_tag = (
+                    f"仅记录本场进展（{item.evidence_kind}），不要求移除旧档案行"
+                    if backed
+                    else "仅记录本场进展（主播自述观察），不要求移除旧档案行"
+                )
+            else:
+                proof_tag = (
+                    f'有本场依据（{item.evidence_kind}），drop 时可填 "correction": {idx}'
+                    if backed
+                    else "主播自述观察（跨场去掉仍须本场台词或游戏记录）"
+                )
             quote_part = f"；依据「{item.evidence_quote}」" if item.evidence_quote else ""
             rendered.append(f"更正{idx} [{target_desc}·{verdict_label}] {item.summary}（{proof_tag}{quote_part}）")
         return items, "【本场更正（必须逐条核对处理）】\n" + "\n".join(rendered)
@@ -2246,6 +2276,9 @@ class SessionSettler:
         if not 1 <= idx <= len(material.corrections):
             return None
         item = material.corrections[idx - 1]
+        if item.verdict == "progress":
+            # progress 仅记录阶段性进展，不作为移除旧档案行的 drop 依据
+            return None
         if item.evidence_kind not in ("game_receipt", "player_chat", "operator"):
             return None
         label = CORRECTION_VERDICT_LABELS.get(item.verdict, item.verdict)
@@ -2269,6 +2302,7 @@ class SessionSettler:
         for item in material.corrections:
             if (
                 item.target_kind == "archive"
+                and item.verdict != "progress"
                 and item.archive_line_id is not None
                 and int(item.archive_line_id) in previous_ids
                 and int(item.archive_line_id) in surviving_ids
