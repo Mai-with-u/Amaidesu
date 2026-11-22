@@ -570,3 +570,128 @@ async def test_dimension_changed_body_event_persists_to_game_events(
     )
     sampled = await store.events.list_session_game_events_sampled(live_session_id=_FAKE_PK)
     assert len(sampled) == 1 and sampled[0].event_type == "dimension_changed"
+
+
+async def test_others_things_stored_and_items_tossed_persist_as_item_delivery(
+    ledger: StorageLedger,
+    store: SQLiteDatabase,
+    event_bus: EventBus,
+) -> None:
+    """往他人容器存物（stored，含嵌套 details 形态）与朝玩家扔出物品落库 item_delivery；取/拆/改不落库。"""
+    # 1. 顶层 action="stored" → 落 item_delivery，带 save_id / save_name / occurred_at_ms
+    await _emit(
+        event_bus,
+        CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
+        BodyEventPayload(
+            game="sandbox_world",
+            kind="others_things_touched",
+            summary="往 PlayerA 放的木桶存进了 1 个钻石",
+            occurred_at_ms=1_700_000_600_000,
+            timestamp_ms=1_700_000_600_500,
+            save_id="save-1",
+            save_name="联机一档",
+            details={"action": "stored"},
+        ),
+    )
+    # 2. 兼容嵌套 others_things.action="stored" → 同样落 item_delivery
+    await _emit(
+        event_bus,
+        CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
+        BodyEventPayload(
+            game="sandbox_world",
+            kind="others_things_touched",
+            summary="往 PlayerB 放的箱子存进了 2 个铁锭",
+            occurred_at_ms=1_700_000_610_000,
+            timestamp_ms=1_700_000_610_500,
+            save_id="save-1",
+            save_name="联机一档",
+            details={"others_things": {"action": "stored"}},
+        ),
+    )
+    # 3. 非 stored（取物 / 拆块 / 改动 / 无明细）一律不落 item_delivery
+    for details in (
+        {"action": "took"},
+        {"action": "broke"},
+        {"others_things": {"action": "changed"}},
+        {},
+    ):
+        await _emit(
+            event_bus,
+            CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
+            BodyEventPayload(
+                game="sandbox_world",
+                kind="others_things_touched",
+                summary="从 PlayerA 放的箱子拿了 1 个木板",
+                occurred_at_ms=1_700_000_620_000,
+                save_id="save-1",
+                save_name="联机一档",
+                details=details,
+            ),
+        )
+    # 4. 扔出物品事件 game.body.items_tossed → 落 item_delivery
+    await _emit(
+        event_bus,
+        CoreEvents.GAME_BODY_ITEMS_TOSSED,
+        BodyEventPayload(
+            game="sandbox_world",
+            kind="items_tossed",
+            summary="朝 PlayerA 扔出了 3 个钻石",
+            occurred_at_ms=1_700_000_630_000,
+            timestamp_ms=1_700_000_630_500,
+            save_id="save-1",
+            save_name="联机一档",
+            details={"items_tossed": {"target": "PlayerA", "count": 3}},
+        ),
+    )
+
+    rows = await store.events.list_session_game_events(live_session_id=_FAKE_PK)
+    assert [(r.game, r.event_type, r.message, r.timestamp_ms, r.save_id, r.save_name) for r in rows] == [
+        (
+            "sandbox_world",
+            "item_delivery",
+            "往 PlayerA 放的木桶存进了 1 个钻石",
+            1_700_000_600_000,
+            "save-1",
+            "联机一档",
+        ),
+        (
+            "sandbox_world",
+            "item_delivery",
+            "往 PlayerB 放的箱子存进了 2 个铁锭",
+            1_700_000_610_000,
+            "save-1",
+            "联机一档",
+        ),
+        ("sandbox_world", "item_delivery", "朝 PlayerA 扔出了 3 个钻石", 1_700_000_630_000, "save-1", "联机一档"),
+    ]
+
+
+async def test_stop_unsubscribes_item_delivery_body_events(
+    make_ledger,
+    store: SQLiteDatabase,
+    event_bus: EventBus,
+) -> None:
+    """stop() 成对清理两个物品交付身体事件订阅，停机后再发事件不写库。"""
+    ledger = make_ledger()
+    await ledger.start()
+    await ledger.stop()
+    await _emit(
+        event_bus,
+        CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
+        BodyEventPayload(
+            game="sandbox_world",
+            kind="others_things_touched",
+            summary="停机后存入",
+            details={"action": "stored"},
+        ),
+    )
+    await _emit(
+        event_bus,
+        CoreEvents.GAME_BODY_ITEMS_TOSSED,
+        BodyEventPayload(
+            game="sandbox_world",
+            kind="items_tossed",
+            summary="停机后扔出",
+        ),
+    )
+    assert await store.events.list_session_game_events(live_session_id=_FAKE_PK) == []

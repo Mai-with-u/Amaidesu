@@ -207,6 +207,8 @@ class CoreEvents:
     GAME_BODY_OTHERS_THINGS_TOUCHED = "game.body.others_things_touched"
     # 角色在眼前视野里亲眼撞见罕见目标（Boss 级强敌或露出的天然稀有矿脉）
     GAME_BODY_RARE_SIGHTED = "game.body.rare_sighted"
+    # 角色朝目标玩家或地面扔出物品（物品交付事实：存储台账落 game_events 供回执与下播核对，不混入低频里程碑通配）
+    GAME_BODY_ITEMS_TOSSED = "game.body.items_tossed"
 
     # ========== v2 语义域事件（game.body.* 通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名：订阅方用它一站式

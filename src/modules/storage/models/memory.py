@@ -299,8 +299,9 @@ class MemoryCorrection(BaseModel):
     )
     archive_line_id: Optional[int] = Field(default=None, description="目标档案行主键")
     commitment_id: Optional[int] = Field(default=None, description="目标承诺主键")
-    verdict: Literal["done", "invalid", "wrong", "note"] = Field(
-        ..., description="结论：done 做完了 / invalid 不成立了 / wrong 记错了 / note 运营补充纠正"
+    verdict: Literal["done", "invalid", "wrong", "progress", "note"] = Field(
+        ...,
+        description="结论：done 做完了 / invalid 不成立了 / wrong 记错了 / progress 本场进展 / note 运营补充纠正",
     )
     summary: str = Field(..., description="一句话说明现状")
     evidence_kind: Literal["game_receipt", "player_chat", "operator", "self_seen"] = Field(

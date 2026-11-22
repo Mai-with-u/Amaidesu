@@ -225,6 +225,24 @@ class StorageLedger:
         )
         self._subscriptions[CoreEvents.GAME_BODY_DIMENSION_CHANGED] = dimension_handler
 
+        # 物品交付事实（往他人容器存物 / 朝玩家扔出物品）：三层身体事件，单层 game.* 接不住，
+        # 显式订阅并落 game_events（event_type="item_delivery"），供场内回执校验与下播核对作证
+        others_things_handler = self._on_others_things_touched
+        self.event_bus.on(
+            CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
+            others_things_handler,
+            model_class=BodyEventPayload,
+        )
+        self._subscriptions[CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED] = others_things_handler
+
+        items_tossed_handler = self._on_items_tossed
+        self.event_bus.on(
+            CoreEvents.GAME_BODY_ITEMS_TOSSED,
+            items_tossed_handler,
+            model_class=BodyEventPayload,
+        )
+        self._subscriptions[CoreEvents.GAME_BODY_ITEMS_TOSSED] = items_tossed_handler
+
         # 委派账：受理与终态各落一行，进度变化（running / 等定夺）不落
         task_handler = self._on_task_changed
         self.event_bus.on(
@@ -255,6 +273,8 @@ class StorageLedger:
             f" + {_GAME_EVENT_WILDCARD}"
             f" + {CoreEvents.GAME_PLACE_NOTED}"
             f" + {CoreEvents.GAME_BODY_DIMENSION_CHANGED}"
+            f" + {CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED}"
+            f" + {CoreEvents.GAME_BODY_ITEMS_TOSSED}"
             f" + {CoreEvents.TASK_CHANGED}"
             f" + {CoreEvents.LIVE_ENDED}"
         )
@@ -803,6 +823,80 @@ class StorageLedger:
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
             logger.error(
                 f"StorageLedger 写入跨维度事件失败（event={event_name}, game={getattr(payload, 'game', '?')}）：{exc}",
+                exc=True,
+            )
+
+    @staticmethod
+    def _extract_others_things_action(details: Any) -> str:
+        """提取动了他人容器/方块事件的动作类型，兼容顶层 action 与嵌套 others_things.action。"""
+        if not isinstance(details, dict):
+            return ""
+        action = str(details.get("action") or "").strip().lower()
+        if action:
+            return action
+        nested = details.get("others_things")
+        if isinstance(nested, dict):
+            return str(nested.get("action") or "").strip().lower()
+        return ""
+
+    async def _on_others_things_touched(
+        self,
+        event_name: str,
+        payload: BodyEventPayload,
+        source: str,
+    ) -> None:
+        """``game.body.others_things_touched`` 回调：仅存入他人容器（action=stored）落库为物品交付事实。"""
+        # 仅当角色往他人容器存入物品时构成交付事实；取物、破块或改动一律不写 item_delivery
+        if self._extract_others_things_action(payload.details) != "stored":
+            return
+        try:
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
+                logger.debug("容器存入交付事件无法归属场次，跳过落库")
+                return
+            message = (payload.summary or "").strip() or "往他人容器存入了物品"
+            await self.event_repo.insert_game_event(
+                live_session_id=live_pk,
+                game=payload.game,
+                event_type="item_delivery",
+                message=message,
+                scene=None,
+                timestamp_ms=payload.occurred_at_ms or payload.timestamp_ms,
+                save_id=payload.save_id,
+                save_name=payload.save_name,
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(
+                f"StorageLedger 写入容器交付事件失败（event={event_name}, game={getattr(payload, 'game', '?')}）：{exc}",
+                exc=True,
+            )
+
+    async def _on_items_tossed(
+        self,
+        event_name: str,
+        payload: BodyEventPayload,
+        source: str,
+    ) -> None:
+        """``game.body.items_tossed`` 回调：角色扔出物品落库为 game_events 的 item_delivery 交付事实。"""
+        try:
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
+                logger.debug("扔物交付事件无法归属场次，跳过落库")
+                return
+            message = (payload.summary or "").strip() or "扔出了物品"
+            await self.event_repo.insert_game_event(
+                live_session_id=live_pk,
+                game=payload.game,
+                event_type="item_delivery",
+                message=message,
+                scene=None,
+                timestamp_ms=payload.occurred_at_ms or payload.timestamp_ms,
+                save_id=payload.save_id,
+                save_name=payload.save_name,
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(
+                f"StorageLedger 写入扔物交付事件失败（event={event_name}, game={getattr(payload, 'game', '?')}）：{exc}",
                 exc=True,
             )
 

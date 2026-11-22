@@ -37,24 +37,39 @@ def delete_commitments_by_session(conn: sqlite3.Connection, *, live_session_id: 
     return int(cur.rowcount or 0)
 
 
-def reopen_commitments_closed_by_session(conn: sqlite3.Connection, *, live_session_id: int, updated_at_ms: int) -> int:
-    """把"由这一场的台词或场内更正了结/作废"的承诺放回未了结，返回条数（重新整理、改成彩排时用）。
+def reopen_commitments_closed_by_session(
+    conn: sqlite3.Connection,
+    *,
+    live_session_id: int,
+    updated_at_ms: int,
+    include_corrections: bool = True,
+) -> int:
+    """把"由这一场的台词（以及可选场内更正）了结/作废"的承诺放回未了结，返回条数。
 
     运营者在 WebUI 手动了结或判误记的行（``close_source='human'`` 或无来源编号）不受影响。
-    这一场的整理结果要整场替换或作废时，它了结掉的旧承诺也要还原：否则重新整理不再认定的了结、
-    彩排做出的了结会一直留在账上。
+    - 改成彩排（``include_corrections=True``）：本场台词了结与场内更正结案的旧承诺一并还原；
+    - 下播整理提交或重跑（``include_corrections=False``）：只还原上一轮整理用本场台词了结的承诺，
+      保留本场已通过场内更正当场结案的承诺，避免整理提交将其误冲回 open。
     """
-    cur = conn.execute(
-        "UPDATE commitments SET status='open', close_chat_id=NULL, close_quote=NULL, close_source='', updated_at_ms=?"
-        " WHERE ("
-        "   (status='closed' AND close_chat_id IN (SELECT id FROM live_chat WHERE live_session_id=?))"
-        "   OR (close_source='correction' AND EXISTS ("
-        "       SELECT 1 FROM memory_corrections mc"
-        "       WHERE mc.commitment_id = commitments.id AND mc.live_session_id=? AND mc.reverted_at_ms IS NULL"
-        "   ))"
-        " )",
-        (int(updated_at_ms), int(live_session_id), int(live_session_id)),
-    )
+    if include_corrections:
+        cur = conn.execute(
+            "UPDATE commitments SET status='open', close_chat_id=NULL, close_quote=NULL, close_source='', updated_at_ms=?"
+            " WHERE ("
+            "   (status='closed' AND close_chat_id IN (SELECT id FROM live_chat WHERE live_session_id=?))"
+            "   OR (close_source='correction' AND EXISTS ("
+            "       SELECT 1 FROM memory_corrections mc"
+            "       WHERE mc.commitment_id = commitments.id AND mc.live_session_id=?"
+            "         AND mc.reverted_at_ms IS NULL AND mc.verdict <> 'progress'"
+            "   ))"
+            " )",
+            (int(updated_at_ms), int(live_session_id), int(live_session_id)),
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE commitments SET status='open', close_chat_id=NULL, close_quote=NULL, close_source='', updated_at_ms=?"
+            " WHERE status='closed' AND close_chat_id IN (SELECT id FROM live_chat WHERE live_session_id=?)",
+            (int(updated_at_ms), int(live_session_id)),
+        )
     return int(cur.rowcount or 0)
 
 

@@ -192,7 +192,9 @@ class MemoryCorrectionItem(BaseModel):
     target_kind: str = Field(description="archive 档案行 / commitment 承诺 / general 运营提醒")
     archive_line_id: Optional[int] = Field(default=None, description="更正目标档案行主键")
     commitment_id: Optional[int] = Field(default=None, description="更正目标承诺主键")
-    verdict: str = Field(description="done 已做完 / invalid 不成立 / wrong 当初记错 / note 运营提醒")
+    verdict: str = Field(
+        description="done 已做完 / progress 本场进展（仍未了结） / invalid 不成立 / wrong 当初记错 / note 运营提醒"
+    )
     summary: str = Field(description="一句话现状说明")
     evidence_kind: str = Field(description="game_receipt / player_chat / operator / self_seen")
     evidence_quote: str = Field(default="", description="本场依据逐字片段")

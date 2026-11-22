@@ -64,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 50
+SCHEMA_VERSION: int = 51
 
 
 # =============================================================================
@@ -1099,7 +1099,7 @@ END;
 # --- memory_corrections —— 场内更正 ---
 # 主播在规划器（或运营递话）对本场简报某行档案或某条惦记承诺做出的当场纠正：
 # target_kind 取 archive / commitment / general（运营递话无特定目标时常驻本场）。
-# verdict 取 done（做完了）/ invalid（不成立了）/ wrong（记错了）/ note（运营补充纠正）。
+# verdict 取 done（做完了）/ invalid（不成立了）/ wrong（记错了）/ progress（本场进展）/ note（运营补充纠正）。
 # evidence_kind 取 game_receipt / player_chat / operator / self_seen；引用玩家公屏时挂外键，
 # 删玩家随级联删除。更正只在本场生效；下播整理将其作为必须处理的输入，人工可在 WebUI 撤回。
 _MEMORY_CORRECTIONS_SQL = """
@@ -1109,7 +1109,7 @@ CREATE TABLE IF NOT EXISTS memory_corrections (
     target_kind            TEXT NOT NULL CHECK (target_kind IN ('archive', 'commitment', 'general')),
     archive_line_id        INTEGER REFERENCES archive_lines(id) ON DELETE CASCADE,
     commitment_id          INTEGER REFERENCES commitments(id) ON DELETE CASCADE,
-    verdict                TEXT NOT NULL CHECK (verdict IN ('done', 'invalid', 'wrong', 'note')),
+    verdict                TEXT NOT NULL CHECK (verdict IN ('done', 'invalid', 'wrong', 'progress', 'note')),
     summary                TEXT NOT NULL,
     evidence_kind          TEXT NOT NULL CHECK (evidence_kind IN ('game_receipt', 'player_chat', 'operator', 'self_seen')),
     evidence_quote         TEXT NOT NULL DEFAULT '',

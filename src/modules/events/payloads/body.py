@@ -14,7 +14,7 @@
   只陈述有证据的部分。
 """
 
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Dict, Literal
 
 from pydantic import ConfigDict, Field
 
@@ -42,6 +42,7 @@ BodyKind = Literal[
     "others_food_taken",
     "others_things_touched",
     "rare_sighted",
+    "items_tossed",
 ]
 
 
@@ -62,6 +63,7 @@ BodyKind = Literal[
 @register_event(CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN)
 @register_event(CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED)
 @register_event(CoreEvents.GAME_BODY_RARE_SIGHTED)
+@register_event(CoreEvents.GAME_BODY_ITEMS_TOSSED)
 class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
 
@@ -82,6 +84,9 @@ class BodyEventPayload(BasePayload):
         player_uuid: 事件说到的那位玩家的 UUID：player_body_language 是冲 AI 玩家做动作的人（主播据此推他的
           玩家卡），follow_status 是它跟着的人（只透传，不推卡）；其余遭遇、认不出时为空串
         player_name: 同一位玩家的名字（和 ``player_uuid`` 一起有或一起空）
+        save_id: 事件发生时角色所在的存档编号；空串表示不分存档或存档不明
+        save_name: 同一存档的显示名；空串表示未提供
+        details: 事件附带的结构化明细（如容器操作 action 或扔出物品明细），默认为空字典
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
     """
 
@@ -115,6 +120,18 @@ class BodyEventPayload(BasePayload):
     intentional: bool = Field(
         default=False,
         description="是否角色主动选择的死亡回城（寻死回家为 True，意外阵亡为 False）",
+    )
+    save_id: str = Field(
+        default="",
+        description="事件发生时角色所在的存档编号；空串表示不分存档或存档不明",
+    )
+    save_name: str = Field(
+        default="",
+        description="同一存档的显示名；空串表示未提供",
+    )
+    details: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="事件附带的结构化明细（如容器操作 action 或扔出物品明细），缺省为空字典",
     )
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")
 

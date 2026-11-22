@@ -23,6 +23,7 @@ CORRECTION_VERDICT_LABELS: Dict[str, str] = {
     "done": "做完了",
     "invalid": "不成立了",
     "wrong": "记错了",
+    "progress": "本场进展",
     "note": "运营纠正",
 }
 
@@ -48,7 +49,7 @@ class MemoryCorrectionRepo(BaseRepo):
         *,
         live_session_id: int,
         target_kind: Literal["archive", "commitment", "general"],
-        verdict: Literal["done", "invalid", "wrong", "note"],
+        verdict: Literal["done", "invalid", "wrong", "progress", "note"],
         summary: str,
         evidence_kind: Literal["game_receipt", "player_chat", "operator", "self_seen"],
         evidence_quote: str = "",
@@ -58,7 +59,7 @@ class MemoryCorrectionRepo(BaseRepo):
         source: Literal["streamer", "operator"] = "streamer",
         created_at_ms: Optional[int] = None,
     ) -> MemoryCorrection:
-        """写入一条场内更正；若目标是未了结承诺则同一事务当场标了结或作废（记来源 correction）。"""
+        """写入一条场内更正；若目标是未了结承诺：progress 仅刷新更新时间且保持 open，其余终态当场标了结或作废。"""
         ts = int(created_at_ms if created_at_ms is not None else now_ms())
         cleaned_summary = (summary or "").strip()
         cleaned_quote = (evidence_quote or "").strip()
@@ -72,22 +73,29 @@ class MemoryCorrectionRepo(BaseRepo):
                         (int(commitment_id),),
                     ).fetchone()
                     if row is not None and str(row[0]) == "open":
-                        new_status = "void" if verdict == "wrong" else "closed"
-                        close_quote = (
-                            f"场内更正（{CORRECTION_VERDICT_LABELS.get(verdict, verdict)}）：{cleaned_summary}"
-                        )
-                        updated = conn.execute(
-                            "UPDATE commitments SET status=?, close_quote=?, close_source='correction', updated_at_ms=?"
-                            " WHERE id=? AND status='open'",
-                            (
-                                new_status,
-                                close_quote[:80] if new_status == "closed" else None,
-                                ts,
-                                int(commitment_id),
-                            ),
-                        )
-                        if updated.rowcount > 0:
-                            prev_status = "open"
+                        if verdict == "progress":
+                            # 仅记录本场阶段性进展：承诺继续保持 open，仅推进 updated_at_ms 且不记 prev_commitment_status
+                            conn.execute(
+                                "UPDATE commitments SET updated_at_ms=? WHERE id=? AND status='open'",
+                                (ts, int(commitment_id)),
+                            )
+                        else:
+                            new_status = "void" if verdict == "wrong" else "closed"
+                            close_quote = (
+                                f"场内更正（{CORRECTION_VERDICT_LABELS.get(verdict, verdict)}）：{cleaned_summary}"
+                            )
+                            updated = conn.execute(
+                                "UPDATE commitments SET status=?, close_quote=?, close_source='correction', updated_at_ms=?"
+                                " WHERE id=? AND status='open'",
+                                (
+                                    new_status,
+                                    close_quote[:80] if new_status == "closed" else None,
+                                    ts,
+                                    int(commitment_id),
+                                ),
+                            )
+                            if updated.rowcount > 0:
+                                prev_status = "open"
                 cur = conn.execute(
                     "INSERT INTO memory_corrections("
                     " live_session_id, target_kind, archive_line_id, commitment_id, verdict, summary,"
@@ -148,6 +156,21 @@ class MemoryCorrectionRepo(BaseRepo):
                 rows = conn.execute(
                     f"SELECT {_COLUMNS} FROM memory_corrections"  # noqa: S608 列为代码内常量
                     " WHERE live_session_id=? AND reverted_at_ms IS NULL"
+                    " ORDER BY created_at_ms ASC, id ASC",
+                    (int(live_session_id),),
+                ).fetchall()
+                return [MemoryCorrection.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_commitment_updates_by_session(self, *, live_session_id: int) -> List[MemoryCorrection]:
+        """返回本场所有未撤回（reverted_at_ms IS NULL）且 target_kind='commitment' 的更正行，按 created_at_ms ASC, id ASC 排序。"""
+
+        def _exec() -> List[MemoryCorrection]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT {_COLUMNS} FROM memory_corrections"  # noqa: S608 列为代码内常量
+                    " WHERE live_session_id=? AND reverted_at_ms IS NULL AND target_kind='commitment'"
                     " ORDER BY created_at_ms ASC, id ASC",
                     (int(live_session_id),),
                 ).fetchall()

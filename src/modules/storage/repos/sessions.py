@@ -790,9 +790,13 @@ class SessionRepo(BaseRepo):
                     "DELETE FROM commitments WHERE created_session_id=? AND status='open'" + stale_filter,  # noqa: S608 占位符由代码生成
                     (int(live_session_id), *kept_evidence, *kept_game_evidence),
                 )
-                # 上一轮整理用本场台词了结的旧承诺先放回未了结，再按这一轮的结果重新了结
+                # 上一轮整理用本场台词了结的旧承诺先放回未了结，再按这一轮的结果重新了结；
+                # 本场已通过场内更正（close_source='correction'）当场结案的承诺予以保留，避免整理提交将其误冲回 open
                 reopen_commitments_closed_by_session(
-                    conn, live_session_id=int(live_session_id), updated_at_ms=int(now_ms_value)
+                    conn,
+                    live_session_id=int(live_session_id),
+                    updated_at_ms=int(now_ms_value),
+                    include_corrections=False,
                 )
                 # 留下来的观众来源行占着它们那句台词：模型这一轮又用同一句写了一行的不再写，免得一件事两行
                 existing_evidence: set[int] = {
