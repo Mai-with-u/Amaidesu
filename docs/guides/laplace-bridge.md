@@ -2,9 +2,13 @@
 
 ## 什么是 LAPLACE
 
-[LAPLACE Chat](https://laplace.live/chat) 是一个运行在浏览器中的 B 站直播聊天面板：把弹幕、Super Chat、礼物分栏显示，并提供 OBS 覆盖层、TTS、实时翻译、OBS/VTS 控制等能力；免安装、免账号（接入本采集器时，要拿到完整用户名/UID 仍需按前置条件配置登录同步）。
+[LAPLACE Chat](https://laplace.live/chat) 是一个运行在浏览器中的 B 站直播聊天面板：把弹幕、Super Chat、礼物分栏显示，并提供 OBS 覆盖层、TTS、实时翻译、OBS/VTS 控制等能力。免安装、免账号。
 
-[LAPLACE Event Bridge](https://laplace.live/chat/event-bridge) 是 LAPLACE Chat 的 **WebSocket 事件桥**：把 LAPLACE Chat 收到的实时 B 站直播事件（弹幕、礼物、SC、上舰、进房等）转发给本地客户端。Amaidesu 的 `bili_danmaku_laplace` 采集器以 **client 角色**连接桥接服务器，把事件转换为现有的 `room.message.*`，因此不需要直接调用 B 站接口。
+- 接入本采集器时，要拿到完整用户名/UID 仍需按前置条件配置登录同步。
+
+[LAPLACE Event Bridge](https://laplace.live/chat/event-bridge) 是 LAPLACE Chat 的 **WebSocket 事件桥**：把 LAPLACE Chat 收到的实时 B 站直播事件（弹幕、礼物、SC、上舰、进房等）转发给本地客户端。
+
+- Amaidesu 的 `bili_danmaku_laplace` 采集器以 **client 角色**连接桥接服务器，把事件转换为现有的 `room.message.*`，因此不需要直接调用 B 站接口。
 
 ## 数据链路
 
@@ -18,15 +22,24 @@ Amaidesu bili_danmaku_laplace 采集器 (client 角色)
 Planner / 存储 / 字幕 / 虚拟形象
 ```
 
-LAPLACE 是**传输层**，事件仍属于 B 站：采集器统一写 `platform="bilibili"`；观众身份沿用 B 站 `uid`（记为账号 ID），与 legacy `bili_danmaku` 相同；`bili_danmaku_official` 给的是 `open_id`（开放平台 ID），两者没有对照，换源后靠昵称关联到同一位观众（见“已知限制”）。礼物金额只能按源提供的折扣后总价记录，口径差异见“已知限制”。
+LAPLACE 是**传输层**，事件仍属于 B 站：
+
+- 采集器统一写 `platform="bilibili"`。
+- 观众身份沿用 B 站 `uid`（记为账号 ID），与 legacy `bili_danmaku` 相同。
+- `bili_danmaku_official` 给的是 `open_id`（开放平台 ID），两者没有对照，换源后靠昵称关联到同一位观众（见“已知限制”）。
+- 礼物金额只能按源提供的折扣后总价记录，口径差异见“已知限制”。
 
 ## 前置条件
 
 **先阅读 [LAPLACE Event Bridge 文档](https://laplace.live/chat/event-bridge)，按其中说明准备一个可用的桥接服务器。** 本文只覆盖 Amaidesu 侧的配置与排障。
 
-1. **桥接服务器（`leb-server`）**：从 [event-bridge Releases](https://github.com/laplace-live/event-bridge/releases) 下载对应平台的单文件二进制（Windows 为 `leb-server-windows-x64.exe`）。该文件不随仓库分发。
-2. **LAPLACE Chat 控制台**：使用 `leb-server` 时，打开 `https://chat.laplace.live/dashboard/<房间号>`。Event Bridge 设置只存在于控制台页面，OBS 页面不转发事件。
-3. **LAPLACE 登录同步（推荐）**：在控制台「进阶」→「同步密钥」配置 LAPLACE Login Sync。未配置时 LAPLACE 可能只提供打码事件（用户名 `***`，`uid` 可能为 0），采集器会因缺少 uid 丢弃事件；要稳定拿到真实 UID，请配置登录同步。
+1. **桥接服务器（`leb-server`）**：从 [event-bridge Releases](https://github.com/laplace-live/event-bridge/releases) 下载对应平台的单文件二进制。
+    - Windows 平台的文件名是 `leb-server-windows-x64.exe`，该文件不随仓库分发。
+2. **LAPLACE Chat 控制台**：使用 `leb-server` 时，打开 `https://chat.laplace.live/dashboard/<房间号>`。
+    - Event Bridge 设置只存在于控制台页面，OBS 页面不转发事件。
+3. **LAPLACE 登录同步（推荐）**：在控制台「进阶」→「同步密钥」配置 LAPLACE Login Sync。
+    - 未配置时 LAPLACE 可能只提供打码事件（用户名 `***`，`uid` 可能为 0），采集器会因缺少 uid 丢弃事件。
+    - 要稳定拿到真实 UID，请配置登录同步。
 
 > 使用 LAPLACE Chat 控制台时，连接方式选「匿名直连」。「开放平台」来源的 `uid` 恒为 0，且公开事件不提供 `open_id`/`union_id`，当前采集器无法还原观众身份。
 
@@ -75,16 +88,20 @@ room_id = 0           # 0=不过滤；填写时使用规范长房间号
 [`BiliDanmakuLaplaceCollector.ConfigSchema`](../../src/modules/collectors/bilibili/laplace/bili_danmaku_laplace_collector.py)。
 未写的键由配置加载管线补默认值并写回，不需要手工抄一份字段表。
 
-**同一房间只启用一种 B 站消息源**（`bili_danmaku` / `bili_danmaku_official` / `bili_danmaku_laplace` 三选一）。同时启用多个真实源会让同一条弹幕被采集多次，导致落库与统计翻倍。中途换源可以：新出现的 ID 会按昵称关联到老观众，拿不准的进 WebUI「观众 → 待确认观众」由人确认。
+**同一房间只启用一种 B 站消息源**（`bili_danmaku` / `bili_danmaku_official` / `bili_danmaku_laplace` 三选一）。同时启用多个真实源会让同一条弹幕被采集多次，导致落库与统计翻倍。
 
-采集器启动后会无限重连，因此 Amaidesu、leb-server、控制台的启动顺序不限；首次连接失败只记录 warning，不阻塞启动。
+中途换源可以：新出现的 ID 会按昵称关联到老观众，拿不准的进 WebUI「观众 → 待确认观众」由人确认。
+
+采集器启动后会无限重连，因此 Amaidesu、leb-server、控制台的启动顺序不限。首次连接失败只记录 warning，不阻塞启动。
 
 ## 验证
 
 两处判据逐层核对，全程不需要额外工具：
 
-1. **接入成功**：Amaidesu 日志出现 `LAPLACE Event Bridge 已连接: ...` 与 `LAPLACE Event Bridge 握手完成: clientId=...` 两条 info（`--filter LaplaceBridgeClient` 可只看该采集器的日志）。
-2. **全链路通**：开播后在直播间发一条弹幕，dashboard 实时事件流出现 `room.message.danmaku`；礼物、SC、上舰分别对应 `room.message.gift` / `room.message.super_chat` / `room.message.guard`。
+1. **接入成功**：Amaidesu 日志出现 `LAPLACE Event Bridge 已连接: ...` 与 `LAPLACE Event Bridge 握手完成: clientId=...` 两条 info。
+    - `--filter LaplaceBridgeClient` 可只看该采集器的日志。
+2. **全链路通**：开播后在直播间发一条弹幕，dashboard 实时事件流出现 `room.message.danmaku`。
+    - 礼物、SC、上舰分别对应 `room.message.gift` / `room.message.super_chat` / `room.message.guard`。
 
 leb-server 与控制台晚于 Amaidesu 启动不影响判据成立——采集器无限重连，对端就绪后日志即出现。
 
@@ -94,7 +111,9 @@ LAPLACE 自带的 OBS 覆盖层负责把弹幕渲染进直播画面，配置入�
 
 1. 打开 LAPLACE Chat 配置页 `https://chat.laplace.live/`（注意不是 `/dashboard/<房间号>` 控制台页），输入房间号，复制配置页生成的**弹幕链接**（以页面实际生成的为准，不要手工拼 URL）。
 2. 在 OBS 新建「浏览器」来源，URL 填弹幕链接，宽高建议 1920×1080；覆盖层是透明背景，位置与大小按画面摆放。
-3. 弹幕样式优先使用官方[云端模版](https://laplace.live/chat/templates)；需要微调时再把自定义 CSS 粘贴到浏览器来源的「自定义 CSS」框，它会覆盖云端模版。暗色跟随、按场景切换样式、礼物特效等见官方 [Using It in OBS](https://laplace.live/chat/using-it-in-obs) 文档。
+3. 弹幕样式优先使用官方[云端模版](https://laplace.live/chat/templates)。
+    - 需要微调时再把自定义 CSS 粘贴到浏览器来源的「自定义 CSS」框，它会覆盖云端模版。
+    - 暗色跟随、按场景切换样式、礼物特效等见官方 [Using It in OBS](https://laplace.live/chat/using-it-in-obs) 文档。
 
 两个页面的分工：
 
@@ -103,7 +122,7 @@ LAPLACE 自带的 OBS 覆盖层负责把弹幕渲染进直播画面，配置入�
 | OBS 浏览器来源（弹幕链接） | 渲染弹幕画面，直连 B 站，与 leb-server 无关 | 画面上没有弹幕 |
 | dashboard 控制台页（普通浏览器） | 事件源，喂 leb-server → Amaidesu | Amaidesu 收不到任何事件 |
 
-OBS 的浏览器来源运行在 OBS 内嵌浏览器中，不受后台标签节流影响；只有 dashboard 控制台页开在普通浏览器里，需要按「配置步骤 2」的提示加白名单。
+OBS 的浏览器来源运行在 OBS 内嵌浏览器中，不受后台标签节流影响。只有 dashboard 控制台页开在普通浏览器里，需要按「配置步骤 2」的提示加白名单。
 
 ## 事件映射
 
@@ -115,9 +134,15 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 
 ## 已知限制
 
-- **实时流，无历史补播**：断线期间的事件不会补发；重连后依靠 `id` / `stableKey` / 内容指纹去重，降低重复落库概率。gift 的事件 `id` 可能由上游按“时间戳:房间:UID”生成，采集器不单独用 `id` 判断重复，而是比较 uid、礼物 ID、数量、价格、时间戳等内容字段，避免同一用户同一时间戳的不同礼物被误删。
-- **与 official 只能靠昵称对上**：Laplace 公开事件只有 `uid`（legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`），`bili_danmaku_official` 只有 `open_id`，两者没有对照。换源后，新出现的 ID 默认先当成新观众，若与老观众同名，就在 WebUI 待确认页挂一条合并建议，由你确认是不是同一人（昵称谁都能改，自动认人会让同名新号冒充老观众）。想要自动接上，把 `storage.toml` 的 `[viewers].name_match_window_days` 调成大于 0 的天数：同名老观众只有一位、且这个昵称在这些天内出现过，就自动视为同一人；错关联可在观众档案页取消关联。B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
-- **礼物金额按实付价统计**：Laplace 只提供含舰队折扣的实付总价，采集器把它同时写入 `total_price` 与 `paid_price`；`unit_price` 是由总价反推的近似值。该源没有标价，按“源只提供实付价时以实付价计贡献”的例外口径统计，因此 laplace 礼物的贡献不高于标价，跨源对比时需注意。
+- **实时流，无历史补播**：断线期间的事件不会补发。重连后依靠 `id` / `stableKey` / 内容指纹去重，降低重复落库概率。
+    - gift 的事件 `id` 可能由上游按“时间戳:房间:UID”生成。采集器不单独用 `id` 判断重复，而是比较 uid、礼物 ID、数量、价格、时间戳等内容字段，避免同一用户同一时间戳的不同礼物被误删。
+- **与 official 只能靠昵称对上**：Laplace 公开事件只有 `uid`，`bili_danmaku_official` 只有 `open_id`，两者没有对照。
+    - `uid` 在 legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`。
+    - 换源后，新出现的 ID 默认先当成新观众。若与老观众同名，就在 WebUI 待确认页挂一条合并建议，由你确认是不是同一人（昵称谁都能改，自动认人会让同名新号冒充老观众）。
+    - 想要自动接上，把 `storage.toml` 的 `[viewers].name_match_window_days` 调成大于 0 的天数：同名老观众只有一位、且这个昵称在这些天内出现过，就自动视为同一人。错关联可在观众档案页取消关联。
+    - B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
+- **礼物金额按实付价统计**：Laplace 只提供含舰队折扣的实付总价，采集器把它同时写入 `total_price` 与 `paid_price`。`unit_price` 是由总价反推的近似值。
+    - 该源没有标价，按“源只提供实付价时以实付价计贡献”的例外口径统计，因此 laplace 礼物的贡献不高于标价，跨源对比时需注意。
 - **连击信息缺失**：Laplace `gift` 事件只提供 `giftAmount`，没有 `combo_id` / `combo_count`；`GiftInfo` 的 `combo_*` 保持默认，连击归并只能按消息量处理。
 - **SC 金额按人民币换算**：Laplace 的 `priceNormalized` 是实际货币单位（人民币元），采集器优先用它 ×1000 转为金瓜子；只有该字段缺失或非正数时才回退 `price`。金额大小与单位无关，不能按金额猜单位。
 - **盲盒 ID 取配置 ID**：`blindGift.blind_gift_config_id` 是盲盒配置 ID，写入 `GiftInfo.blind_gift_id`；`original_gift_id` 是开出的实际礼物，不写入该字段。
