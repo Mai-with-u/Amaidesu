@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
@@ -25,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pytest
 
 from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.agents import (
     AgentManager,
@@ -40,10 +42,21 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.rundown import Rundown, RundownSegment
+from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
+from tests.agents.minecraft_collector_fakes import (
+    FakeMcpClient as _FakeCollectorClient,
+)
+from tests.agents.minecraft_collector_fakes import (
+    events_page as _collector_page,
+)
+from tests.agents.minecraft_collector_fakes import (
+    fake_client_factory as _collector_client_factory,
+)
 from tests.agents.minecraft_v1_fakes import (
     FakeMaicraft,
     LlmScript,
@@ -1449,3 +1462,347 @@ async def test_e2e_game_lead_rundown_overdue_nudges_real_minecraft_agent(
         assert len(rig.streamer_llm.planner_calls) == 0
     finally:
         await rig.stop()
+
+
+# ---------------------------------------------------------------------------
+# 链路 12：双真 Agent 活承诺账本端到端闭环（items_tossed / stored -> progress -> done -> 双向即时同步）
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_live_commitment_ledger_delivery_progress_and_done_closure(
+    prompts: Any,
+    fake_clock: Any,
+    tmp_path: Any,
+) -> None:
+    """双真 Agent + 真实 SQLite + 真实 StorageLedger：对 PlayerA 的 open 承诺经交付落库 -> progress -> done 全链路即时同步。"""
+    db = SQLiteDatabase(tmp_path / "e2e_live_commitments.db")
+    await db.initialize()
+    try:
+        old_start = fake_clock.now_ms() - 86_400_000
+        old_end = old_start + 3_600_000
+        old_sid = await db.sessions.insert_live_session(started_at_ms=old_start)
+        await db.sessions.close_live_session(live_session_id=old_sid, ended_at_ms=old_end)
+
+        live_sid = await db.sessions.insert_live_session(started_at_ms=fake_clock.now_ms())
+
+        # 播种玩家 PlayerA 以及一条上一场对 PlayerA 的 open 承诺（归属当前存档 save_e2e_1）
+        player_a = await db.game_players.meet_player(
+            game="minecraft",
+            uuid="uuid-player-a",
+            name="PlayerA",
+            live_session_id=old_sid,
+            save_id="save_e2e_1",
+            save_name="联机冒险二周目",
+            at_ms=old_start + 10_000,
+        )
+        with db.game_work_docs.connection_manager.transaction() as conn:
+            cur = conn.execute(
+                "INSERT INTO commitments(what, quote, target_player_id, game, save_id, save_name,"
+                " status, created_session_id, last_mentioned_session_id, created_at_ms, updated_at_ms)"
+                " VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
+                (
+                    "补还 3 颗钻石",
+                    "明天一定把 3 颗钻石还给 PlayerA",
+                    int(player_a.id),
+                    "minecraft",
+                    "save_e2e_1",
+                    "联机冒险二周目",
+                    old_sid,
+                    old_sid,
+                    old_start + 20_000,
+                    old_start + 20_000,
+                ),
+            )
+            commitment_id = int(cur.lastrowid or 0)
+        assert commitment_id > 0
+        ref = f"约#{commitment_id}"
+
+        progress_called = [False]
+        done_called = [False]
+        captured_quotes: Dict[str, str] = {}
+
+        def _mc_script(messages: List[Dict[str, Any]]) -> Response:
+            joined = _texts(messages)
+            # 模型直接原封不动摘录游戏侧 [交付回执] / [身体] 中的句子传给 streamer_memory_correct，
+            # 实证与 MaicraftAttentionCollector -> StorageLedger 落库的 game_events.message 逐字同源
+            toss_match = re.search(r"\[交付回执\]\s*([^。]+)。", joined)
+            if toss_match is not None and not progress_called[0]:
+                progress_called[0] = True
+                captured_quotes["progress"] = toss_match.group(1)
+                return _resp(
+                    "已当面扔出 2 颗钻石，先登记本场进展",
+                    calls=[
+                        _call(
+                            "streamer_memory_correct",
+                            {
+                                "target": ref,
+                                "verdict": "progress",
+                                "summary": "已当面扔还 2 颗钻石，还欠 1 颗",
+                                "evidence_kind": "game_receipt",
+                                "evidence_quote": toss_match.group(1),
+                            },
+                            "c_e2e_progress",
+                        )
+                    ],
+                )
+            stored_match = re.search(r"\[身体\]\s*([^。]*存进了[^。]+)。", joined)
+            if stored_match is not None and not done_called[0]:
+                done_called[0] = True
+                captured_quotes["done"] = stored_match.group(1)
+                return _resp(
+                    "最后 1 颗钻石已存进对方木桶，立即结案",
+                    calls=[
+                        _call(
+                            "streamer_memory_correct",
+                            {
+                                "target": ref,
+                                "verdict": "done",
+                                "summary": "剩余 1 颗钻石已存进对方木桶还清",
+                                "evidence_kind": "game_receipt",
+                                "evidence_quote": stored_match.group(1),
+                            },
+                            "c_e2e_done",
+                        )
+                    ],
+                )
+            return _resp("收到，继续推进")
+
+        rig = await _start_dual_agent_rig(
+            prompts=prompts,
+            fake_clock=fake_clock,
+            mc_script=_mc_script,
+            work_docs_repo=db.game_work_docs,
+            chat_batch_window_ms=0,
+            streamer_extra_kwargs={
+                "chat_repo": db.chat,
+                "sessions_repo": db.sessions,
+                "commitments_repo": db.commitments,
+                "archive_repo": db.archive,
+                "event_repo": db.events,
+                "memory_cue_log_repo": db.memory_cue_log,
+                "game_player_repo": db.game_players,
+                "work_docs_repo": db.game_work_docs,
+                "session_manager": ActiveSessionStub(live_sid),
+            },
+        )
+
+        class _LedgerSessionStub:
+            async def resolve_attribution_pk(self) -> int:
+                return int(live_sid)
+
+        storage_ledger = StorageLedger(
+            rig.bus,
+            db.chat,
+            db.viewers,
+            db.events,
+            session_manager=_LedgerSessionStub(),
+            game_player_repo=db.game_players,
+        )
+        await storage_ledger.start()
+        # 装配真实 MaicraftAttentionCollector，让带观察编号与括号坐标的真实 Mod 原始事件经同一采集路径转发落库
+        collector = MaicraftAttentionCollector(
+            config={},
+            event_bus=rig.bus,
+            client_factory=_collector_client_factory(),
+            clock=fake_clock.now_ms,
+        )
+        assert await collector._ensure_ready() is True
+        collector_client = _FakeCollectorClient.instances[-1]
+        collector_client.pages.append(_collector_page([], cursor=5))
+        await collector._drain()
+        try:
+            # 让视野中存在 PlayerA（带 UUID），使开局即可按在场玩家拉取权威承诺账本
+            rig.server.scene_view["entities"] = [
+                {
+                    "id": "e1",
+                    "type": "minecraft:player",
+                    "name": "PlayerA",
+                    "uuid": "uuid-player-a",
+                    "distance": 4.0,
+                }
+            ]
+
+            await rig.bus.emit(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(live_session_id=live_sid, kind="live", started_at_ms=fake_clock.now_ms()),
+                source="e2e_test",
+            )
+            await rig.bus.wait_until_drained()
+            await _wait_until(
+                lambda: rig.coordinator.is_agent_leading("minecraft") and len(rig.minecraft_llm.seen) >= 1
+            )
+            await _wait_until(lambda: not rig.minecraft.batch_active)
+
+            # 1) 游戏侧在尾部状态看见约#N，且 msg[0] 前缀绝不含承诺账本
+            first_seen = rig.minecraft_llm.seen[0]
+            fixed_msg0 = dict(first_seen[0])
+            assert ref not in str(fixed_msg0.get("content") or "")
+            first_text = _texts(first_seen)
+            assert "commitment_ledger" in first_text
+            assert ref in first_text
+            assert "补还 3 颗钻石" in first_text
+
+            # 2) 用真实 Mod 形态带观察编号 (e4) 与括号坐标 (12, 64, -8) 的 items_tossed 原始事件：
+            #    MaicraftAttentionCollector 转发 -> StorageLedger 落库 game_events(item_delivery)，
+            #    同一原始事件同时送给 MinecraftAgent._on_body_event -> 模型直接照抄 [交付回执] 调 progress
+            turns_before_progress = len(rig.minecraft_llm.seen)
+            raw_toss_message = "朝 PlayerA（e4）扔出了 2 个 minecraft:diamond（12, 64, -8）"
+            raw_toss_detail = {
+                "to": "PlayerA",
+                "to_uuid": "uuid-player-a",
+                "at": {"x": 12, "y": 64, "z": -8, "dimension": "minecraft:overworld"},
+                "items": [{"id": "minecraft:diamond", "count": 2}],
+            }
+            toss_page = _collector_page(
+                [
+                    {
+                        "cursor": 6,
+                        "kind": "items_tossed",
+                        "goal_id": -1,
+                        "message": raw_toss_message,
+                        "items_tossed": raw_toss_detail,
+                    }
+                ],
+                cursor=6,
+            )
+            toss_page["world"] = {"id": "save_e2e_1", "name": "联机冒险二周目", "source": "world_id_file"}
+            collector_client.pages.append(toss_page)
+            await collector._drain()
+            await rig.bus.wait_until_drained()
+
+            delivered_events = await db.events.list_session_game_events(live_session_id=live_sid)
+            assert any(
+                ev.event_type == "item_delivery" and ev.message == "朝 PlayerA 扔出了 2 个 minecraft:diamond"
+                for ev in delivered_events
+            )
+
+            rig.server.body_event("items_tossed", raw_toss_message, {"items_tossed": raw_toss_detail})
+            await _wait_until(
+                lambda: progress_called[0]
+                and len(rig.minecraft_llm.seen) >= turns_before_progress + 2
+                and not rig.minecraft.batch_active
+            )
+            await rig.bus.wait_until_drained()
+
+            # 模型原样摘录的回执与 StorageLedger 落库文案逐字一致，已成功通过 verbatim_quote 核验并保持 open
+            assert captured_quotes["progress"] == "朝 PlayerA 扔出了 2 个 minecraft:diamond"
+            after_progress_row = await db.commitments.get_commitment(commitment_id=commitment_id)
+            assert after_progress_row is not None and after_progress_row.status == "open"
+
+            progress_seen = rig.minecraft_llm.seen[-1]
+            assert progress_seen[0] == fixed_msg0
+            progress_tail = str(progress_seen[-1].get("content") or "")
+            assert "commitment_ledger" in progress_tail
+            assert "已当面扔还 2 颗钻石，还欠 1 颗" in progress_tail
+            assert '"open"' in progress_tail
+
+            player_cues_mid = await rig.coordinator.fetch_passive_cues(
+                game="minecraft",
+                players=[("minecraft", "uuid-player-a")],
+                limit=2,
+            )
+            mid_cues_text = "\n".join(player_cues_mid)
+            assert ref in mid_cues_text
+            assert "本场进展：已当面扔还 2 颗钻石，还欠 1 颗" in mid_cues_text
+
+            # 3) 用真实 Mod 形态带括号坐标 (10, 64, 5) 的 others_things_touched(stored) 原始事件：
+            #    MaicraftAttentionCollector 转发 -> StorageLedger 落库第二条 item_delivery，
+            #    同一原始事件送给 MinecraftAgent._on_body_event -> 模型直接照抄 [身体] 调 done 立即结案
+            turns_before_done = len(rig.minecraft_llm.seen)
+            raw_stored_message = "往 PlayerA 放的木桶（10, 64, 5）存进了 1 个 minecraft:diamond"
+            raw_stored_detail = {
+                "action": "stored",
+                "owner": "PlayerA",
+                "owner_uuid": "uuid-player-a",
+                "block": "minecraft:barrel",
+                "at": {"x": 10, "y": 64, "z": 5},
+                "items": [{"item": "minecraft:diamond", "count": 1}],
+            }
+            stored_page = _collector_page(
+                [
+                    {
+                        "cursor": 7,
+                        "kind": "others_things_touched",
+                        "goal_id": -1,
+                        "message": raw_stored_message,
+                        "others_things": raw_stored_detail,
+                    }
+                ],
+                cursor=7,
+            )
+            stored_page["world"] = {"id": "save_e2e_1", "name": "联机冒险二周目", "source": "world_id_file"}
+            collector_client.pages.append(stored_page)
+            await collector._drain()
+            await rig.bus.wait_until_drained()
+
+            rig.server.body_event(
+                "others_things_touched",
+                raw_stored_message,
+                {"others_things": raw_stored_detail},
+            )
+            await _wait_until(
+                lambda: done_called[0]
+                and len(rig.minecraft_llm.seen) >= turns_before_done + 2
+                and not rig.minecraft.batch_active
+            )
+            await rig.bus.wait_until_drained()
+
+            # 4) 验证模型原样摘录通过核验并在同一事务立刻结案，游戏侧尾部状态立即显示本场已了结，msg[0] 仍纹丝不动
+            assert captured_quotes["done"] == "往 PlayerA 放的木桶存进了 1 个 minecraft:diamond"
+            after_done_row = await db.commitments.get_commitment(commitment_id=commitment_id)
+            assert after_done_row is not None and after_done_row.status == "closed"
+
+            done_seen = rig.minecraft_llm.seen[-1]
+            assert done_seen[0] == fixed_msg0
+            done_tail = str(done_seen[-1].get("content") or "")
+            assert "closed_this_session" in done_tail
+            assert ref in done_tail
+            assert "剩余 1 颗钻石已存进对方木桶还清" in done_tail
+            assert '"open"' not in done_tail
+
+            # 5) 主播常驻简报立刻显示「本场已了结」，回答观众弹幕时一眼可见
+            debug_res = await rig.streamer.debug_test_decision(
+                batch=[{"nickname": "小星", "text": "欠 PlayerA 的钻石还清了吗？"}]
+            )
+            assert debug_res["success"] is True
+            assert len(rig.streamer_llm.planner_calls) >= 1
+            latest_planner = rig.streamer_llm.planner_calls[-1]
+            planner_full = str(latest_planner.get("system") or "") + "\n" + _texts(latest_planner["messages"])
+            assert f"[{ref}] 本场已了结：剩余 1 颗钻石已存进对方木桶还清" in planner_full
+
+            # 6) 拨过 10 分钟玩家卡冷却，PlayerA 再次开口时不再推送旧 约#N 卡片
+            fake_clock.tick(11 * 60 * 1000)
+            player_cues_after_done = await rig.coordinator.fetch_passive_cues(
+                game="minecraft",
+                players=[("minecraft", "uuid-player-a")],
+                limit=2,
+            )
+            assert all(ref not in line for line in player_cues_after_done)
+
+            turns_before_rechat = len(rig.minecraft_llm.seen)
+            await rig.bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender="PlayerA",
+                    sender_id="uuid-player-a",
+                    sender_online=True,
+                    sender_distance=4.0,
+                    content="谢谢，钻石我看到啦",
+                    timestamp_ms=fake_clock.now_ms(),
+                ),
+                source="e2e_test",
+            )
+            await rig.bus.wait_until_drained()
+            await _wait_until(
+                lambda: len(rig.minecraft_llm.seen) > turns_before_rechat and not rig.minecraft.batch_active
+            )
+            rechat_tail = str(rig.minecraft_llm.seen[-1][-1].get("content") or "")
+            assert ref not in rechat_tail
+        finally:
+            await collector._teardown()
+            await storage_ledger.stop()
+            await rig.stop()
+    finally:
+        await db.close()
