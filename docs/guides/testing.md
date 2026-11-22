@@ -1,6 +1,6 @@
 # 测试指南
 
-本指南介绍如何在 Amaidesu 项目中编写和运行测试。
+本指南介绍如何在 Amaidesu 项目中编写和运行测试。三份材料的分工：**写测试的纪律**以 [tests/AGENTS.md](../../tests/AGENTS.md) 为权威（AI 编码代理的执行约束）；**操作检查单与假对象地图**在 `testing-conventions` skill（AI 写测试前加载）；本文只讲运行命令、测试类型定位与原理说明。
 
 ## 1. 测试框架
 
@@ -58,259 +58,15 @@ tests/
 - **共享替身与构造器进 `helpers.py` / `fakes.py`**：跨测试文件复用的替身（fake）、工厂构造器收拢到该域的 `helpers.py` 或 `fakes.py`，写测试前先查该域现有文件复用，勿复制装配样板；pytest fixture 仍按作用域放 `conftest.py`（见"Fixtures 共享"一节的"子域共享"）。
 - **合并 / 移动测试文件后同步文档**：本文档与其他指南点名的测试路径随之更新，不留指向不存在文件的引用。
 
-## 3. 测试示例
+## 3. 示例去哪看
 
-### 3.1 基础测试结构
+完整示例不再成篇——真实样板以仓库现有测试为准，改动哪个域就照哪个域的现有测试写：
 
-```python
-"""
-测试模块名称
+- EventBus / 拦截器 / 载荷注册表：`tests/modules/events/`（`test_event_bus.py`、`test_interceptors.py`）
+- 采集器：`tests/modules/collectors/`
+- 存储与配置迁移：`tests/modules/storage/`、`tests/config/`
 
-运行: uv run pytest tests/path/to/test_file.py -v
-"""
-
-import asyncio
-import pytest
-
-from src.modules.events.event_bus import EventBus
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-
-
-@pytest.fixture
-def event_bus():
-    """创建 EventBus 实例"""
-    return EventBus()
-
-
-@pytest.fixture
-def sample_message():
-    """创建示例 RoomMessagePayload"""
-    return RoomMessagePayload(
-        message_type="danmaku",
-        user=RoomMessageUser(id="u1", name="观众A"),
-        content="测试消息",
-    )
-
-
-async def test_event_bus_publish(event_bus, sample_message):
-    """测试事件总线发布订阅功能"""
-    received = []
-
-    async def handler(event_name: str, payload: RoomMessagePayload, source: str):
-        received.append(payload)
-
-    # 订阅事件
-    event_bus.on("test.event", handler, RoomMessagePayload)
-
-    # 发布事件
-    await event_bus.emit("test.event", sample_message, source="test")
-    await event_bus.wait_until_drained()  # 等派发落地（含级联），确定性等待
-
-    # 验证结果
-    assert len(received) == 1
-    assert received[0].content == "测试消息"
-
-
-async def test_event_bus_error_isolation(event_bus):
-    """测试错误隔离功能"""
-    results = []
-
-    async def failing_handler(event_name, payload, source):
-        results.append("before_error")
-        raise ValueError("模拟错误")
-
-    async def normal_handler(event_name, payload, source):
-        results.append("normal")
-
-    event_bus.on("test.event", failing_handler, RoomMessagePayload)
-    event_bus.on("test.event", normal_handler, RoomMessagePayload)
-
-    # 处理器异常由 EventBus 内部处理（计数 + ERROR 日志），不向外传播
-    await event_bus.emit("test.event", RoomMessagePayload(
-        message_type="danmaku", user=RoomMessageUser(id="u1", name="观众A"), content="test"
-    ), source="test")
-    await event_bus.wait_until_drained()
-
-    # 验证一个处理器抛异常没有影响另一个
-    assert "before_error" in results
-    assert "normal" in results
-```
-### 3.2 采集器测试
-
-```python
-"""测试 BaseCollector / CollectorManager（采集器框架）
-
-运行: uv run pytest tests/modules/collectors/ -v
-"""
-
-import pytest
-
-from src.modules.collectors import BaseCollector, CollectorManager
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-
-
-class _FakeEventBus:
-    """捕获 emit 的桩（替代真实 EventBus）"""
-
-    def __init__(self) -> None:
-        self.events: list[tuple[str, object]] = []
-
-    async def emit(self, event_name: str, payload, **kwargs):
-        self.events.append((event_name, payload))
-
-
-class _SampleCollector(BaseCollector):
-    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_framework.py 中同形态）"""
-    name = "sample_collector"
-    description = "示例采集器（用于测试）"
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.started = False
-
-    async def _on_start(self) -> None:
-        self.started = True
-
-    async def _on_stop(self) -> None:
-        self.started = False
-
-
-@pytest.fixture
-def manager() -> CollectorManager:
-    return CollectorManager()
-
-
-@pytest.fixture
-def sample_collector() -> _SampleCollector:
-    return _SampleCollector()
-
-
-def test_register_dedup(manager, sample_collector):
-    """Collector 注册与去重"""
-    assert manager.register(sample_collector) is True
-    assert manager.register(sample_collector) is False  # 同名 Collector 跳过
-
-
-async def test_collector_emit_room_message(sample_collector):
-    """Collector 主动推语义域事件（room.message.danmaku 等）"""
-    bus = _FakeEventBus()
-    sample_collector.set_event_bus(bus)
-
-    payload = RoomMessagePayload(
-        live_session_id="ls_test_001",
-        message_type="danmaku",
-        user=RoomMessageUser(id="u1", name="观众A"),
-        content="主播好可爱！",
-    )
-    await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
-
-    assert bus.events[-1][0] == CoreEvents.ROOM_MESSAGE_DANMAKU
-    assert bus.events[-1][1].content == "主播好可爱！"
-
-
-async def test_collector_start_lifecycle(sample_collector):
-    """Collector start/stop 生命周期（start 进入 RUNNING，stop 进入 STOPPED）"""
-    from src.modules.collectors.base import CollectorState
-
-    await sample_collector.start()
-    assert sample_collector.state == CollectorState.RUNNING
-
-    await sample_collector.stop()
-    assert sample_collector.state == CollectorState.STOPPED
-```
-
-> 真实触发链与各子采集器（console/bilibili/stt）的差异化测试见 [tests/modules/collectors/](../../tests/modules/collectors/)：每个采集器一个测试文件，覆盖该采集器特有的输入源与语义域事件组合。完整的错误隔离与 `CollectorManager` 健康监控测试见 `tests/modules/collectors/test_collector_framework.py`。
-
-### 3.3 事件拦截器测试
-
-```python
-"""测试 RateLimitInterceptor
-
-运行: uv run pytest tests/modules/events/test_interceptors.py -v
-"""
-
-import pytest
-
-from src.modules.events.interceptors.rate_limit import RateLimitInterceptor
-
-
-@pytest.fixture
-def interceptor():
-    """创建限流拦截器实例"""
-    return RateLimitInterceptor(
-        global_rate_limit=10,
-        user_rate_limit=3,
-        window_size=60,
-    )
-
-
-def create_payload(text: str, user_id: str = "test_user") -> dict:
-    """创建测试用的事件 payload（model_dump 后的 dict 形态）"""
-    return {"text": text, "user_id": user_id, "source": "test"}
-
-
-async def test_intercept_pass(interceptor):
-    """测试事件通过限流"""
-    result = await interceptor.intercept("room.message.danmaku", create_payload("测试消息"), "Test")
-    assert result is not None
-
-
-async def test_intercept_rate_limited(interceptor):
-    """测试超出频率的事件被丢弃"""
-    slow = RateLimitInterceptor(global_rate_limit=2, user_rate_limit=10, window_size=60)
-
-    # 前两条通过
-    assert await slow.intercept("room.message.danmaku", create_payload("消息1", "user1"), "T") is not None
-    assert await slow.intercept("room.message.danmaku", create_payload("消息2", "user1"), "T") is not None
-
-    # 第三条被丢弃（返回 None）
-    assert await slow.intercept("room.message.danmaku", create_payload("消息3", "user1"), "T") is None
-```
-### 3.4 Mock 对象与桩
-
-测试通常在测试文件内定义小型桩，避免跨文件 Mock 依赖。常见两类：
-
-```python
-# 在你的测试文件中定义（贴近 tests/modules/collectors/ 现有风格）
-from src.modules.collectors import BaseCollector
-
-
-class _FakeEventBus:
-    """捕获 emit 的桩（替代真实 EventBus）"""
-
-    def __init__(self) -> None:
-        self.events: list[tuple[str, object]] = []
-
-    async def emit(self, event_name: str, payload, **kwargs):
-        self.events.append((event_name, payload))
-
-
-class _SampleCollector(BaseCollector):
-    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_framework.py 同步）"""
-    name = "sample_collector"
-    description = "示例采集器（用于测试）"
-
-    async def _on_start(self) -> None:
-        self.started = True
-
-    async def _on_stop(self) -> None:
-        self.started = False
-```
-
-#### 自定义失败注入
-
-模拟 Collector 启动失败时，在 `_SampleCollector` 子类中重写对应生命周期方法：
-
-```python
-class _FailingCollector(_SampleCollector):
-    """启动时失败的 Collector（用于错误隔离测试）"""
-
-    async def _on_start(self) -> None:
-        raise RuntimeError("模拟启动失败")
-```
-
-更完整的错误隔离测试与 `CollectorManager` 健康监控见 `tests/modules/collectors/test_collector_framework.py`。
+替身（fake）与工厂构造器见各域的 `fakes.py` / `helpers.py`；AI 编码代理的操作检查单与基建地图在 `testing-conventions` skill。
 
 ## 4. 运行测试
 
@@ -379,21 +135,7 @@ uv run pytest -n auto
 
 ## 5. 测试最佳实践
 
-### 5.1 测试命名和文档
-
-```python
-# ✅ 正确：清晰描述测试内容
-async def test_event_bus_publish_message_to_multiple_subscribers(event_bus):
-    """测试事件总线向多个订阅者发布消息"""
-    ...
-
-# ❌ 错误：模糊的测试名称
-async def test_eb(event_bus):
-    """test eb"""
-    ...
-```
-
-### 5.2 使用 Fixture 管理依赖
+### 5.1 使用 Fixture 管理依赖
 
 ```python
 # ✅ 正确：使用 fixture 创建依赖
@@ -410,16 +152,9 @@ async def test_event():
     ...
 ```
 
-### 5.3 异步测试与结果断言
+### 5.2 异步测试与结果断言
 
-项目启用 `asyncio_mode = "auto"`，异步测试直接写 `async def`，**不加 `@pytest.mark.asyncio`**——auto 模式下该标记冗余，误挂到同步测试还会产生 PytestWarning：
-
-```python
-# ✅ 正确：无需任何标记
-async def test_async_operation():
-    result = await async_function()
-    assert result is not None
-```
+项目启用 `asyncio_mode = "auto"`：异步测试直接写 `async def`，不加 `@pytest.mark.asyncio`——auto 模式下该标记冗余，误挂到同步测试还会产生 PytestWarning。
 
 异步 / 事件驱动的结果断言**等确定性信号，不用固定睡眠猜进度**：fire-and-forget 派发在满载运行时固定 sleep 可能赶不上，是偶发红的主要来源。
 
@@ -442,7 +177,7 @@ async def test_health_event_published():
 
 断言"没有事件"的场景才允许固定等待（等满时间窗口确认没发生）。等待上限按全量回归满载运行估算余量，不留贴着正常耗时的紧上限。
 
-### 5.4 Mock 外部依赖
+### 5.3 Mock 外部依赖
 
 ```python
 # ✅ 正确：使用 Mock 对象隔离外部依赖
@@ -458,7 +193,7 @@ async def test_llm_client():
     assert result == "Mock response"
 ```
 
-### 5.5 测试隔离
+### 5.4 测试隔离
 
 ```python
 # ✅ 正确：每个测试独立，不依赖执行顺序
@@ -472,36 +207,6 @@ async def test_second(event_bus):  # 独立运行，不依赖 test_first
     collector = MockInputCollector({"name": "test"}, event_bus)
     ...
 ```
-
-### 5.6 跳过测试
-
-```python
-# 使用 pytest.skip 跳过需要特定条件的测试
-async def test_feature_requiring_config():
-    if not has_config():
-        pytest.skip("需要配置文件")
-
-    # 测试逻辑
-    ...
-```
-
-### 5.7 重复场景参数化
-
-同一流程多组输入输出，用一张参数表，**禁止复制粘贴成长手写**（真实先例：`tests/modules/llm/clients/test_openai_client.py` 的 `test_auth_modes` 将四种鉴权方式并为一条用例）：
-
-```python
-@pytest.mark.parametrize(
-    ("word", "masked"),
-    [
-        ("傻逼", "**"),
-        ("hello", "hello"),
-    ],
-)
-def test_word_filter_masks(word: str, masked: str) -> None:
-    assert mask(word) == masked
-```
-
-断言差异也用参数表达，只有控制流真正不同才拆独立测试函数。同文件内命名成族（`test_x_includes_*` / `test_x_omits_*` 一类）的多条用例，是应当并表的信号。
 
 ## 6. 测试类型
 

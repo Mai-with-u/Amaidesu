@@ -19,3 +19,5 @@
 - 需要 patch 私有成员（前导下划线）才能搭测试，视为生产模块缺接缝的缺陷：上报并修接缝，不绕过。
 - 假对象（fake）单点收敛：一个生产接口的替身全库只写一份，放对应域的 `fakes.py` / `helpers.py`，跨域 import，不复制。
 - 载荷与场景用既有工厂构造（如 tests/modules/storage/helpers.py 的 make_room_message）；没有工厂的先建工厂再用。
+- 项目启用 `asyncio_mode = "auto"`：异步测试直接写 `async def`，不加 `@pytest.mark.asyncio`——auto 模式下该标记冗余，误挂到同步测试还会产生 PytestWarning。
+- 同一流程多组输入输出用一张 `@pytest.mark.parametrize` 参数表，禁止复制粘贴成长手写；断言差异也用参数表达，只有控制流真正不同才拆独立测试函数。
