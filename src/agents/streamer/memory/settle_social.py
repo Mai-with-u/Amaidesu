@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from src.modules.logging import get_logger
 from src.modules.storage.models.game_players import (
     GAME_CHAT_PLAYER,
     GAME_CHAT_STREAMER,
@@ -47,6 +48,7 @@ from src.modules.storage.models.social_facts import (
 )
 
 from .saves import SaveTimeline
+from .settle_proof import GameRecord
 from .textmatch import verbatim_quote
 
 __all__ = [
@@ -56,6 +58,8 @@ __all__ = [
     "build_social_material",
     "validate_social_output",
 ]
+
+logger = get_logger("SettleSocial")
 
 # 每类在一个存档里至多几行现行事实（与场内工具同一个数）
 MAX_FACTS_PER_KIND = MAX_ACTIVE_FACTS_PER_KIND
@@ -67,10 +71,15 @@ _TEXT_MAX_CHARS = 60
 _QUOTE_MAX_CHARS = 80
 _WHAT_MAX_CHARS = 30
 _CHAT_PREFIX = "公屏#"
+_RECORD_PREFIX = "记录#"
 _FACT_PREFIX = "事实#"
 _PLAYER_PREFIX = "玩家"
 # 单趟整词匹配玩家代号（"玩家1"不命中"玩家10"的前缀）
 _PLAYER_CODE_RE = re.compile(rf"{_PLAYER_PREFIX}(\d+)(?!\d)")
+# 满额后允许按“最旧未锁定条目”自动腾退的类别：仅当新事实具备经核实的玩家公屏原话证据时触发，
+# 避免模型漏填 supersedes 时把新学到的服务器关键规矩或共用惯例直接丢弃
+_AUTO_EVICT_KINDS = frozenset({"sharing", "setting", "open_question"})
+_KIND_ORDER: Tuple[str, ...] = ("setting", "members", "sharing", "works", "her_role", "open_question")
 
 _KIND_LABELS: Dict[str, str] = {
     "setting": "环境形态",
@@ -96,6 +105,8 @@ class SocialMaterial:
     player_names: Dict[int, str] = field(default_factory=dict)
     # 给模型看过的现行事实（行号 → 行）
     facts: Dict[int, SocialFact] = field(default_factory=dict)
+    # 给模型看过的本场游戏记录（记录编号 → 游戏记录；仅用于取代既有 works 事实时的无公屏作证核验）
+    records_by_number: Dict[int, GameRecord] = field(default_factory=dict)
     # 没引公屏的归纳行挂在哪：(游戏, 存档编号, 存档名)
     default_scope: Tuple[str, str, str] = ("", "", "")
     # 本场之前最近两场已完结正式场的编号与第二近场开播时刻（判 works 是否隔两场未再证实）
@@ -134,6 +145,36 @@ def _clip(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _format_full_slot_notice(active: Sequence[SocialFact]) -> str:
+    """汇总已达槽位上限的类别提示，提醒模型新增该类事实时通过 supersedes 取代旧条目。"""
+    bucket_counts: Dict[Tuple[str, str, str], int] = {}
+    save_labels: Dict[Tuple[str, str], str] = {}
+    for fact in active:
+        key = (fact.game, fact.save_id, fact.kind)
+        bucket_counts[key] = bucket_counts.get(key, 0) + 1
+        if (fact.game, fact.save_id) not in save_labels:
+            save_labels[(fact.game, fact.save_id)] = fact.save_name or fact.save_id
+    full_buckets = [
+        (game, save_id, kind, count)
+        for (game, save_id, kind), count in bucket_counts.items()
+        if count >= MAX_FACTS_PER_KIND
+    ]
+    if not full_buckets:
+        return ""
+    distinct_scopes = {(game, save_id) for game, save_id, _kind, _count in full_buckets}
+    kind_rank = {kind: idx for idx, kind in enumerate(_KIND_ORDER)}
+    full_buckets.sort(key=lambda item: (item[0], item[1], kind_rank.get(item[2], len(_KIND_ORDER)), item[2]))
+    entries: List[str] = []
+    for game, save_id, kind, count in full_buckets:
+        label = _KIND_LABELS.get(kind, kind)
+        if len(distinct_scopes) > 1:
+            scope_tag = save_labels.get((game, save_id)) or game
+            entries.append(f"{scope_tag}·{label}（已满 {count}/{MAX_FACTS_PER_KIND}）")
+        else:
+            entries.append(f"{label}（已满 {count}/{MAX_FACTS_PER_KIND}）")
+    return f"槽位占用提示：{'、'.join(entries)}，已满类别新增须填 supersedes 取代旧条目"
+
+
 def build_social_material(
     *,
     chat_lines: Sequence[GameChatLine],
@@ -149,6 +190,7 @@ def build_social_material(
     current_session_id: Optional[int] = None,
     recent_two_session_ids: Sequence[int] = (),
     second_recent_started_ms: int = 0,
+    game_records: Sequence[GameRecord] = (),
 ) -> SocialMaterial:
     """拼第四次调用的原料。``player_names`` 是玩家主键 → 现在的名字（读不到的玩家不给代号）。
 
@@ -207,6 +249,9 @@ def build_social_material(
         ):
             tags.append("已隔多场未再证实，优先核实或取代")
         fact_rows.append(f"{_FACT_PREFIX}{fact.id}（{'，'.join(tags)}）{fact.text}")
+    slot_notice = _format_full_slot_notice(active)
+    if slot_notice:
+        fact_rows.append(slot_notice)
     roster = "；".join(f"{code} = {player_names.get(player_id, '（名字未知）')}" for player_id, code in codes.items())
     parts = [
         "【现有的社交事实】\n" + ("\n".join(fact_rows) if fact_rows else "没有"),
@@ -236,6 +281,7 @@ def build_social_material(
         player_codes=codes,
         player_names={int(pid): str(name) for pid, name in player_names.items() if name},
         facts={int(fact.id): fact for fact in active},
+        records_by_number={int(rec.number): rec for rec in game_records},
         default_scope=scope,
         recent_two_session_ids=tuple(int(sid) for sid in recent_two_session_ids[:2]),
         second_recent_started_ms=int(second_recent_started_ms),
@@ -254,6 +300,67 @@ def _number(raw: Any, prefix: str) -> Optional[int]:
             text = text[len(head) :]
             break
     return int(text) if text.isdigit() else None
+
+
+def _parse_record_digits(raw: Any) -> Optional[int]:
+    """把游戏记录编号（"记录#14"、"记录14"、"#14"、14）解析为正整数，无法识别返回 None。"""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    text = str(raw).strip().replace(" ", "")
+    for head in (_RECORD_PREFIX, "记录", "#"):
+        if text.startswith(head):
+            text = text[len(head) :]
+            break
+    return int(text) if text.isdigit() else None
+
+
+def _parse_record_ref(raw_chat: Any, raw_record: Any) -> Tuple[bool, Optional[int]]:
+    """判断一条事实是否声明了游戏记录证据（chat 写“记录#N”或显式填 record 字段）。"""
+    if isinstance(raw_chat, str) and raw_chat.strip().replace(" ", "").startswith("记录"):
+        return True, _parse_record_digits(raw_chat)
+    if raw_chat in (None, "") and raw_record not in (None, ""):
+        return True, _parse_record_digits(raw_record)
+    return False, None
+
+
+def _build_player_name_index(player_names: Mapping[int, str]) -> Dict[str, Tuple[int, ...]]:
+    """构造忽略前后空格与大小写的玩家真名反查表（真名小写 → 候选玩家主键元组）。"""
+    grouped: Dict[str, List[int]] = {}
+    for player_id, name in player_names.items():
+        key = (name or "").strip().casefold()
+        if not key:
+            continue
+        bucket = grouped.setdefault(key, [])
+        pid = int(player_id)
+        if pid not in bucket:
+            bucket.append(pid)
+    return {key: tuple(ids) for key, ids in grouped.items()}
+
+
+def _resolve_interaction_player(
+    raw_player: Any,
+    *,
+    codes: Mapping[str, int],
+    names_by_lower: Mapping[str, Tuple[int, ...]],
+    line_player_id: Optional[int],
+) -> Optional[int]:
+    """解析互动条目指向的玩家主键：优先匹配“玩家N”代号，未命中时按玩家真名（容忍前后空格与大小写）反查。"""
+    trimmed = str(raw_player or "").strip()
+    if not trimmed:
+        return None
+    code_key = trimmed.replace(" ", "")
+    if code_key.isdigit():
+        code_key = f"{_PLAYER_PREFIX}{code_key}"
+    if code_key in codes:
+        return codes[code_key]
+    candidates = names_by_lower.get(trimmed.casefold(), ())
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1 and line_player_id is not None and int(line_player_id) in candidates:
+        return int(line_player_id)
+    return None
 
 
 def _miss(check: SocialCheck, what: str, quote: str, reason: str) -> None:
@@ -278,28 +385,70 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         if kind not in SOCIAL_FACT_KINDS or not text or len(text) > _TEXT_MAX_CHARS:
             _miss(check, text, quote, f"类别不是六类之一，或事实为空、超过 {_TEXT_MAX_CHARS} 字")
             continue
-        chat_number = _number(raw.get("chat"), _CHAT_PREFIX)
-        line = material.chat_by_number.get(chat_number) if chat_number is not None else None
-        if raw.get("chat") not in (None, "") and line is None:
-            _miss(check, text, quote, "引的不是给出的玩家公屏")
-            continue
-        if line is None and kind not in QUOTE_OPTIONAL_KINDS:
-            _miss(check, text, quote, "这一类必须引一句玩家公屏作依据")
-            continue
+        raw_chat = raw.get("chat")
+        raw_record = raw.get("record")
+        is_record_ref, record_number = _parse_record_ref(raw_chat, raw_record)
+        line: Optional[GameChatLine] = None
         verified = ""
-        if line is not None:
-            checked = verbatim_quote(quote, line.content, _QUOTE_MAX_CHARS)
+        supersedes = _number(raw.get("supersedes"), _FACT_PREFIX)
+        if is_record_ref:
+            # 仅针对 works 且正在取代有效现行条目的结案/进度更新场景，放行经核实的游戏记录作证，
+            # 避免自主完工/复活因无玩家公屏复述而永远无法结案旧账
+            if kind != "works":
+                _miss(check, text, quote, "引的不是给出的玩家公屏")
+                continue
+            if raw.get("supersedes") not in (None, "") and supersedes is None:
+                _miss(check, text, quote, "取代的编号认不出")
+                continue
+            if supersedes is None:
+                _miss(check, text, quote, "新建记着的事须引玩家公屏，只有取代既有事实才可用游戏记录作证")
+                continue
+            old = material.facts.get(supersedes)
+            if old is None or supersedes in superseded:
+                _miss(check, text, quote, f"{_FACT_PREFIX}{supersedes} 不是给出的现行事实（或这一场已经取代过）")
+                continue
+            if old.human_locked:
+                _miss(check, text, quote, f"{_FACT_PREFIX}{supersedes} 是运营者定的，不能取代")
+                continue
+            if old.kind != kind:
+                _miss(check, text, quote, f"{_FACT_PREFIX}{supersedes} 不是同一类，取代只在同类之间")
+                continue
+            record = material.records_by_number.get(record_number) if record_number is not None else None
+            if record is None:
+                _miss(check, text, quote, "引的不是给出的游戏记录")
+                continue
+            if not record.proves:
+                _miss(check, text, quote, "引的游戏记录未做成，不能作证")
+                continue
+            if old.game and record.game and record.game.lower() != old.game.lower():
+                _miss(check, text, quote, "引的游戏记录与被取代事实不是同一个游戏")
+                continue
+            checked = verbatim_quote(quote, record.text, _QUOTE_MAX_CHARS)
             if checked is None:
-                _miss(check, text, quote, f"原话不是{_CHAT_PREFIX}{chat_number}那句一字不差的片段")
+                _miss(check, text, quote, f"原话不是{_RECORD_PREFIX}{record_number}那条一字不差的片段")
                 continue
             verified = checked
-        elif quote:
-            _miss(check, text, quote, "写了原话却没引是哪句公屏")
-            continue
-        supersedes = _number(raw.get("supersedes"), _FACT_PREFIX)
-        if raw.get("supersedes") not in (None, "") and supersedes is None:
-            _miss(check, text, quote, "取代的编号认不出")
-            continue
+        else:
+            chat_number = _number(raw_chat, _CHAT_PREFIX)
+            line = material.chat_by_number.get(chat_number) if chat_number is not None else None
+            if raw_chat not in (None, "") and line is None:
+                _miss(check, text, quote, "引的不是给出的玩家公屏")
+                continue
+            if line is None and kind not in QUOTE_OPTIONAL_KINDS:
+                _miss(check, text, quote, "这一类必须引一句玩家公屏作依据")
+                continue
+            if line is not None:
+                checked = verbatim_quote(quote, line.content, _QUOTE_MAX_CHARS)
+                if checked is None:
+                    _miss(check, text, quote, f"原话不是{_CHAT_PREFIX}{chat_number}那句一字不差的片段")
+                    continue
+                verified = checked
+            elif quote:
+                _miss(check, text, quote, "写了原话却没引是哪句公屏")
+                continue
+            if raw.get("supersedes") not in (None, "") and supersedes is None:
+                _miss(check, text, quote, "取代的编号认不出")
+                continue
         if line is not None:
             scope = (line.game, line.save_id, line.save_name)
         elif supersedes is not None and supersedes in material.facts:
@@ -322,8 +471,8 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         else:
             key = (scope[0], scope[1], kind)
             if counts.get(key, 0) >= MAX_FACTS_PER_KIND:
-                stale_candidates = (
-                    [
+                if kind == "works":
+                    stale_candidates = [
                         old_f
                         for old_f in material.facts.values()
                         if old_f.id not in superseded
@@ -336,13 +485,46 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
                             second_recent_started_ms=material.second_recent_started_ms,
                         )
                     ]
-                    if kind == "works"
-                    else []
-                )
-                if stale_candidates:
-                    oldest_stale = min(stale_candidates, key=lambda item: (item.updated_at_ms, item.id))
-                    supersedes = int(oldest_stale.id)
-                    superseded.add(supersedes)
+                    if stale_candidates:
+                        oldest_stale = min(stale_candidates, key=lambda item: (item.updated_at_ms, item.id))
+                        supersedes = int(oldest_stale.id)
+                        superseded.add(supersedes)
+                    else:
+                        _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
+                        continue
+                elif kind in _AUTO_EVICT_KINDS and line is not None:
+                    # 满额的共享惯例/环境形态/待弄清在收到带玩家公屏逐字原话证据的新事实时，
+                    # 按“非本场优先 -> 最后证实时刻最早 -> 更早场次 -> 更小行号”自动腾退最旧未锁定条目，
+                    # 防止模型漏填 supersedes 导致服务器关键规矩被静默丢弃
+                    evict_candidates = [
+                        old_f
+                        for old_f in material.facts.values()
+                        if old_f.id not in superseded
+                        and not old_f.human_locked
+                        and old_f.kind == kind
+                        and old_f.game == scope[0]
+                        and old_f.save_id == scope[1]
+                    ]
+                    if evict_candidates:
+                        oldest_unlocked = min(
+                            evict_candidates,
+                            key=lambda item: (
+                                int(item.updated_session_id or item.created_session_id or 0) == int(live_session_id),
+                                int(item.updated_at_ms),
+                                int(item.updated_session_id or item.created_session_id or 0),
+                                int(item.id),
+                            ),
+                        )
+                        supersedes = int(oldest_unlocked.id)
+                        superseded.add(supersedes)
+                        logger.info(
+                            f"场次 {live_session_id} 社交事实[{_KIND_LABELS[kind]}]已满 {MAX_FACTS_PER_KIND} 条，"
+                            f"自动以公屏证据新事实取代最旧未锁定条目 {_FACT_PREFIX}{supersedes}："
+                            f"「{oldest_unlocked.text}」->「{material.restore_names(text)}」"
+                        )
+                    else:
+                        _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
+                        continue
                 else:
                     _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
                     continue
@@ -364,6 +546,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         )
 
     codes = {code: player_id for player_id, code in material.player_codes.items()}
+    names_by_lower = _build_player_name_index(material.player_names)
     interactions = data.get("interactions")
     for raw in interactions if isinstance(interactions, list) else []:
         if not isinstance(raw, dict):
@@ -371,12 +554,15 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         kind = str(raw.get("kind") or "").strip()
         what = str(raw.get("what") or "").strip()[:_WHAT_MAX_CHARS]
         quote = str(raw.get("quote") or "").strip()
-        player_raw = str(raw.get("player") or "").strip().replace(" ", "")
-        if player_raw.isdigit():
-            player_raw = f"{_PLAYER_PREFIX}{player_raw}"
-        player_id = codes.get(player_raw)
         chat_number = _number(raw.get("chat"), _CHAT_PREFIX)
         line = material.chat_by_number.get(chat_number) if chat_number is not None else None
+        # 既接受“玩家N”代号，也兼容按真名（忽略前后空格与大小写）反查，避免模型填真名被一律误杀
+        player_id = _resolve_interaction_player(
+            raw.get("player"),
+            codes=codes,
+            names_by_lower=names_by_lower,
+            line_player_id=line.player_id if line is not None else None,
+        )
         if kind not in (INTERACTION_TOGETHER, INTERACTION_HELPED) or not what:
             _miss(check, what, quote, "互动只收一起做的事（together）与帮过忙（helped），且要写做了什么")
             continue

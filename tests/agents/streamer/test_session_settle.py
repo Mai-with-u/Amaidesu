@@ -26,7 +26,7 @@ from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import NewCueLogEntry, SettleReport
 from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
-from tests.modules.llm.fakes import FakeLLMManager
+from tests.modules.llm.fakes import FakeLLMManager, FakeStream, chunk, engine_with, make_openai_client, usage
 
 
 @pytest.fixture(scope="module")
@@ -2157,6 +2157,51 @@ async def test_settle_reasoning_effort_override_and_narrow_stub_compatibility(
     settler_narrow = _settler(store, narrow_llm, prompt_manager)
     assert await settler_narrow.settle_session(session_b) is True
     assert narrow_llm.call_count == 2
+
+
+async def test_settle_respects_profile_reasoning_effort_and_falls_back_to_low_when_unset(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """未显式传构造参数时：若 model.toml 的 settle 档位已配 reasoning_effort（如 none）则尊重配置；留空时兜底 low。"""
+    # 场景 1：settle 档位显式配了 reasoning_effort="none" 且指向 DeepSeek → 不被默认 low 覆盖，流式请求翻译为 thinking.disabled
+    session_a = await _ended_session(store, started_at_ms=1_000)
+    await _speech(store, session_a, "今天顺利下播啦", timestamp_ms=1_100)
+    client_ds, sdk_ds = make_openai_client({"base_url": "https://api.deepseek.com"})
+    sdk_ds.chat.completions.create.side_effect = [
+        FakeStream([chunk(content='{"archive": []}'), chunk(usage=usage(10, 5))]),
+        FakeStream([chunk(content='{"commitments": []}'), chunk(usage=usage(10, 5))]),
+    ]
+    async with engine_with(
+        client_ds,
+        {"settle": {"temperature": 0.3, "reasoning_effort": "none"}},
+        base_url="https://api.deepseek.com",
+    ) as manager:
+        settler = _settler(store, manager, prompt_manager)
+        assert await settler.settle_session(session_a) is True
+    assert sdk_ds.chat.completions.create.await_count == 2
+    for call in sdk_ds.chat.completions.create.await_args_list:
+        assert "reasoning_effort" not in call.kwargs
+        assert call.kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+
+    # 场景 2：settle 档位 reasoning_effort 为空串（未配置）→ 兜底透传 low 到 SDK
+    session_b = await _ended_session(store, started_at_ms=5_000)
+    await _speech(store, session_b, "明天继续造房子", timestamp_ms=5_100)
+    client_low, sdk_low = make_openai_client({"base_url": "https://api.deepseek.com"})
+    sdk_low.chat.completions.create.side_effect = [
+        FakeStream([chunk(content='{"archive": []}'), chunk(usage=usage(10, 5))]),
+        FakeStream([chunk(content='{"commitments": []}'), chunk(usage=usage(10, 5))]),
+    ]
+    async with engine_with(
+        client_low,
+        {"settle": {"temperature": 0.3, "reasoning_effort": ""}},
+        base_url="https://api.deepseek.com",
+    ) as manager:
+        settler = _settler(store, manager, prompt_manager)
+        assert await settler.settle_session(session_b) is True
+    assert [call.kwargs.get("reasoning_effort") for call in sdk_low.chat.completions.create.await_args_list] == [
+        "low",
+        "low",
+    ]
 
 
 async def test_settle_cancel_reaps_parallel_step_tasks_cleanly(tmp_path: Path, prompt_manager: PromptManager) -> None:

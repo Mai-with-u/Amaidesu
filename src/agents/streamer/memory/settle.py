@@ -154,8 +154,11 @@ logger = get_logger("SessionSettler")
 
 # 下播整理单独的模型档位：一场只调几次，可以单独换更强的模型而不影响直播里的话题总结
 SETTLE_PROFILE = "settle"
-# 下播整理默认思考强度：整理任务是按规则抽取与核对，默认压到 low 避免推理模型单笔狂想数万字超时
+# 下播整理默认思考强度：整理任务是按规则抽取与核对，当 model.toml 未为 settle 档位配置思考强度时
+# 兜底压到 low 避免推理模型单笔狂想数万字超时；若配置了显式档位（如 none/high），优先尊重配置
 DEFAULT_SETTLE_REASONING_EFFORT = "low"
+# 构造参数哨兵：区分"调用方未传 reasoning_effort（优先读 profile 配置、为空再兜底 low）"与"显式传 None 禁用覆写"
+_UNSET_REASONING_EFFORT: Any = object()
 
 # 三份系统提示词（正文见 src/agents/streamer/prompts/）
 _ARCHIVE_TEMPLATE = "memory_archive_system"
@@ -817,7 +820,7 @@ class SessionSettler:
         social_fact_repo: Optional["SocialFactRepo"] = None,
         correction_repo: Optional[MemoryCorrectionRepo] = None,
         viewer_repo: Optional[ViewerRepo] = None,
-        reasoning_effort: Optional[str] = DEFAULT_SETTLE_REASONING_EFFORT,
+        reasoning_effort: Any = _UNSET_REASONING_EFFORT,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
@@ -827,8 +830,8 @@ class SessionSettler:
         的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与公屏，
         对玩家的承诺一条也认不出（模型写了也进未登记）。cue_log_repo 缺失时唠叨指标只按台词
         点名算，线索卡那几项为空；social_fact_repo 缺失时不跑第四次调用（不更新游戏社交事实）；task_registry 是后台任务登记处（缺省 None
-        时整理不登记，前端面板看不到这次整理，其余行为一致）；reasoning_effort 缺省为 low，
-        控制整理调用的推理思考强度，传 None 或空串时回退到 settle 档位默认值。
+        时整理不登记，前端面板看不到这次整理，其余行为一致）；reasoning_effort 未传时优先尊重
+        settle 档位配置（若档位留空再兜底 low 避免推理失控），显式传 None 或空串时不下发覆盖参数。
         """
         self._sessions = sessions_repo
         self._chat = chat_repo
@@ -849,9 +852,13 @@ class SessionSettler:
         self._min_session_ms = max(0, int(min_session_ms))
         self._task_registry = task_registry
         self._clock = clock
-        self._reasoning_effort: Optional[str] = (
-            reasoning_effort.strip() if isinstance(reasoning_effort, str) and reasoning_effort.strip() else None
-        )
+        self._reasoning_effort_explicit: bool = reasoning_effort is not _UNSET_REASONING_EFFORT
+        if not self._reasoning_effort_explicit:
+            self._reasoning_effort: Optional[str] = DEFAULT_SETTLE_REASONING_EFFORT
+        else:
+            self._reasoning_effort = (
+                reasoning_effort.strip() if isinstance(reasoning_effort, str) and reasoning_effort.strip() else None
+            )
         # 并发模型步骤返回后经此锁串行写断点，避免 SQLite 并发写库锁冲突
         self._checkpoint_lock: asyncio.Lock = asyncio.Lock()
         # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
@@ -1415,6 +1422,7 @@ class SessionSettler:
             current_session_id=int(session.id),
             recent_two_session_ids=recent_two_ids,
             second_recent_started_ms=second_started_ms,
+            game_records=records,
         )
 
     async def _load_game_records(self, session: LiveSession) -> List[GameRecord]:
@@ -2099,6 +2107,22 @@ class SessionSettler:
         """渲染系统提示词并调一次模型，返回解析出的 JSON 对象。"""
         return parse_json_object(await self._ask_text(template=template, prompt=prompt, on_delta=on_delta))
 
+    def _resolve_reasoning_effort(self) -> Optional[str]:
+        """解析本次下播整理要透传的思考强度：显式构造参数优先；未显式传入时先尊重 settle 档位配置，配置留空再兜底 low。"""
+        if self._reasoning_effort_explicit:
+            return self._reasoning_effort
+        getter = getattr(self._llm, "get_profile_reasoning_effort", None)
+        if callable(getter):
+            try:
+                configured = getter(SETTLE_PROFILE)
+                if isinstance(configured, str) and configured.strip():
+                    # 运营者已在 model.toml 的 [llm_profiles.settle] 显式设定思考档位（如 none/minimal/high），
+                    # 不再用代码默认值覆写，直接交由 LLMManager 按档位配置下发
+                    return None
+            except Exception as exc:  # noqa: BLE001 - 查询档位配置失败时回退默认 low，不阻断整理
+                logger.debug(f"查询 {SETTLE_PROFILE} 思考强度档位失败，回退默认值: {exc}")
+        return self._reasoning_effort
+
     async def _ask_text(
         self, *, template: str, prompt: str, on_delta: Optional[Callable[[str, str], None]] = None
     ) -> str:
@@ -2107,14 +2131,15 @@ class SessionSettler:
         ``on_delta`` 非 None 时模型走流式传输，边生成边回调输出增量；整理阶段据此
         判断模型还在动（客户端不支持流式时自动降级为一次性调用，回调不触发）。
         没有回调时不下发这个参数，调用方不必支持流式。支持 ``reasoning_effort`` 的
-        模型入口同时透传受控思考强度（默认 ``low``），避免整理调用单笔思考失控超时。
+        模型入口同时透传受控思考强度（优先尊重 settle 档位配置，未配置时兜底 ``low``）。
         """
         system = self._prompt_manager.render(template)
         call_kwargs: Dict[str, Any] = {"profile": SETTLE_PROFILE, "system": system}
         if on_delta is not None and _supports_kwarg(self._llm.generate, "on_delta"):
             call_kwargs["on_delta"] = on_delta
-        if self._reasoning_effort is not None and _supports_kwarg(self._llm.generate, "reasoning_effort"):
-            call_kwargs["reasoning_effort"] = self._reasoning_effort
+        effort = self._resolve_reasoning_effort()
+        if effort is not None and _supports_kwarg(self._llm.generate, "reasoning_effort"):
+            call_kwargs["reasoning_effort"] = effort
         try:
             response = await self._llm.generate(prompt, **call_kwargs)
         except Exception as exc:  # noqa: BLE001 - 调用异常统一转成整理失败原因
