@@ -54,6 +54,9 @@ logger = get_logger("LeadCoordinator")
 # 主播 Agent 的框架级默认主控名（无游戏主控时的唯一回落身份）
 STREAMER_AGENT_NAME = "streamer"
 
+# 游戏主控期流程单超时提醒默认节流间隔（毫秒）：每 5 分钟至多推送 1 次，避免刷屏干扰推理
+DEFAULT_RUNDOWN_NUDGE_INTERVAL_MS = 300_000
+
 LeadMode = Literal["streamer", "game"]
 LeadOverride = Union[Literal["auto", "streamer"], str]
 
@@ -165,6 +168,9 @@ class LeadCoordinator:
         self._passive_cue_provider: Optional[PassiveCueProvider] = None
         self._lead_changed_listeners: List[LeadChangedListener] = []
         self._ready_listeners: List[AgentReadyListener] = []
+        # 流程单超时提醒节流状态（上次推送时刻与对应环节 id；切段或主控变更时自动清零）
+        self._last_rundown_nudge_ms: Optional[int] = None
+        self._last_rundown_nudge_segment_id: str = ""
 
     # -------------------- 只读状态与候选发现 --------------------
 
@@ -534,6 +540,9 @@ class LeadCoordinator:
         self._active_lead_agent = target_name
         self._since_ms = ts
         self._reason = reason
+        # 进入新游戏主控时重置流程单超时提醒节流，避免受上一任主控节流窗口影响
+        self._last_rundown_nudge_ms = None
+        self._last_rundown_nudge_segment_id = ""
         handover_summary = handover_ctx.segment_goal or handover_ctx.segment_title or ""
         emitted.append(
             AgentLeadChangedPayload(
@@ -575,6 +584,9 @@ class LeadCoordinator:
         self._active_lead_agent = None
         self._since_ms = ts
         self._reason = reason
+        # 收回主播主控时重置流程单超时提醒节流状态
+        self._last_rundown_nudge_ms = None
+        self._last_rundown_nudge_segment_id = ""
         emitted.append(
             AgentLeadChangedPayload(
                 lead_agent=STREAMER_AGENT_NAME,
@@ -769,11 +781,66 @@ class LeadCoordinator:
                 segment_goal=(segment_goal or "").strip(),
                 expected_ms=max(0, int(expected_ms)),
             )
+            # 流程单切段或续期刷新后重置超时提醒节流状态，下一段超时时立即允许提醒
+            self._last_rundown_nudge_ms = None
+            self._last_rundown_nudge_segment_id = ""
         except Exception as exc:  # noqa: BLE001 - 环节同步旁路异常隔离，不阻断流程单与主控主链
             logger.warning(
                 f"向主控游戏 '{self._active_lead_agent}' 同步流程单环节失败（已忽略）: {exc}",
                 exc=True,
             )
+
+    def publish_rundown_nudge(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        elapsed_ms: int = 0,
+        expected_ms: int = 0,
+        next_segment_id: str = "",
+        next_segment_title: str = "",
+        min_interval_ms: int = DEFAULT_RUNDOWN_NUDGE_INTERVAL_MS,
+    ) -> bool:
+        """向当前主控游戏 Agent 节流推送流程单环节到期/超时提醒（异常隔离、零硬编码游戏名）。
+
+        触发条件：游戏自主主控期当前非杂谈环节进入超时状态时调用；
+        动作与边界：仅在处于游戏主控态且主控 Agent 在名册中时生效；同一环节在
+        ``min_interval_ms``（默认 5 分钟）内至多推送 1 次防刷屏，切换至新环节 id 时
+        不受旧环节冷却约束。投递成功返回 True，未投递或处于节流窗口返回 False。
+        """
+        if not self.is_game_lead or self._active_lead_agent is None:
+            return False
+        seg_id = (segment_id or "").strip()
+        interval = max(0, int(min_interval_ms))
+        now = self._clock()
+        if (
+            interval > 0
+            and self._last_rundown_nudge_ms is not None
+            and seg_id == self._last_rundown_nudge_segment_id
+            and (now - self._last_rundown_nudge_ms) < interval
+        ):
+            return False
+        agent: Optional[BaseAgent] = self._agent_manager.get_agent_by_name(self._active_lead_agent)
+        if agent is None:
+            return False
+        try:
+            agent.receive_rundown_nudge(
+                segment_id=seg_id,
+                segment_title=(segment_title or "").strip(),
+                elapsed_ms=max(0, int(elapsed_ms or 0)),
+                expected_ms=max(0, int(expected_ms or 0)),
+                next_segment_id=(next_segment_id or "").strip(),
+                next_segment_title=(next_segment_title or "").strip(),
+            )
+            self._last_rundown_nudge_ms = now
+            self._last_rundown_nudge_segment_id = seg_id
+            return True
+        except Exception as exc:  # noqa: BLE001 - 流程单超时提醒旁路异常隔离，不阻断主循环
+            logger.warning(
+                f"向主控游戏 '{self._active_lead_agent}' 发送流程单超时提醒失败（已忽略）: {exc}",
+                exc=True,
+            )
+            return False
 
     def publish_silence_nudge(self, *, silent_ms: int) -> bool:
         """向当前主控游戏 Agent 发送直播间静默暖场提醒（异常隔离、零硬编码游戏名）。
@@ -976,6 +1043,7 @@ class LeadCoordinator:
 
 __all__ = [
     "STREAMER_AGENT_NAME",
+    "DEFAULT_RUNDOWN_NUDGE_INTERVAL_MS",
     "LeadMode",
     "LeadOverride",
     "LeadHandoverContext",

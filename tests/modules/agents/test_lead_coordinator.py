@@ -1188,3 +1188,97 @@ async def test_factory_injects_embedding_setup_into_minecraft_agent() -> None:
     assert agent is not None
     assert agent.name == "minecraft"
     assert list(await agent.query_short_term_memory("水车")) == []
+
+
+async def test_publish_rundown_nudge_throttles_per_segment_and_resets_on_update(fake_clock: Any) -> None:
+    """publish_rundown_nudge 仅在游戏主控态生效，同环节 5 分钟内节流不重复推送，切段或更新后立即放行。"""
+
+    class _NudgeGameAgent(BaseAgent):
+        name = "solo_game"
+        description = "测流程单超时推送"
+        supports_autonomous_lead = True
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.nudges: List[Dict[str, Any]] = []
+
+        def list_tools(self) -> Iterable[ToolSpec]:
+            return []
+
+        def can_take_lead(self) -> bool:
+            return True
+
+        async def enter_lead(self, context: LeadHandoverContext) -> bool:
+            del context
+            return True
+
+        async def yield_lead(self, *, reason: str = "") -> str:
+            del reason
+            return ""
+
+        def receive_rundown_nudge(
+            self,
+            *,
+            segment_id: str = "",
+            segment_title: str = "",
+            elapsed_ms: int = 0,
+            expected_ms: int = 0,
+            next_segment_id: str = "",
+            next_segment_title: str = "",
+        ) -> None:
+            self.nudges.append(
+                {
+                    "segment_id": segment_id,
+                    "segment_title": segment_title,
+                    "elapsed_ms": elapsed_ms,
+                    "expected_ms": expected_ms,
+                    "next_segment_id": next_segment_id,
+                    "next_segment_title": next_segment_title,
+                }
+            )
+
+    mgr = AgentManager()
+    game = _NudgeGameAgent()
+    mgr.register(game)
+    await mgr.start_all()
+    coord = LeadCoordinator(mgr, clock=fake_clock.now_ms)
+
+    # 非游戏主控态不推送
+    assert coord.publish_rundown_nudge(segment_id="play_1", segment_title="主线探索", elapsed_ms=900_000) is False
+    assert game.nudges == []
+
+    # 切入游戏主控后首次推送成功
+    assert await coord.request_game_lead(LeadHandoverContext(segment_id="play_1"), target="solo_game") == "solo_game"
+    assert (
+        coord.publish_rundown_nudge(
+            segment_id="play_1",
+            segment_title="主线探索",
+            elapsed_ms=960_000,
+            expected_ms=900_000,
+            next_segment_id="closing",
+            next_segment_title="收尾告别",
+        )
+        is True
+    )
+    assert len(game.nudges) == 1
+    assert game.nudges[0]["next_segment_id"] == "closing"
+
+    # 默认 5 分钟（300_000ms）节流期内同环节不重复推送
+    fake_clock.tick(299_999)
+    assert coord.publish_rundown_nudge(segment_id="play_1", segment_title="主线探索", elapsed_ms=1_260_000) is False
+    assert len(game.nudges) == 1
+
+    # 满 5 分钟后再次推送成功
+    fake_clock.tick(1)
+    assert coord.publish_rundown_nudge(segment_id="play_1", segment_title="主线探索", elapsed_ms=1_260_000) is True
+    assert len(game.nudges) == 2
+
+    # 切到新环节 id 或收到 publish_rundown_update 后立即可推，不受旧环节冷却阻碍
+    assert coord.publish_rundown_nudge(segment_id="play_2", segment_title="建仓库", elapsed_ms=660_000) is True
+    assert len(game.nudges) == 3
+
+    coord.publish_rundown_update(segment_id="play_2", segment_title="建仓库", segment_goal="续期", expected_ms=600_000)
+    assert coord.publish_rundown_nudge(segment_id="play_2", segment_title="建仓库", elapsed_ms=660_000) is True
+    assert len(game.nudges) == 4
+
+    await mgr.stop_all()

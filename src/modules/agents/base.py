@@ -368,6 +368,25 @@ class BaseAgent(abc.ABC):
         del silent_ms
         return None
 
+    def receive_rundown_nudge(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        elapsed_ms: int = 0,
+        expected_ms: int = 0,
+        next_segment_id: str = "",
+        next_segment_title: str = "",
+    ) -> None:
+        """接收流程单环节到期/超时提醒（纯同步旁路写入，默认空操作）。
+
+        触发条件：处于游戏自主主控期间流程单当前非杂谈环节停留超期时，
+        由动态主从协调器按节流间隔通知当前主控游戏 Agent，提示其自主调用
+        ``rundown_control`` 选择切换下一环节（``next``）或为本环节续期（``renew``）。
+        """
+        del segment_id, segment_title, elapsed_ms, expected_ms, next_segment_id, next_segment_title
+        return None
+
     async def receive_suggestion(
         self,
         content: str,
