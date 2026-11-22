@@ -66,7 +66,9 @@ class LiveChatMessage(BaseModel):
     utterance_id: Optional[str] = Field(default=None, description="主播发言全链路关联键（与 tts.utterance.* 共用）")
     dropped_at_ms: Optional[int] = Field(default=None, description="播放队列确知未送达观众面前的时刻；None 表示已送达")
     memory_refs: Optional[str] = Field(default=None, description="本句点名引用的记忆编号列表 JSON（如 ['约#7']）")
-    emotion: Optional[str] = Field(default=None, description="主播发言行的情绪标签（Emotion 枚举值）；观众行与旧数据为 None")
+    emotion: Optional[str] = Field(
+        default=None, description="主播发言行的情绪标签（Emotion 枚举值）；观众行与旧数据为 None"
+    )
     emotion_intensity: Optional[float] = Field(
         default=None, description="主播发言行的情绪强度 0.0~1.0；观众行与旧数据为 None"
     )

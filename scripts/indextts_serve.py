@@ -42,11 +42,15 @@ import threading
 import time
 
 parser = argparse.ArgumentParser(description=__doc__.split("\n")[0] if __doc__ else "")
-parser.add_argument("--index-tts-dir", required=True, help="IndexTTS 官方仓库检出根目录（含 indextts/ 与 checkpoints/）")
+parser.add_argument(
+    "--index-tts-dir", required=True, help="IndexTTS 官方仓库检出根目录（含 indextts/ 与 checkpoints/）"
+)
 parser.add_argument("--port", type=int, default=9888)
 parser.add_argument("--ref", required=True, help="说话人参考音频路径（音色由它决定，服务启动后固定）")
 parser.add_argument("--lang", default="zh", help="合成语言（zh/zhen/en/ja/es/ar）")
-parser.add_argument("--qwen-emo-cpu", action="store_true", help="加载 QwenEmotion 到 CPU（实验：emotion_auto 请求由台词现算情绪向量）")
+parser.add_argument(
+    "--qwen-emo-cpu", action="store_true", help="加载 QwenEmotion 到 CPU（实验：emotion_auto 请求由台词现算情绪向量）"
+)
 args = parser.parse_args()
 
 # 官方推理包在 import 时按相对路径定位缓存目录，必须先切工作目录再导入
@@ -170,9 +174,13 @@ def _wav_stream_header() -> bytes:
     riff_size = 0xFFFFFFFF - 8
     data_size = 0xFFFFFFFF - 44
     return (
-        b"RIFF" + struct.pack("<I", riff_size) + b"WAVE"
-        + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, SR, byte_rate, block_align, 16)
-        + b"data" + struct.pack("<I", data_size)
+        b"RIFF"
+        + struct.pack("<I", riff_size)
+        + b"WAVE"
+        + b"fmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, SR, byte_rate, block_align, 16)
+        + b"data"
+        + struct.pack("<I", data_size)
     )
 
 
@@ -187,8 +195,11 @@ def tts(req: TtsRequest) -> Response:
     emo_vector, detected = _resolve_emo_vector(req)
     with _LOCK:
         TTS.infer(
-            spk_audio_prompt=args.ref, text=req.text, output_path=out_path,
-            lang=args.lang, emo_vector=emo_vector,
+            spk_audio_prompt=args.ref,
+            text=req.text,
+            output_path=out_path,
+            lang=args.lang,
+            emo_vector=emo_vector,
         )
     with open(out_path, "rb") as f:
         data = f.read()
@@ -206,8 +217,12 @@ def tts_stream(req: TtsRequest) -> Response:
         with _LOCK:
             yield _wav_stream_header()
             for wav in TTS.infer(
-                spk_audio_prompt=args.ref, text=req.text, output_path=None,
-                lang=args.lang, emo_vector=emo_vector, stream_return=True,
+                spk_audio_prompt=args.ref,
+                text=req.text,
+                output_path=None,
+                lang=args.lang,
+                emo_vector=emo_vector,
+                stream_return=True,
                 max_text_tokens_per_segment=req.seg_tokens or 120,
             ):
                 pcm = wav.to(torch.int16).numpy().tobytes()
