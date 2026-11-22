@@ -1,23 +1,27 @@
 # MinecraftAgent 设计
 
-Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 的 MCP 工具玩 Minecraft 的 ReAct Agent——既是**委派型**（主播交代目标，游戏侧自带 LLM 拆解），也支持**自主领航型**（游玩期接管游戏内主导权，自驱规划、执行与游戏公屏社交）。两种形态与遥控型的定类见 [ADR-043：游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md) 与 [ADR-081：游玩期动态主从移交](../decisions/081-dynamic-lead-handover.md)。
+Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 的 MCP 工具玩 Minecraft 的 ReAct Agent——既是**委派型**（主播交代目标，游戏侧自带 LLM 拆解），也支持**自主领航型**（游玩期接管游戏内主导权，自驱规划、执行与游戏公屏社交）。
+
+两种形态与遥控型的定类见 [ADR-043：游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md) 与 [ADR-081：游玩期动态主从移交](../decisions/081-dynamic-lead-handover.md)。
 
 ## 驱动原则
 
 - 基础形态仍是命令驱动（类 Code Agent）：委派或递话唤醒任务循环，完成即停、空闲零消耗——空闲时只有附属采集器与事件长轮询，没有 LLM 调用
-- 配置 `lead_mode = "dynamic"` 时，游玩环节主播可把游戏内主导权移交给本 Agent，进入**自主领航态**：不再被动等委派，持续自驱（见下文[主控权交出与收回](#主控权交出与收回)）；`lead_mode = "streamer_only"` 时 100% 退回主播常驻主控的委派模式
+- 配置 `lead_mode = "dynamic"` 时，游玩环节主播可把游戏内主导权移交给本 Agent，进入**自主领航态**：不再被动等委派，持续自驱（见下文[主控权交出与收回](#主控权交出与收回)）
+- 配置 `lead_mode = "streamer_only"` 时 100% 退回主播常驻主控的委派模式
 - 因有自身状态与任务内自主决策，游戏 Agent 是 Agent 而非工具（三分判据见 [v2-architecture.md](v2-architecture.md)）
 - 主播 Agent 是它的用户（主播主控态）：
   - 发指令：跨 Agent 派活走框架委派 `framework_delegate`，中途插话走递话 `framework_prompt`，非强杀建议走 `framework_suggest`
   - 读工作文档：`minecraft_get_work_log`
   - 看一眼游戏：`minecraft_glance`
   - 收上报：`game.report`
-- 游戏 Agent 与主播 Agent 各读各的输入：直播间行为流只进主播，游戏内采集流（游戏公屏、身体事件）只进游戏侧——谁主控谁消费（[ADR-081](../decisions/081-dynamic-lead-handover.md) 五束连线契约）；框架层不出现游戏名（[ADR-018：游戏无关边界](../decisions/018-game-agnostic-boundary.md)）
+- 游戏 Agent 与主播 Agent 各读各的输入：直播间行为流只进主播，游戏内采集流（游戏公屏、身体事件）只进游戏侧——谁主控谁消费（[ADR-081](../decisions/081-dynamic-lead-handover.md) 五束连线契约）
+- 框架层不出现游戏名（[ADR-018：游戏无关边界](../decisions/018-game-agnostic-boundary.md)）
 - LLM 可一次返回多个 tool_calls（批量请求 → 串行执行 → 批量作为观察返回，标准 function calling 循环）
 
 ## 模块地图
 
-45 个模块按域归组（目录 `src/agents/minecraft/`，职责一句话从模块 docstring 提炼）：
+各模块按域归组（目录 `src/agents/minecraft/`，职责一句话从模块 docstring 提炼）：
 
 **Agent 本体**
 
@@ -54,7 +58,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 
 | 模块 | 职责 |
 |---|---|
-| `chat_gate.py` | 游戏公屏门控：分级唤醒判定、2 秒合并窗、防刷屏冷却、远处旁听滑窗 |
+| `chat_gate.py` | 游戏公屏门控：分级唤醒判定、短合并窗、防刷屏冷却、远处旁听滑窗 |
 | `interaction_throttle.py` | 玩家肢体动作的按人叫醒节流 |
 | `player_body_language.py` | 肢体动作事件读成给主播的一句话与给游戏 Agent 的通知 |
 | `player_interactions.py` | 肢体动作与切磋结果读成结构化台账条目（只落库，`game.player.interacted`） |
@@ -146,7 +150,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 补充规则：
 
 - 在做委派却没调交付就停：先提醒一次"做完了交付、没做成就报卡住"；提醒过仍不交付才记停了没交付
-- 卡住时问主播的问题还没人答、被计时或决策叫醒接着做的批次：停下时重新挂回等定夺，不记成停了没交付；同一问题挂回满 2 次后，计时到点不再叫醒续原任务，只等主播回答（防模型反复自挂计时周期性空转）
+- 卡住时问主播的问题还没人答、被计时或决策叫醒接着做的批次：停下时重新挂回等定夺，不记成停了没交付；同一问题挂回次数达上限（`MAX_REHOLDS_PER_QUESTION`，在 agent.py）后，计时到点不再叫醒续原任务，只等主播回答（防模型反复自挂计时周期性空转）
 - 批内目标全部终态、待办清空、无回炉等待而委派没交付时，按目标回执自动收账（执行方零交付的账面兜底）；目标里有 cancelled 的不自动收账
 - 一整轮只在查询还在跑的目标（`maicraft_goal` get/list）时，先提醒结束这一轮等通知；连续第二轮直接替它让出，不再推理。带 `path` 的 get 是在读结束了的目标里折起来的证据，不算查询
 - 图纸生成完成的瞬间到其通知注入进对话之间有一个窗口，这段窗口按"在跑"对待：此时自然终止不判"停了没交付"
@@ -155,13 +159,15 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 
 - **绝不发 undelivered**——主控态没有委派要交付，"没交付"无从谈起
 - 有在跑目标 / 图纸生成中 / 回炉等待 → 静默让出等事件唤醒
-- 有待回答/暂停目标或未完成待办 → 提醒自主推进；连续空轮达上限（默认 2 轮）后挂起等外部事件，绝不死循环空烧 LLM
-- 确实无事可做 → 进入有界短休眠（默认 30 秒，由事件页巡检到点投递"自主决定下一步"提示）或纯事件等待；收到任何外部事件即清零空转计数
+- 有待回答/暂停目标或未完成待办 → 提醒自主推进；连续空轮达上限（`_LEAD_MAX_EMPTY_TURNS`，在 agent.py）后挂起等外部事件，绝不死循环空烧 LLM
+- 确实无事可做 → 进入有界短休眠（时长 `_LEAD_IDLE_WAKEUP_S`，在 agent.py；由事件页巡检到点投递"自主决定下一步"提示）或纯事件等待；收到任何外部事件即清零空转计数
 - 本步全部只调了 `framework_commentary` 且解说已受理、后台有运行中目标、无新事件排队 → 直接让出等待，不空烧一轮推理
 
 ## 主控权交出与收回（自主领航态）
 
-运行时主控态两态严格二选一：**主播主控态**（默认，覆盖待机、杂谈、遥控型/委派型游戏、下播与降级）与**游戏主控态**（开播 + 流程单处于游玩环节 + 本 Agent 在线健康时进入）。主从移交的调度（`LeadCoordinator`、状态机、12 时刻职责矩阵、Dashboard 手动切换）是框架层机制，见 [dynamic-lead.md](dynamic-lead.md) 与 [ADR-081](../decisions/081-dynamic-lead-handover.md)；这里只写本 Agent 侧的协议与行为差异。
+运行时主控态两态严格二选一：**主播主控态**（默认，覆盖待机、杂谈、遥控型/委派型游戏、下播与降级）与**游戏主控态**（开播 + 流程单处于游玩环节 + 本 Agent 在线健康时进入）。
+
+主从移交的调度（`LeadCoordinator`、状态机、12 时刻职责矩阵、Dashboard 手动切换）是框架层机制，见 [dynamic-lead.md](dynamic-lead.md) 与 [ADR-081](../decisions/081-dynamic-lead-handover.md)；这里只写本 Agent 侧的协议与行为差异。
 
 协议成员（BaseAgent 探测，未覆写即不支持、完全向下兼容）：
 
@@ -191,7 +197,9 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 | MCP 断连 | 挂起等恢复续跑 | 立即降级回主播主控 |
 | 终止 | 见批次终止语义表 | 绝不发 undelivered；防空转计数 + 有界短休眠 |
 
-主控态健康降级：MCP 断连、LLM 致命故障（余额/鉴权/连不上）或连续推理失败达阈值（默认 3 次，冷却 60 秒）时，本 Agent 主动上报协调器降级回主播主控；恢复健康后发就绪通知，`auto` 模式下由协调器重评交回。
+主控态健康降级：MCP 断连、LLM 致命故障（余额/鉴权/连不上）或连续推理失败达阈值（`_LEAD_LLM_FAILURE_THRESHOLD`，恢复冷却 `_LEAD_LLM_COOLDOWN_S`，均在 agent.py）时，本 Agent 主动上报协调器降级回主播主控。
+
+恢复健康后发就绪通知，`auto` 模式下由协调器重评交回。
 
 ### 主控态的上下文增强（尾部只读注入）
 
@@ -201,7 +209,8 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 - **世界设施短目录**：`observe(world_memory)` 压成名称+分类的精简目录树（总条目硬上限，当前维度优先；写档目标在跑或跨维度后标记脏、下一步重读）
 - **主播台词回执**：`[直播间刚说过]`——主播刚对观众说了什么，游戏侧顺带参考、不重复解说；上一步自己刚触发过解说时，剥离自产回声、放行并发到达的外部发言
 - **远处旁听滑窗**：游戏公屏门控拦下的远处非点名消息，行动步顺带扫一眼，绝不主动唤醒
-- **`[脑中闪过]` 被动记忆闪回**：跨场档案（经协调器检索）与本场短期记忆各至多 1 条（合计 ≤2），带短超时保护；三个时机——新任务/接权开局按环节意图检索、流程单切换按新环节意图检索、走近记住的地标按地名检索；排除已展示的公共规矩与近期原话，未命中零字节
+- **`[脑中闪过]` 被动记忆闪回**：跨场档案（经协调器检索）与本场短期记忆的条数各有上限（额度默认值在 agent.py 的闪回拉取处），带短超时保护
+- 闪回时机有三个：新任务/接权开局按环节意图检索、流程单切换按新环节意图检索、走近记住的地标按地名检索；排除已展示的公共规矩与近期原话，未命中零字节
 
 ## 委派账与换活结单契约
 
@@ -212,7 +221,8 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 - **收手纪元隔离**：本 Agent 每次收手推进一个递增纪元号。在途推理或工具返回跨越了一次收手后立即中止收尾——旧批次丢弃回复、刚下达的新目标一并取消，防止旧批次把新单误记进展
 - **停手回执**：急停或撤单之后，把哪些目标停下了、哪个没停住（附原因）、手上的活撤没撤拼成一句，作为 `game.attention_required` 发给主播——主播照播前知道实际停干净没有
 - **账面归属**：批内委派的受理、标 running、写终态统一走 `DelegationBook`（经注入的任务账本写框架账）；目标账本只给批内委派写游戏侧进展备注，不动委派终态——委派终态只由交付上报、撤单、下播兜底写
-- **主播侧决断兜底**（归属主播包 `src/agents/streamer/delegation_stall_watch.py`）：停滞告警按同一委派计数进决策回合材料；停着等定夺的委派连续 N 次告警仍无决断时自动撤单并补场记。排队等待阶段的委派不产生告警材料；running 的委派不自动杀，由活动看门狗与目标停滞通路覆盖
+- **主播侧决断兜底**（归属主播包 `src/agents/streamer/delegation_stall_watch.py`）：停滞告警按同一委派计数进决策回合材料；停着等定夺的委派连续 N 次告警仍无决断时自动撤单并补场记
+- 排队等待阶段的委派不产生告警材料；running 的委派不自动杀，由活动看门狗与目标停滞通路覆盖
 
 ## 游戏公屏与玩家社交
 
@@ -231,17 +241,17 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 |---|---|---|
 | 私聊 | `/msg` 对她说 | 唤醒合批 |
 | 点名 | 正文提到她 | 唤醒合批 |
-| 身边 | 发言者距离 ≤ 24 格（无距离数据时按身边玩家降级） | 唤醒合批 |
-| 近期互动同伴 | 近 2 分钟内与她互动过 | 唤醒合批 |
+| 身边 | 发言者距离在近距离阈值内（`DEFAULT_NEARBY_DISTANCE`，在 chat_gate.py；无距离数据时按身边玩家降级） | 唤醒合批 |
+| 近期互动同伴 | 近期（互动窗口时长 `DEFAULT_PARTNER_WINDOW_MS`，在 chat_gate.py）内与她互动过 | 唤醒合批 |
 | 远处其余 | 不满足以上 | 有界旁听滑窗，仅行动步顺带取出，绝不唤醒 |
 
 机制细节：
 
 - 事实标签 `[游戏公屏·私聊/点名你/身边N格/远处]` 原样保留采集器附的未核验说明
-- 2 秒短合并窗：单窗默认上限 8 条，按「私聊 > 点名 > 身边/同伴 > 其余抽样」截留；同人同内容与单人高频连发折叠计数
-- 持续刷屏期间启用最小唤醒冷却（默认 6 秒），新消息继续并入同一待发窗
+- 短合并窗（窗长 `DEFAULT_BATCH_WINDOW_MS`，在 chat_gate.py）：单窗条数默认上限（`DEFAULT_MAX_BATCH_ITEMS`），按「私聊 > 点名 > 身边/同伴 > 其余抽样」截留；同人同内容与单人高频连发折叠计数
+- 持续刷屏期间启用最小唤醒冷却（时长 `DEFAULT_WAKE_COOLDOWN_MS`，在 chat_gate.py），新消息继续并入同一待发窗
 - 唤醒批次以 `[游戏公屏合批]` 入队；非私聊正文同时送本场短期记忆与跨场被动检索预取（私聊正文绝不送外部检索）
-- 近期人类原话滚动窗（最近 8 条游戏公屏原话 + 4 条主播建议）供集中整理与重开上下文复用
+- 近期人类原话滚动窗（游戏公屏原话与主播建议各有上限，`DEFAULT_MAX_RECENT_CHATS` / `DEFAULT_MAX_RECENT_SUGGESTIONS`，在 chat_gate.py）供集中整理与重开上下文复用
 
 ### 委派态的游戏公屏旁听
 
@@ -249,8 +259,10 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 
 ### 玩家肢体动作与互动
 
-- Mod 把 16 格内冲角色做的肢体动作（蹲起、挥手、拍一下、扔东西）按人归段发事件流；`player_body_language` 读成给主播的一句话（"你"换"我"、去观察编号）与给游戏 Agent 的通知（可用 `body_language` 回一个动作，回完即收尾、不交付不上报）
-- 按人叫醒节流（`interaction_throttle`）：同一玩家叫醒过一次后 20 秒内再来的先攒着，到点合成一条，一人一分钟最多叫醒 3 次；闲着时只为回应互动开的那批不算数，防"一直蹲就一直调模型"
+- Mod 把 16 格内冲角色做的肢体动作（蹲起、挥手、拍一下、扔东西）按人归段发事件流
+- `player_body_language` 读成给主播的一句话（"你"换"我"、去观察编号）与给游戏 Agent 的通知（可用 `body_language` 回一个动作，回完即收尾、不交付不上报）
+- 按人叫醒节流（`interaction_throttle`）：同一玩家叫醒过一次后，间隔未达下限（`INTERACTION_WAKE_WINDOW_S`，在 interaction_throttle.py）的先攒着，到点合成一条，单位时间内叫醒次数随之有上限
+- 闲着时只为回应互动开的那批不算数，防"一直蹲就一直调模型"
 - 切磋（`fight(spar=true)`）收手时按怎么收的手、各打中几下汇总一句给主播；切磋是玩，输赢都俏皮带过
 - 从别人家拿吃的、动别人放的东西：Mod 事件两头记账——主播拿回应口径（问起来坦然认下），游戏侧按世界记最近几笔放进任务事实对号
 - 结构化互动台账（`player_interactions`）只落库 `game.player.interacted`：打招呼、送东西、切磋对手，供游戏玩家档案跨场使用；主播不订阅这条（当场叙事已从肢体动作那条拿到）
@@ -268,9 +280,13 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 - **任务通道事件**：目标开始/提问/暂停/继续——留给游戏 Agent
 - **目标完成/失败/卡住**：不经分类表——完成与失败走 `game.report`（自带主播唤醒），卡住由游戏 Agent 记账本中间态并转发
 
-通知路由（`notice_router`）一张表定每类事件的通道与文案，Agent 执行器只认通道不认种类：天色只挂队列不唤醒（只留最新）、计时与 Mod 决策闲着也开批、肢体动作开只回应互动的批、跟随与身体急事与死亡任务中注入、未知种类走注意流转告主播。Mod 加事件种类只加一行。
+通知路由（`notice_router`）一张表定每类事件的通道与文案，Agent 执行器只认通道不认种类：天色只挂队列不唤醒（只留最新）、计时与 Mod 决策闲着也开批、肢体动作开只回应互动的批、跟随与身体急事与死亡任务中注入、未知种类走注意流转告主播。
 
-素材发布（`attention_material`）保 Mod 原话：超阈值的长排查说明先压成保信息摘要再发（概述进 `message`、原文留档 `scene`）；概述拿不到时降级为首句斩尾——素材宁可降级也不能不发。与对话历史或待读队列里一字不差重复的通知只注入一句指回（`repeated_notice`：指回的前提是那份原文模型还看得到）。
+Mod 加事件种类只加一行。
+
+素材发布（`attention_material`）保 Mod 原话：超阈值的长排查说明先压成保信息摘要再发（概述进 `message`、原文留档 `scene`）；概述拿不到时降级为首句斩尾——素材宁可降级也不能不发。
+
+与对话历史或待读队列里一字不差重复的通知只注入一句指回（`repeated_notice`：指回的前提是那份原文模型还看得到）。
 
 - **Mod 挂出的决策**（死亡恢复，`goal_id` 为负数）提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕）；模型按选项用 `maicraft_goal(answer)` 回答
 - **自己选的死**（`chosen_death`）：手上正在跑 `suicide`（或注意流记下的 `suicide` 目标窗口内）的死是回家手段，给主播的话换成"回家"的说法——先说清为什么死、东西没丢，再轻松带过
@@ -279,13 +295,17 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 ## 后台目标跟踪（events → 唤醒）
 
 - **登记**：`maicraft_execute` 返回没结束的目标（running / awaiting_answer / paused）即开始跟踪；当场完成的目标不跟踪；`maicraft_goal(resume)` 解除暂停的旧目标也纳入
-- **读事件**：`GoalWatch` 带游标长轮询 `events`（`events_wait_ms`，默认 25 秒），事件流只给宿主读、不进模型工具列表；首次读取只建游标
+- **读事件**：`GoalWatch` 带游标长轮询 `events`（等待时长走配置键 `events_wait_ms`），事件流只给宿主读、不进模型工具列表；首次读取只建游标
 - **事实核实**：事件只说明"变了"，宿主再 `goal(get)` 取它此刻的样子交给任务；finished 事件另带的 `self_brief`（结束时在哪、血、饱食、手上拿着什么）查询里没有，随结果一起交
 - **唤醒**：结束（含 `result.folded` 证据按 `path` 读回的指引）、提问、被暂停才唤醒；恢复推进静默记账
 - **换世界**：事件流编号变了旧游标作废，逐个重查在跟踪的目标；查不到按"不在了"注入，不让任务等不来
-- **挂起等待的停滞看门狗**（`wait_progress`）：让出等待后站桩监视目标是否仍在推进——目标状态事件、自身步数或动作阶段变化、非急事抢占下的实际位移（三维不少于 2 格或跨维度）都算有效进展，刷新计时；连续无进展的唤醒阈值按指数退避拉长（30s → 60s → 120s → 240s），目标集合变化或有进展即复位。唤醒只是请模型核对现场，长途赶路仍属正常推进时不替它取消目标
+- **挂起等待的停滞看门狗**（`wait_progress`）：让出等待后站桩监视目标是否仍在推进——目标状态事件、自身步数或动作阶段变化、非急事抢占下的实际位移达到有效位移阈值（`POSITION_PROGRESS_BLOCKS`，在 wait_progress.py）或跨维度都算有效进展，刷新计时
+- 连续无进展的唤醒等待按指数退避拉长（起点与上限见 `WAIT_PROGRESS_LIMIT_S` / `WAIT_PROGRESS_MAX_LIMIT_S`，序列在 wait_progress.py），目标集合变化或有进展即复位
+- 唤醒只是请模型核对现场，长途赶路仍属正常推进时不替它取消目标
 - **回炉等待**（`furnace_wait`）：obtain 装好炉先走、挂回炉计时当场以 partial 收场——东西在烧、到点 Mod 叫醒回去取，不算停摆也不代发停了没交付；计时到点、timer 结果与换存档各自划掉对应计时
-- **认存档**（`world_identity`）：每页事件与 `observe(self)` 的 `world{id, name}` 喂给三态判定（旧版 Mod / 不明 / 认出）；"换了存档"只认上一个认出的编号被另一个取代。认出后：工具面 `current_save()` 报给主播、待办/笔记/近期上报按存档分开（切换只经 `switch_world`）、换档时手上有任务就告知任务是旧存档里接的、生物名册按世界编号分册。决策依据见 [ADR-069](../decisions/069-game-memory-per-save.md)
+- **认存档**（`world_identity`）：每页事件与 `observe(self)` 的 `world{id, name}` 喂给三态判定（旧版 Mod / 不明 / 认出）；"换了存档"只认上一个认出的编号被另一个取代
+- 认出后：工具面 `current_save()` 报给主播、待办/笔记/近期上报按存档分开（切换只经 `switch_world`）、换档时手上有任务就告知任务是旧存档里接的、生物名册按世界编号分册
+- 决策依据见 [ADR-069](../decisions/069-game-memory-per-save.md)
 - **任务登记镜像**：目标同时记进通用任务登记，主播任务查询看得到；长时间无进展告警回到 Agent 注入提醒
 
 ## 运营干预入口（递话 / 硬取消 / 断连恢复）
@@ -316,13 +336,15 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 
 补充说明：
 
-- **看画面**（`observe(what="picture")`）：文字块当观察进历史；图按额度挂在下一次请求尾部看一次，不能看图的模型经视觉模型转文字。一个任务最多 6 次、两次至少隔 10 秒（`[agents.minecraft.picture]`），超了不调 Mod
+- **看画面**（`observe(what="picture")`）：文字块当观察进历史；图按额度挂在下一次请求尾部看一次，不能看图的模型经视觉模型转文字。每任务次数与两次最小间隔的额度（`[agents.minecraft.picture]` 配置段），超了不调 Mod
 - `maicraft_events` 只给宿主读；截桌面的 `vision_look_at_screen` 不交给游戏 Agent 的模型（截的是整块显示器，看游戏画面用 picture 视图）
-- **主控期动态放行的跨 Agent 工具**：`framework_commentary`（提交解说意图，经协调器直通主播轻量 Replyer 润色播出，完全绕过重型规划器）、`rundown_control`（环节 `next`/`renew` 推进流程单）、`streamer_memory_correct`（更正权威承诺表）。仅主控态可见，每步重算工具定义即时生效
+- **主控期动态放行的跨 Agent 工具**：`framework_commentary`（提交解说意图，经协调器直通主播轻量 Replyer 润色播出，完全绕过重型规划器）、`rundown_control`（环节 `next`/`renew` 推进流程单）、`streamer_memory_correct`（更正权威承诺表）
+- 三者仅主控态可见，每步重算工具定义即时生效
 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
 
-- `framework_delegate` / `framework_prompt` / `framework_suggest`：委派、递话与非强杀建议通道；游戏主控态下指向主控游戏的委派（含 replace 强杀）与结单工具被隐藏或执行期拒绝（[ADR-081](../decisions/081-dynamic-lead-handover.md) 越界禁令）
+- `framework_delegate` / `framework_prompt` / `framework_suggest`：委派、递话与非强杀建议通道
+- 游戏主控态下指向主控游戏的委派（含 replace 强杀）与结单工具被隐藏或执行期拒绝（[ADR-081](../decisions/081-dynamic-lead-handover.md) 越界禁令）
 - `minecraft_get_work_log`：只读返回眼下存档的 `{todo, notebook, recent_reports}`；笔记后面附服务端现查的当前状态快照（位置、背包、装备、数量），读的人以快照为准、笔记数字只当历史参考
 - `minecraft_glance`：主播看一眼游戏——叙事事实（身体状态、背包、身边生物与设施、时段天气、记住的地点名）+ 身体手头的工作；观察编号、方位与网格是游戏 Agent 规划用的，不交给主播
 - `minecraft_chat_send`：主播直发游戏公屏（被动手脚，不进本 Agent 的 ReAct 循环，仅文本输出）；游戏主控态下对主播隐藏——替角色表态归游戏 Agent 自己
@@ -346,7 +368,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 
 纯内存级，开播/下播清空，绝不把玩家游戏公屏写进跨场数据库：
 
-- 收录三类高信号短文本：玩家游戏公屏/私聊（有界滚动，默认上限 200 条）、主动折叠块摘要与保留原话、当前存档工作文档切片（笔记段落、钉住规矩，按内容指纹增量更新）
+- 收录三类高信号短文本：玩家游戏公屏/私聊（有界滚动，默认上限 `DEFAULT_MAX_PLAYER_CHATS`，在 short_term_memory.py）、主动折叠块摘要与保留原话、当前存档工作文档切片（笔记段落、钉住规矩，按内容指纹增量更新）
 - 召回：中文两字切分关键词 + 可选向量余弦混合；未配嵌入或向量未就绪时无缝退化为关键词路径
 - 消费入口：主控态 `[脑中闪过]` 被动闪回、`minecraft_context_recall` 工具、合批时的被动检索预取（私聊正文除外）
 - 时间衰减用 Agent 注入的单调时钟域，避免事件自带的墙钟毫秒与计时错位
@@ -361,7 +383,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：用 MaiCraft v1 
 | `game.milestone` | 步进完成（Mod 自带结论句的进展）与名册认出的死讯 |
 | `game.body.*` / `game.chat.received` / `game.self.chatted` / `game.player.interacted` / `game.place.*` | 由两条附属采集器与 Agent 的落库转发发出（语义见 [事件系统](event-system.md)） |
 
-事件 payload 复用 `GamePayload`（`game="minecraft"`）；上报同时进内存 `recent_reports`（保留最近 10 条）。
+事件 payload 复用 `GamePayload`（`game="minecraft"`）；上报同时进内存 `recent_reports`（保留条数上限 `MAX_REPORTS`，在 state.py）。
 
 ## 配置
 
@@ -402,7 +424,8 @@ max_validation_retries = 3         # 图纸被 Mod 校验拒绝后的重画上�
 - 通用 MCP 层只归一化协议数据；MaiCraft v1 的返回格式、目标运行状态与事件流语义只在 `maicraft.py` 解读一次
 - 工具失败作为错误观察返回 LLM（`error.code` 与 `error.fields` 原样保留），由模型按错误原因调整行动，确实无法推进时上报具体阻塞
 - 内容特有逻辑内聚 `src/agents/minecraft/` 包（加内容=加包+配置，框架零改动）；框架与主播侧不出现游戏名（[ADR-018](../decisions/018-game-agnostic-boundary.md)）
-- 两条附属采集器挂装配期、随本 Agent 一同开关，不进 `collectors.toml`（见 [ADR-038](../decisions/038-agent-companion-collectors.md)）；连接与游标自带，不与 Agent 共用——事件流按读者各自的游标读，互不影响
+- 两条附属采集器挂装配期、随本 Agent 一同开关，不进 `collectors.toml`（见 [ADR-038](../decisions/038-agent-companion-collectors.md)）
+- 附属采集器的连接与游标自带，不与 Agent 共用——事件流按读者各自的游标读，互不影响
 - 游戏侧请求播音只经 `framework_commentary` 单向提交，绝不直连 TTS/字幕，也不订阅直播间弹幕（[ADR-081](../decisions/081-dynamic-lead-handover.md) 越界禁令）
 
 ## 相关文档
@@ -413,7 +436,13 @@ max_validation_retries = 3         # 图纸被 Mod 校验拒绝后的重画上�
 - [事件系统](event-system.md) — game.* 事件语义单一事实源
 - [组件开发指南](../guides/component/README.md) — 游戏 Agent 范式
 - [使用指南](../guides/minecraft-agent.md) — 前置清单、配置与排障操作
-- [ADR-013](../decisions/013-async-task-infrastructure-and-delegation.md) / [ADR-034](../decisions/034-agent-intervention-primitives.md) / [ADR-035](../decisions/035-escalation-ledger-semantics.md) — 委派基建、干预入口与 escalation 账面语义
-- [ADR-043](../decisions/043-game-agent-interaction-shapes.md) / [ADR-076](../decisions/076-delegation-one-in-hand-and-settle-on-switch.md) / [ADR-081](../decisions/081-dynamic-lead-handover.md) — 交互形态、换活结单契约、动态主从移交
-- [ADR-018](../decisions/018-game-agnostic-boundary.md) / [ADR-038](../decisions/038-agent-companion-collectors.md) / [ADR-069](../decisions/069-game-memory-per-save.md) — 游戏无关边界、附属采集器、按存档分记忆
+- [ADR-013](../decisions/013-async-task-infrastructure-and-delegation.md) — 委派基建
+- [ADR-034](../decisions/034-agent-intervention-primitives.md) — 干预入口
+- [ADR-035](../decisions/035-escalation-ledger-semantics.md) — escalation 账面语义
+- [ADR-043](../decisions/043-game-agent-interaction-shapes.md) — 交互形态
+- [ADR-076](../decisions/076-delegation-one-in-hand-and-settle-on-switch.md) — 换活结单契约
+- [ADR-081](../decisions/081-dynamic-lead-handover.md) — 动态主从移交
+- [ADR-018](../decisions/018-game-agnostic-boundary.md) — 游戏无关边界
+- [ADR-038](../decisions/038-agent-companion-collectors.md) — 附属采集器
+- [ADR-069](../decisions/069-game-memory-per-save.md) — 按存档分记忆
 - [ADR-040](../decisions/040-context-layering-and-checkpoints.md) / [ADR-070](../decisions/070-minecraft-background-fold.md) — 上下文分层与后台折叠
