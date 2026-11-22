@@ -117,3 +117,7 @@
 - [整理结果的人工审核](../decisions/073-settlement-human-review.md)
 - [观众定下的事经人批准进记忆](../decisions/074-viewer-defined-memory-needs-approval.md)
 - [游戏里的人按 UUID 认](../decisions/075-game-players-by-uuid.md)
+- [场次档案改为滚动快照](../decisions/071-rolling-session-archive.md)
+- [常驻简报分区与场内更正](../decisions/077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
+- [游戏社交事实边界治理](../decisions/078-game-social-facts-boundaries-and-governance.md)
+- [检索抗干扰、双侧桥接与名场面分层](../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)
