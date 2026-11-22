@@ -1,8 +1,68 @@
-# 虚拟形象接入：Warudo、VRChat 与表情差分立绘
+# 虚拟形象接入：VTS、Warudo、VRChat 与表情差分立绘
 
-本文说明怎样让 Amaidesu 驱动 Warudo、VRChat 或表情差分立绘：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，身体跟着情绪换站姿，来礼物时挥手，AI 还能点名做动作。VTube Studio 接上就能用，不在本文范围；四个平台各自能做什么，见[虚拟形象架构](../architecture/avatar-platform.md)。
+本文说明怎样让 Amaidesu 驱动各虚拟形象平台：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，身体跟着情绪换站姿，来礼物时挥手，AI 还能点名做动作。各平台在系统里的角色与跨平台机制，见[虚拟形象架构](../architecture/avatar-platform.md)。
 
 > 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤，`config/` 下的配置文件已经生成。下文的 `config/avatar.toml` 指项目里的虚拟形象配置文件。
+
+## VTube Studio（VTS）
+
+VTS 是默认平台：装好 VTube Studio、加载好模型，Amaidesu 这边启用即可，VTS 里不需要做面捕配置。
+
+### 它是怎么连起来的
+
+一条 WebSocket 通道（默认本机 8001 端口，与 VTS 插件 API 默认一致）：Amaidesu 作为插件连入 VTS，逐帧写捕捉输入与自建输入；平台上做好的动作（热键）与风格化标记（表情文件或自建输入）由 Amaidesu 登记后按名字触发。首次连接时 VTS 会弹窗请求插件授权，同意后 token 保存在 `data/vts_token.txt`，之后断线自动重连、不再弹窗。
+
+### 一、在 Amaidesu 里启用
+
+```toml
+[platform]
+enabled = ["vts"]
+```
+
+启动 Amaidesu，切到 VTube Studio 窗口，在弹出的插件授权对话框里点同意。连接与模型变化由 Amaidesu 按固定周期在后台检查：断了自动重连，连上后自动核对健康状况、是否换了模型。
+
+### 二、换模型需要重新配置吗
+
+一般不需要：
+
+- VTS 自带的捕捉输入（头部角度、眼睛开合、眉、嘴角、张嘴等）与 VBridger 那组自建输入（`JawOpen`、`MouthFunnel`、`MouthPucker`、`MouthPressLipOpen`、`MouthShrug`、`BrowInnerUp`、`EyeSquintL/R`、`BodyAngleX/Y/Z`、`BodyPositionX/Y/Z`）全部由 Amaidesu 逐帧写入；VTS 里没有的输入由程序按同样的名字与范围自动补建。约稿里"支持 VBridger"的模型认的就是这些名字。
+- 模型作者做模型时已经把这些输入映射到模型参数上，接了哪些就动哪些。在 VTS 界面里换模型后，程序检测到模型变化，会自动重新读取新模型的热键清单与输入范围。
+- "输入写入成功"和"模型上看得出效果"是两回事：模型作者把哪些输入接到了哪个部位，VTS 的接口查不到，没接的输入写了也没效果。
+
+### 三、按观感校准
+
+三个校准项（`[platform.vts]` 的 `eye_open_rest` / `mouth_smile_neutral` / `brow_neutral`）：同一个输入值在不同模型上的含义不一样。比如实测桃濑日和的"眼睛开合"输入 1.0 已是瞪到最大，正常睁眼约 0.53。眼睛显得瞪着就把 `eye_open_rest` 调小，显得困就调大。三项都可以在[形象调校页](../architecture/avatar-platform.md#形象调校页)上看着模型实时调。
+
+VTS 的眼球左右输入与头部左右转输入方向相反（两者同为正时，模型头转向画面右边、眼球转向左边），Amaidesu 的驱动换算时已把视线左右取反，"看向某处"时头和眼朝同一边，不需要配置。
+
+### 四、身体动作与热键
+
+站姿、叠加动作、手势由面捕合成器统一调度；VTS 侧按 `body_hotkeys` 登记的热键触发，**默认不登记**——想用身体动作，先在 VTS 里给动作文件绑好热键，再在 `[platform.vts]` 的 `body_hotkeys` 登记"动作名 = 热键"。
+
+### 五、风格化标记（漫符）
+
+动漫模型常画好一些漫符：脸红、眼泪、汗滴、黑线、生气符号、惊吓符号、爱心眼、星星眼、阴影脸。面捕捕捉不到它们，ARKit 里也没有，由 Amaidesu 自己定名并按动漫惯例挂默认配方：害羞脸红、哭有泪、生气冒青筋、无语出黑线，强弱乘情绪强度。模型上有哪些、对应什么，在 `[platform.vts.markers]` 登记，没登记的不发：
+
+```toml
+[platform.vts.markers]
+tears = "EyesCry.exp3.json"   # 以 .exp3.json 结尾：模型的表情文件
+anger = "SignAngry.exp3.json"
+blush = "Blush"               # 其余是 VTS 输入名：逐帧写 0~1
+```
+
+- **表情文件型**：有回差防抖——值升过打开线才显示、落过关断线才收，在门限附近不会闪烁；淡淡的难过不会掉泪，哭才会。淡入淡出由 VTS 自己做。连上和换模型时程序会读一遍当前模型的表情文件清单，登记了但模型上没有的会在日志里点名并跳过。
+- **输入型**：适合模型作者把漫符做成 0~1 参数的情况（约稿时建议这么做，能随表情渐入渐出）。VTS 里没有这个输入时程序按名字补建，再在 VTS 的模型设置里把它接到对应参数上。
+
+VTS 自带的 akari 模型就带着眼泪（`EyesCry`）、爱心眼（`EyesLove`）、生气符号（`SignAngry`）、惊吓符号（`SignShock`）四个表情文件，可以照上面的写法试。
+
+### 常见问题
+
+| 现象 | 原因与处理 |
+|---|---|
+| 形象停在半闭眼 | VTS 停止注入后会一直保持最后收到的值；正常情况下 Amaidesu 断开前会先发一帧静止姿态收尾，进程被强杀时需手动在 VTS 里复位 |
+| 反复弹授权窗 | token 失效或被删（`data/vts_token.txt`）；删掉文件重走一次授权即可 |
+| 表情、眨眼写了没效果 | 模型没把该输入接到参数上，对照第二步检查模型映射 |
+| 眼睛瞪着或犯困 | 调校准项 `eye_open_rest`（见第三步） |
 
 ## Warudo
 
@@ -10,7 +70,7 @@
 
 两条通道：
 
-- **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器每秒 30 帧，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数、头部转角与位置、眼球转角。Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来；身体前倾、后缩（开心时往前凑、受惊时往后缩）写在头部位置里，和真人身子一动头就跟着平移一样，Warudo 按头部动作自己带动身体。
+- **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器按配置帧率逐帧推进，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数、头部转角与位置、眼球转角。Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来；身体前倾、后缩（开心时往前凑、受惊时往后缩）写在头部位置里，和真人身子一动头就跟着平移一样，Warudo 按头部动作自己带动身体。
 - **蓝图通道**（WebSocket，默认 19190 端口）：Amaidesu 发一条条"动作名 + 数值"，比如 `body_stance_hands_front = 1`、`marker_tears = 0.8`。Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去播一段动画或改一个形状。只用来做身体动作（换站姿、摇一下身体、挥手这类面捕数据装不下的全身动作）、抛鱼和风格化标记（脸红、眼泪这类漫符）。
 
 模型怎么把 ARKit 系数落到自己的形状上，在 Warudo 的面捕设置里调，和真人用 iPhone 面捕时一样。
@@ -83,7 +143,7 @@ uv run python scripts/warudo_blueprints.py --scene "<Warudo 数据目录>/Scenes
 uv run python scripts/warudo_blueprints.py --probe ws://localhost:19190
 ```
 
-脚本把站姿、叠加动作、手势、风格化标记各发一遍，身体动作每项停 3 秒、标记每项停 1.5 秒（`--hold 3` 整体放慢一倍），最后回到普通站姿；终端里会打印正在发哪一项、播的是哪段动画，对着画面看就行。
+脚本把站姿、叠加动作、手势、风格化标记各发一遍，每项停顿一下（`--hold` 可整体放慢一倍），最后回到普通站姿；终端里会打印正在发哪一项、播的是哪段动画，对着画面看就行。
 
 然后启动 Amaidesu：面捕数据一发出，形象就开始眨眼、看来看去，说话时嘴跟着语音动、表情跟着情绪变；蓝图通道 Warudo 后开也没关系，Amaidesu 每隔几秒重连。站姿跟着情绪自己换，说话时偶尔摇一下身体或仰头笑，来礼物时挥手；主播用 `avatar_act` 做的动作里会多出挥手、指一下这类手势和抛鱼。觉得某个动作和模型不搭，在 `[platform.warudo.body_animations]` 里换成 Warudo 自带的别的动画（写 AGIA 下的相对路径即可，如 `hands_front = "01_Idles/AGIA_Idle_energetic_02_right_hand_piece"`），改完重新生成并导入蓝图；想换的是"哪个情绪摆哪个站姿"，改 `[tracking].body_stances`，不用重新生成。想让她用自己做的蓝图动作，在 `[platform.warudo.action_catalog]` 里登记"动作名 = 说明"，蓝图里用"收到 WebSocket 动作"节点按这个名字接收（数据类型选整数）。
 
@@ -125,11 +185,11 @@ enabled = ["vrchat"]
 
 ### 三、头顶聊天框
 
-默认开启：主播说的每句话会同步显示在形象头顶的聊天框里，和字幕显示的是同一句。VRChat 限制单条 144 字，超出会截断；两条之间至少隔约 1.6 秒，说得太快时只显示最新的一句。不想要的话，在 `[platform.vrchat]` 里设 `chatbox_enabled = false`。
+默认开启：主播说的每句话会同步显示在形象头顶的聊天框里，和字幕显示的是同一句。VRChat 限制单条 144 字（平台硬限制），超出会截断；两条之间有最小发送间隔（`chatbox_min_interval_ms`），说得太快时只显示最新的一句。不想要的话，在 `[platform.vrchat]` 里设 `chatbox_enabled = false`。
 
 ### 四、动作
 
-默认动作表对应 VRChat SDK 默认模板里的 `VRCEmote` 参数：挥手、鼓掌、指向、欢呼、跳舞、后空翻、悲伤、倒地。其中第 7、8 项（悲伤、倒地）的取值是按菜单顺序推定的，用的时候请对照一下。触发后默认 3 秒把参数写回 0，鼓掌、跳舞这类会循环的动作靠这一步停下。
+默认动作表对应 VRChat SDK 默认模板里的 `VRCEmote` 参数：挥手、鼓掌、指向、欢呼、跳舞、后空翻、悲伤、倒地。其中第 7、8 项（悲伤、倒地）的取值是按菜单顺序推定的，用的时候请对照一下。触发后过一小段时间把参数写回 0，鼓掌、跳舞这类会循环的动作靠这一步停下。
 
 来礼物挥手、主播点名"指一下"这类手势也走动作表：`body_emotes` 默认把挥手、双手挥对到 Wave，指一下对到 Point，举拳庆祝对到 Cheer。改了动作表的，对不上的手势在 VRChat 上跳过（启动日志里有警告），按需改 `body_emotes`。换站姿 VRChat 没有对应的做法，不做。
 
@@ -163,7 +223,7 @@ VRChat 会按麦克风收到的声音自己算口型，任何形象都适用，A
 ### 一、准备差分图
 
 - 一个目录放一套图，每个情绪一张，**文件名就是情绪名**：`neutral.png`、`happy.png`、`angry.png`、`speechless.png`……
-- 17 个情绪名（小写英文）：`neutral`、`happy`、`sad`、`angry`、`surprised`、`scared`、`disgusted`、`shy`、`embarrassed`、`confused`、`love`、`excited`、`smug`、`serious`、`tired`、`crying`、`speechless`。
+- 全部情绪名（小写英文）：`neutral`、`happy`、`sad`、`angry`、`surprised`、`scared`、`disgusted`、`shy`、`embarrassed`、`confused`、`love`、`excited`、`smug`、`serious`、`tired`、`crying`、`speechless`。
 - 支持 `png` / `jpg` / `jpeg` / `webp`；某张缺了自动回退到 `neutral` 那张，所以至少要准备 `neutral`。
 - 建议所有图同一画布尺寸、同一构图，换图时才不跳。
 
@@ -183,7 +243,7 @@ image_dir = "D:/live2d/差分图"
 
 ### 三、显示到直播画面
 
-控制台「小部件」页选「差分立绘」，复制页面网址（路径是 `/widget/expression_sheet`），在直播软件里添加一个浏览器源指向它，推荐 1920×1080、背景透明。小部件每 250 毫秒向 Amaidesu 问一次"现在该显示哪张图"。
+控制台「小部件」页选「差分立绘」，复制页面网址（路径是 `/widget/expression_sheet`），在直播软件里添加一个浏览器源指向它，推荐 1920×1080、背景透明。小部件按固定节奏向 Amaidesu 轮询"现在该显示哪张图"。
 
 ### 四、换图节奏
 
