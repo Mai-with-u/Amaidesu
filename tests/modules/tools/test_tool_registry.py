@@ -81,6 +81,25 @@ async def test_invoke_never_raises_for_unknown_or_failing_tools(registry: ToolRe
     assert failed.success is False and "boom!" in failed.error_message
 
 
+async def test_unknown_tool_error_suggests_closest_legal_name(registry: ToolRegistry) -> None:
+    """误拼的工具名与注册表内合法名足够接近时，报错附带纠正建议。"""
+    for name in ("minecraft_observe", "memory_recall"):
+        registry.register(ToolSpec(name=name, description=name, kind="sync"), _ok)
+    res = await registry.invoke(ToolInvocation(tool_name="minecraft_obsevre", source="test"))
+    assert res.success is False
+    assert res.error_message.startswith("未知工具: 'minecraft_obsevre'")
+    assert "minecraft_observe" in res.error_message
+
+
+async def test_unknown_tool_error_keeps_plain_message_without_close_match(registry: ToolRegistry) -> None:
+    """误拼的工具名与注册表内所有合法名都不相似时，报错保持原文案。"""
+    for name in ("minecraft_observe", "memory_recall"):
+        registry.register(ToolSpec(name=name, description=name, kind="sync"), _ok)
+    res = await registry.invoke(ToolInvocation(tool_name="totally_unrelated", source="test"))
+    assert res.success is False
+    assert res.error_message == "未知工具: 'totally_unrelated'"
+
+
 async def test_register_dedup_keeps_first_and_collection_protocol(registry: ToolRegistry) -> None:
     async def impl(content: str):
         async def run(inv: ToolInvocation) -> ToolExecutionResult:

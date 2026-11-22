@@ -30,6 +30,7 @@ recover_tool（探活通过后复位熔断）/ probe_tool（按名定位 provide
 from __future__ import annotations
 
 import asyncio
+import difflib
 import inspect
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional
@@ -676,10 +677,16 @@ class ToolRegistry:
             logger.warning(
                 f"ToolRegistry 未找到工具 '{invocation.tool_name}'（source={invocation.source or 'unknown'}）"
             )
+            # 用 0.6 的相似度截止（difflib 默认值，约需过半字符序列重合才命中），
+            # 避免过松时把不相关的工具名也当作纠正建议误导模型
+            close_matches = difflib.get_close_matches(invocation.tool_name, self._tools.keys(), n=1, cutoff=0.6)
+            error_message = f"未知工具: '{invocation.tool_name}'"
+            if close_matches:
+                error_message += f"，你是不是要 '{close_matches[0]}'？"
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
-                error_message=f"未知工具: '{invocation.tool_name}'",
+                error_message=error_message,
                 timestamp_ms=int(time.time() * 1000),
             )
         if invocation.tool_name in self._disabled:
