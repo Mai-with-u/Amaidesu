@@ -2,7 +2,7 @@
 
 > 工具层是所有 Agent 可调用能力的统一契约面：把看屏幕、查旧事、切直播场景、让虚拟形象做动作、向游戏 Agent 委派这类**被调才干活**的能力做成同一种形状，注册进一张表，供模型按 function calling 调用。它解决三件事：让模型能调（契约翻译）、让每个 Agent 只看到自己该用的（可见名单）、让单个能力故障不扩散成全局停摆（调用永不抛异常 + 熔断摘除）。
 >
-> 系统里现在有哪些工具（工具清单）以代码为事实源（`ToolRegistry`），文档不抄录；写一个新工具的实操步骤见[组件开发指南的"添加工具"](../guides/component.md)。
+> 系统里现在有哪些工具（工具清单）以代码为事实源（`ToolRegistry`），文档不抄录；写一个新工具的实操步骤见[组件开发指南的"添加工具"](../guides/component/README.md)。
 
 ## 三个概念
 
@@ -31,7 +31,7 @@
 
 ## 管控三维度
 
-任何"开/关/通"话题先分清说的是哪个维度（术语纪律全文见[组件开发指南](../guides/component.md)）：
+任何"开/关/通"话题先分清说的是哪个维度（术语纪律全文见[组件开发指南](../guides/component/README.md)）：
 
 | 维度 | 回答的问题 | 生效期 | 机制 |
 |---|---|---|---|
@@ -216,7 +216,7 @@ MCP（Model Context Protocol，模型上下文协议）是连接外部工具服�
 两种用法：
 
 - **全局外部 server**：`bind_mcp_tools` 按 `[tools.mcp]` 配置连接全部 server，工具以 server 名为提供者名全局注册，任何 Agent 经可见名单机制各取所需。
-- **Agent 私有 MCP**：Agent 自建连接、自注册提供者，工具名单只给自己（如 Minecraft Agent 的游戏 server，工具只对 `minecraft` 可见）。见[组件开发指南的 MCP 二分表](../guides/component.md)。
+- **Agent 私有 MCP**：Agent 自建连接、自注册提供者，工具名单只给自己（如 Minecraft Agent 的游戏 server，工具只对 `minecraft` 可见）。见[组件开发指南的 MCP 二分表](../guides/component/README.md)。
 
 命名与映射：
 
@@ -243,7 +243,7 @@ MCP 提供者可声明任务适配器（绑定处在连接拉到清单后赋值�
 
 ## 什么不是工具
 
-Agent 内部件的处置分三档（判据与细则见[组件开发指南的红线三分](../guides/component.md)）：
+Agent 内部件的处置分三档（判据与细则见[组件开发指南的红线三分](../guides/component/tool.md#红线三分)）：
 
 | 类别 | 处置 |
 |---|---|

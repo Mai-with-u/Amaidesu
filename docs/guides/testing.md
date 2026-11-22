@@ -348,6 +348,6 @@ async def event_bus():
 ## 10. 相关文档
 
 - [开发规范](../../AGENTS.md#代码约定) - 代码风格和数据类型规范
-- [组件开发指南](component.md) - 组件三范式开发指南
+- [组件开发指南](component/README.md) - 组件三范式开发指南
 - [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发指南
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南

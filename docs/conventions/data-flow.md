@@ -19,7 +19,7 @@ v2 不再有 Input/Decision/Output 三阶段流水线，组件通过**语义域�
 | 知道所有事件名、Payload 类型、订阅者 | [事件系统](../architecture/event-system.md) |
 | 知道组件清单与目录结构 | （代码：`src/`、`ToolRegistry`） |
 | 知道事件命名规范 | [事件命名](event-naming.md) |
-| 知道怎么开发 Agent/工具/采集器 | [组件开发指南](../guides/component.md) |
+| 知道怎么开发 Agent/工具/采集器 | [组件开发指南](../guides/component/README.md) |
 | **知道数据该往哪儿流、哪儿不能流** | 本文档 |
 
 ---
@@ -318,6 +318,6 @@ v2 中不同数据走不同通道，不要混用：
 | 全部事件名 + Payload 类型 + 发布者/订阅者 | [事件系统 - 事件事实表](../architecture/event-system.md#事件事实表与拓扑) |
 | 组件清单、目录结构、启动时序 | （代码：`src/`、`ToolRegistry`） |
 | 事件命名规范与语义域分层 | [事件命名](event-naming.md) |
-| Agent/工具/采集器三范式开发详解 | [组件开发指南](../guides/component.md) |
+| Agent/工具/采集器三范式开发详解 | [组件开发指南](../guides/component/README.md) |
 | 拦截器开发指南 | [事件系统 - 事件拦截器](../architecture/event-system.md#事件拦截器interceptor) |
 | ADR 决策记录 | [架构决策记录](../decisions/README.md) |

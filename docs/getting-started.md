@@ -192,7 +192,7 @@ uv run python main.py --dry
 | **业务 Agent（Agent）** | 拥有内部状态与工具的主循环体；订阅事件、决策、调用工具 | `src/agents/` | `[agents]` + `[agents.<name>]` |
 | **工具（Tool）** | 单一能力契约（ToolSpec + BaseToolProvider / as_tool_impl），由 Agent 在决策时按需调用 | `src/modules/tools/` | `tools.toml` 提供者开关与子配置 |
 
-> 渲染输出（字幕 / 虚拟形象 / OBS 等）的装配入口不统一：OBS 等能力以 **Tool Provider** 的形式注册，开启对应开关后工具进入可见集；虚拟形象平台只接收面捕合成器的逐帧数据与 `avatar_act` 的动作，不注册 LLM 工具；字幕由 `infra.toml` 的 `[subtitle]` 段驱动。**TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component.md) 与 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
+> 渲染输出（字幕 / 虚拟形象 / OBS 等）的装配入口不统一：OBS 等能力以 **Tool Provider** 的形式注册，开启对应开关后工具进入可见集；虚拟形象平台只接收面捕合成器的逐帧数据与 `avatar_act` 的动作，不注册 LLM 工具；字幕由 `infra.toml` 的 `[subtitle]` 段驱动。**TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component/README.md) 与 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
 
 ### 3.3 可用组件清单
 
@@ -414,7 +414,7 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 
 - 了解架构设计：[架构总览](architecture/v2-architecture.md)
 - 学习开发规范：[开发规范](../AGENTS.md#代码约定)
-- 写一个自己的组件（Collector / Agent / Tool / 拦截器）：[组件开发指南](guides/component.md)
+- 写一个自己的组件（Collector / Agent / Tool / 拦截器）：[组件开发指南](guides/component/README.md)
 
 ---
 

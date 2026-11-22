@@ -398,5 +398,5 @@ await event_bus.emit(
 - [v2 架构叙事](v2-architecture.md)
 - [数据流规则](../conventions/data-flow.md)
 - [事件命名](../conventions/event-naming.md)
-- [三范式开发指南](../guides/component.md)
+- [三范式开发指南](../guides/component/README.md)
 - [架构决策记录](../decisions/README.md)

@@ -9,7 +9,7 @@
 
 ## 开发指南
 
-- [组件开发](guides/component.md)
+- [组件开发](guides/component/README.md)
 - [测试](guides/testing.md)
 - [提示词](guides/prompt.md)
 - [Skill 编写与接入](guides/skill.md)

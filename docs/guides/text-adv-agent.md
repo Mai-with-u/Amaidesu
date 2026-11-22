@@ -2,7 +2,7 @@
 
 `text_adv` 是一个**游戏 Agent**（命令驱动），用于直播文字冒险 / 视觉小说类游戏：它观察游戏画面，把剧情推进和待决策的选项上报给主播 Agent，由主播定夺后驱动游戏。它**绝不替主播做选择**——感知与上报是它的全部主动行为。
 
-它为什么是 Agent 而不是工具：`set_auto(true)` 后它自己拉起并持有观察循环（`asyncio.Task`），有自己的内部状态（剧情环缓冲、auto 标志）和循环内自主决策（何时降频省 VLM、护栏失败如何收场）；工具面只是主播遥控它的命令入口。归类判据见[组件开发指南](component.md#判据组件该做成哪一类)。
+它为什么是 Agent 而不是工具：`set_auto(true)` 后它自己拉起并持有观察循环（`asyncio.Task`），有自己的内部状态（剧情环缓冲、auto 标志）和循环内自主决策（何时降频省 VLM、护栏失败如何收场）；工具面只是主播遥控它的命令入口。归类判据见[组件开发指南](component/README.md#判据组件该做成哪一类)。
 
 ## 工作原理
 
@@ -135,4 +135,4 @@ tool = "text_adv_advance"
 - `screen.py` / `window.py` / `input.py` — 稳定判定、窗口护栏、键鼠注入后端
 - `state.py` / `config.py` — 内部状态、配置 Schema
 
-新增同类游戏 Agent 时照此包范式扩展（加包 + 配置，框架零改动），范式见 [游戏 Agent 范式（Minecraft）](../architecture/minecraft-agent.md) 与[组件开发指南](component.md)。
+新增同类游戏 Agent 时照此包范式扩展（加包 + 配置，框架零改动），范式见 [游戏 Agent 范式（Minecraft）](../architecture/minecraft-agent.md) 与[组件开发指南](component/README.md)。
