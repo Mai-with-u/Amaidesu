@@ -83,7 +83,7 @@ class SessionCase:
 
 @dataclass(frozen=True)
 class SequenceRecord:
-    """一条用例：连着的几场，与序列末尾该在、不该在快照和开播简报里的事（按键名）。
+    """一条用例：连着的几场，与序列末尾该在、不该在快照和开播记忆摘要里的事（按键名）。
 
     ``present`` 是稳定的事（量遗忘率）；``kept`` 是哪一场都没有证据说它了结的旧行（多是一次性的
     小事），进过快照的序列末尾也必须还在；模型当初就没把它写成档案的不算"被丢"，另行报告。
@@ -507,9 +507,9 @@ def verdict_failures(metrics: RollingMetrics, *, dry: bool) -> List[str]:
     if metrics.wrongly_lasting > WRONGLY_LASTING_MAX:
         failures.append(f"进展被标成稳定的事 {metrics.wrongly_lasting} 条")
     if metrics.brief_archive_missing > 0:
-        failures.append(f"开播简报漏掉应保留的事件行 {metrics.brief_archive_missing} 条")
+        failures.append(f"开播记忆摘要漏掉应保留的事件行 {metrics.brief_archive_missing} 条")
     if metrics.brief_commitment_missing > 0:
-        failures.append(f"开播简报【还惦记的事】漏掉近期活跃承诺 {metrics.brief_commitment_missing} 条")
+        failures.append(f"开播记忆摘要【还惦记的事】漏掉近期活跃承诺 {metrics.brief_commitment_missing} 条")
     if metrics.stale_commitment_leaked > 0:
         failures.append(f"过期承诺混入【还惦记的事】 {metrics.stale_commitment_leaked} 条")
     if dry and metrics.kept_unwritten:
@@ -532,7 +532,7 @@ def format_metrics(metrics: RollingMetrics) -> str:
             f"没有本场证据的旧行被丢 {metrics.unevidenced_lost}/{metrics.kept_total} 条（阈值 {UNEVIDENCED_LOST_MAX}；"
             f"另有 {metrics.kept_unwritten} 条模型当初没写成档案，不计入）",
             f"进展被标成稳定的事 {metrics.wrongly_lasting}/{metrics.not_lasting_total} 条（阈值 {WRONGLY_LASTING_MAX}）",
-            f"开播简报核验：漏事件 {metrics.brief_archive_missing} 条，漏近期承诺 {metrics.brief_commitment_missing} 条，"
+            f"开播记忆摘要核验：漏事件 {metrics.brief_archive_missing} 条，漏近期承诺 {metrics.brief_commitment_missing} 条，"
             f"过期承诺混入 {metrics.stale_commitment_leaked} 条（阈值均为 0）",
             f"留下的旧行字节变化 {metrics.byte_mismatches} 处（阈值 {BYTE_MISMATCH_MAX}）",
         ]

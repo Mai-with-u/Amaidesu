@@ -2177,7 +2177,7 @@ class MinecraftAgent(BaseAgent):
                 self._delegations.mark_running()
             # 推理前确保抗折叠钉住规矩固定层与当前状态同步（无规矩时不占槽位，有规矩时紧跟固定前缀）
             self._sync_pinned_rules_message(messages, expect_rewrite=False)
-            # 主控态正常推理步前拼入未读的 [直播间刚说过] 回执、远处 [公屏旁听]、地标与环节切换 [脑中闪过]（均只附尾、保前缀缓存）；
+            # 主控态正常推理步前拼入未读的 [直播间刚说过] 回执、远处 [游戏公屏旁听]、地标与环节切换 [脑中闪过]（均只附尾、保前缀缓存）；
             # 若上一步刚成功触发 framework_commentary 并出声，紧邻步先剔除异步稍晚落入的自产 game_commentary 回声，
             # 同时照常放行并发到达的外部主播弹幕回声（零误吞、防自产回声续轮风暴）
             if suppress_next_commentary_echo:
@@ -4612,7 +4612,7 @@ class MinecraftAgent(BaseAgent):
             query_text = "\n".join(clean_texts).strip()
             if not query_text:
                 return []
-            # 排除近期尾部已见原话、已展示公共规矩及本批触发文本自身，只闪出早先记住的规矩、折叠摘要或更早公屏；
+            # 排除近期尾部已见原话、已展示公共规矩及本批触发文本自身，只闪出早先记住的规矩、折叠摘要或更早的游戏公屏；
             # 传 wait_vector_ms=0：命中缓存即时融合余弦，未就绪仅后台预取并毫秒级返回关键词命中，不被慢嵌入取消
             excludes = set(self._chat_gate.recent_human_texts())
             excludes.update(clean_texts)

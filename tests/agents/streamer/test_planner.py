@@ -307,7 +307,7 @@ async def test_brief_rides_at_system_prompt_tail_not_in_reference() -> None:
 
 
 async def test_brief_omitted_when_absent_or_unreadable() -> None:
-    """没有简报时系统提示词保持原样；简报读失败只省这一段，决策照常。"""
+    """没有记忆摘要时系统提示词保持原样；记忆摘要读失败只省这一段，决策照常。"""
     planner, llm, _prompt = _make_planner([_resp()])
     await planner.plan([_msg()])
     assert _system_message(llm) == "SYSTEM_PROMPT"

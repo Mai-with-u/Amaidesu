@@ -362,7 +362,7 @@ class MemoryCueProvider:
         ``previous_session_provider`` 给"上一场"的判定（承诺线索与往事线索的时间词）：缺省时
         一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有往事线索；
         ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时被动想起三路都不跑；``search`` 缺失、
-        没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。``game_player_repo`` 缺失时没有玩家卡；
+        没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。``game_player_repo`` 缺失时没有玩家线索；
         ``correction_repo`` 缺失时不附本场进展注记；``social_fact_repo`` 缺失时游戏主控意图联想
         优雅降级，不推社交事实卡。
         """
@@ -969,7 +969,7 @@ class MemoryCueProvider:
             if self._passive_blocked(key, state) is not None:
                 continue
 
-            # 观众来源行的原话先遮掉观众名再匹配，杜绝观众昵称命中或泄露隐私
+            # 观众定下的事所在行的原话先遮掉观众名再匹配，杜绝观众昵称命中或泄露隐私
             safe_quote = (line.quote or "").strip()
             if line.source == "viewer" and line.source_viewer_names and safe_quote:
                 safe_quote = mask_names_in_text(safe_quote, line.source_viewer_names, "那位观众")
@@ -1052,7 +1052,7 @@ class MemoryCueProvider:
         if not candidate_ids:
             return [], fts_hit_ids
         try:
-            # 经 list_cue_lines 统一核实正式场身份并带上观众来源遮名信息
+            # 经 list_cue_lines 统一核实正式场身份并带上观众定下的事的遮名信息
             verified = await archive.list_cue_lines(line_ids=candidate_ids)
         except Exception as exc:  # noqa: BLE001 - 核实失败不推该批档案
             logger.warning(f"意图联想核对跨场档案行失败（跳过）: {exc}", exc=exc)
@@ -1616,7 +1616,7 @@ class MemoryCueProvider:
         state: _Round,
         excluded_compact: Sequence[str] = (),
     ) -> None:
-        """规则：弹幕或她最近的台词提到了触发词；自触发须不在简报、来自两场以前，且每条每场只推一次。"""
+        """规则：弹幕或她最近的台词提到了触发词；自触发须不在记忆摘要、来自两场以前，且每条每场只推一次。"""
         for hit in hits:
             limit = MAX_SELF_PUSHES_PER_CARD if hit.self_only else MAX_PUSHES_PER_CARD
             if self._skip(hit.key, state, self._passive_blocked(hit.key, state, limit=limit)):

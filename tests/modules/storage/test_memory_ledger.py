@@ -306,7 +306,7 @@ async def test_snapshot_before_seeds_from_old_archives_and_stops_at_a_stored_one
 
 
 async def test_latest_snapshot_is_the_previous_long_enough_session(store: SQLiteDatabase) -> None:
-    """简报读的快照：最近一个时长够的场次（写过快照的空场次也算）；开错重开的一小段跳过。"""
+    """记忆摘要读的快照：最近一个时长够的场次（写过快照的空场次也算）；开错重开的一小段跳过。"""
     real = await _ended_session(store, started_at_ms=1_000, duration_ms=3_600_000)
     await _settle_with_snapshot(store, real, new=[])
     false_start = await _ended_session(store, started_at_ms=4_000_000, duration_ms=60_000)

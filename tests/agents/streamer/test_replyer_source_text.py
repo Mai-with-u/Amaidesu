@@ -275,7 +275,7 @@ class _PlanRecordingReplyer:
 
 
 async def test_reply_tool_strips_memory_numbers_from_the_handoff() -> None:
-    """房管照抄简报里的编号写进发言要点：交给说话侧之前去掉，她看不到就不会念出来。"""
+    """房管照抄记忆摘要里的编号写进发言要点：交给说话侧之前去掉，她看不到就不会念出来。"""
     replyer = _PlanRecordingReplyer()
     provider = ReplyToolProvider(replyer=cast(Replyer, replyer))
     arguments = {

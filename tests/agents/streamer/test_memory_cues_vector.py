@@ -204,7 +204,7 @@ async def test_game_situation_is_queried_once_per_change(store: SQLiteDatabase) 
     ["viewer", "closed", "brief", "vector_off"],
 )
 async def test_vector_skips_what_it_must_not_push(store: SQLiteDatabase, change: str) -> None:
-    """对某位观众的承诺、已了结的承诺、简报里列着的行、关掉向量一路：都不推。"""
+    """对某位观众的承诺、已了结的承诺、记忆摘要里列着的行、关掉向量一路：都不推。"""
     memory = await _Memory(store).seed()
     session_id = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms())
     extra: dict[str, Any] = {}

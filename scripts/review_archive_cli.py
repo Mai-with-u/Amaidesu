@@ -28,7 +28,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ):
         p = sub.add_parser(cmd_name, help=help_text)
         p.add_argument("--db", default="data/amaidesu.db", help="SQLite 数据库文件路径")
-        p.add_argument("--line-id", type=int, required=True, help="档案行主键（即简报中的 档#N）")
+        p.add_argument("--line-id", type=int, required=True, help="档案行主键（即记忆摘要中的 档#N）")
     return parser.parse_args(argv)
 
 

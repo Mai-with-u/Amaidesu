@@ -1436,7 +1436,7 @@ async def test_opening_intent_triggers_passive_flash_with_exclude_texts_and_zero
             assert "营地西边本来就有一座现成的下界门" in tail_text
             assert "营地西边本来就有一座现成的下界门" not in str(msg0_snapshot.get("content") or "")
 
-            # 2) 公屏触发同样透传 exclude_texts，避免重复闪出前 6 条已有规矩
+            # 2) 游戏公屏触发同样透传 exclude_texts，避免重复闪出前 6 条已有规矩
             turns_before_chat = len(llm.seen)
             await bus.emit(
                 CoreEvents.GAME_CHAT_RECEIVED,

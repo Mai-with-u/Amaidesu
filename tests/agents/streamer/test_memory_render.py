@@ -90,7 +90,7 @@ def test_archive_block_renders_title_and_quote_and_caps_lines() -> None:
         _archive(line_id=index, text=f"第 {index} 条", quote="原话") for index in range(1, MAX_BRIEF_ARCHIVE_LINES + 4)
     ]
     rendered = render_archive_block(lines)
-    assert len(rendered) == MAX_BRIEF_ARCHIVE_LINES == 12, "一份滚动档案至多 12 行，简报照这个数列"
+    assert len(rendered) == MAX_BRIEF_ARCHIVE_LINES == 12, "一份档案快照至多 12 行，记忆摘要照这个数列"
     assert rendered[0] == "- [档#1] 第 1 条（你说过「原话」）", "档案行带编号：要提这件事就点名"
     assert render_archive_block([_archive(text="", quote="")]) == []
 

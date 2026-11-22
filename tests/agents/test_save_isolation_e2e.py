@@ -105,7 +105,7 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         home, new = GameSave(id="home", name="老家"), GameSave(id="new", name="新的世界")
 
         # 老家：老家的事照列、新的世界的折成一行；记笔记、给女仆起名
-        # （承诺轮播已停：承诺线索改为走到提及地点时单推，简报窗不再按存档推卡）
+        # （承诺轮播已停：承诺线索改为走到提及地点时单推，记忆摘要不再按存档推线索）
         await _enter(server, registry, home)
         brief, cards = await _streamer_view(streamer)
         assert "眼下 minecraft 开着存档「老家」。" in brief and "屋顶终于封好了" in brief

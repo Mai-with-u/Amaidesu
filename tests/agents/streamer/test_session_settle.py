@@ -177,7 +177,7 @@ async def test_close_call_asks_for_all_four_kinds_of_closure(
 ) -> None:
     """了结那次调用的问法要列全四种了结，与了结系统提示词一致。
 
-    只问"做完了或不做了"时，她当众坦白"那个我真弄不来"的承诺了结不了，一直留在简报里。
+    只问"做完了或不做了"时，她当众坦白"那个我真弄不来"的承诺了结不了，一直留在记忆摘要里。
     """
     session_id = await _ended_session(store)
     old = await store.commitments.insert_commitment(what="画生日贺图", quote="下播给你画张生日贺图", now_ms_value=100)

@@ -64,7 +64,7 @@ variables: []
 - `observe(self)` 的 `mod_features` 列着当前实例已就绪的模组能力（如 `chain_mining` 连锁破坏、`lootr` 独立战利品箱等），`last_chain_mining` 与采掘结果 `details.chain_mining` 记着这次连上了几批共几格、单挖几格，以及未连上或部分未连的原因（`not_chained_reason`）；采掘结果 `details.pits` 记着地面挖出的深坑是否已回填（`filled`）及说明（`note`）。主播或玩家问起为什么没用连锁、装没装某项能力，或地上坑怎么来的，照这些字段如实交代，不凭空猜成缺附魔。
 - 任务状态里的 `named_creatures` 是主播给游戏里的生物起的名字：名字 → 是哪一只（种类、谁的、皮肤）、此刻怎样。主播在指令里用这些名字（"带上阿缕"）时，按写着的种类和皮肤在 `observe(scene)` 里找到那只的观察编号；写着已死的就不在了，别去找。
 - 任务上下文里的 `world_social_rules` 是当前存档已核实的公共规矩：看到 `world_social_rules` 时遵守其中的共享设施惯例、同伴关系与领地边界（公用设施按约定使用和复位，不擅闯或乱动他人领地与正在推进的工程；若本次目标与公共规矩直接冲突，先用 escalation 请主播定夺）。
-- 任务状态里出现 `commitment_ledger` 时，其中的 `约#N` 是跨场权威承诺账本（包含仍在推进的约定与本场已了结的记录）：当场还清物品、推进了一部分进度或确认原约定已不成立时，凭本场物品交付回执或玩家公屏依据调用 `streamer_memory_correct`（对应 `done` / `progress` / `invalid`）即时更新账本，不再在 `minecraft_notebook` 中另抄欠账替代权威账本。
+- 任务状态里出现 `commitment_ledger` 时，其中的 `约#N` 是跨场权威承诺表（包含仍在推进的约定与本场已了结的记录）：当场还清物品、推进了一部分进度或确认原约定已不成立时，凭本场物品交付回执或玩家游戏公屏依据调用 `streamer_memory_correct`（对应 `done` / `progress` / `invalid`）即时更新承诺表，不再在 `minecraft_notebook` 中另抄欠账替代承诺表。
 - 任务状态里出现 `known_places` 时，它是当前存档已登记的地标、加工站、地盘与核心设施紧凑目录（按当前维度与跨维度分组，仅列名称）：动工新建或寻找现有设施前可直接对照确认是否已有现成设施，需要具体坐标或细节时再查 `observe(what=detail)` 或 `observe(what=places)`。
 - 角色死了会收到一条 `[身体]` 通知，Mod 同时挂出一条死亡恢复决策（`goal_id` 是负数，`maicraft_goal(list)` 里看得到）：按问题里给的选项用 `maicraft_goal(operation=answer)` 回答，选重生才会复活。目标停在原地，复活后接着做，不用重新下达；复活后先看一眼自己再决定。自己用 `suicide` 死的，通知会写明是回家的办法，照样选重生。
 

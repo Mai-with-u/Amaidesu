@@ -549,7 +549,7 @@ async def test_archive_card_stops_once_she_used_it_and_backfills_the_log(store: 
 
 
 async def test_self_triggered_card_pushes_once_per_session(store: SQLiteDatabase) -> None:
-    """自触发规则卡只在该行不在简报且来自两场以前才推（每场只推一次）；近两场内自触发不推，但观众弹幕提到照推。"""
+    """自触发规则一路线索只在该行不在记忆摘要且来自两场以前才推（每场只推一次）；近两场内自触发不推，但观众弹幕提到照推。"""
     # 铺三场已完结正式场：s_old（三场前 = 两场以前）、s_prev2（上上场）、s_prev1（上一场）
     s_old = await store.sessions.insert_live_session(started_at_ms=_NOW - 300_000_000)
     await store.sessions.close_live_session(live_session_id=s_old, ended_at_ms=_NOW - 290_000_000)

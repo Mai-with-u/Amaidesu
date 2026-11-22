@@ -1020,7 +1020,7 @@ class LeadCoordinator:
         exclude_texts: Sequence[str] = (),
         limit: int = 2,
     ) -> List[str]:
-        """供主控游戏 Agent 在收到公屏合批、产生行动意图或到达地标时拉取跨场被动记忆线索卡（异常隔离、零游戏名硬编码）。"""
+        """供主控游戏 Agent 在收到游戏公屏合批、产生行动意图或到达地标时拉取跨场被动记忆线索（异常隔离、零游戏名硬编码）。"""
         provider = self._passive_cue_provider
         normalized_game = (game or "").strip()
         if provider is None or not normalized_game or limit <= 0:

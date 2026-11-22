@@ -227,7 +227,7 @@ async def test_refresh_brief_reads_previous_archive_and_pending_commitments(stor
 
 
 async def test_next_brief_reflects_operator_corrections(store: SQLiteDatabase) -> None:
-    """运营者删一行档案、判一条承诺误记之后，下一场开播重拼的简报就少那几行。
+    """运营者删一行档案、判一条承诺误记之后，下一场开播重拼的记忆摘要就少那几行。
 
     简报只依赖表快照、每场开播重拼一次：删掉的行在下一份简报里不再出现，没动的照旧在。
     """

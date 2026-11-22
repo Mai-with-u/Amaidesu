@@ -850,7 +850,7 @@ def render_game_card(commitment: Commitment, *, game: str, unsure_save: bool = F
     )
 
 
-# 游戏主控态社交事实线索卡的类别短标签（与回想工具和社交事实渲染口径一致）
+# 游戏主控态社交事实线索的类别短标签（与回忆工具和社交事实渲染口径一致）
 _SOCIAL_FACT_CUE_LABELS: Mapping[str, str] = {
     "works": "记着的事",
     "sharing": "共享惯例",
@@ -860,7 +860,7 @@ _SOCIAL_FACT_CUE_LABELS: Mapping[str, str] = {
 
 
 def render_social_fact_card(fact: "SocialFact") -> str:
-    """游戏主控态社交事实线索卡：清晰紧凑，不带内部数据库主键、不泄露直播间观众隐私。"""
+    """游戏主控态社交事实线索：清晰紧凑，不带内部数据库主键、不泄露直播间观众隐私。"""
     text = " ".join((fact.text or "").split())
     if not text:
         return ""

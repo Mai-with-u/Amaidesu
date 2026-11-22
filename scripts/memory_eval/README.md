@@ -347,7 +347,7 @@ uv run python scripts/memory_eval/player_candidates.py --live --out reports/play
 
 另报 `word_blocked`：模型列了、代码核出名字或梗词不在那条弹幕原文里（或不在标题里）而拦下的条数。
 dry 的理想输出故意把个人信息行、模拟观众行和"名字是她自己起的"行也列上，核对代码把它们拦下。候选
-批准前不进简报、记忆线索、回忆，由契约测试保证，不在这里量。
+批准前不进记忆摘要、记忆线索、回忆，由契约测试保证，不在这里量。
 
 ```bash
 uv run python scripts/memory_eval/viewer_candidates.py

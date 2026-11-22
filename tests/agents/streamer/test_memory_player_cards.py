@@ -168,7 +168,7 @@ async def test_cooldown_cap_and_stop_once_she_answered_him(store: SQLiteDatabase
 
 
 async def test_promises_to_him_ride_on_his_card_only(store: SQLiteDatabase) -> None:
-    """答应过 Alex 的事：他露面时写在他的卡尾（没有别的往来也推），简报和游戏开着的卡都不提。"""
+    """答应过 Alex 的事：他露面时写在线索末尾（没有别的往来也推），记忆摘要里不列，也不按游戏开着轮播。"""
     before, current = await _two_sessions(store)
     alex = await store.game_players.meet_player(
         game="minecraft", uuid="uuid-a", name="Alex", live_session_id=before, at_ms=_NOW - 85_000_000
