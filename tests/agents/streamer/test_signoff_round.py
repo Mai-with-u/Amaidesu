@@ -2,7 +2,7 @@
 
 道别窗的回归用真实的场次管理器、场次盖章拦截器、记账器与 SQLite 临时库串起来：
 手动下播时场次先写成已结束、再发 ``live.ended``，道别那一轮必须按正在结束的那一场
-读历史、给道别句盖那一场的编号、按那一场的类型回想；这一场只在道别那一轮自己的调用链里
+读历史、给道别句盖那一场的编号、按那一场的类型回忆；这一场只在道别那一轮自己的调用链里
 看得见，道别期间新开的场次与并发的常规轮次照常按进行中场次走。场次行已删或将删（空场次、
 删除进行中场次）时道别照常跑，但道别句不落库、不排收播整理。
 
@@ -134,7 +134,7 @@ def _no_more_calls() -> Response:
 
 
 def _recall_call(query: str = "钻石") -> ToolCall:
-    """回想工具（阶段 3b 起由 memory_recall 取代旧的两个回想工具）。"""
+    """回忆工具（阶段 3b 起由 memory_recall 取代旧的两个回忆工具）。"""
     return ToolCall(id="call_recall", name="memory_recall", arguments={"query": query, "scope": "all"})
 
 
@@ -187,7 +187,7 @@ def _replyer_dialogues(prompt: MagicMock) -> List[str]:
 async def _started_signoff_agent(
     stack: _LiveStack, llm: MagicMock, prompt: Optional[MagicMock] = None, *, with_sessions: bool = False
 ) -> StreamerAgent:
-    """真实 Planner + Replyer；只接聊天仓储与回顾、印象两张表（回想工具要用），不起收播整理。
+    """真实 Planner + Replyer；只接聊天仓储与回顾、印象两张表（回忆工具要用），不起收播整理。
 
     ``with_sessions`` 再接上场次表：备忘录每次写入落进场次行，用例才看得到哪一场存了什么；
     同时收播整理也会起（下播后后台用 summary 档位写一次回顾）。默认不接——接上后开播时会把
@@ -205,7 +205,7 @@ async def _started_signoff_agent(
         # 下播整理走账本（承诺与场次档案）：接上仓储才会在道别后起一次 summary 档位整理
         commitments_repo=stack.store.commitments,
         archive_repo=stack.store.archive,
-        # 回想工具走混合检索：接上索引，并在启动前把已造好的档案补进索引（不和后台补算抢先后）
+        # 回忆工具走混合检索：接上索引，并在启动前把已造好的档案补进索引（不和后台补算抢先后）
         memory_index_repo=stack.store.memory_index,
     )
     await MemoryIndexer(repo=stack.store.memory_index, embedding=None, embedding_note="").run_once()
@@ -214,7 +214,7 @@ async def _started_signoff_agent(
 
 
 async def _past_session_with_recap(store: SQLiteDatabase, *, kind: SessionKind, recap: str) -> None:
-    """造一场已整理过的同类型场次：常驻简报取它的档案行（阶段 3b 起不再注入旧回顾文本）。"""
+    """造一场已整理过的同类型场次：记忆摘要取它的档案行（阶段 3b 起不再注入旧回顾文本）。"""
     pk = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=1_000, kind=kind)
     await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=9_000)
     await store.archive.insert_line(live_session_id=pk, text=recap, quote=recap, evidence_chat_id=1)
@@ -262,12 +262,12 @@ async def _end_and_wait_signoff(
 async def test_signoff_round_reads_and_lands_in_the_ending_session(
     live_stack: _LiveStack, kind: SessionKind, recalled: str, other_line: str
 ) -> None:
-    """手动下播：道别那一轮看得见本场最后几条原文，按本场类型回想，道别句落进刚结束的那一场；
-    这一轮跑完，正在结束的场次随之失效，之后的轮次按"没开场次"回想（未开播按正式场算）。"""
+    """手动下播：道别那一轮看得见本场最后几条原文，按本场类型回忆，道别句落进刚结束的那一场；
+    这一轮跑完，正在结束的场次随之失效，之后的轮次按"没开场次"回忆（未开播按正式场算）。"""
     store, manager = live_stack.store, live_stack.manager
     await _past_session_with_recap(store, kind="live", recap="正式那场挖到了钻石")
     await _past_session_with_recap(store, kind="rehearsal", recap="彩排那场试了新皮肤")
-    # 道别那一轮：先回想上一场，再开口道别；下播后的一轮调试闲聊：只回想上一场、不开口
+    # 道别那一轮：先回忆上一场，再开口道别；下播后的一轮调试闲聊：只回忆上一场、不开口
     # 道别那一轮只查属于它那一类场次的档案；下播后的轮次没有进行中场次，按正式场查
     signoff_query = "新皮肤" if "彩排" in recalled else "钻石"
     llm = _routed_llm(
@@ -293,18 +293,18 @@ async def test_signoff_round_reads_and_lands_in_the_ending_session(
 
     first, second, _after_signoff, after_recall = _planner_requests(llm)
     assert "TNT阵还差最后一排没铺完" in first and "下次一定要把它炸了" in first, "道别那一轮看得到本场最后的原文"
-    assert recalled in second and other_line not in second, "道别那一轮按正在结束的场次类型回想上一场"
+    assert recalled in second and other_line not in second, "道别那一轮按正在结束的场次类型回忆上一场"
     assert [speech.live_session_id for speech in live_stack.speeches] == [pk], "道别句带的是刚结束那一场的编号"
     assert [row.content for row in stored] == [FAREWELL], "记账器把道别句落进刚结束的那一场"
-    # 道别那一轮跑完之后：常驻简报仍是这一场开播时定的那份（整场不变，不会因为下播就换一份），
-    # 回想工具不按场次类型过滤，往场的档案照样查得到
-    assert "正式那场挖到了钻石" in after_recall, "道别那一轮跑完，回想工具照样能翻到往场的档案"
+    # 道别那一轮跑完之后：记忆摘要仍是这一场开播时定的那份（整场不变，不会因为下播就换一份），
+    # 回忆工具不按场次类型过滤，往场的档案照样查得到
+    assert "正式那场挖到了钻石" in after_recall, "道别那一轮跑完，回忆工具照样能翻到往场的档案"
 
 
 async def test_signoff_round_recalls_this_stream_of_the_ending_session(live_stack: _LiveStack) -> None:
-    """道别那一轮回想"本场"：查的是正在结束的那一场，原文不遮名。
+    """道别那一轮回忆"本场"：查的是正在结束的那一场，原文不遮名。
 
-    场次管理器发 live.ended 前已清掉进行中场次；回想工具取"本场"若照常读进行中场次，
+    场次管理器发 live.ended 前已清掉进行中场次；回忆工具取"本场"若照常读进行中场次，
     道别时会答"现在不在直播"，或把刚结束的这一场当成往场、把观众昵称遮掉。
     """
     store, manager = live_stack.store, live_stack.manager
@@ -338,12 +338,12 @@ async def test_signoff_round_recalls_this_stream_of_the_ending_session(live_stac
 
 async def test_signoff_during_new_session_does_not_leak_into_concurrent_round(live_stack: _LiveStack) -> None:
     """彩排场手动下播，道别那一轮还在等模型时开了正式场、跑了一轮常规决策：这一轮按正式场
-    读历史、按正式场回想上一场、台词记进正式场；道别那一轮照旧按彩排场读、记进彩排场。"""
+    读历史、按正式场回忆上一场、台词记进正式场；道别那一轮照旧按彩排场读、记进彩排场。"""
     store, manager = live_stack.store, live_stack.manager
     await _past_session_with_recap(store, kind="live", recap="正式那场挖到了钻石")
     await _past_session_with_recap(store, kind="rehearsal", recap="彩排那场试了新皮肤")
     gate, entered = asyncio.Event(), asyncio.Event()
-    # 并发的常规轮次：先回想上一场，再开口打招呼
+    # 并发的常规轮次：先回忆上一场，再开口打招呼
     regular_steps = [
         _planner_step(_recall_call("钻石")),
         _planner_step(_reply_call(topic="和观众打招呼", guidance="欢迎大家来看正式场")),

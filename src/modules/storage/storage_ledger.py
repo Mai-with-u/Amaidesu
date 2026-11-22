@@ -25,7 +25,7 @@ StorageLedger —— 直播间消息流落库器
 - 启动时把库里还挂着受理的委派一律记成被打断（上一个进程留下的，不会再有终态）：续播、直接开新场、
   手动收尾残留场都一样，下播整理不会把它们当成还在做。委派账只由本落库器写，主播侧只读。
 - 游戏 Agent 代发的"停了没交付"上报（``report_kind=undelivered``）不落成游戏事件行：同一件事委派账里
-  已有终态行，固定的那句落成阶段汇报会越积越多、进记忆检索污染回想。
+  已有终态行，固定的那句落成阶段汇报会越积越多、进记忆检索污染回忆。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环。
 """
 
@@ -99,7 +99,7 @@ class StorageLedger:
         self._privacy = privacy
         self._retention = retention
         self._cleanup_on_live_ended = cleanup_on_live_ended
-        # 游戏里的人：公屏聊天、她在公屏说的话、玩家互动落玩家表与公屏聊天表（随本落库器一起起停）
+        # 游戏里的人：游戏公屏、她在游戏公屏说的话、玩家互动落玩家表与游戏公屏表（随本落库器一起起停）
         # 游戏里的人：不记录名单里的玩家再出现也不记，名单查询走隐私服务
         self._game_players = (
             GamePlayerLedger(event_bus, game_player_repo, privacy) if game_player_repo is not None else None
@@ -618,7 +618,7 @@ class StorageLedger:
             )
 
     async def _reply_player_id(self, payload: StreamerSpeechPayload) -> Optional[int]:
-        """这句台词在回应的游戏玩家：本窗只有他一位开口时发言事件带着他的 UUID，按玩家表认出主键。
+        """这句台词在回应的游戏玩家：本回合只有他一位开口时发言事件带着他的 UUID，按玩家表认出主键。
 
         玩家表里还没有他（落库器还没写到、或已被删除）时不记，读失败也只记日志：台词照常落库。
         """
@@ -692,7 +692,7 @@ class StorageLedger:
     ) -> None:
         """``game.*`` 通配回调：游戏里程碑/安全阀/异常写入 game_events 表。"""
         if payload.event_type == "report" and payload.report_kind == "undelivered":
-            # 停了没交付：委派账里已有这件委派的终态行；固定那句落成阶段汇报会越积越多、污染回想
+            # 停了没交付：委派账里已有这件委派的终态行；固定那句落成阶段汇报会越积越多、污染回忆
             return
         try:
             live_pk = await self._resolve_live_pk(payload.live_session_id)
@@ -742,7 +742,7 @@ class StorageLedger:
         """``task.changed`` 回调：委派型任务的受理与终态写成 ``delegation_*`` 游戏事件行。
 
         受理行正文只存发起方自己的原话（受理时快照里的 own_words）：账面的全文附着来源对话，里面有
-        观众昵称、弹幕原话与玩家公屏原话，落库后删观众、删玩家只换得掉名字、换不掉原话。终态行正文
+        观众昵称、弹幕原话与玩家游戏公屏原话，落库后删观众、删玩家只换得掉名字、换不掉原话。终态行正文
         是终态摘要；每行都记发起方。停滞提醒、running 与等定夺这类过程变化不落，provider 型任务也不落。
         """
         if payload.source != "agent" or payload.alert:

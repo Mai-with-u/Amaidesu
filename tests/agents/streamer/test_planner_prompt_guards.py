@@ -25,7 +25,7 @@ from src.modules.tools.registry import ToolRegistry
 from src.modules.utils.time_utils import now_ms
 from tests.modules.llm.fakes import FakeLLMManager
 
-#: 三条说话通路（Planner、Replyer、嘴）共用的 AI 声明口径，Planner 这条接在它后面补"交接稿要让她这样答"
+#: 三条说话通路（Planner、Replyer、嘴）共用的 AI 声明口径，Planner 这条接在它后面补"发言要点要让她这样答"
 _AI_DECLARATION = "被问到是不是真人时，坦白自己是 AI 主播，可以俏皮，但不能否认"
 
 #: 「她是谁」一节的结尾：AI 声明那一段的最后一句，边界栏一行接在它后面
@@ -40,7 +40,7 @@ def prompts() -> Iterator[Any]:
 
 
 async def _system_prompt(prompts: Any, *, boundaries: str) -> str:
-    """跑一个决策窗，取发给模型的第一条消息（系统提示词）；假模型不调工具，这一窗自然沉默。"""
+    """跑一个决策回合，取发给模型的第一条消息（系统提示词）；假模型不调工具，这一窗自然沉默。"""
     llm = FakeLLMManager()
     planner = Planner(
         config=PlannerConfig(),
@@ -90,12 +90,12 @@ def _render_bare(prompts: Any) -> str:
 async def test_boundaries_line_sits_next_to_ai_declaration_with_handover_reminder(
     prompts: Any, boundaries: str, line: str
 ) -> None:
-    """人设里写了她不答应的事：「她是谁」一节里 AI 声明后面多一行"不答应的事：…"，并提醒交接稿里别替她答应；
+    """人设里写了她不答应的事：「她是谁」一节里 AI 声明后面多一行"不答应的事：…"，并提醒发言要点里别替她答应；
     行为准则一节仍是配置原文，边界栏不拼进去。"""
     system = await _system_prompt(prompts, boundaries=boundaries)
 
     expected = (
-        f"{_AI_PARAGRAPH_END}\n\n{line}（交接稿里别替她答应这些事，碰到就让她婉拒）\n\n"
+        f"{_AI_PARAGRAPH_END}\n\n{line}（发言要点里别替她答应这些事，碰到就让她婉拒）\n\n"
         "# 行为准则\n\n积极互动\n\n# 当前游戏的玩法"
     )
     assert expected in system
@@ -109,7 +109,7 @@ async def test_empty_boundaries_omit_the_whole_line_but_keep_ai_declaration(prom
 
     assert "不答应的事：" not in system
     assert f"{_AI_PARAGRAPH_END}\n\n# 行为准则\n\n积极互动\n\n# 当前游戏的玩法" in system
-    assert _AI_DECLARATION in system and "交接稿要让她这样答" in system
+    assert _AI_DECLARATION in system and "发言要点要让她这样答" in system
 
 
 def test_refusals_follow_the_boundaries_line_not_a_hardcoded_list(prompts: Any) -> None:
@@ -290,7 +290,7 @@ async def test_proactive_action_options_mention_avatar_act_only_when_registered(
 
 async def test_a3_and_a4_pit_trap_checks_own_recent_digging_and_explosions_before_answering(prompts: Any) -> None:
     """A3 + A4 补 1 回归（第 61 场 21:45 '还有陷阱' / 第 65 场 22:41 '卡住了'）：
-    玩家甲在公屏说'这边还有陷阱''还有陷阱 2 号'或指出卡住时，【游戏那边此刻】呈现近期挖掘与失败记录，
+    玩家甲在游戏公屏说'这边还有陷阱''还有陷阱 2 号'或指出卡住时，【游戏那边此刻】呈现近期挖掘与失败记录，
     系统提示词明确要求先对照自己最近挖过什么、哪里爆炸过、哪步没成，是自己造成的就认下来去处理，不反问'在哪儿'。"""
     ts = now_ms()
     captured_messages: list[list[dict]] = []
@@ -370,7 +370,7 @@ async def test_a3_and_a4_pit_trap_checks_own_recent_digging_and_explosions_befor
         env=PlannerEnv(reply_provider_factory=lambda: MagicMock(), game_now_provider=lambda _a: game_now),
     )
 
-    chat_line = "[21:45 minecraft 公屏] 玩家 玩家甲：这边还有陷阱，还有陷阱 2 号"
+    chat_line = "[21:45 minecraft 游戏公屏] 玩家 玩家甲：这边还有陷阱，还有陷阱 2 号"
     outcome = await planner.plan(
         [],
         proactive=True,
@@ -489,7 +489,7 @@ async def test_a4_why_not_use_capability_checks_game_records_instead_of_fabricat
 async def test_s66_remote_public_chat_exclamation_marks_absent_speakers_and_guards_against_self_attribution(
     prompts: Any,
 ) -> None:
-    """第 66 场 22:55:21 回归：两名玩家远在沙漠神殿发全服公屏感叹'wc'/'全是压力板'，主播独自在营地西边修压机。
+    """第 66 场 22:55:21 回归：两名玩家远在沙漠神殿发全服游戏公屏感叹'wc'/'全是压力板'，主播独自在营地西边修压机。
     即便营地机器归属字段写着玩家甲，现场速览的周边实体里没有这两名玩家——参考段必须点明两人当前不在身边，
     且系统提示词明确未点名她的异地环境感叹不能硬套成自己手头工位的状况，拿不准可顺口问清在哪碰上的。"""
     captured_messages: list[list[dict]] = []
@@ -559,8 +559,8 @@ async def test_s66_remote_public_chat_exclamation_marks_absent_speakers_and_guar
         env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
 
-    line_a = "[22:55 minecraft 公屏] 玩家 玩家甲：wc"
-    line_b = "[22:55 minecraft 公屏] 玩家 玩家乙：全是压力板"
+    line_a = "[22:55 minecraft 游戏公屏] 玩家 玩家甲：wc"
+    line_b = "[22:55 minecraft 游戏公屏] 玩家 玩家乙：全是压力板"
     outcome = await planner.plan(
         [],
         proactive=True,
@@ -584,7 +584,7 @@ async def test_s66_remote_public_chat_exclamation_marks_absent_speakers_and_guar
 
 
 def test_s66_nearby_and_named_players_keep_positive_response_guardrail(prompts: Any) -> None:
-    """配对副作用护栏：不能因为防远端公屏误认，压低对身边围观互动、点名主播或向主播求助搭话玩家的回应积极度。"""
+    """配对副作用护栏：不能因为防远端游戏公屏误认，压低对身边围观互动、点名主播或向主播求助搭话玩家的回应积极度。"""
     system_text = prompts.render(
         "amaidesu_planner_react",
         bot_name="麦麦",
@@ -603,8 +603,8 @@ def test_s66_nearby_and_named_players_keep_positive_response_guardrail(prompts: 
         '"entities": [{"type": "minecraft:player", "name": "玩家甲", "distance": 4.0}]}'
     )
     notes = (
-        PlayerNote(who="玩家甲", said=True, line="[22:56 minecraft 公屏] 玩家 玩家甲：这台压机转起来了"),
-        PlayerNote(who="玩家乙", said=True, line="[22:56 minecraft 公屏] 玩家 玩家乙：麦麦家里还有铁锭吗"),
+        PlayerNote(who="玩家甲", said=True, line="[22:56 minecraft 游戏公屏] 玩家 玩家甲：这台压机转起来了"),
+        PlayerNote(who="玩家乙", said=True, line="[22:56 minecraft 游戏公屏] 玩家 玩家乙：麦麦家里还有铁锭吗"),
     )
     mixed = render_game_speakers(notes, overview=overview)
     assert "在游戏里回一句" in mixed
@@ -617,12 +617,12 @@ def test_s66_nearby_and_named_players_keep_positive_response_guardrail(prompts: 
 
 
 def test_game_chat_vs_streamer_reply_role_split_in_prompt_and_speakers(prompts: Any) -> None:
-    """系统提示词与公屏说话人参考段均明确区分 minecraft_chat_send（往游戏公屏发字）与 streamer_reply（直播间口播收口）。"""
+    """系统提示词与游戏公屏说话人参考段均明确区分 minecraft_chat_send（往游戏公屏发字）与 streamer_reply（直播间口播收口）。"""
     system_text = _render_bare(prompts)
     assert "单独填 `to_player` 只标记口播对象、不会往游戏公屏发字" in system_text
-    assert "调用 `minecraft_chat_send` 把游戏内文字发进公屏，再用 `streamer_reply` 收口直播口播" in system_text
+    assert "调用 `minecraft_chat_send` 把游戏内文字发进游戏公屏，再用 `streamer_reply` 收口直播口播" in system_text
 
-    note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 公屏] 玩家 玩家甲：在忙什么")
+    note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 游戏公屏] 玩家 玩家甲：在忙什么")
     speakers_text = render_game_speakers((note,))
     assert speakers_text.startswith("【游戏公屏近期发言】")
     assert "调用 `minecraft_chat_send` 在游戏里回一句" in speakers_text
@@ -632,11 +632,11 @@ def test_game_chat_vs_streamer_reply_role_split_in_prompt_and_speakers(prompts: 
 
 
 def test_speakers_segment_anchors_the_mention_mark(prompts: Any) -> None:
-    """提及标注判据：公屏说话人段锚住行尾的 [提及…] 标注——带标注优先处理、无标注的旁人对话不插嘴。
+    """提及标注判据：游戏公屏说话人段锚住行尾的 [提及…] 标注——带标注优先处理、无标注的旁人对话不插嘴。
 
     标注是采集器按文本判的事实：判据同时写明撞词也照标、"说她"是否等于"跟她说话"由模型按句意分辨。
     """
-    note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 公屏] 玩家 玩家甲：麦麦在吗")
+    note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 游戏公屏] 玩家 玩家甲：麦麦在吗")
     speakers_text = render_game_speakers((note,))
     assert "行尾带 [提及…] 标注的行是正文里提到了她的名字，优先处理" in speakers_text
     assert "是不是在跟她说话按那句的意思分辨" in speakers_text, "只做事实标注，行为判断留给模型"
@@ -670,12 +670,12 @@ def test_online_players_from_overview_parses_presence_cleanly(overview: str, exp
 
 
 def test_render_game_speakers_marks_offline_players_and_mixed_presence() -> None:
-    """本窗发言过的玩家若在当刻速览里已不在 online_players 中，现场核对如实标明已下线并不必往公屏空喊。"""
+    """本回合发言过的玩家若在当刻速览里已不在 online_players 中，现场核对如实标明已下线并不必往游戏公屏空喊。"""
     offline_overview = 'minecraft_glance: {"body": {"dimension": "minecraft:overworld"}, "online_players": []}'
-    note_a = PlayerNote(who="玩家甲", said=True, line="[21:10 minecraft 公屏] 玩家 玩家甲：我先溜了")
+    note_a = PlayerNote(who="玩家甲", said=True, line="[21:10 minecraft 游戏公屏] 玩家 玩家甲：我先溜了")
     only_offline = render_game_speakers((note_a,), overview=offline_overview)
     assert "玩家 玩家甲 当前已下线" in only_offline
-    assert "无需再用 `minecraft_chat_send` 往公屏空喊" in only_offline
+    assert "无需再用 `minecraft_chat_send` 往游戏公屏空喊" in only_offline
     assert "可在直播口播里顺口带过" in only_offline
 
     # 三种在场状态并存：玩家甲在身边、玩家乙在线但不在身边、玩家丙刚说完已下线
@@ -686,20 +686,20 @@ def test_render_game_speakers_marks_offline_players_and_mixed_presence() -> None
     )
     notes = (
         note_a,
-        PlayerNote(who="玩家乙", said=True, line="[21:10 minecraft 公屏] 玩家 玩家乙：我在矿洞挖铁"),
-        PlayerNote(who="玩家丙", said=True, line="[21:10 minecraft 公屏] 玩家 玩家丙：拜拜"),
+        PlayerNote(who="玩家乙", said=True, line="[21:10 minecraft 游戏公屏] 玩家 玩家乙：我在矿洞挖铁"),
+        PlayerNote(who="玩家丙", said=True, line="[21:10 minecraft 游戏公屏] 玩家 玩家丙：拜拜"),
     )
     mixed = render_game_speakers(notes, overview=mixed_overview)
     assert "玩家 玩家甲 当前就在身边，围观搭话照常积极回应" in mixed
     assert "玩家 玩家乙 当前不在身边（仍在服内在线）" in mixed
-    assert "玩家 玩家丙 当前已下线" in mixed and "无需再用 `minecraft_chat_send` 往公屏空喊" in mixed
+    assert "玩家 玩家丙 当前已下线" in mixed and "无需再用 `minecraft_chat_send` 往游戏公屏空喊" in mixed
 
 
 def test_delegate_rules_check_online_players_and_click_commands(prompts: Any) -> None:
-    """委派守则：主动在公屏找人前先对照 online_players 确认在线，系统消息带可点击执行命令时可委派执行。"""
+    """委派守则：主动在游戏公屏找人前先对照 online_players 确认在线，系统消息带可点击执行命令时可委派执行。"""
     rules_text = prompts.render("amaidesu_planner_delegate_rules")
     assert "对照【现场速览】的 `online_players` 确认对方此刻在线" in rules_text
-    assert "不在列表里的已下线玩家不往公屏空喊" in rules_text
+    assert "不在列表里的已下线玩家不往游戏公屏空喊" in rules_text
     assert "（可点击执行: /...）" in rules_text
     assert "委派游戏里按该命令执行" in rules_text
 

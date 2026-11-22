@@ -57,11 +57,11 @@ class AgentDeps:
     # 记忆检索的派生索引仓储与嵌入服务装配结果（没配嵌入时客户端为空，只补全文索引）
     memory_index_repo: Optional[Any] = None
     embedding_setup: Optional[Any] = None
-    # 线索卡记录仓储（被动想起每推一张卡记一行）
+    # 记忆线索记录仓储（被动想起每推一张卡记一行）
     memory_cue_log_repo: Optional[Any] = None
-    # 游戏里的人（主播的玩家卡读：玩家在游戏里开口或冲她做动作时，这位是谁、和她有过什么）
+    # 游戏里的人（主播的玩家线索读：玩家在游戏里开口或冲她做动作时，这位是谁、和她有过什么）
     game_player_repo: Optional[Any] = None
-    # 游戏社交事实（主播的社交事实工具、参考段与回想读写）
+    # 游戏社交事实（主播的社交事实工具、参考段与回忆读写）
     social_fact_repo: Optional[Any] = None
     # 自备话题匣与提问箱仓储（主播杂谈档预摆卡片与 talk_draw_cards 工具读写）
     talk_card_repo: Optional[Any] = None

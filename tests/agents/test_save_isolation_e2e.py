@@ -1,7 +1,7 @@
-"""换存档端到端：MaiCraft 报的存档从老家 → 主菜单 → 新的世界 → 回老家，主播的常驻简报、游戏承诺卡、
+"""换存档端到端：MaiCraft 报的存档从老家 → 主菜单 → 新的世界 → 回老家，主播的记忆摘要、游戏承诺线索、
 MC 的工作日志与生物名册都跟着眼下的存档走。
 
-MC Agent 真启动，经目标跟踪的长轮询读替身的事件页认存档；主播与 MC 共用一个工具注册表，开窗前从
+MC Agent 真启动，经目标跟踪的长轮询读替身的事件页认存档；主播与 MC 共用一个工具注册表，回合开始前从
 工具面拉存档。库是临时 SQLite（档案、承诺、名册都是真表）。
 """
 
@@ -43,7 +43,7 @@ async def _enter(server: FakeMaicraft, registry: ToolRegistry, save: GameSave) -
 
 
 async def _streamer_view(streamer: StreamerAgent) -> Tuple[str, Tuple[int, ...]]:
-    """主播这一窗看到的：常驻简报，与正在玩 minecraft 时推的承诺卡编号。"""
+    """主播这一窗看到的：记忆摘要，与正在玩 minecraft 时推的承诺线索编号。"""
     streamer._sync_current_saves()
     await streamer._refresh_memory_brief()
     cues = await streamer._collect_memory_cues([], ["minecraft"])
@@ -105,7 +105,7 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         home, new = GameSave(id="home", name="老家"), GameSave(id="new", name="新的世界")
 
         # 老家：老家的事照列、新的世界的折成一行；记笔记、给女仆起名
-        # （承诺轮播已停：承诺卡改为走到提及地点时单推，简报窗不再按存档推卡）
+        # （承诺轮播已停：承诺线索改为走到提及地点时单推，简报窗不再按存档推卡）
         await _enter(server, registry, home)
         brief, cards = await _streamer_view(streamer)
         assert "眼下 minecraft 开着存档「老家」。" in brief and "屋顶终于封好了" in brief

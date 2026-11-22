@@ -1,4 +1,4 @@
-"""回想工具的仓储检索面：live_chat 关键词检索、场次边界与观众昵称全表。
+"""回忆工具的仓储检索面：live_chat 关键词检索、场次边界与观众昵称全表。
 
 覆盖：多关键词取交集、场次过滤、newest / oldest 两向取批、只有已播出的台词才命中
 （dropped_at_ms 带标记的不算说过的话）、LIKE 元字符按字面匹配、观众消息只按场次取、
@@ -78,7 +78,7 @@ async def _danmaku(store: SQLiteDatabase, pk: int, *, user_id: str, name: str, t
 
 
 async def test_list_speech_by_ids_keeps_the_given_order_and_only_aired_lines(store: SQLiteDatabase) -> None:
-    """回想按检索结果的先后还原台词；没送到观众面前的（dropped_at_ms 非空）不算说过。"""
+    """回忆按检索结果的先后还原台词；没送到观众面前的（dropped_at_ms 非空）不算说过。"""
     pk = await _session(store, started=1_000)
     first = await _say(store, pk, "今天挖矿挖到钻石了", 1_100)
     dropped = await _say(store, pk, "这句没送到观众面前", 1_200, dropped_at_ms=1_250)

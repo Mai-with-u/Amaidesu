@@ -168,7 +168,7 @@ def _extract_sender_distance(event: Dict[str, Any]) -> Optional[float]:
 
 
 def new_message_id() -> str:
-    """一条公屏消息的消息号：8 位十六进制随机串（一场几百句，撞号可忽略；工具按"恰好命中一行"兜底）。"""
+    """一条游戏公屏消息的消息号：8 位十六进制随机串（一场几百句，撞号可忽略；工具按"恰好命中一行"兜底）。"""
     return secrets.token_hex(4)
 
 

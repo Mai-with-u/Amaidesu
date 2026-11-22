@@ -1,11 +1,11 @@
-"""玩家卡：游戏里的人开口或冲她做动作时，推一张"这位是谁、和你有过什么"。
+"""玩家线索：游戏里的人开口或冲她做动作时，推一张"这位是谁、和你有过什么"。
 
 覆盖：
 - 只推给这一窗找过她的那位（按 UUID 对上），卡面写往来事实与他当时的名字（改过名写以前叫什么）
 - 新面孔、只在本场或彩排里有往来的不推
 - 同一位每场至多两次、隔十分钟；本场她已经回应过他就不再推（用上即停）
-- 推出去的卡记进线索卡记录，只记玩家编号
-- 答应过他的事写在他的卡尾；对玩家的承诺不进常驻简报、不当"游戏开着"的卡推给全场
+- 推出去的卡记进记忆线索记录，只记玩家编号
+- 答应过他的事写在他的卡尾；对玩家的承诺不进记忆摘要、不当"游戏开着"的卡推给全场
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ _NOW = 1_000_000_000_000
 
 
 class _Clock:
-    """可拨动的时钟：玩家卡的冷却按它算。"""
+    """可拨动的时钟：玩家线索的冷却按它算。"""
 
     def __init__(self, value: int = _NOW) -> None:
         self.value = value
@@ -221,7 +221,7 @@ async def test_a_promise_she_already_used_drops_off_his_card(store: SQLiteDataba
 
 
 async def test_no_card_for_a_player_who_asked_to_be_forgotten(store: SQLiteDatabase) -> None:
-    """他在公屏发过"忘了我"、还在宽限期里：不再提起他。"""
+    """他在游戏公屏发过"忘了我"、还在宽限期里：不再提起他。"""
     before, current = await _two_sessions(store)
     alex_id = await _old_friend(store, before, current)
     with store.manager.transaction() as conn:
@@ -259,7 +259,7 @@ async def test_approved_self_statements_ride_on_his_card_only(store: SQLiteDatab
     await repo.decide_player_candidate(candidate_id=ids[0], approve=True, at_ms=_NOW - 70_000_000)
 
     brief = await build_brief(archive_repo=store.archive, commitments_repo=store.commitments)
-    assert "雪山脚下" not in brief.text, "自述不进常驻简报"
+    assert "雪山脚下" not in brief.text, "自述不进记忆摘要"
     cues = await _provider(store, current, _Clock(), before).collect(batch=[], game_players=[("minecraft", "uuid-a")])
     assert cues.card_count == 1
     # 这一场没报存档（不分存档）时不加"在哪个存档"的注；分存档时的注与答应过他的事同一个说法
@@ -281,7 +281,7 @@ def test_self_statements_from_another_save_say_where() -> None:
 
 
 async def test_player_card_syncs_progress_and_drops_closed_promise(store: SQLiteDatabase) -> None:
-    """玩家卡同步本场最新 progress 附注；承诺在本场 done 结案后再次开口不再推送旧约卡片。"""
+    """玩家线索同步本场最新 progress 附注；承诺在本场 done 结案后再次开口不再推送旧约卡片。"""
     before, current = await _two_sessions(store)
     player = await store.game_players.meet_player(
         game="minecraft", uuid="uuid-pa", name="PlayerA", live_session_id=before, at_ms=_NOW - 85_000_000
@@ -296,7 +296,7 @@ async def test_player_card_syncs_progress_and_drops_closed_promise(store: SQLite
     with store.manager.transaction() as conn:
         conn.execute("UPDATE commitments SET target_player_id=?, game='minecraft' WHERE id=?", (player.id, promise))
 
-    # 写入两次本场 progress，玩家卡应只展示最新进展且承诺仍保持 open
+    # 写入两次本场 progress，玩家线索应只展示最新进展且承诺仍保持 open
     await store.memory_corrections.insert_and_apply(
         live_session_id=current,
         target_kind="commitment",

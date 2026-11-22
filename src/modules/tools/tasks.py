@@ -89,7 +89,7 @@ TASK_CANCELLED: TaskStatus = "cancelled"
 TASK_TIMEOUT: TaskStatus = "timeout"
 TASK_UNDELIVERED: TaskStatus = "undelivered"
 
-# 执行 Agent 最近说的一句判断与时刻（账本旁注，见 annotate）：发起方每窗决策前读它当参考；
+# 执行 Agent 最近说的一句判断与时刻（账本旁注，见 annotate）：发起方每回合决策前读它当参考；
 # 它是没脱敏的推理原文（坐标、工具名都在里面），不算进展，也不进拒受理与队列清单理由
 REPLY_NOTE_KEY = "latest_reply"
 REPLY_NOTE_AT_KEY = "latest_reply_at_ms"

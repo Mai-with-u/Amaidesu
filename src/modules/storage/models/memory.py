@@ -17,7 +17,7 @@
 自带逐字原话作证据；原话所在场次被删时 evidence_chat_id 成为空引用。
 
 ``ArchiveLine`` —— ``archive_lines`` 一行：场次档案的标题与原话片段，
-下次开播回想「上一场」时用。
+下次开播回忆「上一场」时用。
 
 ``ArchiveSnapshot`` —— 一场整理后她该记得的事（滚动档案快照）：每行引用一条档案行，
 带"是否长期""最近一次写下或再提起是哪一场"两项快照自己的标注；原行一个字节都不动。
@@ -146,12 +146,12 @@ class Commitment(BaseModel):
 
     @property
     def has_target(self) -> bool:
-        """是对某位观众或某位游戏玩家答应的：只在那个人露面时提，不进常驻简报、不对全场推。"""
+        """是对某位观众或某位游戏玩家答应的：只在那个人露面时提，不进记忆摘要、不对全场推。"""
         return self.viewer_id is not None or self.target_player_id is not None
 
 
 class ArchiveLine(BaseModel):
-    """``archive_lines`` 一行：场次档案里的一条，下次开播回想"上一场"时用。"""
+    """``archive_lines`` 一行：场次档案里的一条，下次开播回忆"上一场"时用。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -176,20 +176,20 @@ class ArchiveLine(BaseModel):
         default="streamer", description="来源：streamer 她自己说的（整理写、人新增）/ viewer 人批准的观众候选"
     )
     viewer_chat_id: Optional[int] = Field(
-        default=None, description="观众来源的行挂着的那条弹幕（live_chat 行）；她自己说的为空"
+        default=None, description="观众定下的事所在行挂着的那条弹幕（live_chat 行）；她自己说的为空"
     )
     source_viewer_names: List[str] = Field(
         default_factory=list,
         exclude=True,
         description=(
-            "观众来源的行：那条弹幕的发送者用过的名字（读的时候按弹幕查出来，不是库里的列）。"
-            '只给渲染用：简报、线索卡、回复器档把原话里的这些名字换成"那位观众"，库里的原话不改'
+            "观众定下的事所在行：那条弹幕的发送者用过的名字（读的时候按弹幕查出来，不是库里的列）。"
+            '只给渲染用：记忆摘要、记忆线索、回复器档把原话里的这些名字换成"那位观众"，库里的原话不改'
         ),
     )
     viewer_word: str = Field(
         default="",
         description=(
-            "观众来源的行：批准时从候选抄来的观众定下的名字或梗词；她自己说的行为空。"
+            "观众定下的事所在行：批准时从候选抄来的观众定下的名字或梗词；她自己说的行为空。"
             '渲染原话时和它相同的那一段不换成"那位观众"——观众的名字和起的名字撞上时，起的名字照说'
         ),
     )
@@ -249,7 +249,7 @@ class SnapshotChange(BaseModel):
 
 
 class CardKindStat(BaseModel):
-    """某一类线索卡这一场推了几张、她点名用上几张。"""
+    """某一类记忆线索这一场推了几张、她点名用上几张。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -277,7 +277,7 @@ class SideEffectStats(BaseModel):
     circling_items: int = Field(default=0, description="在任意 30 分钟里被点名 3 次及以上的条目数（围着一件事绕）")
     cards: Dict[str, CardKindStat] = Field(
         default_factory=dict,
-        description="线索卡按卡类（viewer / player / game / place / rule / vector / joke）推了几张、用上几张",
+        description="记忆线索按卡类（viewer / player / game / place / rule / vector / joke）推了几张、用上几张",
     )
     self_triggered_cards: int = Field(default=0, description="只由她自己的台词触发的卡数（防打转的口径）")
     max_cards_per_player: int = Field(default=0, description="同一位游戏玩家这一场被推卡最多的张数")
@@ -305,10 +305,10 @@ class MemoryCorrection(BaseModel):
     )
     summary: str = Field(..., description="一句话说明现状")
     evidence_kind: Literal["game_receipt", "player_chat", "operator", "self_seen"] = Field(
-        ..., description="证据类别：游戏回执 / 玩家公屏 / 运营提醒 / 亲眼看到"
+        ..., description="证据类别：游戏回执 / 玩家游戏公屏 / 运营提醒 / 亲眼看到"
     )
     evidence_quote: str = Field(default="", description="证据逐字片段")
-    evidence_game_chat_id: Optional[int] = Field(default=None, description="引用的玩家公屏行主键（删玩家级联删除）")
+    evidence_game_chat_id: Optional[int] = Field(default=None, description="引用的玩家游戏公屏行主键（删玩家级联删除）")
     source: Literal["streamer", "operator"] = Field(..., description="来源：streamer 主播工具 / operator 运营递话")
     prev_commitment_status: str = Field(default="", description="当场改写承诺前的原状态（供人工撤回还原）")
     created_at_ms: int = Field(..., description="记录时刻（Unix epoch 毫秒）")
@@ -341,7 +341,7 @@ class SettleReport(BaseModel):
     )
     side_effects: Optional[SideEffectStats] = Field(
         default=None,
-        description="这一场的唠叨指标（点名旧事几次、没人问时提几次、线索卡用上几张）；本场没点名也没推卡为 None",
+        description="这一场的唠叨指标（点名旧事几次、没人问时提几次、记忆线索用上几张）；本场没点名也没推卡为 None",
     )
 
 
@@ -421,7 +421,7 @@ class ViewerCandidate(PendingViewerCandidate):
 
 
 class ViewerSelfNote(BaseModel):
-    """已批准的老观众近况（供场内老观众卡按观众只读展示）。"""
+    """已批准的老观众近况（供场内老观众线索按观众只读展示）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -471,7 +471,7 @@ class IndexCandidate(BaseModel):
 
 
 class NewCueLogEntry(BaseModel):
-    """一张推出去的线索卡（写进 ``memory_cue_log`` 的样子）：只有条目编号和分数，不带观众身份。"""
+    """一张推出去的记忆线索（写进 ``memory_cue_log`` 的样子）：只有条目编号和分数，不带观众身份。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -482,8 +482,8 @@ class NewCueLogEntry(BaseModel):
         description="卡类：viewer 对象开口 / player 游戏玩家开口 / game 游戏开着 / place 地点 / rule 规则"
         " / vector 向量 / vector_probe 向量未推留痕 / joke 老梗",
     )
-    archive_line_id: Optional[int] = Field(default=None, description="指向的档案行（档案卡才有）")
-    commitment_id: Optional[int] = Field(default=None, description="指向的承诺（承诺卡才有）")
+    archive_line_id: Optional[int] = Field(default=None, description="指向的档案行（往事线索才有）")
+    commitment_id: Optional[int] = Field(default=None, description="指向的承诺（承诺线索才有）")
     sources: List[str] = Field(
         default_factory=list,
         description="命中它的全部来源：danmaku 观众弹幕 / player 游戏玩家开口 / place 游戏地点"
@@ -491,7 +491,7 @@ class NewCueLogEntry(BaseModel):
     )
     detail: Dict[str, Any] = Field(
         default_factory=dict,
-        description="分数明细：规则写命中的触发词，向量写余弦、名次与融合分，地点写地点名与距离，玩家卡写玩家编号",
+        description="分数明细：规则写命中的触发词，向量写余弦、名次与融合分，地点写地点名与距离，玩家线索写玩家编号",
     )
     self_triggered: bool = Field(default=False, description="来源只有她自己的台词（防打转的统计口径）")
 

@@ -1,4 +1,4 @@
-"""v28 → v29 迁移：记忆检索的派生索引、线索卡记录，档案行与承诺的触发词、地点列。
+"""v28 → v29 迁移：记忆检索的派生索引、记忆线索记录，档案行与承诺的触发词、地点列。
 
 派生索引的删除口径全靠存储层自己保证：向量表外键级联、全文虚表靠触发器，正文被改时连同向量一起删掉
 等重算。这里用 v28 形状的最小 DDL 造前置形状后直接调 ``migrate(conn)``，再用全新库走一遍启动路径。
@@ -61,7 +61,7 @@ _SOURCES = (
 def conn() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
-    # 生产连接统一打开外键；向量表与线索卡记录的级联删除靠它
+    # 生产连接统一打开外键；向量表与记忆线索记录的级联删除靠它
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(V28_SCHEMA)
     connection.execute("INSERT INTO live_sessions(id, started_at_ms) VALUES (1, 1000)")

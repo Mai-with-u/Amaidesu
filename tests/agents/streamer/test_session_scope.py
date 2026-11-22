@@ -1,4 +1,4 @@
-"""SessionScope：场次作用域状态与决策窗开窗的接口级测试。
+"""SessionScope：场次作用域状态与决策回合开窗的接口级测试。
 
 锁定的不变量：出账先于读取（open_window 内化的顺序契约）、读历史纯读、
 合并投影按发生时刻稳定排序、读库失败宁可无历史、清场五件套、补记的
@@ -101,7 +101,7 @@ def _scope(
     )
 
 
-# 开窗：出账先于读取，且每窗恰好出账一次
+# 开窗：出账先于读取，且每回合恰好出账一次
 
 
 async def test_open_window_drains_before_reading_history() -> None:
@@ -339,5 +339,5 @@ async def test_note_delegation_writes_timeline_note_without_window_batch() -> No
     materials = await scope.open_window()
     assert len(materials.timeline_notes) == 1
     batch = scope.drain_window()
-    assert batch.events == (), "委派行不进决策窗批次"
+    assert batch.events == (), "委派行不进决策回合批次"
     assert ledger is scope.ledger

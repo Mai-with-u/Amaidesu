@@ -135,8 +135,8 @@ class GameChatPayload(BasePayload):
 class GameSelfChattedPayload(BasePayload):
     """AI 玩家自己在游戏公屏打出去的一句话。
 
-    发布者：游戏 Agent（Minecraft：公屏说话的目标结束、那句交出去了时）
-    订阅者：存储台账（落公屏聊天，供认"她在回应哪位玩家"与下播找承诺）；主播（进对话时间线，
+    发布者：游戏 Agent（Minecraft：游戏公屏说话的目标结束、那句交出去了时）
+    订阅者：存储台账（落游戏公屏，供认"她在回应哪位玩家"与下播找承诺）；主播（进对话时间线，
     她知道自己在游戏里说过什么；不促发决策）
 
     Attributes:

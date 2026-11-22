@@ -8,7 +8,7 @@
 
 - 系统消息带 ``shown_as``：不是任何人说的话，是模组借角色名义发的；
 - 没有发言人 UUID 的玩家消息：Mod 标了 ``sender_online``（发言人此刻就在在线玩家列表里，Mod 收到时核对过；
-  没签名的服务器转来的公屏聊天就是这样）的，按那个人说的话转出、不加说明；没标或标了 false 的（控制台、
+  没签名的服务器转来的游戏公屏就是这样）的，按那个人说的话转出、不加说明；没标或标了 false 的（控制台、
   命令方块的 /say 只借了个名字；旧版 Mod 不给这个字段）照记成玩家消息，但说明"没有发言人凭据，不一定是
   这个人说的"。这句说明当初是为旧版 Mod 借角色名字发的女仆坐标写的；新版 Mod 把那类改成带 ``shown_as`` 的
   系统消息，又替核对过的发言人作了保证，核对过的再挂这句只会让主播对每句搭话都起疑、问成盘问；
@@ -121,7 +121,7 @@ def attribute_chat(event: Dict[str, Any], self_name: str = "") -> Optional[ChatA
     sender_id = str(event.get("sender_id") or "")
     if sender_id or not sender:
         return ChatAttribution(kind="player", sender=sender, sender_id=sender_id, content=text)
-    # 没有发言人 UUID：Mod 核对过发言人此刻在线（没签名的服务器转来的公屏聊天）就按那个人说的话转出；
+    # 没有发言人 UUID：Mod 核对过发言人此刻在线（没签名的服务器转来的游戏公屏）就按那个人说的话转出；
     # 没核对过（/say 只借了个名字，或旧版 Mod 不给这个字段）的名字只是聊天栏上显示的，附说明。
     # 旧版 Mod 的整行文字还带着聊天格式的"<名字> "前缀，去掉
     prefix = f"<{sender}> "

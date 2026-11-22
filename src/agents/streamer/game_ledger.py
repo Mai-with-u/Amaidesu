@@ -8,8 +8,8 @@
   ``遭遇·<game>·<kind>`` / 委派行）并暂存结构化条目；账本外生产代码零手写标签
   字面量。
 - **折叠**：待入账阶段同摘要在折叠窗内连发时并入最近一条只记数（"另 N 次相同"）；
-  条目一经决策窗边界写进时间线就不再改写。
-- **出口**：``drain`` 在决策窗边界产出本批时间线行与本批状态跃迁事实块。事实块
+  条目一经决策回合边界写进时间线就不再改写。
+- **出口**：``drain`` 在决策回合边界产出本批时间线行与本批状态跃迁事实块。事实块
   直接从结构化条目渲染（保留原钟点标记），不做"字符串行 → 正则 → 事实"的反解析。
 """
 
@@ -30,7 +30,7 @@ __all__ = ["GameLedger", "keep_recent_notes", "sole_speaker_name"]
 # 覆盖游戏/身体侧按重试节奏连发同一失败摘要的典型间隔（秒级到一分多钟）
 _GAME_EVENT_FOLD_WINDOW_MS = 90_000
 
-# 待入账队列上限（条）。决策窗长期不发生时防无界增长；溢出丢最旧
+# 待入账队列上限（条）。决策回合长期不发生时防无界增长；溢出丢最旧
 _PENDING_GAME_EVENTS_MAX = 200
 
 #: 状态跃迁类事件种类：身体遭遇线（game.body.*）的死亡/重生/临时任务开始与结束，
@@ -54,7 +54,7 @@ _MAX_STATE_LINES = 8
 _MAX_INVENTORY_ITEMS = 8
 
 #: 交给回复器的"游戏里最近找你的人"只留这么久以内的：送礼、搭话常在上一窗发生、这一窗才接话，
-#: 只看本窗会漏掉；再早的多半已经接过，留着反倒让她把旧事当新事讲
+#: 只看本回合会漏掉；再早的多半已经接过，留着反倒让她把旧事当新事讲
 _PLAYER_NOTE_WINDOW_MS = 10 * 60_000
 
 #: 同上，最多留这么多条（同一位玩家连说几句各占一条）
@@ -65,7 +65,7 @@ _PLAYER_NOTES_MAX = 6
 class _PendingEntry:
     """待入账的一条结构化条目：时间线行（未折叠的底稿）+ 标签/正文字段 + 折叠计数。
 
-    折叠只发生在待入账阶段：条目一经决策窗边界写进时间线就不再改写，之后到达的
+    折叠只发生在待入账阶段：条目一经决策回合边界写进时间线就不再改写，之后到达的
     相同摘要是新的一条。``label`` / ``body`` 供事实渲染按结构化字段挑选，不走反解析。
     """
 
@@ -75,7 +75,7 @@ class _PendingEntry:
     base: str  # 未附加折叠计数说明的行原文（折叠比较键）
     arrived_ms: int
     count: int = 1
-    is_chat: bool = False  # 游戏聊天行：入账后其原话随本窗说话交给回复器
+    is_chat: bool = False  # 游戏聊天行：入账后其原话随本回合说话交给回复器
     # 聊天行是谁说的：核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息与非聊天行为空；
     # 肢体动作遭遇行写冲她做动作的玩家 UUID
     speaker: str = ""
@@ -83,16 +83,16 @@ class _PendingEntry:
     # 玩家找她的条目：玩家名与给回复器看的那句（聊天是"玩家 X：原话"，动作是去掉怎么接口径的事实）
     who: str = ""
     note: str = ""
-    # 公屏消息号：只挂在规划器看的时间线行末尾（``[id:…]``），折叠比较与交给回复器的原话都不带它
+    # 游戏公屏消息号：只挂在规划器看的时间线行末尾（``[id:…]``），折叠比较与交给回复器的原话都不带它
     message_id: str = ""
-    # 公屏行提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时在规划器看的行尾挂 [提及…] 标注
+    # 游戏公屏行提到的她的名字（采集器按文本判定的，空串 = 没提及）：出账时在规划器看的行尾挂 [提及…] 标注
     mention: str = ""
 
 
 def keep_recent_notes(kept: Sequence[PlayerNote], fresh: Sequence[PlayerNote], at_ms: int) -> Tuple[PlayerNote, ...]:
-    """上一窗留下的与本窗新到的合在一起，只留最近几分钟、最多几条（旧→新）。
+    """上一窗留下的与本回合新到的合在一起，只留最近几分钟、最多几条（旧→新）。
 
-    玩家扔来东西常在上一窗入账、这一窗才接话，所以不能只看本窗。
+    玩家扔来东西常在上一窗入账、这一窗才接话，所以不能只看本回合。
     """
     floor = at_ms - _PLAYER_NOTE_WINDOW_MS
     recent = [note for note in (*kept, *fresh) if note.timestamp_ms >= floor]
@@ -108,7 +108,7 @@ def mark_answered(
 ) -> Tuple[PlayerNote, ...]:
     """按互动渠道把指定玩家的待接条目标成已接过，其他玩家的条目保持不变。
 
-    玩家公屏发言（``said=True``）只有在游戏公屏发送工具真实把文字发出去后才允许标已回；
+    玩家游戏公屏发言（``said=True``）只有在游戏公屏发送工具真实把文字发出去后才允许标已回；
     仅完成直播间口播时只消费投掷送礼等肢体动作（``said=False``），不把尚未在游戏聊天栏回字的话误标为已接过。
     """
     return tuple(
@@ -124,7 +124,7 @@ def mark_answered(
 
 
 def sole_speaker_name(notes: Sequence[PlayerNote]) -> str:
-    """这些条目里在公屏开口的只有一位玩家时返回他的名字，否则空串（两位以上开口不猜在回谁）。"""
+    """这些条目里在游戏公屏开口的只有一位玩家时返回他的名字，否则空串（两位以上开口不猜在回谁）。"""
     names = {note.who for note in notes if note.said and note.who}
     return next(iter(names)) if len(names) == 1 else ""
 
@@ -135,11 +135,11 @@ def answering_player(
     round_notes: Sequence[PlayerNote],
     recent_notes: Sequence[PlayerNote] = (),
 ) -> str:
-    """她这句在回应游戏里的哪位玩家：Planner 点名的（``written``）优先；没点名时，本窗唯一在公屏开口、
+    """她这句在回应游戏里的哪位玩家：Planner 点名的（``written``）优先；没点名时，本回合唯一在游戏公屏开口、
     话题摘要里又提到的那位；都不成立时为空串。
 
-    只要不在回弹幕就填唯一开口的那位会张冠李戴：玩家乙扔来钻石、同一窗玩家甲在公屏说"晚上好"，她要谢乙时
-    会把礼谢给甲。点名的名字（"玩家甲"或"玩家 玩家甲"都认）要对得上本窗或最近几分钟找过她的玩家，对不上
+    只要不在回弹幕就填唯一开口的那位会张冠李戴：玩家乙扔来钻石、同一窗玩家甲在游戏公屏说"晚上好"，她要谢乙时
+    会把礼谢给甲。点名的名字（"玩家甲"或"玩家 玩家甲"都认）要对得上本回合或最近几分钟找过她的玩家，对不上
     按没点名处理：不让模型编出一个人来。
     """
     names = {note.who for note in (*round_notes, *recent_notes) if note.who}
@@ -152,7 +152,7 @@ def answering_player(
 
 
 def sole_chat_player(speakers: Sequence[Tuple[str, str]]) -> Tuple[str, str]:
-    """本窗公屏聊天只来自一位核对过的玩家时返回 (游戏, UUID)，否则为两个空串。
+    """本回合游戏公屏只来自一位核对过的玩家时返回 (游戏, UUID)，否则为两个空串。
 
     有两位以上玩家开口、或有认不出是谁的人插话时，她这一窗说的话不算在回应某一位（不猜）。
     """
@@ -165,7 +165,7 @@ class GameLedger:
     """单个 StreamerAgent 持有的游戏事件账本（非线程安全）。
 
     入账方法返回脱敏后的文本，供回调处的嘴部喂料复用同一份脱敏值；委派记录只
-    构造时间线行（委派行直写时间线，不进决策窗批次，也不参与事实块）。
+    构造时间线行（委派行直写时间线，不进决策回合批次，也不参与事实块）。
     """
 
     def __init__(self) -> None:
@@ -216,8 +216,8 @@ class GameLedger:
 
     @staticmethod
     def self_chat_label(game: str) -> str:
-        """她自己在游戏公屏说的话：``我在 <game> 公屏说``。"""
-        return f"我在 {game} 公屏说"
+        """她自己在游戏公屏说的话：``我在 <game> 游戏公屏说``。"""
+        return f"我在 {game} 游戏公屏说"
 
     # ==================== 入账 ====================
 
@@ -240,7 +240,7 @@ class GameLedger:
     ) -> str:
         """身体遭遇事件（game.body.*）入账，返回脱敏后的摘要供嘴部喂料复用。
 
-        ``player`` 是冲她做肢体动作的那位玩家的 UUID（其余遭遇为空）：出账时列进本窗找过她的玩家。
+        ``player`` 是冲她做肢体动作的那位玩家的 UUID（其余遭遇为空）：出账时列进本回合找过她的玩家。
         ``who`` 是那位玩家的名字：有名字时摘要第一句（动作事实，不带后面怎么接的口径）列进
         玩家找她的条目，回复器据此说清是谁扔来的、谁拍的她。
         """
@@ -269,7 +269,7 @@ class GameLedger:
         message_id: str = "",
         mention: str = "",
     ) -> None:
-        """游戏聊天行入账（标签就是游戏名）；原话随本窗说话交给回复器，行文不经脱敏。
+        """游戏聊天行入账（标签就是游戏名）；原话随本回合说话交给回复器，行文不经脱敏。
 
         ``speaker`` 是这句是谁说的（核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息为空）：
         出账时列进本批的发言人，她这一窗说的话据此记下在回应哪位玩家。
@@ -350,7 +350,7 @@ class GameLedger:
     # ==================== 出口 ====================
 
     def drain(self, private_chat: Sequence[str] = ()) -> GameEventBatch:
-        """决策窗边界：待入账队列整批出账，产出时间线行与本批状态跃迁事实块。
+        """决策回合边界：待入账队列整批出账，产出时间线行与本批状态跃迁事实块。
 
         折叠过多条的行附计数说明（"另 N 次相同"）后再入时间线；时间线条目只追加
         不改写，相邻窗口的历史前缀逐字一致。事实块从结构化条目渲染，带原钟点标记。
@@ -389,7 +389,7 @@ class GameLedger:
                 fresh_chat.append(content)
                 if item.speaker and (item.label, item.speaker) not in speakers:
                     speakers.append((item.label, item.speaker))
-            # 本窗找过她的玩家：公屏开口的、冲她做动作的，认得出是谁的才算（玩家卡按这个推）
+            # 本回合找过她的玩家：游戏公屏开口的、冲她做动作的，认得出是谁的才算（玩家线索按这个推）
             if item.speaker and item.speaker != "?" and (item.game, item.speaker) not in addressed:
                 addressed.append((item.game, item.speaker))
             if self._is_state_line(item.label, item.body):
@@ -413,8 +413,8 @@ class GameLedger:
 
     @staticmethod
     def _player_note(item: _PendingEntry) -> PlayerNote:
-        """一条玩家找她的条目 → 给回复器看的一行：标签只分"公屏说的"与"冲我做的"，带原钟点。"""
-        kind = "公屏" if item.is_chat else "动作"
+        """一条玩家找她的条目 → 给回复器看的一行：标签只分"游戏公屏说的"与"冲我做的"，带原钟点。"""
+        kind = "游戏公屏" if item.is_chat else "动作"
         note = item.note if item.count == 1 else f"{item.note}（另 {item.count - 1} 次相同）"
         line = note_turn(f"{item.game} {kind}".strip(), note, item.turn.timestamp_ms).content
         # 带上他是谁（游戏与 UUID）：她点名回应他时据此落库；认不出是谁的（UUID 写 "?"）留空

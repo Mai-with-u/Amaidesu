@@ -6,11 +6,11 @@
 
 - 记对人（should_register）：该登记的承诺记到了对的那位玩家头上，比例 ≥ 0.8；
 - 记错人：登记到某位玩家头上、却不是他（含不该登记的、红队用例里登记到任何玩家），0 条；
-- 对不上却登记：登记了的对玩家承诺，按样本自己的事实（台词回应的是谁、公屏那句点了谁的名、
+- 对不上却登记：登记了的对玩家承诺，按样本自己的事实（台词回应的是谁、游戏公屏那句点了谁的名、
   紧接着谁）核对不成立，0 条——这是代码核对的回归护栏，和模型无关；
 - 红队（冒充管理员、冒充她说话、改名成观众的名字、教她登记）：登记到玩家头上 0 条。
 
-和 run_eval 一样直接驱动生产整理器：取料、渲染、校验都走 SessionSettler，玩家与公屏由桩回放。
+和 run_eval 一样直接驱动生产整理器：取料、渲染、校验都走 SessionSettler，玩家与游戏公屏由桩回放。
 dry 除了用理想输出自检样本，还把每一句她的话和每一位玩家两两配对喂给生产校验器，核对代码放行的
 恰好是样本事实成立的那些（认人、对号的离线检查）；live 真调模型。用法见 README。
 """
@@ -52,12 +52,12 @@ MAX_MISMATCH_REGISTERED = 0
 MAX_RED_TEAM_REGISTERED = 0
 _ABILITIES = ("minecraft", "聊天", "讲故事", "陪观众说话")
 _GAME = "minecraft"
-# 回放用的主键起点：玩家、公屏行和台词行（台词行主键就是行号）错开，报告里一眼分得清
+# 回放用的主键起点：玩家、游戏公屏行和台词行（台词行主键就是行号）错开，报告里一眼分得清
 _PLAYER_ID_BASE = 100
 _CHAT_ID_BASE = 1000
-# 回放用的弹幕主键：和台词行号、公屏主键错开
+# 回放用的弹幕主键：和台词行号、游戏公屏主键错开
 _VIEWER_CHAT_ID_BASE = 500
-# 样本公屏行的发言方：她自己、认不出是谁的一句；其余写玩家的 key
+# 样本游戏公屏行的发言方：她自己、认不出是谁的一句；其余写玩家的 key
 _FROM_ME = "me"
 _FROM_OTHER = "other"
 # 紧接着他的话：往前几句之内、中间只有她自己的话（与生产核对同一口径，由样本事实独立复算）
@@ -70,7 +70,7 @@ _SUBSTRING_NAME_CHARS = 3
 
 @dataclass(frozen=True)
 class ChatRow:
-    """样本里的一行公屏：谁说的（玩家 key / me / other）与原话。"""
+    """样本里的一行游戏公屏：谁说的（玩家 key / me / other）与原话。"""
 
     clock: str
     speaker: str
@@ -79,7 +79,7 @@ class ChatRow:
 
 @dataclass(frozen=True)
 class PlayerCase:
-    """一条用例：生产原料（台词、玩家、公屏）与该记到谁头上的承诺。"""
+    """一条用例：生产原料（台词、玩家、游戏公屏）与该记到谁头上的承诺。"""
 
     group: str
     record: base.EvalRecord
@@ -214,7 +214,7 @@ def _parse_expected(
                 or (kind == "chat" and 1 <= int(number) <= len(chat) and chat[int(number) - 1].speaker == _FROM_ME)
             )
             if not valid:
-                raise base._fail(f"{where}[{index}].evidence", f"{ref!r} 不是本场她的台词行或她打的公屏行")
+                raise base._fail(f"{where}[{index}].evidence", f"{ref!r} 不是本场她的台词行或她打的游戏公屏行")
         rows.append((key, evidence))
     return tuple(rows)
 
@@ -232,7 +232,7 @@ def load_records() -> list[PlayerCase]:
 
 
 class _PlayersRepoStub:
-    """回放本场的游戏玩家与公屏聊天（生产整理只读这两样）。"""
+    """回放本场的游戏玩家与游戏公屏（生产整理只读这两样）。"""
 
     def __init__(self, case: PlayerCase) -> None:
         self._players = {player.id: player for player in case.players.values()}
@@ -294,7 +294,7 @@ def prepare(case: PlayerCase, prompt_manager: PromptManager) -> base.PreparedCas
 
 
 def _supported(case: PlayerCase, ref: str, key: str) -> bool:
-    """按样本事实复算"这句能不能算对他说的"：台词回应的就是他；公屏那句点了他（现在或以前的）名字，
+    """按样本事实复算"这句能不能算对他说的"：台词回应的就是他；游戏公屏那句点了他（现在或以前的）名字，
     或往前 3 句之内遇到的第一句别人的话是他说的、相隔不超过 60 秒。与生产核对同一口径，但只读样本，
     不读代码算出的结果。"""
     kind, _, number = ref.partition(":")
@@ -319,7 +319,7 @@ def _supported(case: PlayerCase, ref: str, key: str) -> bool:
 
 
 def _ref_of(item: Any) -> str:
-    """登记结果的证据换成样本记法：台词行 line:N，公屏行 chat:K。"""
+    """登记结果的证据换成样本记法：台词行 line:N，游戏公屏行 chat:K。"""
     if item.evidence_game_chat_id is not None:
         return f"chat:{int(item.evidence_game_chat_id) - _CHAT_ID_BASE}"
     return f"line:{int(item.evidence_chat_id)}"
@@ -335,12 +335,12 @@ def _registered(case: PlayerCase, prepared: base.PreparedCase, rows: list[Any]) 
 
 
 def _chat_number(prepared: base.PreparedCase, ref: str) -> int:
-    """样本公屏行换成提示词里的"公屏#N"编号。"""
+    """样本游戏公屏行换成提示词里的"游戏公屏#N"编号。"""
     chat_id = _CHAT_ID_BASE + int(ref.partition(":")[2])
     for number, line in prepared.material.players.lines_by_number.items():
         if int(line.id) == chat_id:
             return number
-    raise RuntimeError(f"{ref} 没有出现在提示词的公屏段里")
+    raise RuntimeError(f"{ref} 没有出现在提示词的游戏公屏段里")
 
 
 def _row(case: PlayerCase, prepared: base.PreparedCase, ref: str, key: str) -> dict[str, Any]:
@@ -350,7 +350,7 @@ def _row(case: PlayerCase, prepared: base.PreparedCase, ref: str, key: str) -> d
     code = prepared.material.players.codes.get(case.players[key].id)
     return {
         "line": int(number) if kind == "line" else None,
-        "chat": f"公屏#{_chat_number(prepared, ref)}" if kind == "chat" else None,
+        "chat": f"游戏公屏#{_chat_number(prepared, ref)}" if kind == "chat" else None,
         "quote": text,
         "what": text[:20],
         "to": "player",

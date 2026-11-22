@@ -1,6 +1,6 @@
 """直播画面挂帧节流键退役迁移测试（agents.toml v2.0.46）。
 
-决策窗改为每窗必挂暂存最新帧，``[agents.streamer.live_frame]`` 的
+决策回合改为每回合必挂暂存最新帧，``[agents.streamer.live_frame]`` 的
 ``max_age_ms`` / ``min_interval_ms`` 失去消费者，加载期原地删除；
 其他段的 ``min_interval_ms`` 不受影响；重复加载零变更。
 """

@@ -1,6 +1,6 @@
 """观众候选仓储：整理写进待审区（本场待审的整份替换）、批准、驳回、过期。
 
-批准观众定下的写成一行观众来源的档案行并放进最新快照；批准她说欠着的登记成未了结承诺；
+批准观众定下的写成一行观众定下的事的档案行并放进最新快照；批准她说欠着的登记成未了结承诺；
 驳回的留着当去重依据；待审的只按时间过期。
 """
 
@@ -143,7 +143,7 @@ async def test_approving_a_viewer_defined_candidate_writes_a_normal_viewer_line(
         True,
     ), "以普通行插在最前面：稳定照批准时标的，不标放回"
     assert await store.memory_review.count_human_edits(live_session_id=session_id) == 0, (
-        "观众来源行重新整理时留着，不拦重新整理"
+        "观众定下的事行重新整理时留着，不拦重新整理"
     )
     assert _edits(store) == [("candidate", "approve", "猫叫团子", "和观众一起给猫取名团子")]
 
@@ -181,7 +181,7 @@ async def test_pending_candidates_expire_after_fourteen_days_only(store: SQLiteD
 
 
 async def test_viewer_line_reads_back_with_the_source_viewers_names(store: SQLiteDatabase) -> None:
-    """批准后的观众来源行：按挂着的那条弹幕带出发送者的名字（弹幕上的名、现名），快照、按编号、线索池都带；
+    """批准后的观众定下的事行：按挂着的那条弹幕带出发送者的名字（弹幕上的名、现名），快照、按编号、线索池都带；
     她自己说的行不带。原话照存不改。"""
     session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=600_000)

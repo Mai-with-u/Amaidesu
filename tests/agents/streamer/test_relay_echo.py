@@ -383,7 +383,7 @@ async def test_stuck_game_and_refused_delegate_no_longer_deadlock() -> None:
 
 
 async def test_cold_window_relays_with_or_without_fresh_game_chat_and_attaches_chat_source() -> None:
-    """拆闸后冷场窗允许补充要求；批次里带来本窗新入账的玩家原话时，来源对话逐字附带进递话。"""
+    """拆闸后冷场窗允许补充要求；批次里带来本回合新入账的玩家原话时，来源对话逐字附带进递话。"""
     invoked: List[ToolInvocation] = []
     planner = _planner([_relay("先核对下炉子状态"), Response(success=True, content="不说")], invoked)
     await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
@@ -463,7 +463,7 @@ def test_prompts_state_relay_and_completion_rules() -> None:
     assert "error.fields" in game
     # 卡住等我拿主意时空窗也补；游戏里回话用 minecraft_chat_send 直发、像玩家打字那样短，游戏侧照发不加工
     assert "停着等我拿主意" in planner and "minecraft_chat_send" in planner
-    # 游戏侧不再代打主播的公屏话：她自己直连发送，游戏 Agent 只管行动与自己想说的话
+    # 游戏侧不再代打主播的游戏公屏话：她自己直连发送，游戏 Agent 只管行动与自己想说的话
     assert "她自己直连发送" in game and "不把要问的事列成清单或编号" in game
 
 

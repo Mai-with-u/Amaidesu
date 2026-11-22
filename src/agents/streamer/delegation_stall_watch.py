@@ -4,7 +4,7 @@
 告警发了主播也做不出决断（场 65：全场 11 次告警，主播侧零反应）。本件按同一
 委派计数告警，输出两样东西：
 
-- 每次告警一条决策窗必读材料行：委派原话、已停多久、第几次告警；
+- 每次告警一条决策回合必读材料行：委派原话、已停多久、第几次告警；
 - 停着等定夺（waiting_for_decision）的委派连续收到第 N 次
   告警仍无决断（无撤单 / 无改单 / 无账面变化）→ 判自动撤单，由调用方经
   ``framework_task_settle``（``outcome="drop"``）撤掉并补一条场记事实
@@ -49,7 +49,7 @@ def _progress_view(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class StallAlertOutcome:
-    """一次停滞告警的处置结果：决策窗材料行与是否判自动撤单。
+    """一次停滞告警的处置结果：决策回合材料行与是否判自动撤单。
 
     ``material`` 是未经脱敏的行原文（含委派原话），入账侧统一脱敏。
     """
@@ -85,7 +85,7 @@ class DelegationStallWatch:
         self._entries: Dict[str, _Entry] = {}
 
     def note_alert(self, payload: Any) -> Optional[StallAlertOutcome]:
-        """停滞告警计数：返回决策窗材料与是否判自动撤单；非委派告警返回 None。
+        """停滞告警计数：返回决策回合材料与是否判自动撤单；非委派告警返回 None。
 
         ``payload`` 是 ``TaskChangedPayload``（alert=True）。同一任务两次告警之间
         账面对比没变 → 累计计数；变了 → 算有进展/决断，从这次重新数。

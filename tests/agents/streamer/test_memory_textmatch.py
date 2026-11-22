@@ -63,7 +63,7 @@ def test_or_query_quotes_every_word_so_operators_stay_literal() -> None:
 
 
 def test_recall_query_strips_colloquial_fillers_and_falls_back_when_all_stopwords() -> None:
-    """回想查询剥离中英文疑问虚词与时间套话；整句只有虚词时回退原词表，确保纯虚词查询不报错也不返回空。"""
+    """回忆查询剥离中英文疑问虚词与时间套话；整句只有虚词时回退原词表，确保纯虚词查询不报错也不返回空。"""
     assert fts_recall_query("上次 那个 挖矿 是不是 钻石") == '"挖矿" OR "钻石"'
     assert fts_recall_query("What was the camera you had before?") == '"camera"'
     # 整句全是虚词时回退原去重词表，保持可检索

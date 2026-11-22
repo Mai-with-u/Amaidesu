@@ -1,20 +1,20 @@
-"""常驻简报：按台账快照渲染的一段记忆摘要。
+"""记忆摘要：按台账快照渲染的一段记忆摘要。
 
 两段料：上一场（最近一个整理过、时长够的同类型场次）的档案快照——那一场新写的事加上从
 之前几场接住、仍然成立的事，分"上一场""之前"两块列；所有不针对具体观众、不挂游戏的
-未了结承诺（最老的在前，至多五条，多出来的折成一行指向回想工具）。彩排场接彩排场、
+未了结承诺（最老的在前，至多五条，多出来的折成一行指向回忆工具）。彩排场接彩排场、
 正式场接正式场，调试场不会被当成正式直播的上一场；时长太短的场次（开错后马上重开的
 那一小段）也不算上一场，往前找，它登记的承诺照常进承诺段。本场台词已经点名用过的
-承诺不再进简报（与线索卡的"用上即停"同口径）：一件事一场提一次就够，不然她每个
-决策窗都看到它，会一整场围着它转。点名用过的档案行留着、末尾标"（本场已提过）"：
+承诺不再进记忆摘要（与记忆线索的"用上即停"同口径）：一件事一场提一次就够，不然她每个
+决策回合都看到它，会一整场围着它转。点名用过的档案行留着、末尾标"（本场已提过）"：
 档案行是她知道的事实，撤掉她会在同一场里忘掉刚说过的名字和住处。
 
-分存档的游戏（工具面报得出眼下在哪个存档）：简报开头写明眼下在哪个存档，上一场在别的
+分存档的游戏（工具面报得出眼下在哪个存档）：记忆摘要开头写明眼下在哪个存档，上一场在别的
 存档里做的事折成一行，没记存档的游戏行注明不确定（判定见 ``saves``）。
 
-渲染只依赖表快照、不含时刻：表没变时每个决策窗的输出逐字节相同，Planner 的系统
+渲染只依赖表快照、不含时刻：表没变时每个决策回合的输出逐字节相同，Planner 的系统
 提示词前缀缓存仍然命中；表变了（运营者判误记、了结、删一行，或上一场整理刚写完）
-下一窗就反映出来——每窗重渲正是为了让直播中的纠错"下一窗少一行"。
+下一窗就反映出来——每回合重渲正是为了让直播中的纠错"下一窗少一行"。
 """
 
 from __future__ import annotations
@@ -61,15 +61,15 @@ logger = get_logger("MemoryBrief")
 
 # 一次读多少条未了结承诺（够筛出不挂游戏、不针对人的那几条）
 _CANDIDATE_LIMIT = 200
-# 常驻简报顶部最多保留最近几条本场运营提醒
+# 记忆摘要顶部最多保留最近几条本场运营提醒
 MAX_OPERATOR_NOTES_IN_BRIEF = 3
-# 常驻简报承诺段尾部最多保留最近几条本场已了结承诺
+# 记忆摘要承诺段尾部最多保留最近几条本场已了结承诺
 MAX_CLOSED_COMMITMENTS_IN_BRIEF = 5
 
 
 @dataclass(frozen=True)
 class MemoryBrief:
-    """常驻简报的成品：一段文本 + 其中的承诺与档案行编号（点名的合法名单之一）。
+    """记忆摘要的成品：一段文本 + 其中的承诺与档案行编号（点名的合法名单之一）。
 
     ``previous_session_id`` / ``archive_line_count`` 只供观测（开播日志与测试核对
     "上一场是谁、带了几行档案"）；文本本身仍是唯一注入面。
@@ -78,7 +78,7 @@ class MemoryBrief:
     text: str = ""
     commitment_ids: Tuple[int, ...] = field(default_factory=tuple)
     archive_ids: Tuple[int, ...] = field(default_factory=tuple)
-    # 本场台词已经点名用过的档案行（简报里标"（本场已提过）"的那些）：Planner 据此拦住主动复提
+    # 本场台词已经点名用过的档案行（记忆摘要里标"（本场已提过）"的那些）：Planner 据此拦住主动复提
     used_archive_ids: Tuple[int, ...] = field(default_factory=tuple)
     previous_session_id: Optional[int] = None
     archive_line_count: int = 0
@@ -99,11 +99,11 @@ async def build_brief(
     privacy_service: Optional["PrivacyService"] = None,
     speaking_mode: str = "gameplay",
 ) -> MemoryBrief:
-    """拼一份常驻简报；两段料都没取到时返回空简报（系统提示词里整段省略）。
+    """拼一份记忆摘要；两段料都没取到时返回空记忆摘要（系统提示词里整段省略）。
 
     ``min_session_ms``：时长不到它的场次不当"上一场"（开错后马上重开的那一小段），往前找。
     ``chat_repo`` 与 ``live_session_id`` 都给了（正在直播）才做"用上即停"：本场台词点名过的
-    承诺不进这一份简报，点名过的档案行标"（本场已提过）"。``current_saves`` 是分存档的游戏眼下所在的存档；``event_repo`` 给了才查
+    承诺不进这一份记忆摘要，点名过的档案行标"（本场已提过）"。``current_saves`` 是分存档的游戏眼下所在的存档；``event_repo`` 给了才查
     "上一场玩这些游戏时记没记下存档"（没记下的块尾注一句）。
     """
     previous_session_id, snapshot_lines = await _snapshot_lines(archive_repo, kind, min_session_ms)
@@ -177,8 +177,8 @@ async def _snapshot_lines(
     """上一场的场次主键与它的快照各行（带稳定、再提起与人放回标注）；没有上一场或读不到时为 (None, [])。"""
     try:
         snapshot = await archive_repo.latest_snapshot(kind=kind, min_duration_ms=min_session_ms)
-    except Exception as exc:  # noqa: BLE001 - 读不到就当没有上一场，简报少一段
-        logger.warning(f"取上一场的档案快照失败（简报不带档案段）: {exc}", exc=exc)
+    except Exception as exc:  # noqa: BLE001 - 读不到就当没有上一场，记忆摘要少一段
+        logger.warning(f"取上一场的档案快照失败（记忆摘要不带档案段）: {exc}", exc=exc)
         return None, []
     if snapshot is None:
         return None, []
@@ -201,8 +201,8 @@ async def _recent_window(
             exclude_session_id=live_session_id,
             limit=3,
         )
-    except Exception as exc:  # noqa: BLE001 - 查不到场次边界时不挡简报，按未落后、不限三场渲染
-        logger.warning(f"查最近已结束场次边界失败（简报按常规上一场渲染）: {exc}", exc=exc)
+    except Exception as exc:  # noqa: BLE001 - 查不到场次边界时不挡记忆摘要，按未落后、不限三场渲染
+        logger.warning(f"查最近已结束场次边界失败（记忆摘要按常规上一场渲染）: {exc}", exc=exc)
         return False, 0, []
     if not bounds:
         return False, 0, []
@@ -221,8 +221,8 @@ async def _unsaved_games(
     try:
         played = await event_repo.list_games_by_session(live_session_ids=[int(session_id)])
         spans = await event_repo.list_session_save_spans(live_session_id=int(session_id))
-    except Exception as exc:  # noqa: BLE001 - 查不到就不加注，简报照常
-        logger.warning(f"查上一场玩游戏时记没记存档失败（简报不加注）: {exc}", exc=exc)
+    except Exception as exc:  # noqa: BLE001 - 查不到就不加注，记忆摘要照常
+        logger.warning(f"查上一场玩游戏时记没记存档失败（记忆摘要不加注）: {exc}", exc=exc)
         return []
     saved = {span.game for span in spans}
     games = played.get(int(session_id), set())
@@ -232,7 +232,7 @@ async def _unsaved_games(
 async def load_used_refs(chat_repo: "ChatRepo", live_session_id: int) -> Tuple[Set[int], Set[int]]:
     """本场台词已经点名引用过的（承诺编号, 档案行编号）：用上即停的口径，确知没送达的台词不算。
 
-    常驻简报与线索推送共用这一份。读不到就当都没用上：最多这一窗多列一次，不挡决策。
+    记忆摘要与线索推送共用这一份。读不到就当都没用上：最多这一窗多列一次，不挡决策。
     """
     try:
         raw_rows = await chat_repo.list_session_memory_refs(live_session_id=int(live_session_id))
@@ -257,14 +257,14 @@ async def _pending_commitments(
 ) -> Tuple[Sequence[Commitment], int, Sequence[Commitment]]:
     """切出进【还惦记的事】的近期未了结非私向承诺、搁了很久件数，以及别的存档里的承诺。
 
-    对某位观众、某位游戏玩家的承诺只经线索推送在那个人开口时出现，不进常驻简报；
+    对某位观众、某位游戏玩家的承诺只经线索推送在那个人开口时出现，不进记忆摘要；
     挂在当前世界或不挂游戏的公开承诺若最近三场内被提起过（且未过短期时间词时效）进【还惦记的事】，
     更早搁下的只汇总为一句件数提醒，不再靠轮播刷屏。
     """
     try:
         rows = await commitments_repo.list_commitments(statuses=["open"], limit=_CANDIDATE_LIMIT)
-    except Exception as exc:  # noqa: BLE001 - 读不到就当没有待办，简报少一段
-        logger.warning(f"读未了结承诺失败（简报不带承诺段）: {exc}", exc=exc)
+    except Exception as exc:  # noqa: BLE001 - 读不到就当没有待办，记忆摘要少一段
+        logger.warning(f"读未了结承诺失败（记忆摘要不带承诺段）: {exc}", exc=exc)
         return [], 0, []
     return partition_brief_commitments(
         rows,
@@ -290,8 +290,8 @@ async def _load_session_corrections(
         return {}, [], {}, []
     try:
         items = await correction_repo.list_active_by_session(live_session_id=int(live_session_id))
-    except Exception as exc:  # noqa: BLE001 - 更正读不到不挡常驻简报主干
-        logger.warning(f"读取本场记忆更正失败（简报暂不附更正注记）: {exc}", exc=exc)
+    except Exception as exc:  # noqa: BLE001 - 更正读不到不挡记忆摘要主干
+        logger.warning(f"读取本场记忆更正失败（记忆摘要暂不附更正注记）: {exc}", exc=exc)
         return {}, [], {}, []
     archive_map: dict[int, str] = {}
     operator_notes: List[str] = []
@@ -321,18 +321,18 @@ async def _load_session_corrections(
             if commitments_repo is not None:
                 try:
                     commitment = await commitments_repo.get_commitment(commitment_id=cid)
-                except Exception as exc:  # noqa: BLE001 - 单条回查失败跳过该条，不挡简报主干
+                except Exception as exc:  # noqa: BLE001 - 单条回查失败跳过该条，不挡记忆摘要主干
                     logger.warning(f"回查本场已了结承诺 约#{cid} 失败（已跳过）: {exc}", exc=exc)
                     continue
                 if commitment is None or commitment.status == "open":
                     continue
-                # 观众私向承诺不进常驻简报，防止单人私事暴露给全场
+                # 观众私向承诺不进记忆摘要，防止单人私事暴露给全场
                 if commitment.viewer_id is not None:
                     continue
                 # 确认属于别的存档的承诺不混入当前存档承诺段
                 if commitment.game and place_of(commitment.game, commitment.save_id, saves) is SavePlace.OTHER:
                     continue
-                # 挂游戏玩家的承诺若对方已申请遗忘或在遗忘名单中，立即隔离不入简报
+                # 挂游戏玩家的承诺若对方已申请遗忘或在遗忘名单中，立即隔离不入记忆摘要
                 if commitment.target_player_id is not None and game_player_repo is not None:
                     try:
                         player = await game_player_repo.get_player(player_id=int(commitment.target_player_id))

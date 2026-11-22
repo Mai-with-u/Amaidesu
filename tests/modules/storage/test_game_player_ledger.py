@@ -1,4 +1,4 @@
-"""游戏里的人落库器：按 UUID 认人，公屏聊天只落公屏，互动记到对的人头上，公屏聊天受保留期管。
+"""游戏里的人落库器：按 UUID 认人，游戏公屏只落游戏公屏，互动记到对的人头上，游戏公屏受保留期管。
 
 认人口径（代码行为，全部要满分）：
 - 带 UUID、游戏核对过在线的发言人才建玩家；没有 UUID 或没核对过的只占一行位置、不存原话
@@ -150,7 +150,7 @@ async def test_public_chat_expires_with_the_session_but_her_lines_stay(wired, tm
 
 
 async def test_retention_keeps_the_line_an_approved_self_statement_hangs_on(wired, tmp_path: Path) -> None:
-    """批准进玩家卡的自述挂着他那句公屏：保留期到了那句留着，自述不被级联删；待审的随那句一起删。"""
+    """批准进玩家线索的自述挂着他那句游戏公屏：保留期到了那句留着，自述不被级联删；待审的随那句一起删。"""
     store, bus, session_id = wired
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=2_000)
     player = await store.game_players.meet_player(

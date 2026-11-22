@@ -41,7 +41,7 @@ def stub_prompt() -> MagicMock:
 class FakeRoundExecutor:
     """决策轮执行器替身：``execute`` 记录调用并返回固定结果，供测试替换决策执行半。
 
-    缺省不消费运营递话提醒队列（真实执行器在任何决策窗入口取空队列）；
+    缺省不消费运营递话提醒队列（真实执行器在任何决策回合入口取空队列）；
     ``drain_reminders = True`` 后经 ``set_reminders_provider`` 接线注入的
     取空动词取空，模拟正常送达，每轮取到的递话与续播重放文本按轮记进
     ``window_reminders`` / ``window_resume_replay``（与 ``calls`` 一一对应）。

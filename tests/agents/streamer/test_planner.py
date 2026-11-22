@@ -225,7 +225,7 @@ async def test_context_assembly_paths() -> None:
     assert prompt.render.call_args.args[0] == "amaidesu_planner_react"
 
     # forced 标注进参考段（序列尾）；本轮新入账的游戏事件不再重放进参考段——
-    # 它们已在决策窗边界追加进对话历史，只有状态跃迁事实块汇总进参考段；字符级 topics 不进 prompt
+    # 它们已在决策回合边界追加进对话历史，只有状态跃迁事实块汇总进参考段；字符级 topics 不进 prompt
     planner, llm, _prompt = _make_planner([_resp()])
     planner._room_state.update(_msg("来个落地水"))
     planner._room_state.update(_msg("来个落地水"))
@@ -293,7 +293,7 @@ def _system_message(llm: Any, call_index: int = -1) -> str:
 
 
 async def test_brief_rides_at_system_prompt_tail_not_in_reference() -> None:
-    """常驻简报接在系统提示词末尾（整场不变，跨决策窗逐字一致可吃前缀缓存），参考段里不出现。"""
+    """记忆摘要接在系统提示词末尾（整场不变，跨决策回合逐字一致可吃前缀缓存），参考段里不出现。"""
     brief = "# 她记得的事（内部参考；以眼前为准，用不上就不提）\n上一场：\n- [档#41] 挖到了钻石"
     planner, llm, _prompt = _make_planner([_resp(), _resp()], brief_provider=lambda: brief)
 
@@ -434,12 +434,17 @@ def _reply_with_memory(use_memory: Any) -> list:
 
 
 def _said(name: str) -> PlayerNote:
-    return PlayerNote(who=name, said=True, line=f"[00:10 minecraft 公屏] 玩家 {name}：要不要一起")
+    return PlayerNote(who=name, said=True, line=f"[00:10 minecraft 游戏公屏] 玩家 {name}：要不要一起")
 
 
 def _reply_about_alex(target: str = "", to_player: str = "") -> list:
-    """一句在接 Alex 公屏话的回复（话题摘要点到他）；可另填 target 与 to_player。"""
-    args: dict = {"topic_summary": "接 Alex 在公屏说的话", "is_novel": True, "emotion": "happy", "intensity": 0.5}
+    """一句在接 Alex 游戏公屏话的回复（话题摘要点到他）；可另填 target 与 to_player。"""
+    args: dict = {
+        "topic_summary": "接 Alex 在游戏公屏说的话",
+        "is_novel": True,
+        "emotion": "happy",
+        "intensity": 0.5,
+    }
     if target:
         args["target"] = target
     if to_player:
@@ -458,7 +463,7 @@ def _reply_about_alex(target: str = "", to_player: str = "") -> list:
     ids=["只有一位玩家开口", "两位玩家开口", "有认不出的人插话", "没人开口"],
 )
 async def test_her_line_answers_a_player_only_when_he_alone_spoke(speakers: tuple, expected: tuple) -> None:
-    """本窗公屏聊天只来自一位核对过的玩家、她这句又是在回他时，这一窗说的话记成在回应他；否则不猜。"""
+    """本回合游戏公屏只来自一位核对过的玩家、她这句又是在回他时，这一窗说的话记成在回应他；否则不猜。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     planner, _llm, _prompt = _make_planner(_reply_about_alex(), reply_provider=provider)
@@ -480,17 +485,17 @@ async def test_her_line_answers_a_player_only_when_he_alone_spoke(speakers: tupl
         (False, "m1", ("minecraft", "uuid-a")),
     ],
     ids=[
-        "按编号点了本窗的弹幕：对象是观众",
-        "照提示词抄成 [id:…] 写法点了本窗的弹幕：对象是观众",
-        "按原文片段点了本窗的弹幕：对象是观众",
-        "拿公屏原话当目标、对不上弹幕：照旧在回应玩家",
-        "本窗没有弹幕：点的不是弹幕，照旧在回应玩家",
+        "按编号点了本回合的弹幕：对象是观众",
+        "照提示词抄成 [id:…] 写法点了本回合的弹幕：对象是观众",
+        "按原文片段点了本回合的弹幕：对象是观众",
+        "拿游戏公屏原话当目标、对不上弹幕：照旧在回应玩家",
+        "本回合没有弹幕：点的不是弹幕，照旧在回应玩家",
     ],
 )
 async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_player(
     batch: bool, target: str, expected: tuple
 ) -> None:
-    """回应目标对得上本窗一条弹幕（编号或原文）时，即使本窗只有一位玩家在公屏开口，也不记成在回应他。"""
+    """回应目标对得上本回合一条弹幕（编号或原文）时，即使本回合只有一位玩家在游戏公屏开口，也不记成在回应他。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     planner, _llm, _prompt = _make_planner(_reply_about_alex(target), reply_provider=provider)
@@ -504,7 +509,7 @@ async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_playe
 
 
 async def test_reply_names_the_player_she_actually_answers_not_the_one_who_spoke() -> None:
-    """玩家乙扔来钻石、同一窗玩家甲在公屏说"晚上好"，她要谢乙：没点名、话题也没提到甲时不补成甲；
+    """玩家乙扔来钻石、同一窗玩家甲在游戏公屏说"晚上好"，她要谢乙：没点名、话题也没提到甲时不补成甲；
     点名乙时回应对象就是乙，落库也记成在回应乙（否则她接住乙的那句进不了玩家自述候选）；
     点的名对不上找过她的人时都不填。"""
     gift = PlayerNote(
@@ -515,7 +520,11 @@ async def test_reply_names_the_player_she_actually_answers_not_the_one_who_spoke
         uuid="uuid-乙",
     )
     hello = PlayerNote(
-        who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好", game="minecraft", uuid="uuid-甲"
+        who="玩家甲",
+        said=True,
+        line="[00:10 minecraft 游戏公屏] 玩家 玩家甲：晚上好",
+        game="minecraft",
+        uuid="uuid-甲",
     )
     batch = GameEventBatch(chat_speakers=(("minecraft", "uuid-甲"),), player_notes=(gift, hello))
 
@@ -567,12 +576,12 @@ async def test_thanks_in_a_later_window_is_recorded_for_the_named_player() -> No
 
 
 def _gift_and_hello() -> GameEventBatch:
-    """玩家乙扔来钻石、玩家甲在公屏打招呼（时刻取现在：最近几分钟的条目才留到下一窗）。"""
+    """玩家乙扔来钻石、玩家甲在游戏公屏打招呼（时刻取现在：最近几分钟的条目才留到下一窗）。"""
     at = now_ms()
     gift = PlayerNote(
         who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石", timestamp_ms=at
     )
-    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好", timestamp_ms=at)
+    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 游戏公屏] 玩家 玩家甲：晚上好", timestamp_ms=at)
     return GameEventBatch(chat_speakers=(("minecraft", "uuid-甲"),), player_notes=(gift, hello))
 
 
@@ -646,8 +655,8 @@ async def test_reset_player_notes_forgets_last_sessions_players() -> None:
 
 
 async def test_sole_speaker_is_filled_in_only_when_the_topic_names_him() -> None:
-    """Planner 没点名时：话题摘要提到本窗唯一开口的玩家才补上他，没提到就不填。"""
-    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好")
+    """Planner 没点名时：话题摘要提到本回合唯一开口的玩家才补上他，没提到就不填。"""
+    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 游戏公屏] 玩家 玩家甲：晚上好")
     batch = GameEventBatch(chat_speakers=(("minecraft", "uuid-甲"),), player_notes=(hello,))
 
     for summary, expected, recorded in (
@@ -719,7 +728,7 @@ async def test_use_memory_rejects_archive_prefix_and_multi_values(loguru_capture
         assert outcome.memory_refs == []
 
     messages = [record["message"] for record in loguru_capture.records]
-    assert any("档案行编号 7 不在本窗" in message for message in messages)
+    assert any("档案行编号 7 不在本回合" in message for message in messages)
     assert any("认不出" in message and "话#7" in message for message in messages)
     assert any("一次只能点名一条" in message for message in messages)
     assert any("类型认不出" in message for message in messages)
@@ -754,7 +763,7 @@ async def test_use_memory_accepts_archive_line_in_the_brief() -> None:
 
 
 async def test_use_memory_accepts_archive_line_from_this_batch_cards() -> None:
-    """本批线索卡带来的档案行也能点名；不在简报也不在卡片里的编号按没填处理。"""
+    """本批记忆线索带来的档案行也能点名；不在简报也不在卡片里的编号按没填处理。"""
     cues = SimpleNamespace(text="【这一批想起来的事】\n- [档#41] 女仆取名团子", archive_ids=(41,), labels={})
 
     async def cues_provider(batch: Any, open_games: Any, game_players: Any) -> Any:
@@ -818,7 +827,7 @@ _PLAIN_REPLY = _resp(
 
 async def test_archive_line_already_mentioned_is_bounced_once_when_nobody_asked() -> None:
     """第 58 场 14 条旧事里 8 条各提了两次，第二次都是冷场时主动点名：本场已提过的档案行，
-    没人问起时这句先退回一次，她换个话题再说；退回次数记进本窗收场。"""
+    没人问起时这句先退回一次，她换个话题再说；退回次数记进本回合收场。"""
     planner, llm, provider = _repeat_planner([*_reply_with_memory("档#41"), _PLAIN_REPLY])
 
     bounced = await planner.plan([], proactive=True)
@@ -863,10 +872,10 @@ async def test_viewer_question_from_the_previous_window_is_answered_with_the_mem
 
 
 async def test_player_asking_in_game_chat_gets_the_memory_when_she_answers_him() -> None:
-    """玩家在公屏问起旧事、她在回他：to_player 写他，或没写、话题摘要提到本窗唯一开口的他，都照常点名
+    """玩家在游戏公屏问起旧事、她在回他：to_player 写他，或没写、话题摘要提到本回合唯一开口的他，都照常点名
     （和唠叨指标把回应玩家算作有人问同一口径；只写在摘要里就退回的话，她会换话题不答）。
     to_player 写的人对不上最近找过她的玩家时不算。"""
-    asked = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：你那女仆叫啥")
+    asked = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 游戏公屏] 玩家 玩家甲：你那女仆叫啥")
 
     for extra in ({"to_player": "玩家甲"}, {"topic_summary": "回玩家甲问的女仆名字"}):
         planner, _llm, _provider = _repeat_planner(_reply_to("", "档#41", **extra))
@@ -879,9 +888,9 @@ async def test_player_asking_in_game_chat_gets_the_memory_when_she_answers_him()
 
 
 async def test_busy_window_does_not_wave_through_an_unprompted_repeat() -> None:
-    """本窗有弹幕、也有玩家在公屏开口，但她这句没在回任何人（target 不指弹幕、没写 to_player）：照样退回。
-    热闹时段几乎每窗都有弹幕和公屏话，按"本窗有人开口"放行，这道拦截就形同虚设。"""
-    chatter = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好")
+    """本回合有弹幕、也有玩家在游戏公屏开口，但她这句没在回任何人（target 不指弹幕、没写 to_player）：照样退回。
+    热闹时段几乎每回合都有弹幕和游戏公屏话，按"本回合有人开口"放行，这道拦截就形同虚设。"""
+    chatter = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 游戏公屏] 玩家 玩家甲：晚上好")
     planner, _llm, provider = _repeat_planner([*_reply_with_memory("档#41"), _PLAIN_REPLY])
 
     outcome = await planner.plan([_msg("主播今天玩啥")], game_batch=GameEventBatch(player_notes=(chatter,)))
@@ -891,7 +900,7 @@ async def test_busy_window_does_not_wave_through_an_unprompted_repeat() -> None:
 
 
 async def test_card_pushed_by_someone_and_answering_a_danmaku_are_not_bounced() -> None:
-    """本窗弹幕或玩家开口推上来的卡指向这一条、或这句的 target 指着本窗一条弹幕：都算在回人。"""
+    """本回合弹幕或玩家开口推上来的卡指向这一条、或这句的 target 指着本回合一条弹幕：都算在回人。"""
     asked_card = SimpleNamespace(text="", archive_ids=(41,), asked_archive_ids=(41,), labels={})
 
     async def cues_provider(batch: Any, open_games: Any, game_players: Any) -> Any:
@@ -901,14 +910,14 @@ async def test_card_pushed_by_someone_and_answering_a_danmaku_are_not_bounced() 
     assert (await planner.plan([], proactive=True)).memory_refs == ["档#41"]
 
     planner, _llm, _provider = _repeat_planner(_reply_to("m1", "档#41"))
-    assert (await planner.plan([_msg("那个女仆叫啥")])).memory_refs == ["档#41"], "回本窗那条弹幕"
+    assert (await planner.plan([_msg("那个女仆叫啥")])).memory_refs == ["档#41"], "回本回合那条弹幕"
 
 
 def _registry_with_chat_send(
     chat_result: ToolExecutionResult,
     reply_provider: Any,
 ) -> tuple[ToolRegistry, AsyncMock]:
-    """构造同时提供 minecraft_chat_send 与 streamer_reply 的真实注册表，返回注册表与公屏发送调用桩。"""
+    """构造同时提供 minecraft_chat_send 与 streamer_reply 的真实注册表，返回注册表与游戏公屏发送调用桩。"""
     registry = ToolRegistry()
     chat_handler = AsyncMock(return_value=chat_result)
     chat_spec = ToolSpec(name="chat_send", description="直发游戏公屏文字", kind="sync", provider="minecraft")
@@ -920,10 +929,10 @@ def _registry_with_chat_send(
     return registry, chat_handler
 
 
-def _reply_player_args(player_name: str = "玩家甲", summary: str = "回应玩家甲在公屏的提问") -> dict[str, Any]:
+def _reply_player_args(player_name: str = "玩家甲", summary: str = "回应玩家甲在游戏公屏的提问") -> dict[str, Any]:
     return {
         "topic_summary": summary,
-        "reply_guidance": "自然接上对方在公屏问的事",
+        "reply_guidance": "自然接上对方在游戏公屏问的事",
         "to_player": player_name,
         "is_novel": True,
         "emotion": "happy",
@@ -932,7 +941,7 @@ def _reply_player_args(player_name: str = "玩家甲", summary: str = "回应玩
 
 
 async def test_game_chat_reply_bounces_once_before_replyer_then_marks_answered_after_chat_send() -> None:
-    """玩家公屏发问时首次仅调 streamer_reply 会在进回复器前退回一次；补调 minecraft_chat_send 成功后放行并标已回。"""
+    """玩家游戏公屏发问时首次仅调 streamer_reply 会在进回复器前退回一次；补调 minecraft_chat_send 成功后放行并标已回。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     chat_ok = ToolExecutionResult(
@@ -954,7 +963,7 @@ async def test_game_chat_reply_bounces_once_before_replyer_then_marks_answered_a
     chat_note = PlayerNote(
         who="玩家甲",
         said=True,
-        line="[21:10 minecraft 公屏] 玩家 玩家甲：麦麦你在忙啥",
+        line="[21:10 minecraft 游戏公屏] 玩家 玩家甲：麦麦你在忙啥",
         timestamp_ms=now_ms(),
     )
 
@@ -971,7 +980,7 @@ async def test_game_chat_reply_bounces_once_before_replyer_then_marks_answered_a
 
 
 async def test_second_reply_without_chat_send_passes_through_without_marking_chat_answered() -> None:
-    """同轮第二次仍仅调用 streamer_reply 时放行出声防整窗静默，但只标纯送礼已回，未发公屏的 chat 绝不标已回。"""
+    """同轮第二次仍仅调用 streamer_reply 时放行出声防整窗静默，但只标纯送礼已回，未发游戏公屏的 chat 绝不标已回。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     chat_ok = ToolExecutionResult(
@@ -995,7 +1004,7 @@ async def test_second_reply_without_chat_send_passes_through_without_marking_cha
     chat_note = PlayerNote(
         who="玩家甲",
         said=True,
-        line="[21:10 minecraft 公屏] 玩家 玩家甲：够不够用呀",
+        line="[21:10 minecraft 游戏公屏] 玩家 玩家甲：够不够用呀",
         timestamp_ms=ts,
     )
 
@@ -1029,7 +1038,7 @@ async def test_second_reply_without_chat_send_passes_through_without_marking_cha
 async def test_failed_chat_send_payload_does_not_count_as_game_chat_answered(
     failed_result: ToolExecutionResult,
 ) -> None:
-    """minecraft_chat_send 返回业务失败（success=False）或执行失败时不算已发公屏：首次口播照拦，二次放行后 chat 仍未标已回。"""
+    """minecraft_chat_send 返回业务失败（success=False）或执行失败时不算已发游戏公屏：首次口播照拦，二次放行后 chat 仍未标已回。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     registry, chat_handler = _registry_with_chat_send(failed_result, provider)
@@ -1046,7 +1055,7 @@ async def test_failed_chat_send_payload_does_not_count_as_game_chat_answered(
     chat_note = PlayerNote(
         who="玩家甲",
         said=True,
-        line="[21:11 minecraft 公屏] 玩家 玩家甲：听得见吗",
+        line="[21:11 minecraft 游戏公屏] 玩家 玩家甲：听得见吗",
         timestamp_ms=now_ms(),
     )
 
@@ -1054,12 +1063,12 @@ async def test_failed_chat_send_payload_does_not_count_as_game_chat_answered(
 
     assert outcome.replied is True and outcome.steps == 2
     assert chat_handler.await_count == 1
-    assert provider.invoke.await_count == 1, "同一步的公屏发送业务失败，首次口播仍在回复器前被退回"
+    assert provider.invoke.await_count == 1, "同一步的游戏公屏发送业务失败，首次口播仍在回复器前被退回"
     assert [(note.who, note.said, note.answered) for note in planner.recent_player_notes] == [("玩家甲", True, False)]
 
 
 async def test_successful_chat_send_without_spoken_reply_marks_round_chat_answered() -> None:
-    """本轮真实成功调用 minecraft_chat_send 后自然终止不口播时，本窗待回的公屏发言照常标记为已回。"""
+    """本轮真实成功调用 minecraft_chat_send 后自然终止不口播时，本回合待回的游戏公屏发言照常标记为已回。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     chat_ok = ToolExecutionResult(
@@ -1076,7 +1085,7 @@ async def test_successful_chat_send_without_spoken_reply_marks_round_chat_answer
     chat_note = PlayerNote(
         who="玩家甲",
         said=True,
-        line="[21:12 minecraft 公屏] 玩家 玩家甲：来东边看一眼",
+        line="[21:12 minecraft 游戏公屏] 玩家 玩家甲：来东边看一眼",
         timestamp_ms=now_ms(),
     )
 

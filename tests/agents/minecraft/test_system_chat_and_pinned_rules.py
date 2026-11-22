@@ -397,7 +397,7 @@ async def test_receive_silence_nudge_dedupes_unread_and_wakes_background_goal_wi
 
 
 # ======================================================================
-# 回想工具动态可见名单与 Agent 名册热启停联动
+# 回忆工具动态可见名单与 Agent 名册热启停联动
 # ======================================================================
 
 
@@ -422,7 +422,7 @@ async def test_memory_recall_provider_dynamic_extra_visible_agents() -> None:
         commitments_repo=AsyncMock(),
         archive_repo=AsyncMock(),
     )
-    service.recall = AsyncMock(return_value="【回想】命中 1 条记录")  # type: ignore[method-assign]
+    service.recall = AsyncMock(return_value="【回忆】命中 1 条记录")  # type: ignore[method-assign]
 
     # 默认行为向后兼容：仅对 streamer 可见，且不污染全局 MEMORY_RECALL_SPEC
     default_provider = build_memory_recall_provider(service)
@@ -463,7 +463,7 @@ async def test_memory_recall_provider_dynamic_extra_visible_agents() -> None:
 
 
 async def test_memory_recall_provider_auto_syncs_visibility_on_agent_manager_register_and_unregister() -> None:
-    """先注册回想工具、后热启用或停用自主游戏 Agent 时，AgentManager 自动刷新 ToolRegistry 可见名单。"""
+    """先注册回忆工具、后热启用或停用自主游戏 Agent 时，AgentManager 自动刷新 ToolRegistry 可见名单。"""
     service = MemoryRecallService(
         chat_repo=AsyncMock(),
         commitments_repo=AsyncMock(),
@@ -683,7 +683,7 @@ async def test_pinned_rules_survive_notebook_overwrite_and_background_folding_an
 
 
 def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_fold_guard() -> None:
-    """提示词覆盖查包后 obtain、纠偏高优穿透、同伴社交停手与多条合并回应、记忆回想、钉住规矩与折叠保真。"""
+    """提示词覆盖查包后 obtain、纠偏高优穿透、同伴社交停手与多条合并回应、记忆回忆、钉住规矩与折叠保真。"""
     reset_prompt_manager()
     try:
         pm = get_prompt_manager()

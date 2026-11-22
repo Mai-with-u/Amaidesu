@@ -1,4 +1,4 @@
-"""即时反应：游戏里出事时当场出一句短反应——由头合并、冷却、安静门槛、现场卡、输出解析与兜底、接线。"""
+"""即时反应：游戏里出事时当场出一句短反应——由头合并、冷却、安静门槛、事实快照、输出解析与兜底、接线。"""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def _trigger(
 
 
 async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts: Any) -> None:
-    """被打了：即时反应拿人设与现场卡生成一句，带情绪插队出声，并记下发言时刻。"""
+    """被打了：即时反应拿人设与事实快照生成一句，带情绪插队出声，并记下发言时刻。"""
     llm, speech = _LLM("scared：哇！谁炸我？！"), _Speech()
     mouth = _mouth(llm, speech, prompts)
     mouth.note_speech("走走走，回家！", NOW - 30_000)
@@ -137,7 +137,7 @@ async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts:
 
 
 async def test_mouth_carries_no_memory_in_system_prompt_or_scene_card(prompts: Any) -> None:
-    """即时反应不拿任何记忆：系统提示词里没有长期笔记，现场卡里没有备忘录（悬着的事）一段。"""
+    """即时反应不拿任何记忆：系统提示词里没有长期笔记，事实快照里没有备忘录（悬着的事）一段。"""
     llm = _LLM("happy：好家伙")
     mouth = _mouth(llm, _Speech(), prompts)
 
@@ -555,7 +555,7 @@ async def test_mouth_verbatim_repeat_triggers_rephrase_instead_of_dropping(promp
 
 
 async def test_mouth_hides_room_enters_and_keeps_planner_speeches_under_event_flood(prompts: Any) -> None:
-    """即时反应的现场卡不带直播间进房名单（欢迎归规划器），且高频游戏事件刷满 _records 后仍看得见刚说过的台词。"""
+    """即时反应的事实快照不带直播间进房名单（欢迎归规划器），且高频游戏事件刷满 _records 后仍看得见刚说过的台词。"""
     llm, speech = _LLM("scared：先把盾举起来！"), _Speech()
     mouth = _mouth(llm, speech, prompts)
     mouth._room_state.record_enter("u_b", "观众乙", now_ms=NOW - 5_000)

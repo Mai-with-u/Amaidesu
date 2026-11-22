@@ -1,4 +1,4 @@
-"""记忆渲染：常驻简报、线索卡、老观众在场一行与两档写法。"""
+"""记忆渲染：记忆摘要、记忆线索、老观众在场一行与两档写法。"""
 
 from __future__ import annotations
 
@@ -117,7 +117,7 @@ def test_memory_refs_keep_commitment_and_archive_numbers_apart() -> None:
 
 
 def test_viewer_sourced_lines_say_they_were_decided_with_viewers_without_naming_anyone() -> None:
-    """人批准的观众候选写成的行：简报、线索卡、回复器档都注明和观众一起定的，别点名是哪一位。"""
+    """人批准的观众候选写成的行：简报、记忆线索、回复器档都注明和观众一起定的，别点名是哪一位。"""
     line = ArchiveLine(
         id=43, live_session_id=7, text="和观众一起给小羊取名雪球", quote="就叫雪球", evidence_chat_id=3, source="viewer"
     )
@@ -130,7 +130,7 @@ def test_viewer_sourced_lines_say_they_were_decided_with_viewers_without_naming_
 
 
 def test_viewer_sourced_lines_replace_that_viewers_name_when_rendered() -> None:
-    """她当场点了那位观众的名：简报、线索卡里原话换成"那位观众"（现名、曾用名都换）；人批过的标题不换。"""
+    """她当场点了那位观众的名：简报、记忆线索里原话换成"那位观众"（现名、曾用名都换）；人批过的标题不换。"""
     line = ArchiveLine(
         id=44,
         live_session_id=7,
@@ -334,7 +334,7 @@ def test_cue_block_orders_cards_presence_and_notices_under_one_header() -> None:
         notices=[render_forget_notice(message_id="m815")],
     )
     lines = block.split("\n")
-    assert lines[0].startswith("【这一批想起来的事】") and "以眼前为准" in lines[0], "和常驻简报一样以眼前为准"
+    assert lines[0].startswith("【这一批想起来的事】") and "以眼前为准" in lines[0], "和记忆摘要一样以眼前为准"
     assert "[约#7·Minecraft] 卡" in lines[1]
     assert lines[2].startswith("老观众在场")
     assert lines[3].startswith("【已按")
@@ -796,7 +796,7 @@ def test_zatsudan_mode_expands_cross_save_highlights_with_save_names_and_used_ma
 
 
 def test_presence_line_and_familiar_viewer_card_include_tier_former_names_and_zero_raw_numbers() -> None:
-    """老观众在场行与老观众卡：区分常来老熟人与眼熟老观众、附曾用名与近况/共创梗，绝不透出场次数或日期数字。"""
+    """老观众在场行与老观众线索：区分常来老熟人与眼熟老观众、附曾用名与近况/共创梗，绝不透出场次数或日期数字。"""
     presence = render_presence_line(
         [
             ("阿杰", _NOW - 60_000, "close", ("阿杰在摸鱼",)),
@@ -826,7 +826,7 @@ def test_presence_line_and_familiar_viewer_card_include_tier_former_names_and_ze
 
 
 def test_render_brief_shows_commitment_progress_and_closed_this_session() -> None:
-    """常驻简报在未了结承诺行尾附本场进展，并在承诺段尾部展示本场已了结小行（即使无剩余未了结也可见）。"""
+    """记忆摘要在未了结承诺行尾附本场进展，并在承诺段尾部展示本场已了结小行（即使无剩余未了结也可见）。"""
     open_comm = Commitment(
         id=43,
         what="补还 3 颗钻石",
@@ -858,7 +858,7 @@ def test_render_brief_shows_commitment_progress_and_closed_this_session() -> Non
 
 
 def test_render_player_card_attaches_in_session_commitment_progress() -> None:
-    """玩家卡在有本场进展的未了结承诺后附注（本场进展：…），无进展时保持原格式。"""
+    """玩家线索在有本场进展的未了结承诺后附注（本场进展：…），无进展时保持原格式。"""
     player = GamePlayer(
         id=7,
         game="minecraft",

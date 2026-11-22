@@ -212,8 +212,8 @@ SUPPLEMENT_DELIVERY_REMINDER = (
     "\n[交付提醒] 若原委派要的结果其实已经达成，先用 minecraft_report(kind=delivery) 交付结单，"
     "不要把新的一件事混在已做完的旧单里继续；仍属同一件事的要求再接着推进。"
 )
-# 公屏聊天回话的模式判据：未显式加 [聊天回话] 抬头、但正文是标准公屏回话句式时同样按聊天回话认，不附交付提醒
-_CHAT_REPLY_MARKERS = ("在游戏聊天里回", "在游戏公屏回", "在公屏回")
+# 游戏公屏回话的模式判据：未显式加 [聊天回话] 抬头、但正文是标准游戏公屏回话句式时同样按聊天回话认，不附交付提醒
+_CHAT_REPLY_MARKERS = ("在游戏聊天里回", "在游戏公屏回", "在游戏公屏回")
 # 同一个问题没人答、接着做又挂回等定夺满这么多次后，计时到点不再叫醒续原任务，只等主播回答：
 # 每次叫醒至少两次模型调用，模型每批都给自己挂计时的话会一直周期性空转
 MAX_REHOLDS_PER_QUESTION = 2
@@ -222,7 +222,7 @@ DELIVERY_REMINDER_WHILE_WAITING = (
     "[还没交付] 做完了就用 minecraft_report 交付（delivery）；遇到新的卡点就报卡住（escalation），换成新的问题；"
     "还卡在原来那个问题上、等主播回答，就直接停下。"
 )
-# 活跃任务旁听公屏通知的短时间去重窗（毫秒）：仅抑制几秒内的重复回声，超时或换新任务后允许玩家再喊同一指令
+# 活跃任务旁听游戏公屏通知的短时间去重窗（毫秒）：仅抑制几秒内的重复回声，超时或换新任务后允许玩家再喊同一指令
 _CHAT_NOTICE_DEDUP_WINDOW_MS = 5_000
 # 非死亡服务器系统提示的去重节流窗口（秒）：首次立即入队，同前缀/同内容在窗口内合并计数，避免插件刷屏撑爆上下文
 _SYSTEM_CHAT_THROTTLE_WINDOW_S = 15.0
@@ -270,9 +270,9 @@ def _trim_preserved_line(text: str) -> str:
 
 
 def _extract_preserved_human_lines(originals: Sequence[Mapping[str, Any]]) -> List[str]:
-    """按严格白名单从被折叠区间机械抽取人类原话（公屏、直播间建议与主播/运营递话）。
+    """按严格白名单从被折叠区间机械抽取人类原话（游戏公屏、直播间建议与主播/运营递话）。
 
-    仅放行 ``[公屏``（不含 ``[公屏旁听]``）、``[直播间建议]`` 及 ``PROMPT_SOURCE_LABELS`` 开头的人类输入行，
+    仅放行 ``[游戏公屏``（不含 ``[游戏公屏旁听]``）、``[直播间建议]`` 及 ``PROMPT_SOURCE_LABELS`` 开头的人类输入行，
     杜绝 ``[装备]`` 等宿主系统通知被误收进保留区。剥离 ``[mNNNN]`` 编号与附尾只读段，
     单条限 120 字、单块最多保留 6 条且总字符不超过 500 字（超限时优先保住较新的原话）。
     """
@@ -288,17 +288,17 @@ def _extract_preserved_human_lines(originals: Sequence[Mapping[str, Any]]) -> Li
         if not text:
             continue
         # 裁掉附在尾部消息下方的只读回执/线索段，避免把回声或闪过误当成人类原话保留
-        for marker in ("\n\n[脑中闪过]", "\n\n[直播间刚说过]", "\n\n[公屏旁听]"):
+        for marker in ("\n\n[脑中闪过]", "\n\n[直播间刚说过]", "\n\n[游戏公屏旁听]"):
             if marker in text:
                 text = text.split(marker, 1)[0].strip()
         if not text:
             continue
 
         # 远处背景旁听明确排除，不挤占人类原话保留名额
-        if text.startswith("[公屏旁听]"):
+        if text.startswith("[游戏公屏旁听]"):
             continue
 
-        if text.startswith("[公屏合批]"):
+        if text.startswith("[游戏公屏合批]"):
             for line in text.splitlines()[1:]:
                 stripped = line.strip()
                 if stripped.startswith("- "):
@@ -307,8 +307,8 @@ def _extract_preserved_human_lines(originals: Sequence[Mapping[str, Any]]) -> Li
                         raw_candidates.append(item)
             continue
 
-        if text.startswith("[公屏"):
-            # 附尾只读段已剥净，此处保留整条多行玩家公屏原话（压缩空白后统一限 120 字）
+        if text.startswith("[游戏公屏"):
+            # 附尾只读段已剥净，此处保留整条多行玩家游戏公屏原话（压缩空白后统一限 120 字）
             item = _trim_preserved_line(text)
             if item:
                 raw_candidates.append(item)
@@ -435,7 +435,7 @@ _READ_ONLY_TOOL_NAMES = frozenset({OBSERVE, LOOKUP, "minecraft_context_recall"})
 # 其余非 cancelled 的终态（failed / partial / gone）都算没做成
 _AUTO_FINISH_DONE_STATUS = "done"
 
-# 主播直发公屏的确认等待：覆盖 Mod 侧 chat 任务的逐字打字与提交（确认窗约 5 秒），
+# 主播直发游戏公屏的确认等待：覆盖 Mod 侧 chat 任务的逐字打字与提交（确认窗约 5 秒），
 # 超出即按"没等到结果"收场——发送与否由发起方决定，不自动重发
 _CHAT_CONFIRM_WAIT_MS = 12_000
 
@@ -538,7 +538,7 @@ class MinecraftAgent(BaseAgent):
         super().__init__(event_bus=event_bus)
         # 时间流逝统一经此时钟：缺省用系统单调时钟，测试注入假时钟冻结或推进时间
         self._clock = clock or time.monotonic
-        # 毫秒单调时钟视图：供公屏门控与本场短期记忆共享单一内部时间轴（绝不混入外部 epoch 时间戳）
+        # 毫秒单调时钟视图：供游戏公屏门控与本场短期记忆共享单一内部时间轴（绝不混入外部 epoch 时间戳）
         self._clock_ms: Callable[[], int] = lambda: int(round(self._clock() * 1000))
         # Unix epoch 毫秒墙钟：供持久化数据库落库时间戳使用（符合全库 *_ms 契约，不随进程重启倒退）
         self._wall_clock_ms: Callable[[], int] = wall_clock_ms if wall_clock_ms is not None else now_ms
@@ -601,7 +601,7 @@ class MinecraftAgent(BaseAgent):
         self._remembered_places = RememberedPlacesCache(self._clock)
         # 按名字点了对手的切磋：下令时记下名字，收手时连同输赢发一条玩家互动给存储记账（不改怎么打）
         self._spar_opponents = SparOpponents()
-        # 她在游戏公屏打出去的话：交出去了就发一条给存储记进公屏聊天（认她在回应哪位玩家），不改怎么说
+        # 她在游戏公屏打出去的话：交出去了就发一条给存储记进游戏公屏（认她在回应哪位玩家），不改怎么说
         self._self_chats = SelfChatLog()
         # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
         self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
@@ -609,7 +609,7 @@ class MinecraftAgent(BaseAgent):
         self._last_self_coords: Optional[Coords] = None
         # 最近一次看周围时身边的玩家名：随游戏情境交给主播，主播发情境给外部服务前遮名用
         self._nearby_players: Tuple[str, ...] = ()
-        # 当前视野及近期公屏/交互过的在线玩家 UUID：供游戏主控态向权威承诺账本按人筛选关联承诺
+        # 当前视野及近期游戏公屏/交互过的在线玩家 UUID：供游戏主控态向权威承诺账本按人筛选关联承诺
         self._nearby_player_uuids: Tuple[str, ...] = ()
         self._recent_player_uuids: Deque[str] = deque(maxlen=16)
         # 权威承诺账本的尾部状态缓存：绝不写入 msg[0] 系统提示词前缀，只在尾部 [当前任务状态]/[继续原游戏任务] 动态挂出
@@ -629,7 +629,7 @@ class MinecraftAgent(BaseAgent):
         # 记地点成功是在同步的回执处理里认出来的，先连同当时的存档与时刻排进待发队列，回到异步处再发
         self._near_places = NearPlaceTracker(self._clock)
         self._pending_place_marks: List[GamePlacePayload] = []
-        # 当场就结束的公屏说话排在这里，回复记账之后发出（记账是同步的，发事件要等）
+        # 当场就结束的游戏公屏说话排在这里，回复记账之后发出（记账是同步的，发事件要等）
         self._pending_self_chats: List[str] = []
         # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不代发停了没交付
         self._furnace_waits = FurnaceWaits(self._clock)
@@ -709,7 +709,7 @@ class MinecraftAgent(BaseAgent):
             embedding_client=embedding_client,
             clock=self._clock_ms,
         )
-        # 公屏门控：主控态 2 秒短合并窗、防刷屏、24 格/2 分钟分级唤醒、远处旁听滑窗与近期人类原话滚动窗
+        # 游戏公屏门控：主控态 2 秒短合并窗、防刷屏、24 格/2 分钟分级唤醒、远处旁听滑窗与近期人类原话滚动窗
         self._chat_gate = MinecraftChatGate(
             clock=self._clock_ms,
             batch_window_ms=(
@@ -775,13 +775,13 @@ class MinecraftAgent(BaseAgent):
         # 任务被 replace 替换收手时生成的紧凑交接摘要：供紧接其后的 _start_new_task 带入新任务开头，
         # 避免换活清历史后忘记几秒前刚建的设施或刚丢出的物品；正常交付后为空，新任务照常干净开局。
         self._pending_handover_summary: str = ""
-        # 游戏 Agent 自己通过 maicraft:chat 发出的公屏句缓存：收到 game.self.chatted 时据此排除己方重复注入，
-        # 只把主播替角色发出的公屏话注入活跃任务上下文。
+        # 游戏 Agent 自己通过 maicraft:chat 发出的游戏公屏句缓存：收到 game.self.chatted 时据此排除己方重复注入，
+        # 只把主播替角色发出的游戏公屏话注入活跃任务上下文。
         self._own_emitted_chats: Deque[str] = deque(maxlen=16)
-        # 已在 _send_self_chat 中写入 chat_gate 与短期记忆的公屏句去重队列：防止主播直发公屏
-        # （from_streamer=True）触发异步 game.self.chatted 回调时，在玩家公屏插队间隙双写两条 [你回过]。
+        # 已在 _send_self_chat 中写入 chat_gate 与短期记忆的游戏公屏句去重队列：防止主播直发游戏公屏
+        # （from_streamer=True）触发异步 game.self.chatted 回调时，在玩家游戏公屏插队间隙双写两条 [你回过]。
         self._recorded_self_chats: Deque[str] = deque(maxlen=16)
-        # 近期已注入上下文的公屏通知去重表：(来源键, 正文) → 注入时的单调时钟秒值（5 秒短窗 + 新任务清空）
+        # 近期已注入上下文的游戏公屏通知去重表：(来源键, 正文) → 注入时的单调时钟秒值（5 秒短窗 + 新任务清空）
         self._recent_chat_notices: Dict[Tuple[str, str], float] = {}
         # 非死亡服务器系统提示的 15 秒节流合并表：归并键 → [窗口起始单调秒, 窗口内已合并次数, 最新原文]
         self._system_chat_throttle: Dict[str, List[Any]] = {}
@@ -858,7 +858,7 @@ class MinecraftAgent(BaseAgent):
         if self._event_bus is not None:
             self._event_bus.on(CoreEvents.LIVE_STARTED, self._on_live_started, model_class=LiveStartedPayload)
             self._event_bus.on(CoreEvents.LIVE_ENDED, self._on_live_ended, model_class=LiveEndedPayload)
-            # 聊天流：系统死亡播报走生物名册，任务中旁听玩家公屏与主播替角色发出的公屏话（空闲零消耗）
+            # 聊天流：系统死亡播报走生物名册，任务中旁听玩家游戏公屏与主播替角色发出的游戏公屏话（空闲零消耗）
             self._event_bus.on(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat, model_class=GameChatPayload)
             self._event_bus.on(CoreEvents.GAME_SELF_CHATTED, self._on_self_chatted, model_class=GameSelfChattedPayload)
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令；当前收工态，开播后接受委派）")
@@ -868,7 +868,7 @@ class MinecraftAgent(BaseAgent):
         del event_name, source
         self._live_active = True
         self._current_session_id = payload.live_session_id
-        # 新场次开播先等待残留合批定时器彻底退出，再清空上场公屏门控与纯内存本场短期记忆
+        # 新场次开播先等待残留合批定时器彻底退出，再清空上场游戏公屏门控与纯内存本场短期记忆
         await self._cancel_chat_flush_task(await_done=True)
         self._reset_session_chat_and_memory()
         # 新场次开播自动清空仅本场有效的临时钉住规矩（长期持久规矩不受影响）
@@ -897,7 +897,7 @@ class MinecraftAgent(BaseAgent):
             if self._in_lead_mode:
                 await self.yield_lead(reason="live_ended")
         await self._save_work_docs()
-        # 下播先等待挂起的合批定时器退出，再清空纯内存本场短期记忆与公屏门控
+        # 下播先等待挂起的合批定时器退出，再清空纯内存本场短期记忆与游戏公屏门控
         await self._cancel_chat_flush_task(await_done=True)
         self._reset_session_chat_and_memory()
         # 下播清空仅本场有效的临时钉住规矩与系统提示节流状态，不带入下一场
@@ -1687,7 +1687,7 @@ class MinecraftAgent(BaseAgent):
         scope: str = "all",
         limit: int = 6,
     ) -> Sequence[Mapping[str, Any]]:
-        """供记忆回想工具检索本场公屏、折叠块摘要与当前存档/本场规矩（纯内存只读，绝不写跨场库）。"""
+        """供记忆回忆工具检索本场游戏公屏、折叠块摘要与当前存档/本场规矩（纯内存只读，绝不写跨场库）。"""
         del scope
         clean_query = (query or "").strip()
         if not clean_query or limit <= 0:
@@ -2309,7 +2309,7 @@ class MinecraftAgent(BaseAgent):
             # 换到备用模型时思考由引擎丢弃，这里只管原样存
             messages.append(response_to_assistant_message(response))
 
-            # 中间工具调用步骤的正文记成名下委派的最近一句判断：主播每窗决策前从任务账本读，不靠订阅
+            # 中间工具调用步骤的正文记成名下委派的最近一句判断：主播每回合决策前从任务账本读，不靠订阅
             if tool_calls and (response.content or "").strip():
                 self._delegations.note_reply(response.content or "", now_ms())
             # 中间工具调用步骤的正文进观察面响应卡；自然终止轮的正文由交付卡承载，不重复发。
@@ -2582,7 +2582,7 @@ class MinecraftAgent(BaseAgent):
         决策顺序：
         1. 有在跑目标 / 图纸生成中 / 烧炉等待 -> 静默让出等待对应事件唤醒（空转计数清零）。
         2. 有待回答/暂停目标或未完成待办 -> 低于防空转上限时提醒继续自主推进；达上限则挂起等外部事件。
-        3. 确实无未完成待办且无在跑目标 -> 进入有界短休眠/挂起等外部事件（公屏/身体事件/观众建议）；
+        3. 确实无未完成待办且无在跑目标 -> 进入有界短休眠/挂起等外部事件（游戏公屏/身体事件/观众建议）；
            连续空轮达上限后停止定时自醒，严格零空转。
         """
         pending = self._goals.tracked_ids()
@@ -2890,7 +2890,7 @@ class MinecraftAgent(BaseAgent):
                 self._last_dimension = dim
             return
         if name == OBSERVE and arguments.get("what", "scene") == "scene":
-            # 顺手同步身边玩家名单，供旧版 Mod 未报 sender_distance 时公屏门控降级判定 [公屏·身边]；
+            # 顺手同步身边玩家名单，供旧版 Mod 未报 sender_distance 时游戏公屏门控降级判定 [游戏公屏·身边]；
             # 并提取视野内在线玩家 UUID，供游戏主控态拉取权威承诺账本
             self._nearby_players = nearby_player_names(MaicraftReply(ok=True, data=data))
             self._sync_nearby_player_uuids(data)
@@ -2913,7 +2913,7 @@ class MinecraftAgent(BaseAgent):
             return
         if name == EXECUTE:
             if run.ability == "chat" or run.ability.endswith(":chat"):
-                # 角色发游戏内 chat 时把目标玩家或刚回应的公屏对话人记入近 2 分钟互动同伴窗
+                # 角色发游戏内 chat 时把目标玩家或刚回应的游戏公屏对话人记入近 2 分钟互动同伴窗
                 self._note_chat_partner_from_execute(arguments)
             if run.finished:
                 if run.result_status == "done" and _mutates_known_places(run.ability, arguments):
@@ -2937,7 +2937,7 @@ class MinecraftAgent(BaseAgent):
                 # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：同步回炉计时与看门狗的自设计时器
                 self._furnace_waits.absorb(run)
                 self._wait_progress.absorb_timer(run, arguments)
-                # 当场就结束的公屏说话（关了逐字打字）：交出去的那句排进待发，调用方随后发给存储记进公屏聊天
+                # 当场就结束的游戏公屏说话（关了逐字打字）：交出去的那句排进待发，调用方随后发给存储记进游戏公屏
                 message = self._self_chats.take(run)
                 if message:
                     self._pending_self_chats.append(message)
@@ -3052,7 +3052,7 @@ class MinecraftAgent(BaseAgent):
             failure_line = goal_failure_line(run)
             if failure_line:
                 # 没做成/只做一半当场发给主播：做成走委派交付上报，失败没有别的实时通道，
-                # 不发她要等下一个决策窗才知道（场 65 压机问题驻留 63 分钟的教训）
+                # 不发她要等下一个决策回合才知道（场 65 压机问题驻留 63 分钟的教训）
                 await self._emit_game_event("milestone", failure_line)
             spar = spar_outcome_line(run)
             if spar is not None:
@@ -3216,7 +3216,7 @@ class MinecraftAgent(BaseAgent):
         if not self._live_active:
             self._logger.info(f"收工态不叫醒：{message[:60]}")
             return
-        # 收到玩家肢体互动时记入近 2 分钟互动同伴窗，其后续公屏即使超出 24 格仍可唤醒
+        # 收到玩家肢体互动时记入近 2 分钟互动同伴窗，其后续游戏公屏即使超出 24 格仍可唤醒
         player_info = event.get("player")
         if isinstance(player_info, dict):
             actor_name = str(player_info.get("name") or "").strip()
@@ -3651,7 +3651,7 @@ class MinecraftAgent(BaseAgent):
             context["pinned_rules"] = list(self._mc_state.pinned_rules)
         if self._mc_state.session_rules:
             context["session_rules"] = list(self._mc_state.session_rules)
-        # 近期人类原话滚动窗（仅存在近期公屏或主播建议时提供，供集中整理/重开对话保真，不改写头部固定层）
+        # 近期人类原话滚动窗（仅存在近期游戏公屏或主播建议时提供，供集中整理/重开对话保真，不改写头部固定层）
         recent_human = self._chat_gate.format_recent_human_lines()
         if recent_human:
             context["recent_human_lines"] = recent_human
@@ -3681,7 +3681,7 @@ class MinecraftAgent(BaseAgent):
                 # 切入新存档或清空规矩时显式交付空列表告知前文规矩已失效，后续续做不再重复出现
                 delta[clearable_key] = []
         if "recent_human_lines" in shown and "recent_human_lines" not in current:
-            # 近期公屏对话全部过期淘汰后显式清空，防止模型仍把前文陈旧对话当成眼下刚发生的
+            # 近期游戏公屏对话全部过期淘汰后显式清空，防止模型仍把前文陈旧对话当成眼下刚发生的
             delta["recent_human_lines"] = ""
         delta["unchanged_since_earlier_task_state"] = sorted(key for key in current if key not in delta)
         return delta
@@ -3715,7 +3715,7 @@ class MinecraftAgent(BaseAgent):
             self._commitment_ledger_dirty = True
 
     def _note_active_player_uuid(self, player_uuid: str) -> None:
-        """记录本场近期公屏或肢体/交付互动过的在线玩家 UUID（有界去重，新见时标记刷新账本）。"""
+        """记录本场近期游戏公屏或肢体/交付互动过的在线玩家 UUID（有界去重，新见时标记刷新账本）。"""
         uid = (player_uuid or "").strip()
         if not uid:
             return
@@ -4062,9 +4062,9 @@ class MinecraftAgent(BaseAgent):
         for block in outcome.blocks:
             span = block.start if block.start == block.end else f"{block.start}–{block.end}"
             has_private_chat = (
-                "[公屏·私聊]" in (block.summary or "")
-                or any("[公屏·私聊]" in line for line in block.preserved_lines)
-                or any("[公屏·私聊]" in _message_plain_text(msg.get("content")) for msg in block.originals)
+                "[游戏公屏·私聊]" in (block.summary or "")
+                or any("[游戏公屏·私聊]" in line for line in block.preserved_lines)
+                or any("[游戏公屏·私聊]" in _message_plain_text(msg.get("content")) for msg in block.originals)
             )
             self._short_term_memory.record_fold_block(
                 block.block_id,
@@ -4175,7 +4175,7 @@ class MinecraftAgent(BaseAgent):
     async def _glance(self) -> Dict[str, Any]:
         """主播看一眼：读一次自己、周围与记住的地点，只留直播叙事用得上的事实，再附上身体手头的工作。
 
-        结果最前面放一句话现场（``brief``）：主播的现场卡只放这一句白话，其余字段留给想细看时查。
+        结果最前面放一句话现场（``brief``）：主播的事实快照只放这一句白话，其余字段留给想细看时查。
         记住的地点只进其余字段（地点名一行），不进一句话现场。
         """
         view: Dict[str, Any] = {}
@@ -4299,7 +4299,7 @@ class MinecraftAgent(BaseAgent):
 
     @staticmethod
     def _chat_should_wake_waiting_task(payload: GameChatPayload, content: str) -> bool:
-        """活跃任务在等待期间收到玩家公屏时，是否需要立即唤醒任务循环评估停手或转向。"""
+        """活跃任务在等待期间收到玩家游戏公屏时，是否需要立即唤醒任务循环评估停手或转向。"""
         if payload.private:
             return True
         if any(getattr(m, "type", "") == "self" for m in (payload.mentions or [])):
@@ -4308,7 +4308,7 @@ class MinecraftAgent(BaseAgent):
         return any(hint in content for hint in wake_hints)
 
     def _enqueue_chat_notice(self, source_key: str, notice: str, *, wake_if_waiting: bool) -> None:
-        """把一条 [公屏] 只读现场通知注入当前活跃任务的上下文队列，并按需唤醒等待中的任务循环。
+        """把一条 [游戏公屏] 只读现场通知注入当前活跃任务的上下文队列，并按需唤醒等待中的任务循环。
 
         去重仅在 5 秒短时间窗内生效（基于注入单调时钟，换新任务亦会清空）：既抑制瞬时回声重复，
         又保证同伴几秒后再次喊"过来/停/等一下"时正常入队并唤醒。
@@ -4386,7 +4386,7 @@ class MinecraftAgent(BaseAgent):
                 self._enqueue_chat_notice(f"system:{key}:merged", summary, wake_if_waiting=True)
 
     # ==================================================================
-    # 本场短期记忆、公屏门控合批与被动 [脑中闪过] 线索
+    # 本场短期记忆、游戏公屏门控合批与被动 [脑中闪过] 线索
     # ==================================================================
 
     def _sync_short_term_work_docs(self) -> None:
@@ -4399,14 +4399,14 @@ class MinecraftAgent(BaseAgent):
         )
 
     def _cancel_chat_flush_task_nowait(self) -> None:
-        """同步取消挂起的公屏合批刷出定时器（幂等）。"""
+        """同步取消挂起的游戏公屏合批刷出定时器（幂等）。"""
         task = self._chat_flush_task
         self._chat_flush_task = None
         if task is not None and not task.done():
             task.cancel()
 
     async def _cancel_chat_flush_task(self, *, await_done: bool = False) -> None:
-        """取消挂起的公屏合批刷出定时器，可选等待协程退出。"""
+        """取消挂起的游戏公屏合批刷出定时器，可选等待协程退出。"""
         task = self._chat_flush_task
         self._chat_flush_task = None
         if task is None or task.done():
@@ -4419,7 +4419,7 @@ class MinecraftAgent(BaseAgent):
                 pass
 
     def _reset_session_chat_and_memory(self) -> None:
-        """开播/下播/停机统一清空公屏门控、待刷元数据与纯内存本场短期记忆，取消合批定时器。"""
+        """开播/下播/停机统一清空游戏公屏门控、待刷元数据与纯内存本场短期记忆，取消合批定时器。"""
         self._cancel_chat_flush_task_nowait()
         self._chat_gate.clear()
         self._short_term_memory.clear_session()
@@ -4437,7 +4437,7 @@ class MinecraftAgent(BaseAgent):
         self._clear_known_places_state()
 
     def _note_chat_partner_from_execute(self, arguments: Dict[str, Any]) -> None:
-        """角色发游戏内 chat 时把目标玩家或刚回应的公屏对话人记入近 2 分钟互动同伴窗。"""
+        """角色发游戏内 chat 时把目标玩家或刚回应的游戏公屏对话人记入近 2 分钟互动同伴窗。"""
         goal = arguments.get("goal") if isinstance(arguments.get("goal"), dict) else {}
         target = goal.get("target") if isinstance(goal.get("target"), dict) else {}
         if target.get("kind") == "player":
@@ -4449,7 +4449,7 @@ class MinecraftAgent(BaseAgent):
             self._chat_gate.note_partner_interaction(sender)
 
     def _schedule_chat_flush(self) -> None:
-        """挂起可取消异步刷出任务，在 2 秒短合并窗或冷却到点时刷出 ``[公屏合批]``。"""
+        """挂起可取消异步刷出任务，在 2 秒短合并窗或冷却到点时刷出 ``[游戏公屏合批]``。"""
         if self._chat_flush_task is not None and not self._chat_flush_task.done():
             return
         try:
@@ -4459,7 +4459,7 @@ class MinecraftAgent(BaseAgent):
         self._chat_flush_task = loop.create_task(self._run_chat_flush_timer(), name="mc-chat-gate-flush")
 
     async def _run_chat_flush_timer(self) -> None:
-        """按公屏门控剩余毫秒异步等待并刷出 ``[公屏合批]``（支持注入等待器避免测试真实 sleep）。"""
+        """按游戏公屏门控剩余毫秒异步等待并刷出 ``[游戏公屏合批]``（支持注入等待器避免测试真实 sleep）。"""
         try:
             while self._running and self._live_active and self._in_lead_mode:
                 delay_ms = self._chat_gate.next_flush_delay_ms()
@@ -4475,24 +4475,24 @@ class MinecraftAgent(BaseAgent):
                         await asyncio.sleep(delay_ms / 1000.0)
                     continue
                 await self._deliver_due_chat_batch(force=False)
-                # 投递过程可能因拉取被动线索让出事件循环，期间新到的公屏会开启新窗口；继续循环复检防漏调度
+                # 投递过程可能因拉取被动线索让出事件循环，期间新到的游戏公屏会开启新窗口；继续循环复检防漏调度
                 continue
         except asyncio.CancelledError:
             return
-        except Exception as exc:  # noqa: BLE001 - 公屏合批定时器异常不拖垮主循环
-            self._logger.warning(f"公屏合批刷出定时器异常（已忽略）: {type(exc).__name__}: {exc}", exc=True)
+        except Exception as exc:  # noqa: BLE001 - 游戏公屏合批定时器异常不拖垮主循环
+            self._logger.warning(f"游戏公屏合批刷出定时器异常（已忽略）: {type(exc).__name__}: {exc}", exc=True)
         finally:
             if self._chat_flush_task is asyncio.current_task():
                 self._chat_flush_task = None
 
     async def flush_pending_chat(self, *, force: bool = False) -> bool:
-        """检查并刷出已到点（或强制刷出）的 ``[公屏合批]``，返回本次是否产出了批次。"""
+        """检查并刷出已到点（或强制刷出）的 ``[游戏公屏合批]``，返回本次是否产出了批次。"""
         if not (self._live_active and self._in_lead_mode):
             return False
         return await self._deliver_due_chat_batch(force=force)
 
     async def _deliver_due_chat_batch(self, *, force: bool = False) -> bool:
-        """从公屏门控刷出 ``[公屏合批]``，在主控态顺手附带最多 1–2 条只读 ``[脑中闪过]`` 并按需唤醒循环。"""
+        """从游戏公屏门控刷出 ``[游戏公屏合批]``，在主控态顺手附带最多 1–2 条只读 ``[脑中闪过]`` 并按需唤醒循环。"""
         batch = self._chat_gate.flush_due(force=force)
         if batch is None:
             return False
@@ -4676,7 +4676,7 @@ class MinecraftAgent(BaseAgent):
 
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
         """``game.chat.received`` 回调：
-        1. 玩家公屏聊天：主控态经公屏门控（2 秒短合并窗、防刷屏、24 格/2 分钟分级唤醒、远处旁听滑窗）处理，
+        1. 玩家游戏公屏：主控态经游戏公屏门控（2 秒短合并窗、防刷屏、24 格/2 分钟分级唤醒、远处旁听滑窗）处理，
            并同步收录本场短期记忆；非主控委派态仅活跃任务期间旁听（严格空闲零消耗）；
         2. 系统死亡播报：认出生物名册里的个体并上报主播（不唤醒模型，保持空闲零消耗）；
         3. 非死亡系统提示：在主控态或活跃委派任务期间放行服务器权限/领地/插件等反馈，过滤空白与
@@ -4686,7 +4686,7 @@ class MinecraftAgent(BaseAgent):
         if payload.game != "minecraft":
             return
         if payload.kind == "player":
-            # 主控态下玩家公屏由游戏 Agent 经公屏门控统一节流、合批并附带被动联想线索
+            # 主控态下玩家游戏公屏由游戏 Agent 经游戏公屏门控统一节流、合批并附带被动联想线索
             if self._in_lead_mode:
                 if not self._live_active:
                     return
@@ -4695,7 +4695,7 @@ class MinecraftAgent(BaseAgent):
                     return
                 sender = (payload.sender or "").strip() or "其他玩家"
                 if payload.sender_id and payload.sender_online:
-                    # 记下本场公屏交互过的在线玩家 UUID，供尾部权威承诺账本精准按人拉取
+                    # 记下本场游戏公屏交互过的在线玩家 UUID，供尾部权威承诺账本精准按人拉取
                     self._note_active_player_uuid(payload.sender_id)
                 # 统一使用 Agent 注入的单调时钟域入库，避免 payload 的 wall-clock 毫秒与单调时钟错位导致时间衰减失效
                 self._short_term_memory.record_player_chat(
@@ -4732,14 +4732,14 @@ class MinecraftAgent(BaseAgent):
             if not content:
                 return
             sender = (payload.sender or "").strip() or "其他玩家"
-            # 统一使用 Agent 注入的单调时钟域入库，保证与近期公屏窗及短期记忆衰减同源
+            # 统一使用 Agent 注入的单调时钟域入库，保证与近期游戏公屏窗及短期记忆衰减同源
             self._short_term_memory.record_player_chat(
                 sender,
                 content,
                 private=bool(payload.private),
                 timestamp_ms=self._clock_ms(),
             )
-            prefix = "[公屏·私聊]" if payload.private else "[公屏]"
+            prefix = "[游戏公屏·私聊]" if payload.private else "[游戏公屏]"
             notice = f"{prefix} 玩家 {sender}：{content}"
             self._enqueue_chat_notice(
                 f"player:{sender}",
@@ -4787,14 +4787,14 @@ class MinecraftAgent(BaseAgent):
         )
 
     async def _on_self_chatted(self, event_name: str, payload: GameSelfChattedPayload, source: str) -> None:
-        """``game.self.chatted`` 回调：任务中旁听主播替角色发出的公屏话（排除游戏 Agent 自己发的重复）。"""
+        """``game.self.chatted`` 回调：任务中旁听主播替角色发出的游戏公屏话（排除游戏 Agent 自己发的重复）。"""
         del event_name, source
         if payload.game != "minecraft":
             return
         message = (payload.message or "").strip()
         if not message:
             return
-        # 排除游戏 Agent 自己经 maicraft:chat 发出的公屏句，避免把刚说过的话重复注回自己上下文
+        # 排除游戏 Agent 自己经 maicraft:chat 发出的游戏公屏句，避免把刚说过的话重复注回自己上下文
         try:
             self._own_emitted_chats.remove(message)
             try:
@@ -4804,7 +4804,7 @@ class MinecraftAgent(BaseAgent):
             return
         except ValueError:
             pass
-        # 若该句已由本 Agent 在 _send_self_chat 阶段记入近期公屏与短期记忆（如主播直发工具 from_streamer=True），
+        # 若该句已由本 Agent 在 _send_self_chat 阶段记入近期游戏公屏与短期记忆（如主播直发工具 from_streamer=True），
         # 这里消费去重标记后不再重复写入，防止并发玩家聊天穿插时出现两条相同的 [你回过]
         already_recorded = False
         try:
@@ -4812,7 +4812,7 @@ class MinecraftAgent(BaseAgent):
             already_recorded = True
         except ValueError:
             pass
-        # 外部通道替角色发出的公屏话：在开播活跃期同步记入双向近期公屏与本场短期记忆（统一使用本 Agent 单调时钟域）
+        # 外部通道替角色发出的游戏公屏话：在开播活跃期同步记入双向近期游戏公屏与本场短期记忆（统一使用本 Agent 单调时钟域）
         if not already_recorded and self._live_active and (self._in_lead_mode or not self._task_finished):
             now_tick_ms = self._clock_ms()
             self._chat_gate.record_self_chat(message, now_ms=now_tick_ms)
@@ -4820,7 +4820,7 @@ class MinecraftAgent(BaseAgent):
         # 空闲零消耗：没有活跃委派任务时不入队、不唤醒 LLM
         if not self._has_active_delegation_task():
             return
-        notice = f"[公屏·主播替你说] {message}"
+        notice = f"[游戏公屏·主播替你说] {message}"
         self._enqueue_chat_notice("streamer_self", notice, wake_if_waiting=True)
 
     async def _read_creatures(self, body: MaicraftReply) -> MaicraftReply:
@@ -5022,7 +5022,7 @@ class MinecraftAgent(BaseAgent):
             base_prompt = (
                 "你是 Minecraft 世界中的 AI 玩家，用工具玩 Minecraft。"
                 "maicraft_observe 看自己与周围，maicraft_lookup 查能力，maicraft_execute 下达目标，"
-                "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事（body_language 和公屏说话的 chat 是插一下，不替换手上的目标）；需要动手的目标在后台推进，"
+                "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事（body_language 和游戏公屏说话的 chat 是插一下，不替换手上的目标）；需要动手的目标在后台推进，"
                 "宿主会在它结束、提问或被暂停时通知你；没有可做的事就结束这一轮（不调工具），等通知。"
                 "复杂任务用 minecraft_todo 维护阶段。本次目标要的结果真的达成才交付，用 minecraft_report(kind=delivery)；"
                 "拿别的顶替或只做一半不算，附带原话与本次目标冲突时听本次目标。"
@@ -5039,21 +5039,21 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     async def _emit_self_chat(self, run: GoalRun) -> None:
-        """公屏说话的目标结束、那句交出去了：发一条给存储记进公屏聊天，主播记进她的对话时间线。"""
+        """游戏公屏说话的目标结束、那句交出去了：发一条给存储记进游戏公屏，主播记进她的对话时间线。"""
         message = self._self_chats.take(run)
         if message:
             await self._send_self_chat(message)
 
     async def _flush_self_chats(self) -> None:
-        """把回复记账时排下的公屏说话发出去（当场就结束的那种）。"""
+        """把回复记账时排下的游戏公屏说话发出去（当场就结束的那种）。"""
         while self._pending_self_chats:
             await self._send_self_chat(self._pending_self_chats.pop(0))
 
     async def _send_self_chat(self, message: str, *, from_streamer: bool = False) -> None:
-        # 纯公屏回话类的补充指令在原话发出后即已完成，从固定层摘掉免得一直占在指令清单里
+        # 纯游戏公屏回话类的补充指令在原话发出后即已完成，从固定层摘掉免得一直占在指令清单里
         self._task_instructions[:] = prune_sent_chat_supplements(self._task_instructions, message)
         text = message.strip()
-        # 己方公屏发出一律同步写入近期双向对话窗与本场短期记忆，避免后续折叠或状态刷新时忘掉自己回过话；
+        # 己方游戏公屏发出一律同步写入近期双向对话窗与本场短期记忆，避免后续折叠或状态刷新时忘掉自己回过话；
         # 记入 _recorded_self_chats 供 _on_self_chatted 判重，无论是否来自主播直发都不会在回调里二次写入；
         # 游戏 Agent 自己经 maicraft:chat 发出时额外记入 _own_emitted_chats，供 _on_self_chatted 过滤回声防自唤醒。
         if text:
@@ -5073,11 +5073,11 @@ class MinecraftAgent(BaseAgent):
         )
 
     async def _send_streamer_chat(self, text: str) -> Dict[str, Any]:
-        """minecraft_chat_send 的执行器：主播直发公屏，不经本 Agent 的 ReAct 决策循环。
+        """minecraft_chat_send 的执行器：主播直发游戏公屏，不经本 Agent 的 ReAct 决策循环。
 
         与她自己说话共用同一条执行路径（``maicraft_execute`` 的 chat 能力，只动手脚、
         大脑不醒）与同一落库口径：确认交出去后发 GAME_SELF_CHATTED，存储记进
-        公屏聊天（direction=streamer），主播下一轮上下文看得到自己说过什么。
+        游戏公屏（direction=streamer），主播下一轮上下文看得到自己说过什么。
         游戏侧没有回报交出去（没结束、被取消、打成了对某人的私聊）一律报错误，
         不当作已发送；以 ``/`` 开头是游戏命令，这个工具只发文本，直接拒绝。
 
@@ -5089,7 +5089,7 @@ class MinecraftAgent(BaseAgent):
         if not message:
             return {"success": False, "error": "chat_send 需要 text 字符串"}
         if message.startswith("/"):
-            return {"success": False, "error": "chat_send 只发公屏文本，不执行游戏命令"}
+            return {"success": False, "error": "chat_send 只发游戏公屏文本，不执行游戏命令"}
         reply = await self._call_maicraft(EXECUTE, {"goal": {"ability": "chat", "parameters": {"message": message}}})
         if not reply.ok:
             return {"success": False, "error": f"游戏没有受理发送：{reply.error_message}"}
@@ -5101,7 +5101,7 @@ class MinecraftAgent(BaseAgent):
             run = await self._await_goal_finished(run.goal_id)
         if run is None:
             # 确认窗内没等到结束不等于没发出去（提交可能在收场后才落地）；如实说不确定，
-            # 让发起方决定要不要再发——赌"没发出去"自动重发会造出公屏重复句。
+            # 让发起方决定要不要再发——赌"没发出去"自动重发会造出游戏公屏重复句。
             return {"success": False, "error": "发送未确认：等待期内游戏没有回报这句话的结果"}
         details = (run.result or {}).get("details") if isinstance(run.result, dict) else None
         submitted = isinstance(details, dict) and details.get("submitted") is True and "to" not in details

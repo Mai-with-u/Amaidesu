@@ -163,7 +163,7 @@ async def test_a_spar_called_by_observation_id_is_recorded_by_the_opponent_in_th
 
 
 async def test_her_public_chat_goes_to_storage_when_it_was_sent() -> None:
-    """游戏 Agent 在公屏说的一句，目标结束、交出去了：发一条只落库的公屏说话事件；不发 milestone。"""
+    """游戏 Agent 在游戏公屏说的一句，目标结束、交出去了：发一条只落库的游戏公屏说话事件；不发 milestone。"""
     server = FakeMaicraft()
     # 逐字打字开着：chat 是要跑一会儿的目标，结束由 finish 推进
     server.chat_instant = False
@@ -177,7 +177,7 @@ async def test_her_public_chat_goes_to_storage_when_it_was_sent() -> None:
         return _resp(calls=[_call("maicraft_execute", {"goal": goal})])
 
     agent, _llm, bus = await make_minecraft_agent(server, script)
-    agent.receive_delegation(instruction="在公屏约 Alex 切磋", task_id="d-1")
+    agent.receive_delegation(instruction="在游戏公屏约 Alex 切磋", task_id="d-1")
     await _wait_until(lambda: agent.tracked_goal_ids == [1] and agent.batch_active is False)
 
     server.finish(1, summary="说了", details={"message": "Alex 来切磋吧", "submitted": True})

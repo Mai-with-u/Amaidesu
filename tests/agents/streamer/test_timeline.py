@@ -287,9 +287,9 @@ def _layer_tokens(view: Sequence[Any]) -> int:
 async def _run_windows(
     timeline: StreamerTimeline, windows: int, per_window: int = 10, *, timed: bool = True
 ) -> List[List[Any]]:
-    """连跑若干决策窗：每窗新进 per_window 条记录，投影后让后台写章跑完（假模型当场返回）。
+    """连跑若干决策回合：每回合新进 per_window 条记录，投影后让后台写章跑完（假模型当场返回）。
 
-    每窗只递新记录即可：时间线只追加没见过的条目，已进去的不受影响。
+    每回合只递新记录即可：时间线只追加没见过的条目，已进去的不受影响。
     ``timed=False`` 时记录都没有发生时刻（调试对话那样），章节标题与目录行只能用章号。
     """
     views = []
@@ -385,7 +385,7 @@ async def test_busy_four_hour_stream_keeps_layer_bounded_without_placeholders() 
     llm = _chapter_llm()
     timeline = _fake_timeline(llm, budget)
     start_ms = 1_791_000_000_000
-    window_ms = 30_000  # 每 30 秒一个决策窗：20 条弹幕 + 主播一句回话
+    window_ms = 30_000  # 每 30 秒一个决策回合：20 条弹幕 + 主播一句回话
     windows = 4 * 60 * 60 * 1000 // window_ms
     peak = 0
     view: List[Any] = []

@@ -284,7 +284,7 @@ async def test_delivery_reminder_lets_the_task_deliver_itself() -> None:
 
 
 async def test_intermediate_reply_is_noted_on_the_running_delegation() -> None:
-    """委派在跑时中间步骤说的话记成这件委派的旁注：主播每窗决策前从任务账本读，不订阅回复事件。"""
+    """委派在跑时中间步骤说的话记成这件委派的旁注：主播每回合决策前从任务账本读，不订阅回复事件。"""
     ledger = TaskLedger(event_bus=SimpleNamespace(emit=AsyncMock()))
     ledger.register(
         task_id="d-1",
@@ -931,7 +931,7 @@ def test_tool_guide_tells_streamer_debug_panel_is_not_a_topic() -> None:
 
 
 # ---------------------------------------------------------------------------
-# minecraft_chat_send：主播直发公屏（复用 chat 能力执行器，不进本 Agent 决策循环）
+# minecraft_chat_send：主播直发游戏公屏（复用 chat 能力执行器，不进本 Agent 决策循环）
 # ---------------------------------------------------------------------------
 
 
@@ -951,7 +951,7 @@ def test_chat_send_spec_visible_to_streamer_only() -> None:
 
 
 def test_tool_guide_names_chat_send_for_streamer() -> None:
-    """玩法说明点名直发公屏工具：说一句话走直发、做动作仍走委派。"""
+    """玩法说明点名直发游戏公屏工具：说一句话走直发、做动作仍走委派。"""
     guide = MinecraftToolProvider(state=MinecraftAgentState()).guide_for("streamer")
     assert "minecraft_chat_send" in guide and "委派" in guide
 

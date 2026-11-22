@@ -42,7 +42,7 @@ __all__ = [
 
 logger = get_logger("LastWrapup")
 
-# 开播至多在前几个决策窗注入【上次收尾】（本场受理第一件委派后立即提前停注）
+# 开播至多在前几个决策回合注入【上次收尾】（本场受理第一件委派后立即提前停注）
 OPENING_WRAPUP_MAX_WINDOWS = 2
 # 上一场收尾最后几句台词上限与单句字符上限
 LAST_SPEECH_MAX_LINES = 3

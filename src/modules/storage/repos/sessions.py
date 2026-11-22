@@ -82,7 +82,7 @@ class LiveSessionSummary(NamedTuple):
 def _approved_unseen(
     conn: sqlite3.Connection, *, live_session_id: int, seen_line_ids: Optional[Sequence[int]]
 ) -> List[KeptSnapshotLine]:
-    """整理读原料之后才批准进最新快照的观众来源行，照它们在那份快照里的样子取出（按位置）。
+    """整理读原料之后才批准进最新快照的观众定下的事行，照它们在那份快照里的样子取出（按位置）。
 
     批准总是把这一行插进当时最新的那份快照；整理读原料时它还不在，``seen_line_ids`` 里就没有它。
     最新那份属于开播晚于本场的场次时，本场快照写出来也不是最新的，那份快照照旧留着这些行，不用补。
@@ -132,7 +132,7 @@ def _write_snapshot(
 ) -> int:
     """在整理事务里写本场的快照：先登记"写过快照"（快照可以是空的），再按顺序写各行引用。
 
-    ``front`` 排在最前（整理调模型期间人批准的观众来源行，和批准时一样插在最前面），其后是本场新写的行，
+    ``front`` 排在最前（整理调模型期间人批准的观众定下的事行，和批准时一样插在最前面），其后是本场新写的行，
     最后是接住的旧行。本场新写的行最近一次提起就是本场（记本场开播时刻）；接住的行只在原行还在时
     才引用，运营者放回与名场面两项标记都跟着接进新快照（否则下一场整理会把人放回的行或名场面当普通行挤掉）。
     返回写进快照的行数。
@@ -371,7 +371,7 @@ class SessionRepo(BaseRepo):
                     delete_session_index_rows(conn, live_session_id=int(live_session_id))
                     # 本场的观众候选也撤掉：台词行还在，外键级联管不到；批准出的承诺已随本场承诺删掉
                     conn.execute("DELETE FROM viewer_candidates WHERE live_session_id=?", (int(live_session_id),))
-                    # 彩排里和游戏玩家的互动、玩家的待审自述同样不进正式的记忆；人还认得，公屏聊天是原始记录照旧留着
+                    # 彩排里和游戏玩家的互动、玩家的待审自述同样不进正式的记忆；人还认得，游戏公屏是原始记录照旧留着
                     for table in ("game_player_interactions", "player_candidates"):
                         conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (int(live_session_id),))  # noqa: S608 常量表名
                 elif row["settled_at_ms"] is not None and int(row["settled_at_ms"]) == int(row["ended_at_ms"]):
@@ -433,7 +433,7 @@ class SessionRepo(BaseRepo):
     ) -> Optional[LiveSession]:
         """取最近一场已结束且时长达标的同类型场次（不论下播整理完没有）。
 
-        供开播【上次收尾】与回想"上一场"共用：开错马上重开的极短场次按 ``min_duration_ms`` 跳过；
+        供开播【上次收尾】与回忆"上一场"共用：开错马上重开的极短场次按 ``min_duration_ms`` 跳过；
         上一场即使还在整理或整理失败，也能拿到它的账面记录拼出开场交接。
         """
         threshold = max(0, int(min_duration_ms))
@@ -720,7 +720,7 @@ class SessionRepo(BaseRepo):
         幂等：先用「settled_at_ms 为空且仍是正式场」抢占本场——同一场被两次整理同时
         挑中时只有一次写进去（begin immediate 把第二个写事务挡在对方提交之后，重读即
         看到已完成）；整理途中场次被改成彩排时，这里也写不进去。运营者重置进度后重跑
-        时，同一事务里先删掉本场旧档案行（人批准的观众来源行留着）、把上一轮用本场台词了结的旧承诺
+        时，同一事务里先删掉本场旧档案行（人批准的观众定下的事行留着）、把上一轮用本场台词了结的旧承诺
         放回未了结，再写，重跑整场替换：不会越堆越多，上一轮认定、这一轮不再认定的了结也不会留在
         账上。本场登记的未了结承诺按原话那句台词对齐——这一轮还认定的保留原编号、原地
         更新，不再认定的才删；运营者已了结或判误记的承诺不受影响。
@@ -758,7 +758,7 @@ class SessionRepo(BaseRepo):
                     return written
                 written["claimed"] = 1
                 # 读原料 -> 调模型 -> 落库这段时间里人批准的观众候选：批准时插进了当时最新的那份快照，
-                # 本场快照写出来成了最新的一份，不补上它们就从她的简报里消失。删旧快照前先读出来
+                # 本场快照写出来成了最新的一份，不补上它们就从她的记忆摘要里消失。删旧快照前先读出来
                 approved_late = _approved_unseen(
                     conn, live_session_id=int(live_session_id), seen_line_ids=seen_line_ids
                 )
@@ -767,7 +767,7 @@ class SessionRepo(BaseRepo):
                 # 线索推送的"用上即停"仍认得它）；这一轮不再认定的才删；运营者已了结或
                 # 判误记的一概不动
                 delete_snapshot(conn, live_session_id=int(live_session_id))
-                # 人批准的观众来源行不删：它们不是整理写的，整理器把它们接着带进重写的快照
+                # 人批准的观众定下的事行不删：它们不是整理写的，整理器把它们接着带进重写的快照
                 conn.execute(
                     "DELETE FROM archive_lines WHERE live_session_id=? AND source <> 'viewer'", (int(live_session_id),)
                 )
@@ -798,7 +798,7 @@ class SessionRepo(BaseRepo):
                     updated_at_ms=int(now_ms_value),
                     include_corrections=False,
                 )
-                # 留下来的观众来源行占着它们那句台词：模型这一轮又用同一句写了一行的不再写，免得一件事两行
+                # 留下来的观众定下的事行占着它们那句台词：模型这一轮又用同一句写了一行的不再写，免得一件事两行
                 existing_evidence: set[int] = {
                     int(row[0])
                     for row in conn.execute(
@@ -854,7 +854,7 @@ class SessionRepo(BaseRepo):
                     front=approved_late,
                 )
                 for item in commitments:
-                    # 证据是公屏那句的按公屏行对齐，其余按台词行对齐
+                    # 证据是游戏公屏那句的按游戏公屏行对齐，其余按台词行对齐
                     conflict_key = (
                         "evidence_game_chat_id" if item.evidence_game_chat_id is not None else "evidence_chat_id"
                     )

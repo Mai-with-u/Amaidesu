@@ -87,7 +87,7 @@ def trim_task_instructions(instructions: list[str], *, max_supplements: int = MA
 
 
 def _is_fulfilled_chat_supplement(supplement: str, sent_text: str) -> bool:
-    """补充指令是否只是刚才已发出的那句公屏回话（不含其他后续任务要求）。"""
+    """补充指令是否只是刚才已发出的那句游戏公屏回话（不含其他后续任务要求）。"""
     clean_sent = sent_text.strip()
     if not clean_sent:
         return False
@@ -95,7 +95,7 @@ def _is_fulfilled_chat_supplement(supplement: str, sent_text: str) -> bool:
     body = _PROMPT_TAG_PREFIX.sub("", body).strip()
     if clean_sent not in body:
         return False
-    if not any(kw in body for kw in ("游戏聊天", "游戏公屏", "公屏", "原样打")):
+    if not any(kw in body for kw in ("游戏聊天", "游戏公屏", "游戏公屏", "原样打")):
         return False
     shell = body
     for quoted in (f"「{clean_sent}」", f"“{clean_sent}”", f'"{clean_sent}"', clean_sent):
@@ -109,7 +109,7 @@ def _is_fulfilled_chat_supplement(supplement: str, sent_text: str) -> bool:
 
 
 def prune_sent_chat_supplements(instructions: list[str], sent_text: str) -> list[str]:
-    """公屏台词确认发出后，从固定层的补充指令里移掉对应的纯回话条目（不动第 0 条委派原话）。"""
+    """游戏公屏台词确认发出后，从固定层的补充指令里移掉对应的纯回话条目（不动第 0 条委派原话）。"""
     if len(instructions) <= 1 or not sent_text.strip():
         return list(instructions)
     return [

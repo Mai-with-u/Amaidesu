@@ -93,7 +93,7 @@ class PaidViewerLookup:
         """查这批消息涉及的观众里，哪些在付费三表留过记录（身份键 → 观众 ID）。
 
         外部 ID → 内部观众 ID：按（平台, ID 种类）分组批量查——一条消息一次
-        查询会拖慢决策窗。
+        查询会拖慢决策回合。
         """
         grouped: Dict[Tuple[str, str], List[str]] = {}
         open_app_ids: Dict[Tuple[str, str], str] = {}

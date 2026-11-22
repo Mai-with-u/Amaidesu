@@ -141,7 +141,7 @@ def test_state_lines_cap_keeps_most_recent() -> None:
 
 
 def test_delegation_turn_not_in_batch() -> None:
-    """委派行只构造时间线行（直写时间线用），不进决策窗批次。"""
+    """委派行只构造时间线行（直写时间线用），不进决策回合批次。"""
     ledger = GameLedger()
     turn = ledger.record_delegation("minecraft", "做一个蜂蜜胶")
     assert "我在 minecraft 里开始做" in turn.content
@@ -282,7 +282,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
 
 
 def test_addressed_players_are_those_who_spoke_or_did_something_to_her() -> None:
-    """本窗找过她的玩家：公屏开口的、冲她做动作的，认得出是谁的才算；按先后去重。"""
+    """本回合找过她的玩家：游戏公屏开口的、冲她做动作的，认得出是谁的才算；按先后去重。"""
     ledger = GameLedger()
     ledger.record_encounter(
         "minecraft", "player_body_language", "玩家 Steve 看着我蹲起 2 下", True, _ts(20, 1), player="uuid-s"
@@ -299,7 +299,7 @@ def test_addressed_players_are_those_who_spoke_or_did_something_to_her() -> None
 
 
 def test_chat_speakers_list_who_spoke_this_batch() -> None:
-    """本批公屏聊天是谁说的：按先后去重；系统消息不算，认不出是谁的写 "?"。"""
+    """本批游戏公屏是谁说的：按先后去重；系统消息不算，认不出是谁的写 "?"。"""
     ledger = GameLedger()
     ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a")
     ledger.record_chat("minecraft", "系统消息：Steve 加入了游戏", _ts(20, 2))
@@ -343,7 +343,7 @@ def test_sole_chat_player_only_when_one_checked_player_spoke(speakers: tuple, ex
 
 
 def test_chat_message_id_only_reaches_decision_view() -> None:
-    """公屏消息号挂在规划器看的时间线行末尾（折叠行带第一条的号）；交给回复器的原话不带号。"""
+    """游戏公屏消息号挂在规划器看的时间线行末尾（折叠行带第一条的号）；交给回复器的原话不带号。"""
     ledger = GameLedger()
     ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="a1b2")
     ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="c3d4")
@@ -394,7 +394,7 @@ def test_chat_mention_mark_follows_the_turn_into_the_timeline() -> None:
 
 
 def test_replyer_dialogue_strips_game_chat_message_id() -> None:
-    """回复器聊天记录里的公屏行与弹幕行同一办法剥掉消息号。"""
+    """回复器聊天记录里的游戏公屏行与弹幕行同一办法剥掉消息号。"""
     from src.agents.streamer.replyer import _history_entry, _strip_id_tag
 
     ledger = GameLedger()

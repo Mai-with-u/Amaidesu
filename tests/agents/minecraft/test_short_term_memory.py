@@ -144,13 +144,13 @@ async def test_private_chat_and_private_fold_block_never_sent_to_external_embedd
     memory.record_player_chat("同伴甲", "箱子暗格密码是九五二七", private=True)
     memory.record_player_chat("同伴乙", "公开提醒北边有煤矿", private=False)
     memory.record_fold_block("b10", "m0001–m0004", "记录了一段私密对话", ["同伴甲：暗号别说出去"], private=True)
-    # 即使调用方漏传 private=True，保留原话带 [公屏·私聊] 也自动兜底标为私聊
-    memory.record_fold_block("b11", "m0005–m0008", "整理了仓库安排", ["[公屏·私聊] 同伴甲：暗门钥匙在床下"])
+    # 即使调用方漏传 private=True，保留原话带 [游戏公屏·私聊] 也自动兜底标为私聊
+    memory.record_fold_block("b11", "m0005–m0008", "整理了仓库安排", ["[游戏公屏·私聊] 同伴甲：暗门钥匙在床下"])
     await memory.flush_embeddings()
 
     sent_texts = [text for batch in server.requests for text in batch]
     assert any("公开提醒北边有煤矿" in text for text in sent_texts)
-    assert all("九五二七" not in text for text in sent_texts), "私聊公屏绝不可外发外部嵌入 API"
+    assert all("九五二七" not in text for text in sent_texts), "私聊游戏公屏绝不可外发外部嵌入 API"
     assert all("暗号别说出去" not in text for text in sent_texts), "显式私聊折叠块绝不可外发外部嵌入 API"
     assert all("暗门钥匙在床下" not in text for text in sent_texts), "含私聊标记的折叠块绝不可外发外部嵌入 API"
 
@@ -209,7 +209,7 @@ async def test_wait_vector_zero_returns_keyword_hits_immediately_under_slow_embe
 
 
 async def test_self_chat_indexed_relative_age_prefix_and_time_decay_blocks_stale_flashback() -> None:
-    """己方公屏正常收录检索、闪回带相对时间前缀、20 分钟半衰期与 45 分钟降权彻底阻止 97 分钟陈旧闪回。"""
+    """己方游戏公屏正常收录检索、闪回带相对时间前缀、20 分钟半衰期与 45 分钟降权彻底阻止 97 分钟陈旧闪回。"""
     clock = FakeClock(1_000_000)
     server = FakeEmbeddingServer()
     memory = SessionShortTermMemory(embedding_client=server.client(clock=clock.now_ms), clock=clock.now_ms)
@@ -228,7 +228,7 @@ async def test_self_chat_indexed_relative_age_prefix_and_time_decay_blocks_stale
     clock.tick(12 * 60_000)
     await memory.flush_embeddings()
 
-    # 1) 己方公屏可正常命中、标记 is_self=True，且闪回渲染强制带 [12分钟前] 前缀
+    # 1) 己方游戏公屏可正常命中、标记 is_self=True，且闪回渲染强制带 [12分钟前] 前缀
     mutton_hits = await memory.search_entries("羊肉", limit=5)
     assert any(hit.is_self and "你回过：羊肉收下啦" in hit.text for hit in mutton_hits)
     rendered_self = memory.format_hit_for_flash(next(h for h in mutton_hits if h.is_self))
@@ -243,7 +243,7 @@ async def test_self_chat_indexed_relative_age_prefix_and_time_decay_blocks_stale
     assert len(rule_hits) == 1
     assert memory.format_hit_for_flash(rule_hits[0]).startswith("[1小时37分钟前] [长期规矩]")
 
-    # 4) 同主题新旧公屏对比：1 分钟前得分显著高于 30 分钟前
+    # 4) 同主题新旧游戏公屏对比：1 分钟前得分显著高于 30 分钟前
     clock.tick(30 * 60_000)
     memory.record_player_chat("同伴乙", "红石中继器调成三档", timestamp_ms=clock.now_ms() - 30 * 60_000)
     memory.record_player_chat("同伴乙", "红石中继器改成四档", timestamp_ms=clock.now_ms() - 60_000)

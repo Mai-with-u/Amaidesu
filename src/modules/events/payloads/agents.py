@@ -84,9 +84,9 @@ class AgentRepliedPayload(BasePayload):
 
 class LeadHandoverBrief(BaseModel):
     """
-    交权简报正文快照（随 agent.lead.changed 事件出网，供控制台复盘交棒内容）。
+    交权记忆摘要正文快照（随 agent.lead.changed 事件出网，供控制台复盘交棒内容）。
 
-    字段与 ``LeadHandoverContext``（src/modules/agents/lead.py）对齐，是简报的
+    字段与 ``LeadHandoverContext``（src/modules/agents/lead.py）对齐，是记忆摘要的
     结构化出网形态；交权方向的载荷填本模型，收回方向为 None。
     """
 
@@ -95,7 +95,7 @@ class LeadHandoverBrief(BaseModel):
     segment_goal: str = Field(default="", description="环节目标")
     expected_ms: int = Field(default=0, description="环节预期时长（毫秒）")
     save_name: str = Field(default="", description="存档名")
-    memory_brief: str = Field(default="", description="常驻简报")
+    memory_brief: str = Field(default="", description="记忆摘要")
     operator_notes: List[str] = Field(default_factory=list, description="运营备忘条目")
     recent_speech: List[str] = Field(default_factory=list, description="最近台词条目")
 
@@ -111,8 +111,8 @@ class AgentLeadChangedPayload(BasePayload):
         mode: 切换后的主控模式（"streamer"=主播主控 / "game"=游戏自主主控）
         reason: 本次主从切换原因说明
         manual_override: 当前人工覆盖策略（None / "auto" / "streamer" / 具体游戏名）
-        handover_summary: 交权简报或收权收尾摘要
-        handover_brief: 交权方向的简报正文；收回方向为 None，收权摘要在 handover_summary
+        handover_summary: 交权记忆摘要或收权收尾摘要
+        handover_brief: 交权方向的记忆摘要正文；收回方向为 None，收权摘要在 handover_summary
         live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """
@@ -125,7 +125,7 @@ class AgentLeadChangedPayload(BasePayload):
     handover_summary: str = Field(default="", description="交接或收尾摘要")
     handover_brief: Optional[LeadHandoverBrief] = Field(
         default=None,
-        description="交权方向的简报正文；收回方向为 None，收权摘要在 handover_summary",
+        description="交权方向的记忆摘要正文；收回方向为 None，收权摘要在 handover_summary",
     )
     live_session_id: int = Field(
         default=0,

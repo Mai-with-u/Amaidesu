@@ -37,7 +37,7 @@
 - [游戏 Agent（Minecraft）](architecture/minecraft-agent.md)
 - [虚拟形象（Avatar）](architecture/avatar-platform.md)
 - [主播上下文构成](architecture/streamer-context.md)
-- [主播记忆（承诺表 + 场次档案）](architecture/streamer-memory.md)
+- [主播记忆](architecture/memory/README.md)（承诺表 + 场次档案；下播整理 / 快照 / 记忆摘要 / 线索 / 回忆 / 审核删除 / 游戏侧各一篇）
 
 ## 架构决策记录
 

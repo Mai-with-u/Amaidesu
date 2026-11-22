@@ -65,7 +65,7 @@ class ReviewSpeechItem(BaseModel):
 
 
 class ReviewCueItem(BaseModel):
-    """复盘页「本场线索卡」一行：推给规划器的哪张卡、谁触发的、分数、她用上没有。"""
+    """复盘页「本场记忆线索」一行：推给规划器的哪张卡、谁触发的、分数、她用上没有。"""
 
     id: int
     pushed_at_ms: int

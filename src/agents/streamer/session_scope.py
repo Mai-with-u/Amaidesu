@@ -1,11 +1,11 @@
-"""场次作用域：以 live_session 为界的进程内状态与决策窗材料收集。
+"""场次作用域：以 live_session 为界的进程内状态与决策回合材料收集。
 
 「这一场主播记得什么」在此单点承载——游戏账本（出账与清场经本模块动词，
 入账动词见 :attr:`SessionScope.ledger`）、待入私聊行、未落库对话轮、时间线
-notes、本窗游戏批次。对外动词：开窗（``open_window``，出账先于读历史的顺序
+notes、本回合游戏批次。对外动词：开窗（``open_window``，出账先于读历史的顺序
 不变量内化其中）、读历史（``read_history``，纯读）、补记一轮
 （``remember_round``）、清场（``begin_session`` / ``end_session``）。
-live_chat 是已落库对话的事实源，本模块只读不写；跨场记忆（常驻简报、承诺与
+live_chat 是已落库对话的事实源，本模块只读不写；跨场记忆（记忆摘要、承诺与
 场次档案）归 StreamerAgent 与 memory 子包，不在这里落状态。
 """
 
@@ -25,7 +25,7 @@ from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn
 
 __all__ = ["ClosingSession", "LiveChatTurn", "SessionScope", "WindowMaterials"]
 
-# 私聊暂存上限（行）。只进本窗决策参考段，不进时间线
+# 私聊暂存上限（行）。只进本回合决策参考段，不进时间线
 _PRIVATE_CHAT_LINES_MAX = 10
 
 
@@ -68,13 +68,13 @@ class LiveChatTurn:
 
 @dataclass(frozen=True)
 class WindowMaterials:
-    """一次决策窗的材料包（:meth:`SessionScope.open_window` 产物）。
+    """一次决策回合的材料包（:meth:`SessionScope.open_window` 产物）。
 
     字段语义（调用方按此消费，None 与空不同义）：
     - ``history``：``None`` = 读库失败，宁可本轮无历史，不拿残缺冒充完整；
       空列表 = 真的无历史。
-    - ``game_batch``：空批次 = 本窗无新游戏事件（不用 None 表达）。
-    - ``timeline_notes``：本窗开窗时点的时间线 notes 累积快照（只读观察面，
+    - ``game_batch``：空批次 = 本回合无新游戏事件（不用 None 表达）。
+    - ``timeline_notes``：本回合开窗时点的时间线 notes 累积快照（只读观察面，
       写入仍只经本模块动词）。
     """
 
@@ -90,7 +90,7 @@ def _text_field(item: Any, name: str) -> str:
 
 
 class SessionScope:
-    """场次作用域状态 + 决策窗开窗（合并投影/出账/清场/补记的单一承载）。"""
+    """场次作用域状态 + 决策回合开窗（合并投影/出账/清场/补记的单一承载）。"""
 
     def __init__(
         self,
@@ -122,11 +122,11 @@ class SessionScope:
     # -- 入账便道 ------------------------------------------------------
 
     def record_private_chat(self, line: str) -> None:
-        """私聊行入待入栈：不进时间线，随本窗批次交决策参考段（私下的话不当众说）。"""
+        """私聊行入待入栈：不进时间线，随本回合批次交决策参考段（私下的话不当众说）。"""
         self._pending_private_chat.append(line)
 
     def note_delegation(self, agent_name: str, instruction: str) -> TimelineTurn:
-        """委派行：账本入账 + 直写时间线（不进决策窗批次，批次只收三类游戏事件通道）。"""
+        """委派行：账本入账 + 直写时间线（不进决策回合批次，批次只收三类游戏事件通道）。"""
         turn = self._ledger.record_delegation(agent_name, instruction)
         self._timeline_notes.append(turn)
         return turn
@@ -151,12 +151,12 @@ class SessionScope:
     # -- 开窗与读取 ----------------------------------------------------
 
     def drain_window(self) -> GameEventBatch:
-        """决策窗出账半：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
+        """决策回合出账半：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
 
         收口只发生在窗边界恰好一处（``open_window`` 首步 / 测试显式驱动）；
         读历史（``read_history``）是纯读。折叠过多条的行附计数说明（"另 N 次
         相同"）后再入时间线；时间线条目只追加不改写，相邻窗口的历史前缀逐字
-        一致。私聊行不进时间线，单独随批次交本窗决策参考段。
+        一致。私聊行不进时间线，单独随批次交本回合决策参考段。
         """
         batch = self._ledger.drain(private_chat=self._pending_private_chat)
         self._pending_private_chat.clear()
@@ -165,11 +165,11 @@ class SessionScope:
         return batch
 
     def current_window_batch(self) -> GameEventBatch:
-        """本窗新入账的游戏事件批次（出账半写入；无新事件为空批次）。"""
+        """本回合新入账的游戏事件批次（出账半写入；无新事件为空批次）。"""
         return self._window_game_batch
 
     async def open_window(self, *, scope_pk: Optional[int] = None) -> WindowMaterials:
-        """开一个决策窗：出账（先）→ 读历史（后）→ 附本窗批次与上场回顾。
+        """开一个决策回合：出账（先）→ 读历史（后）→ 附本回合批次与上场回顾。
 
         "出账先于读取"的顺序不变量由本方法内化——调用方无法错序。``scope_pk``
         原样交给 :meth:`read_history`：收播道别那一轮传正在结束的那一场。

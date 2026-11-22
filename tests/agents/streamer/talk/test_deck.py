@@ -88,7 +88,7 @@ async def test_use_card_marks_used_and_rejects_invalid_ids() -> None:
     used = await deck.use_card("3")
     assert used is not None and used.id == 3
     assert store.cards[3].is_used_in(3) is True
-    assert [c.id for c in deck.preset_cards()] == [5]  # 本窗预摆里拿掉已选的
+    assert [c.id for c in deck.preset_cards()] == [5]  # 本回合预摆里拿掉已选的
 
     assert await deck.use_card(4) is None  # 停用卡
     assert await deck.use_card(999) is None

@@ -5,13 +5,13 @@
 - DELETE /memory/players/{id}/links/{viewer_id}  取消关联
 - DELETE /memory/players/{id}                    删玩家
 - GET    /memory/players/candidates              玩家自述列表（按状态筛）与待审数
-- POST   /memory/players/candidates/{id}/approve 批准（可改标题）：只进这位玩家的玩家卡
+- POST   /memory/players/candidates/{id}/approve 批准（可改标题）：只进这位玩家的玩家线索
 - POST   /memory/players/candidates/{id}/reject  驳回：同一句他的话、同样的标题以后不再列
-- POST   /memory/players/candidates/{id}/revoke  撤销批准：撤下玩家卡、回到待审
+- POST   /memory/players/candidates/{id}/revoke  撤销批准：撤下玩家线索、回到待审
 - DELETE /memory/players/candidates/{id}         删掉这一条（哪种状态都行）
 
 对号只由运营者确认，同名、名字像、同时出现都不自动关联；关联只用来连带删除（删观众、"忘了我"时
-一起删这位玩家）和给运营者看清楚，从不告诉她。删玩家时他的互动、公屏聊天、对他的承诺随之删除，
+一起删这位玩家）和给运营者看清楚，从不告诉她。删玩家时他的互动、游戏公屏、对他的承诺随之删除，
 名字换成"一位玩家"，UUID 进不记录名单，之后他再出现也不再记。
 """
 
@@ -159,7 +159,7 @@ async def approve_player_candidate(
     players: PlayerRepoDep,
     request: Optional[PlayerCandidateApproveRequest] = None,
 ) -> PlayerCandidateItem:
-    """批准：之后他在游戏里找她时，这件事写在他的玩家卡上；不进开播简报。"""
+    """批准：之后他在游戏里找她时，这件事写在他的玩家线索上；不进开播记忆摘要。"""
     body = request or PlayerCandidateApproveRequest()
     title = body.title if body.title is not None and body.title.strip() else None
     try:
@@ -183,7 +183,7 @@ async def reject_player_candidate(candidate_id: int, players: PlayerRepoDep) -> 
 
 @router.post("/candidates/{candidate_id}/revoke", response_model=PlayerCandidateItem)
 async def revoke_player_candidate(candidate_id: int, players: PlayerRepoDep) -> PlayerCandidateItem:
-    """撤销批准：批错了的自述撤下他的玩家卡、回到待审，可以改了标题再批或驳回。"""
+    """撤销批准：批错了的自述撤下他的玩家线索、回到待审，可以改了标题再批或驳回。"""
     try:
         row = await players.revoke_player_candidate(candidate_id=int(candidate_id), at_ms=now_ms())
     except MemoryReviewError as exc:
@@ -193,7 +193,7 @@ async def revoke_player_candidate(candidate_id: int, players: PlayerRepoDep) -> 
 
 @router.delete("/candidates/{candidate_id}", response_model=PlayerMutationResponse)
 async def delete_player_candidate(candidate_id: int, players: PlayerRepoDep) -> PlayerMutationResponse:
-    """删掉这一条：批准过的随之撤下玩家卡；驳回过的删了以后同一句话可能再被列出。"""
+    """删掉这一条：批准过的随之撤下玩家线索；驳回过的删了以后同一句话可能再被列出。"""
     try:
         await players.delete_player_candidate(candidate_id=int(candidate_id), at_ms=now_ms())
     except MemoryReviewError as exc:
@@ -227,7 +227,7 @@ async def unlink_viewer(player_id: int, viewer_id: int, players: PlayerRepoDep) 
 
 @router.delete("/{player_id}", response_model=PlayerMutationResponse)
 async def delete_player(player_id: int, privacy: PrivacyDep) -> PlayerMutationResponse:
-    """删玩家：互动、公屏聊天、对他的承诺随之删除，名字换成"一位玩家"，UUID 进不记录名单。"""
+    """删玩家：互动、游戏公屏、对他的承诺随之删除，名字换成"一位玩家"，UUID 进不记录名单。"""
     if not await privacy.delete_player(player_id=player_id, add_to_forget_list=True):
         raise HTTPException(status_code=404, detail=f"玩家不存在: #{player_id}")
     return PlayerMutationResponse(success=True, detail="已删除，他再出现也不会被记下")

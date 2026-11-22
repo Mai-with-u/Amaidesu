@@ -1,4 +1,4 @@
-"""下播整理里对游戏玩家的承诺：原料里的玩家代号与公屏段，"对谁"的两条证据路径与对不上不登记。"""
+"""下播整理里对游戏玩家的承诺：原料里的玩家代号与游戏公屏段，"对谁"的两条证据路径与对不上不登记。"""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _reply(*contents: str) -> FakeLLMManager:
 
 
 async def _scene(store: SQLiteDatabase) -> Dict[str, int]:
-    """一场：Alex 在公屏邀她挖矿，她播出一句回应 Alex，又在公屏点名答应 Alex、紧接着回 Bob 一句。"""
+    """一场：Alex 在游戏公屏邀她挖矿，她播出一句回应 Alex，又在游戏公屏点名答应 Alex、紧接着回 Bob 一句。"""
     session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     await store.sessions.close_live_session(live_session_id=session, ended_at_ms=1_800_000)
     repo = store.game_players
@@ -109,26 +109,26 @@ async def test_material_has_player_codes_and_her_public_chat(
     prompt = llm.calls[1]["input"]
     assert "（回应玩家1）：好呀，明天上线就带你去挖矿" in prompt, "回应玩家的台词标上代号"
     assert "【游戏里的玩家】\n玩家1 = Alex；玩家2 = Bob" in prompt
-    assert "公屏#1" in prompt and "你：Alex 周末我帮你把房子修好" in prompt
+    assert "游戏公屏#1" in prompt and "你：Alex 周末我帮你把房子修好" in prompt
     assert "玩家2：我也要" in prompt and "（认不出是谁的一句）" in prompt
-    assert prompt.index("公屏#1") > prompt.index("【本场她说的话】"), "公屏段排在台词之后"
+    assert prompt.index("游戏公屏#1") > prompt.index("【本场她说的话】"), "游戏公屏段排在台词之后"
 
 
 async def test_commitments_to_players_need_a_matching_evidence_path(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """台词行按记下的回应对象核对；公屏那句按点名或紧接着回话核对；对不上的不登记、进报告。"""
+    """台词行按记下的回应对象核对；游戏公屏那句按点名或紧接着回话核对；对不上的不登记、进报告。"""
     ids = await _scene(store)
     llm = _reply(
         '{"archive": []}',
         '{"commitments": ['
         '{"line": 1, "chat": null, "quote": "明天上线就带你去挖矿", "what": "带 Alex 去挖矿", "to": "player",'
         ' "player": "玩家1", "game": "minecraft", "same_as": null},'
-        '{"line": null, "chat": "公屏#1", "quote": "周末我帮你把房子修好", "what": "帮 Alex 修房子", "to": "player",'
+        '{"line": null, "chat": "游戏公屏#1", "quote": "周末我帮你把房子修好", "what": "帮 Alex 修房子", "to": "player",'
         ' "player": "玩家1", "game": null, "same_as": null},'
-        '{"line": null, "chat": "公屏#2", "quote": "下次给你也修一个", "what": "给 Bob 修房子", "to": "player",'
+        '{"line": null, "chat": "游戏公屏#2", "quote": "下次给你也修一个", "what": "给 Bob 修房子", "to": "player",'
         ' "player": "玩家2", "game": null, "same_as": null},'
-        '{"line": null, "chat": "公屏#3", "quote": "下次请你吃蛋糕", "what": "请 Alex 吃蛋糕", "to": "player",'
+        '{"line": null, "chat": "游戏公屏#3", "quote": "下次请你吃蛋糕", "what": "请 Alex 吃蛋糕", "to": "player",'
         ' "player": "玩家1", "game": null, "same_as": null}]}',
     )
     assert await _settler(store, llm, prompt_manager).settle_session(ids["session"]) is True
@@ -139,13 +139,13 @@ async def test_commitments_to_players_need_a_matching_evidence_path(
         ("帮 Alex 修房子", ids["alex"], None, ids["named"]),
         ("给 Bob 修房子", ids["bob"], None, ids["follow"]),
     ]
-    # 公屏那句的游戏与存档取它自己的
+    # 游戏公屏那句的游戏与存档取它自己的
     assert (rows[1].game, rows[1].save_id, rows[1].save_name) == ("minecraft", "w1", "生存一档")
     session = await store.sessions.get_live_session(live_session_id=ids["session"])
     assert session is not None and session.settle_report is not None
     report = SettleReport.model_validate_json(session.settle_report)
     assert [item.reason for item in report.unregistered] == [
-        "公屏这句没点这位玩家的名字，也不是紧接着他的话说的，未登记"
+        "游戏公屏这句没点这位玩家的名字，也不是紧接着他的话说的，未登记"
     ], "中间隔着认不出是谁的一句：看不出是在回 Alex"
 
 
@@ -158,7 +158,7 @@ async def test_wrong_player_or_public_chat_to_everyone_is_not_registered(
         '{"commitments": ['
         '{"line": 1, "quote": "明天上线就带你去挖矿", "what": "带 Bob 去挖矿", "to": "player", "player": "玩家2"},'
         '{"line": 1, "quote": "明天上线就带你去挖矿", "what": "带人挖矿", "to": "player", "player": "玩家9"},'
-        '{"chat": "公屏#1", "quote": "周末我帮你把房子修好", "what": "修房子", "to": "everyone"}]}',
+        '{"chat": "游戏公屏#1", "quote": "周末我帮你把房子修好", "what": "修房子", "to": "everyone"}]}',
     )
     assert await _settler(store, llm, prompt_manager).settle_session(ids["session"]) is True
 
@@ -169,7 +169,7 @@ async def test_wrong_player_or_public_chat_to_everyone_is_not_registered(
     assert reasons == [
         "说的是对某位玩家答应，但这一行不是在回应这位玩家，未登记",
         "说的是对某位玩家答应，但玩家代号认不出（玩家9），未登记",
-        "公屏上打的字只登记对某位玩家的承诺，未登记",
+        "游戏公屏上打的字只登记对某位玩家的承诺，未登记",
     ]
 
 
@@ -214,7 +214,7 @@ async def test_line_answering_a_danmaku_is_not_a_promise_to_the_player(
 def test_game_players_eval_dry_self_check_passes() -> None:
     """ "游戏里的人"评测器（scripts/memory_eval/game_players.py）回放生产整理器：dry 用理想输出自检样本，
     并把她的每一句话和每一位玩家两两配对喂给生产校验器，代码放行的必须恰好是样本事实成立的那些
-    （台词回应的是他、公屏点了他的名字或紧接着他的话）。核对规则或取料改了而评测没跟上，这里先红。"""
+    （台词回应的是他、游戏公屏点了他的名字或紧接着他的话）。核对规则或取料改了而评测没跟上，这里先红。"""
     script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "game_players.py"
     completed = subprocess.run(
         [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False

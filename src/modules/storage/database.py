@@ -157,21 +157,21 @@ class SQLiteDatabase:
         # 承诺表：承诺与场次档案（下播整理写入；WebUI 查看、纠错与手建）
         self.commitments = CommitmentRepo(self._manager)
         self.archive = ArchiveRepo(self._manager)
-        # 记忆检索的派生索引（主播的索引任务补算，回想与被动想起查询）
+        # 记忆检索的派生索引（主播的索引任务补算，回忆与被动想起查询）
         self.memory_index = MemoryIndexRepo(self._manager)
-        # 线索卡记录（被动想起推了哪张、谁触发的、用上没有；复盘面板读）
+        # 记忆线索记录（被动想起推了哪张、谁触发的、用上没有；复盘面板读）
         self.memory_cue_log = MemoryCueLogRepo(self._manager)
         # 记忆页人工审核（改标题、标稳定、放回、新增、删行、标已审，连同改动记录）
         self.memory_review = MemoryReviewRepo(self._manager)
         # 观众候选：整理写进待审区，记忆页批准或驳回（批准前对她完全不可见）
         self.viewer_candidates = ViewerCandidateRepo(self._manager)
-        # 游戏里的人：按 UUID 认出的玩家、和她的互动、公屏聊天、运营者确认的观众关联
+        # 游戏里的人：按 UUID 认出的玩家、和她的互动、游戏公屏、运营者确认的观众关联
         self.game_players = GamePlayerRepo(self._manager)
         # 切片段：AI 提议 + 运营手调的切片时段（WebUI 切片页与切割器读写）
         self.clips = ClipRepo(self._manager)
         # 游戏社交事实：她与游戏里的人怎么相处的可核对事实（场内工具登记，下播整理归纳）
         self.social_facts = SocialFactRepo(self._manager)
-        # 场内更正：主播决策工具或运营递话在本场对简报行或承诺的当场纠正
+        # 场内更正：主播决策工具或运营递话在本场对记忆摘要行或承诺的当场纠正
         self.memory_corrections = MemoryCorrectionRepo(self._manager)
 
     # -------------------- 属性 --------------------

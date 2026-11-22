@@ -528,7 +528,7 @@ async def test_world_switch_invalidates_old_summaries_and_next_compaction_replac
 
 
 def test_supplement_instructions_keep_original_plus_recent_and_prune_sent_chat() -> None:
-    """固定层补充指令只留委派原话加最近 4 条（去重），纯公屏回话发出后当场摘除，复合指令保留。"""
+    """固定层补充指令只留委派原话加最近 4 条（去重），纯游戏公屏回话发出后当场摘除，复合指令保留。"""
     raw = ["把树场的四棵橡树苗补栽好"]
     for idx in range(1, 20):
         raw.append(f"[主播补充]\n第 {idx} 次调整要求")

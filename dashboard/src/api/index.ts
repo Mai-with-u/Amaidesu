@@ -704,7 +704,7 @@ export const ledgerApi = {
 //
 // 她在游戏里遇到过的玩家：列表带曾用名、互动条数和运营者确认过的关联观众。对号只由运营者
 // 确认，同名不会自动关联；关联只用来连带删除（删观众或 ta 发"忘了我"时一起删这位玩家），
-// 不告诉她。删玩家时他的互动、公屏聊天、对他的承诺一起删，UUID 进不记录名单。
+// 不告诉她。删玩家时他的互动、游戏公屏、对他的承诺一起删，UUID 进不记录名单。
 export const playersApi = {
   list: (params?: { game?: string }) => api.get<PlayerListResponse>('/memory/players', { params }),
   linkViewer: (playerId: number, payload: PlayerLinkPayload) =>
@@ -713,7 +713,7 @@ export const playersApi = {
     api.delete<LedgerMutationResponse>(`/memory/players/${playerId}/links/${viewerId}`),
   deletePlayer: (playerId: number) =>
     api.delete<LedgerMutationResponse>(`/memory/players/${playerId}`),
-  // 玩家自述审核：批准前她看不到；批准后只进这位玩家的玩家卡，不进开播简报
+  // 玩家自述审核：批准前她看不到；批准后只进这位玩家的玩家线索，不进开播记忆摘要
   listCandidates: (status: CandidateStatus | 'all' = 'pending') =>
     api.get<PlayerCandidateListResponse>('/memory/players/candidates', { params: { status } }),
   approveCandidate: (candidateId: number, payload: { title?: string } = {}) =>

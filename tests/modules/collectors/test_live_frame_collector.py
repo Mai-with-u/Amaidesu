@@ -81,7 +81,7 @@ async def test_first_and_changed_frames_hit_the_change_gate(_store: VisionImageS
 
 async def test_unchanged_frame_still_updates_latest_slot(_store: VisionImageStore) -> None:
     """低于变化阈值的帧不刷新基线，但暂存的最新帧槽位每次采样都覆盖更新——
-    决策窗查询式挂帧看的必须是刚截的画面，而不是上一张稳定画面。"""
+    决策回合查询式挂帧看的必须是刚截的画面，而不是上一张稳定画面。"""
     collector = _collector([_frame(10), _frame(11), _frame(200)], refresh_ms=0)
     assert await collector.sample_once() is True
     assert await collector.sample_once() is False

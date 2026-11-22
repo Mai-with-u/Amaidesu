@@ -384,7 +384,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 3. `make_provider_from_specs` 组装 Provider，装配处一行
    `registry.register_provider(provider, visible_to=...)` 注册
 
-样板：`src/agents/streamer/memory/recall.py`（主播回想工具——无连接、无状态，按键读账本、档案与台词）。
+样板：`src/agents/streamer/memory/recall.py`（主播回忆工具——无连接、无状态，按键读账本、档案与台词）。
 
 **升级为手写 Provider 类的判据**（出现任一条才升级）：需要连接重连
 （覆写 `connect`/`health_check`）/ 共享状态 / 动态工具表 / 任务适配器
@@ -394,7 +394,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 
 ### 最小骨架代码（正典路径）
 
-参考样板：`src/agents/streamer/memory/recall.py`（主播回想工具——无连接、无状态，按键读账本、档案与台词）。
+参考样板：`src/agents/streamer/memory/recall.py`（主播回忆工具——无连接、无状态，按键读账本、档案与台词）。
 
 ```python
 # my_tool.py —— 简单工具正典路径样板

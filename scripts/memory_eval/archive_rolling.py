@@ -88,7 +88,7 @@ class SequenceRecord:
     ``present`` 是稳定的事（量遗忘率）；``kept`` 是哪一场都没有证据说它了结的旧行（多是一次性的
     小事），进过快照的序列末尾也必须还在；模型当初就没把它写成档案的不算"被丢"，另行报告。
     ``not_lasting`` 是建造进度、家具、种地、做菜这类进展，任何一场的快照里都不该标成稳定的事。
-    ``brief_archive_present`` 核对序列结束下一场开播时仍出现在常驻简报里的档案键（如隔一场事件与
+    ``brief_archive_present`` 核对序列结束下一场开播时仍出现在记忆摘要里的档案键（如隔一场事件与
     多条取名并存时的事件名额）；``brief_commitments_present`` / ``brief_commitments_absent`` 核对
     近期承诺进【还惦记的事】而过期承诺退居搁置计数。
     """

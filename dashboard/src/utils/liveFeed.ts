@@ -154,7 +154,7 @@ export interface ShowEntry {
   delegateEntryId?: string;
   /** 收活卡标注的派活时刻（配对到的 framework_delegate 条目时间，Unix 毫秒） */
   delegateTsMs?: number;
-  /** 交接简报（agent.lead.changed 的 handover_brief 防御解析产物）。收回方向
+  /** 交接记忆摘要（agent.lead.changed 的 handover_brief 防御解析产物）。收回方向
    *  （brief 为 null）与旧事件（字段缺失）不带此字段，切换卡据此省略展开入口 */
   brief?: LeadHandoverBrief | null;
 }
@@ -572,7 +572,7 @@ export function makeEntry(base: {
   utteranceId?: string;
   priority?: number;
   speechSource?: string;
-  /** 交接简报（仅 lead_change 交权方向携带，见 ShowEntry.brief） */
+  /** 交接记忆摘要（仅 lead_change 交权方向携带，见 ShowEntry.brief） */
   brief?: LeadHandoverBrief | null;
 }): ShowEntry {
   const actor = base.actor ?? '';
@@ -1080,7 +1080,7 @@ function fromBodyEvent(event: FeedEvent, data: Record<string, unknown>): ShowEnt
 
 /** 游戏内聊天：game.chat.received（GameChatPayload）。
  *  chat 行形态（actor=游戏内说话者），徽标区分私聊/系统消息，与 B 站弹幕视觉区分；
- *  公屏流由采集器采集、主播与任务中的游戏 Agent 双侧共享感知，source 标中性真实来源“游戏公屏”
+ *  游戏公屏流由采集器采集、主播与任务中的游戏 Agent 双侧共享感知，source 标中性真实来源“游戏公屏”
  *  （双轨分栏与分组仍按 kind === 'game_chat' 归入游戏栏，不受 source 文案变更影响）。 */
 function fromGameChat(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const isPrivate = bool(data.private);
@@ -1199,7 +1199,7 @@ function fromLeadChanged(event: FeedEvent, data: Record<string, unknown>): ShowE
   });
 }
 
-/** agent.lead.changed 载荷的 handover_brief → 交接简报对象（契约字段全部防御解析：
+/** agent.lead.changed 载荷的 handover_brief → 交接记忆摘要对象（契约字段全部防御解析：
  *  字符串守卫去空白、数组守卫逐项过滤、数字守卫兜 null）。null 或全空字段返回
  *  null——切换卡据此不渲染展开入口 */
 export function handoverBriefOf(raw: unknown): LeadHandoverBrief | null {

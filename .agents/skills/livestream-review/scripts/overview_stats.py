@@ -203,7 +203,7 @@ def _print_llm_usage(
             f"总费用 {total_cost:.2f}（口径：--config 价格表每百万 token；分段缓存=命中×cache 价+未命中×in 价+输出×out 价）"
         )
     elif prices is not None:
-        print("（价格表存在但本窗请求的模型均未命中价格条目）")
+        print("（价格表存在但本回合请求的模型均未命中价格条目）")
     print()
 
 

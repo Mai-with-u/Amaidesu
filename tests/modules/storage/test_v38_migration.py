@@ -116,7 +116,7 @@ async def test_evidence_row_deletion_nulls_reference(tmp_path: Path) -> None:
 
 
 async def test_old_game_chat_gains_message_id_column_and_index(tmp_path: Path) -> None:
-    """v37 形状的公屏表（没有消息号列）：升级后补列与索引、旧行补空串，重复执行不再变。"""
+    """v37 形状的游戏公屏表（没有消息号列）：升级后补列与索引、旧行补空串，重复执行不再变。"""
     path = tmp_path / "data" / "v37.db"
     fresh = SQLiteDatabase(path)
     await fresh.initialize()

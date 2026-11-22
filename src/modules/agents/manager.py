@@ -54,12 +54,12 @@ class AgentManager:
         读取 / 后台维护 / 收播整理依赖它们。回退语义同 tool_registry
         ——Dashboard 动态启用不传时回退成员，避免 Agent 拿 None 降级）。
         embedding_setup: 嵌入服务装配结果（主播的记忆索引任务用；动态启用时同样回退到它）
-        memory_cue_log_repo: 线索卡记录仓储（主播的被动想起写；动态启用时同样回退到它）
-        game_player_repo: 游戏里的人仓储（主播的玩家卡读；动态启用时同样回退到它）
-        social_fact_repo: 游戏社交事实仓储（主播的社交事实工具、参考段与回想；动态启用时同样回退到它）
+        memory_cue_log_repo: 记忆线索记录仓储（主播的被动想起写；动态启用时同样回退到它）
+        game_player_repo: 游戏里的人仓储（主播的玩家线索读；动态启用时同样回退到它）
+        social_fact_repo: 游戏社交事实仓储（主播的社交事实工具、参考段与回忆；动态启用时同样回退到它）
         creature_repo: 构造时注入的默认生物名册仓储（Minecraft Agent 跨场次记得同伴）
         work_docs_repo: 构造时注入的默认游戏工作文档仓储（Minecraft Agent 跨重启按存档保留笔记与待办）
-        privacy_service: 删除/遮蔽服务（回想工具与线索推送按它遮名、核对遗忘命令）
+        privacy_service: 删除/遮蔽服务（回忆工具与线索推送按它遮名、核对遗忘命令）
     """
 
     def __init__(

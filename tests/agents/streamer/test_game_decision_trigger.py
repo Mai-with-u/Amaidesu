@@ -1,4 +1,4 @@
-"""主播侧游戏上下文：游戏事件在决策窗边界批量追加进时间线，哪些事件促发一轮主动决策"""
+"""主播侧游戏上下文：游戏事件在决策回合边界批量追加进时间线，哪些事件促发一轮主动决策"""
 
 from __future__ import annotations
 
@@ -47,12 +47,12 @@ async def live_agent():
 
 
 async def test_game_lines_carry_event_type_and_only_report_sets_pending() -> None:
-    """game.* 事件先入待入账队列；读历史（决策窗边界）整批追加进时间线，行带类型标签。"""
+    """game.* 事件先入待入账队列；读历史（决策回合边界）整批追加进时间线，行带类型标签。"""
     agent = make_streamer_agent()
     await agent._on_game_event(CoreEvents.GAME_MILESTONE, _report("milestone", "挖到钻石了！"), "Test")
     await agent._on_game_event(CoreEvents.GAME_REPORT, _report("report", "迷宫尽头有两个门：左或右？"), "Test")
     assert agent._proactive_signals.game_pending is True
-    # 决策窗边界之前不进时间线：纯读历史里看不到事件行
+    # 决策回合边界之前不进时间线：纯读历史里看不到事件行
     assert "游戏·minecraft" not in "\n".join(
         getattr(turn, "content", "") for turn in (await agent._read_history() or [])
     )
@@ -166,12 +166,12 @@ async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replye
     batch = agent._scope.drain_window()
     assert "系统消息：Alex 请求传送到你这里" in batch.events[0]
     assert "玩家 Steve：麦麦你在干嘛呀（之前还有 2 条重复或刷屏的没转过来）" in batch.events[1]
-    # 聊天原话随本窗说话交给回复器
+    # 聊天原话随本回合说话交给回复器
     assert batch.fresh_chat == (batch.events[0], batch.events[1])
 
 
 async def test_game_chat_mention_mark_lands_on_decision_line(live_agent) -> None:
-    """采集器判定的自提及（payload 里 type="self" 的点名词条目）在决策窗公屏行尾挂 [提及…] 标注。"""
+    """采集器判定的自提及（payload 里 type="self" 的点名词条目）在决策回合游戏公屏行尾挂 [提及…] 标注。"""
     agent, bus = live_agent
     mentioned = GameChatPayload(
         game="minecraft",
@@ -210,7 +210,7 @@ async def test_game_chat_note_follows_the_speaker(live_agent) -> None:
 
 
 async def test_private_game_chat_reaches_planner_batch_but_never_timeline(live_agent) -> None:
-    """私聊：随本窗批次交给规划器，但不进时间线（回复器与历史都看不到）。"""
+    """私聊：随本回合批次交给规划器，但不进时间线（回复器与历史都看不到）。"""
     agent, bus = live_agent
     secret = GameChatPayload(
         game="minecraft", kind="player", sender="Steve", content="悄悄跟你说个事", private=True, timestamp_ms=1_000
@@ -259,7 +259,7 @@ async def test_game_chat_speakers_become_known_names_for_masking() -> None:
 
 
 async def test_game_chat_remembers_who_spoke_for_the_window(live_agent) -> None:
-    """玩家聊天入账时记下是谁说的：核对过的写 UUID，没核对过的写 "?"，系统消息不算；本窗出账时一并列出。"""
+    """玩家聊天入账时记下是谁说的：核对过的写 UUID，没核对过的写 "?"，系统消息不算；本回合出账时一并列出。"""
     agent, bus = live_agent
     for payload in (
         GameChatPayload(
@@ -286,12 +286,12 @@ async def test_game_chat_remembers_who_spoke_for_the_window(live_agent) -> None:
 
     materials = await agent._scope.open_window()
     assert materials.game_batch.chat_speakers == (("minecraft", "uuid-a"), ("minecraft", "?"))
-    # 冲她做动作的也算找过她：玩家卡据此推
+    # 冲她做动作的也算找过她：玩家线索据此推
     assert materials.game_batch.addressed_players == (("minecraft", "uuid-a"), ("minecraft", "uuid-s"))
 
 
 async def test_her_own_public_chat_enters_timeline_without_waking_her(live_agent) -> None:
-    """游戏那一面自己在公屏开口（第 58 场问人要蒲公英）：进时间线让她知道自己问过什么；不促发决策、不算别人的聊天。"""
+    """游戏那一面自己在游戏公屏开口（第 58 场问人要蒲公英）：进时间线让她知道自己问过什么；不促发决策、不算别人的聊天。"""
     agent, bus = live_agent
     said = GameSelfChattedPayload(game="minecraft", message="你那儿还有蒲公英吗", timestamp_ms=1_000)
     await bus.emit(CoreEvents.GAME_SELF_CHATTED, said, source="TestGameAgent")
@@ -301,13 +301,13 @@ async def test_her_own_public_chat_enters_timeline_without_waking_her(live_agent
     materials = await agent._scope.open_window()
     batch = materials.game_batch
     assert [turn.content.split("] ", 1)[1] for turn in materials.timeline_notes] == ["你那儿还有蒲公英吗"]
-    assert "我在 minecraft 公屏说]" in materials.timeline_notes[0].content
-    # 她自己的话不交回复器当"游戏里刚有人说的话"，也不算谁在公屏开口
+    assert "我在 minecraft 游戏公屏说]" in materials.timeline_notes[0].content
+    # 她自己的话不交回复器当"游戏里刚有人说的话"，也不算谁在游戏公屏开口
     assert batch.fresh_chat == () and batch.chat_speakers == () and batch.player_notes == ()
 
 
 async def test_player_chat_and_actions_reach_the_batch_with_names(live_agent) -> None:
-    """玩家在公屏说的话、冲她做的动作带着名字列进本窗的玩家条目；系统消息与没人做的遭遇不列。"""
+    """玩家在游戏公屏说的话、冲她做的动作带着名字列进本回合的玩家条目；系统消息与没人做的遭遇不列。"""
     agent, bus = live_agent
     gift = _body(
         "player_body_language",

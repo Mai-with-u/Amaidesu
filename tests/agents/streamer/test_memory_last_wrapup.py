@@ -357,7 +357,7 @@ async def test_agent_injects_wrapup_for_at_most_two_windows_or_until_first_deleg
         )
         await wait_until(agent.is_live_active, what="首场开播就绪")
 
-        # 第 1 窗、第 2 窗都有【上次收尾】，第 3 窗自动收闸（经公开递话入口唤醒决策窗）
+        # 第 1 窗、第 2 窗都有【上次收尾】，第 3 窗自动收闸（经公开递话入口唤醒决策回合）
         for round_no in (1, 2, 3):
             agent.receive_prompt(content=f"检查窗口{round_no}", source="test")
             await wait_until(lambda n=round_no: len(_planner_refs()) >= n, what=f"第{round_no}窗决策完成")

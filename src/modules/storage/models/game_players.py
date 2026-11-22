@@ -1,4 +1,4 @@
-"""游戏里的人域数据契约（game_players 及其互动、公屏聊天、观众关联的读写模型）
+"""游戏里的人域数据契约（game_players 及其互动、游戏公屏、观众关联的读写模型）
 
 她在游戏里遇到的别的玩家按游戏给每个账号的 UUID 认：同一个 UUID 改了名仍是同一个人，同名不同 UUID
 是两个人。只自动记和她发生过的互动，都是她亲身经历、直播画面里看得到的事；玩家说的关于他自己的事
@@ -37,7 +37,7 @@ __all__ = [
     "ViewerPlayerLink",
 ]
 
-# 和她的互动种类：打招呼（冲她蹲起挥手、公屏点她名说话或她回应了他，按场合并计数）、送东西
+# 和她的互动种类：打招呼（冲她蹲起挥手、游戏公屏点她名说话或她回应了他，按场合并计数）、送东西
 # （朝她扔东西落在她身边）、切磋（谁赢、几局）、一起做的事（委派任务点名了这位玩家）、帮过忙
 INTERACTION_GREET = "greet"
 INTERACTION_GIFT = "gift"
@@ -46,7 +46,7 @@ INTERACTION_TOGETHER = "together"
 INTERACTION_HELPED = "helped"
 INTERACTION_KINDS = (INTERACTION_GREET, INTERACTION_GIFT, INTERACTION_SPAR, INTERACTION_TOGETHER, INTERACTION_HELPED)
 
-# 公屏聊天的方向：玩家说的（挂玩家）/ 她说的 / 认不出是谁说的（没有 UUID 或不在线的借名消息，
+# 游戏公屏的方向：玩家说的（挂玩家）/ 她说的 / 认不出是谁说的（没有 UUID 或不在线的借名消息，
 # 只占一行位置、不存原话：判断"她这句之前有没有别人插话"要知道有人说过话）
 GAME_CHAT_PLAYER = "player"
 GAME_CHAT_STREAMER = "streamer"
@@ -107,7 +107,7 @@ class PlayerInteraction(BaseModel):
 
 
 class GameChatLine(BaseModel):
-    """``game_chat`` 一行：一条公屏游戏聊天（私聊不落库）。"""
+    """``game_chat`` 一行：一条游戏公屏游戏聊天（私聊不落库）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -126,7 +126,7 @@ class GameChatLine(BaseModel):
 class PendingPlayerCandidate(BaseModel):
     """整理校验通过、等着写进待审区的一条玩家自述（批准前对她完全不可见）。
 
-    挂在他那句公屏聊天和她的回应上：回应是她在公屏打的那句（``reply_game_chat_id``）或播出的那句台词
+    挂在他那句游戏公屏和她的回应上：回应是她在游戏公屏打的那句（``reply_game_chat_id``）或播出的那句台词
     （``reply_live_chat_id``），两者恰有一个。
     """
 
@@ -134,15 +134,15 @@ class PendingPlayerCandidate(BaseModel):
 
     player_id: int = Field(..., description="说这件事的玩家")
     title: str = Field(..., description="标题（玩家代号已换成「他」；代码已截到上限）")
-    player_chat_id: int = Field(..., description="他那句公屏聊天（game_chat 行）")
+    player_chat_id: int = Field(..., description="他那句游戏公屏（game_chat 行）")
     player_quote: str = Field(..., description="他那句的逐字片段")
-    reply_game_chat_id: Optional[int] = Field(default=None, description="她在公屏回他的那句；回应是台词时为空")
-    reply_live_chat_id: Optional[int] = Field(default=None, description="她播出的那句回应台词；回应在公屏时为空")
+    reply_game_chat_id: Optional[int] = Field(default=None, description="她在游戏公屏回他的那句；回应是台词时为空")
+    reply_live_chat_id: Optional[int] = Field(default=None, description="她播出的那句回应台词；回应在游戏公屏时为空")
     reply_quote: str = Field(..., description="她那句回应的逐字片段")
 
 
 class PendingPlayerInteraction(BaseModel):
-    """下播整理校验通过、等着写进互动表的一次"一起做的事"或"帮过忙"（有公屏原话作依据才有）。"""
+    """下播整理校验通过、等着写进互动表的一次"一起做的事"或"帮过忙"（有游戏公屏原话作依据才有）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -151,7 +151,7 @@ class PendingPlayerInteraction(BaseModel):
     fact: Dict[str, Any] = Field(default_factory=dict, description="结构化事实：做了什么、依据原话")
     save_id: str = Field(default="", description="在哪个存档；不明为空")
     save_name: str = Field(default="", description="存档给人看的名字")
-    at_ms: int = Field(..., description="依据那句公屏的时刻")
+    at_ms: int = Field(..., description="依据那句游戏公屏的时刻")
 
 
 class PlayerCandidate(PendingPlayerCandidate):
@@ -165,13 +165,13 @@ class PlayerCandidate(PendingPlayerCandidate):
 
 
 class PlayerStatement(BaseModel):
-    """批准过的一条玩家自述：玩家卡上"他跟你说过"那几条，带他说那句时所在的存档。"""
+    """批准过的一条玩家自述：玩家线索上"他跟你说过"那几条，带他说那句时所在的存档。"""
 
     model_config = ConfigDict(extra="forbid")
 
     id: int = Field(..., description="候选主键")
     title: str = Field(..., description="标题")
-    game: str = Field(..., description="他那句公屏所在的游戏")
+    game: str = Field(..., description="他那句游戏公屏所在的游戏")
     save_id: str = Field(default="", description="他说那句时所在的存档；不明为空")
     save_name: str = Field(default="", description="存档给人看的名字")
     decided_at_ms: int = Field(..., description="批准的时刻")

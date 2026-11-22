@@ -75,7 +75,7 @@ class DelegationRecord(BaseModel):
 
 
 class IndexedGameEvent(BaseModel):
-    """按主键读回的一条游戏事件：检索命中后还原成行，回想工具据此渲染"哪一场、哪个存档"。"""
+    """按主键读回的一条游戏事件：检索命中后还原成行，回忆工具据此渲染"哪一场、哪个存档"。"""
 
     model_config = ConfigDict(extra="forbid")
 

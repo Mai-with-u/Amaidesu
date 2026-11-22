@@ -1,7 +1,7 @@
 """续播重放玩家聊天：只补上一进程最后一轮决策之后、她还没接的玩家发言，注入下一轮参考段一次。
 
 续播经公开事件面驱动：真实的 ``core.startup`` 载荷划出本进程启动时刻，
-``live.started(resumed=True)`` 触发重放，从接回那一轮决策窗取到的重放文本看补了哪些话。
+``live.started(resumed=True)`` 触发重放，从接回那一轮决策回合取到的重放文本看补了哪些话。
 诊断事件流样本按 ``logs/events/<日期>/<小时>.jsonl`` 版式手工构造。
 """
 
@@ -86,7 +86,7 @@ async def resume_bus() -> AsyncIterator[EventBus]:
 
 
 async def _resume_and_collect_replay(bus: EventBus, events_dir: Path, *, window_ms: int = 5 * _MINUTE_MS) -> str:
-    """真实启动事件 → 断线续播：返回续播后第一轮决策窗取到的重放文本，并确认只注入一次。"""
+    """真实启动事件 → 断线续播：返回续播后第一轮决策回合取到的重放文本，并确认只注入一次。"""
     executor = FakeRoundExecutor()
     executor.drain_reminders = True  # 与真实执行器一样，开窗即取空递话队列与续播重放缓冲
     agent = make_streamer_agent(
@@ -113,7 +113,7 @@ async def _resume_and_collect_replay(bus: EventBus, events_dir: Path, *, window_
 
 
 async def test_replay_skips_answered_chat_and_keeps_unanswered_tail(resume_bus: EventBus, tmp_path: Path) -> None:
-    """最后一轮台词播出过的决策开窗前的话她回过了不补；之后的尾巴补回，归属说明照实时路径保留。"""
+    """最后一轮台词播出过的决策回合开始前的话她回过了不补；之后的尾巴补回，归属说明照实时路径保留。"""
     events_dir = tmp_path / "events"
     t_now = now_ms()
     t_open = t_now - 3 * _MINUTE_MS

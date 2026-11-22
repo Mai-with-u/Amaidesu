@@ -1,16 +1,16 @@
-"""GamePlayerRepo —— 游戏里的人仓储（game_players、互动、公屏聊天、观众关联）。
+"""GamePlayerRepo —— 游戏里的人仓储（game_players、互动、游戏公屏、观众关联）。
 
 她在游戏里遇到的别的玩家按"游戏 + UUID"认：见到一次就更新最近的名字、见过的名字与存档、最近一次
 见到的场次。只记和她发生过的互动；打招呼按场合并成一行计数，免得一位玩家蹲起一小时写出几百行。
-公屏聊天只落公屏（私聊不进），认不出是谁说的只占一行位置、不存原话。观众与玩家的对应只由运营者
+游戏公屏只落游戏公屏（私聊不进），认不出是谁说的只占一行位置、不存原话。观众与玩家的对应只由运营者
 确认后写入，只用来连带删除。
 
 玩家自述（``player_candidates``）由下播整理在整理事务里写进待审区（:func:`replace_session_player_candidates`），
 本场待审的整份替换；已批、已驳回的不动，驳回的留作去重依据。待审的列出后 14 天没人审就删，和观众候选同一个期限。
-人在记忆页批准（可以先改标题）或驳回；批准过的只进这位玩家的玩家卡（他在游戏里找她时推），不进常驻简报。
+人在记忆页批准（可以先改标题）或驳回；批准过的只进这位玩家的玩家线索（他在游戏里找她时推），不进记忆摘要。
 批错了可以撤销批准（回到待审，期限从撤销时重算），哪种状态的都可以整条删掉。批准、驳回、撤销、删除
 各在同一事务里记一行 ``memory_edits``（``target = player_candidate``，动作带 ``player_`` 前缀，和观众候选的
-批准驳回分开数）：只记动作、候选编号与时刻，不记标题和原话——自述会随删玩家、按句删、公屏过期被级联删掉，
+批准驳回分开数）：只记动作、候选编号与时刻，不记标题和原话——自述会随删玩家、按句删、游戏公屏过期被级联删掉，
 改动记录里留着文本就删不干净。
 
 谁能建玩家（有 UUID、在线核对过、不在忘记名单上）由调用方判断；仓储只管读写。
@@ -181,7 +181,7 @@ def _find_player_row(conn: sqlite3.Connection, *, game: str, uuid: str) -> Any:
 
 
 class GamePlayerRepo(BaseRepo):
-    """游戏里的人的读写入口：见到玩家、记互动、公屏聊天落库、观众关联。"""
+    """游戏里的人的读写入口：见到玩家、记互动、游戏公屏落库、观众关联。"""
 
     async def meet_player(
         self,
@@ -445,7 +445,7 @@ class GamePlayerRepo(BaseRepo):
     async def list_history(
         self, *, player_id: int, exclude_session_id: Optional[int] = None, limit: int = 50
     ) -> List[PlayerInteraction]:
-        """玩家卡用的往来：正式场里和她的互动，最近的在前；不含 ``exclude_session_id`` 那一场（本场的她自己知道）。
+        """玩家线索用的往来：正式场里和她的互动，最近的在前；不含 ``exclude_session_id`` 那一场（本场的她自己知道）。
 
         彩排场的互动不算：彩排里的事不进正式的记忆。
         """
@@ -490,13 +490,13 @@ class GamePlayerRepo(BaseRepo):
         at_ms: int,
         message_id: str = "",
     ) -> int:
-        """落一条公屏聊天。玩家说的必须挂玩家；认不出是谁说的不存原话，只占位。
+        """落一条游戏公屏。玩家说的必须挂玩家；认不出是谁说的不存原话，只占位。
 
         ``message_id`` 是采集时发的消息号（主播视野里这一行末尾的 ``[id:…]``）；占位行也记号，
         登记社交事实时引到它能说清"这句没有存原话"。她自己说的话没有号。
         """
         if direction == GAME_CHAT_PLAYER and player_id is None:
-            raise ValueError("玩家说的公屏聊天必须挂玩家")
+            raise ValueError("玩家说的游戏公屏必须挂玩家")
         text = content if direction != "other" else ""
         owner = int(player_id) if direction == GAME_CHAT_PLAYER and player_id is not None else None
 
@@ -512,7 +512,7 @@ class GamePlayerRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_session_game_chat(self, *, live_session_id: int) -> List[GameChatLine]:
-        """一场的公屏聊天，按时间先后。"""
+        """一场的游戏公屏，按时间先后。"""
 
         def _exec() -> List[GameChatLine]:
             with self._manager.transaction() as conn:
@@ -526,7 +526,7 @@ class GamePlayerRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def player_candidate_keys(self) -> Tuple[Dict[int, List[str]], List[int]]:
-        """整理去重用：每位玩家已批、已驳回的自述标题，以及驳回过的他那句公屏。
+        """整理去重用：每位玩家已批、已驳回的自述标题，以及驳回过的他那句游戏公屏。
 
         批准过的同一件事不再列；驳回过的同一句话、同样的标题以后也不再列。
         """
@@ -590,7 +590,7 @@ class GamePlayerRepo(BaseRepo):
         """批准或驳回一条待审的玩家自述；批准时可以改标题。
 
         不存在报 ``not_found``、已经审过报 ``conflict``、标题为空或超长报 ``invalid``（:class:`MemoryReviewError`）。
-        批准过的只进这位玩家的玩家卡；驳回的留着，同一句他的话、同样的标题以后不再列。
+        批准过的只进这位玩家的玩家线索；驳回的留着，同一句他的话、同样的标题以后不再列。
         """
 
         def _exec() -> PlayerCandidate:
@@ -619,7 +619,7 @@ class GamePlayerRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def revoke_player_candidate(self, *, candidate_id: int, at_ms: int) -> PlayerCandidate:
-        """撤销批准：批错了的自述撤下玩家卡、回到待审，14 天期限从撤销这一刻重算。
+        """撤销批准：批错了的自述撤下玩家线索、回到待审，14 天期限从撤销这一刻重算。
 
         只有已批准的能撤：不存在报 ``not_found``，不是已批准报 ``conflict``。
         """
@@ -629,7 +629,7 @@ class GamePlayerRepo(BaseRepo):
                 row = _candidate_row(conn, candidate_id)
                 if row["status"] != "approved":
                     raise MemoryReviewError("conflict", "只有批准过的玩家自述才能撤销批准")
-                # 回到待审：撤下玩家卡，人可以改了标题再批或驳回；期限从撤销时重算，免得一撤就过期被删
+                # 回到待审：撤下玩家线索，人可以改了标题再批或驳回；期限从撤销时重算，免得一撤就过期被删
                 conn.execute(
                     "UPDATE player_candidates SET status='pending', decided_at_ms=NULL, created_at_ms=? WHERE id=?",
                     (int(at_ms), int(candidate_id)),
@@ -641,7 +641,7 @@ class GamePlayerRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def delete_player_candidate(self, *, candidate_id: int, at_ms: int) -> None:
-        """删掉一条玩家自述（哪种状态都行）：批准过的随之撤下玩家卡；驳回过的删了以后同一句话可能再被列出。
+        """删掉一条玩家自述（哪种状态都行）：批准过的随之撤下玩家线索；驳回过的删了以后同一句话可能再被列出。
 
         不存在报 ``not_found``。
         """
@@ -655,7 +655,7 @@ class GamePlayerRepo(BaseRepo):
         await self._run_in_executor(_exec)
 
     async def approved_statements(self, *, player_id: int, limit: int = 2) -> List[PlayerStatement]:
-        """玩家卡用：批准过的他的自述，最近批准的在前，带他说那句时所在的存档。
+        """玩家线索用：批准过的他的自述，最近批准的在前，带他说那句时所在的存档。
 
         只认正式场列出的（彩排场的候选随场次改类型时已删）。
         """

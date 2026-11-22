@@ -5,7 +5,7 @@
 生成 round_id → 发射 ``streamer.stage``（planning）→ Planner ReAct 决策
 → 产出送发言管线 → 发射 ``planner.decision`` 与 idle 状态。
 
-依赖全部构造期注入（不持 Agent 引用）；决策窗材料经 ``window_opener``
+依赖全部构造期注入（不持 Agent 引用）；决策回合材料经 ``window_opener``
 一次取齐（出账与读取的顺序不变量内化在 SessionScope.open_window），
 流程单文本与运营提醒这两个非场次作用域项仍经 provider 回调自取。
 
@@ -62,7 +62,7 @@ _MODULE_LOGGER = get_logger("StreamerAgent.DecisionRoundExecutor")
 
 
 class WindowOpener(Protocol):
-    """开一个决策窗的入口（``SessionScope.open_window`` 的形状）。
+    """开一个决策回合的入口（``SessionScope.open_window`` 的形状）。
 
     ``scope_pk`` 为 None 时按进行中场次读历史；收播道别那一轮传正在结束的那一场。
     """
@@ -136,7 +136,7 @@ def _resolve_dispatch_priority(
     """按四档语音优先级划分本次决策发言档位。
 
     - 观众付费（forced）或观众弹幕/点名回复 → P2（SPEECH_PRIORITY_AUDIENCE，触发一级打断清待播 P0/P1）；
-    - 游戏事件/公屏触发的决策轮（TriggerKind.GAME）→ P1（SPEECH_PRIORITY_HIGHLIGHT，触发一级打断清待播 P0）；
+    - 游戏事件/游戏公屏触发的决策轮（TriggerKind.GAME）→ P1（SPEECH_PRIORITY_HIGHLIGHT，触发一级打断清待播 P0）；
     - 普通主动独白 / 流程单节奏 / 冷场暖场 → P0（SPEECH_PRIORITY_NORMAL）。
     """
     if forced or has_viewer_target:
@@ -177,14 +177,14 @@ class DecisionRoundExecutor:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
-        """决策窗材料的取用契约：
+        """决策回合材料的取用契约：
 
-        - window_opener: 开一个决策窗，一次取齐场次作用域材料（出账先于读取，
+        - window_opener: 开一个决策回合，一次取齐场次作用域材料（出账先于读取，
           顺序不变量内化在 ``SessionScope.open_window``）。每轮以关键字
           ``scope_pk`` 调用：常规轮次为 None，收播道别那一轮为正在结束的场次号。
           返回的 ``WindowMaterials`` 字段语义见其类型注释——``history`` 的 ``None``
           与空列表不同义，``game_batch`` 空批次即无事件，``timeline_notes`` 空列表
-          即本窗没有新的游戏动作记录。
+          即本回合没有新的游戏动作记录。
         - rundown_text: ``Optional[str]``（None = 无流程单情境；非场次作用域
           项，经流程单协调器自取）。
         - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
@@ -355,7 +355,7 @@ class DecisionRoundExecutor:
             "total_duration_ms": self._clock() - started_ms,
         }
 
-        # 开决策窗：出账 + 读历史 + 本窗批次 + 时间线 notes 一次取齐（顺序不变量
+        # 开决策回合：出账 + 读历史 + 本回合批次 + 时间线 notes 一次取齐（顺序不变量
         # 在 SessionScope.open_window 内化——出账的时间线行必先进本轮投影）
         window_opened_ms = self._clock()
         open_input_version = self._current_input_version()
@@ -503,7 +503,7 @@ class DecisionRoundExecutor:
                 return result, outcome
         target_user_id = resolve_reply_target_user(outcome, batch)
         reply_quote = resolve_reply_quote(outcome, batch)
-        # 四档语音优先级映射：观众付费/弹幕回复 P2 > 游戏待定夺/公屏 P1 > 普通主动独白/冷场暖场 P0
+        # 四档语音优先级映射：观众付费/弹幕回复 P2 > 游戏待定夺/游戏公屏 P1 > 普通主动独白/冷场暖场 P0
         dispatch_priority = _resolve_dispatch_priority(
             forced=forced,
             has_viewer_target=bool(batch or target_user_id or result["reply_to_message_id"]),
@@ -604,7 +604,7 @@ class DecisionRoundExecutor:
         """发言放行限速（可中断）：距上次开口不足 ``rundown_ready_interval_ms`` 时等满再放行。
 
         若需等待的时长超过短容忍阈值（默认 1 秒），等待前或等待期间一旦来了新的观众弹幕、
-        游戏公屏聊天或需即时响应的游戏事件，立即中止等待并返回 ``True``（由调用方撤回
+        游戏公屏或需即时响应的游戏事件，立即中止等待并返回 ``True``（由调用方撤回
         尚未播出的旧自主独白，释放锁让下一 tick 用最新现场重想）。返回 ``False`` 表示
         正常等满可放行。
         """

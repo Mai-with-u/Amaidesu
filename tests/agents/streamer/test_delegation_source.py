@@ -51,9 +51,9 @@ async def test_source_does_not_create_an_instruction_or_change_other_tools() -> 
 
 
 async def test_delegation_attaches_recent_and_current_game_public_chat_waypoints_verbatim() -> None:
-    """D1 第 8 条（第 61 场 19:17 回归）：玩家在游戏公屏发了路点/坐标（无论上一窗留下的还是本窗新到的），
-    即使本窗没有直播间弹幕，Planner 派出的委派与补充要求也自动把那几句游戏公屏原文附在[来源对话]里送给游戏侧；
-    公屏回话走直发工具 minecraft_chat_send，原样发送不被来源对话污染。"""
+    """D1 第 8 条（第 61 场 19:17 回归）：玩家在游戏公屏发了路点/坐标（无论上一窗留下的还是本回合新到的），
+    即使本回合没有直播间弹幕，Planner 派出的委派与补充要求也自动把那几句游戏公屏原文附在[来源对话]里送给游戏侧；
+    游戏公屏回话走直发工具 minecraft_chat_send，原样发送不被来源对话污染。"""
     invoked: List[tuple[str, Dict[str, Any]]] = []
 
     async def _invoke(invocation: ToolInvocation) -> ToolExecutionResult:
@@ -83,9 +83,9 @@ async def test_delegation_attaches_recent_and_current_game_public_chat_waypoints
     llm = MagicMock()
     llm.generate = AsyncMock(
         side_effect=[
-            # 第一窗：玩家甲在公屏发了路点，这窗先没派活
+            # 第一窗：玩家甲在游戏公屏发了路点，这窗先没派活
             Response(success=True, content="先听他说完"),
-            # 第二窗：玩家甲催促，决策调 framework_delegate 过去看，并用 minecraft_chat_send 在公屏直回一句
+            # 第二窗：玩家甲催促，决策调 framework_delegate 过去看，并用 minecraft_chat_send 在游戏公屏直回一句
             Response(
                 success=True,
                 tool_calls=[
@@ -132,7 +132,7 @@ async def test_delegation_attaches_recent_and_current_game_public_chat_waypoints
     )
 
     waypoint_line = (
-        "[19:17 minecraft 公屏] 玩家 玩家甲："
+        "[19:17 minecraft 游戏公屏] 玩家 玩家甲："
         "[xaero-waypoint:海边新家:新:248:64:-512:3:false:0:Internal-overworld-waypoints]"
     )
     ts = now_ms()
@@ -144,7 +144,7 @@ async def test_delegation_attaches_recent_and_current_game_public_chat_waypoints
             player_notes=(PlayerNote(who="玩家甲", said=True, line=waypoint_line, timestamp_ms=ts),),
         ),
     )
-    follow_line = "[19:18 minecraft 公屏] 玩家 玩家甲：按刚才那个路点过来就行"
+    follow_line = "[19:18 minecraft 游戏公屏] 玩家 玩家甲：按刚才那个路点过来就行"
     await planner.plan(
         [],
         proactive=True,
@@ -153,7 +153,7 @@ async def test_delegation_attaches_recent_and_current_game_public_chat_waypoints
             player_notes=(PlayerNote(who="玩家甲", said=True, line=follow_line, timestamp_ms=ts + 5_000),),
         ),
     )
-    dock_line = "[19:19 minecraft 公屏] 玩家 玩家甲：北侧有个木码头"
+    dock_line = "[19:19 minecraft 游戏公屏] 玩家 玩家甲：北侧有个木码头"
     await planner.plan(
         [],
         proactive=True,

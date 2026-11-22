@@ -121,7 +121,7 @@ class RundownCoordinator:
         return self._state.begin(by=by)
 
     def current_segment_title(self) -> str:
-        """当前环节标题（嘴的现场卡用）；没有流程单为空串。"""
+        """当前环节标题（嘴的事实快照用）；没有流程单为空串。"""
         segment = self._state.current_segment
         return segment.title if segment is not None else ""
 

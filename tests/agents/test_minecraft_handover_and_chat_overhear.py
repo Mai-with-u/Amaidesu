@@ -1,4 +1,4 @@
-"""MinecraftAgent 双脑协同测试：when_busy="replace" 保留 [交接摘要]、普通结单干净开局、任务中旁听公屏与短窗去重。"""
+"""MinecraftAgent 双脑协同测试：when_busy="replace" 保留 [交接摘要]、普通结单干净开局、任务中旁听游戏公屏与短窗去重。"""
 
 from __future__ import annotations
 
@@ -94,11 +94,11 @@ async def test_replace_release_preserves_handover_summary_while_settle_starts_cl
 
 
 async def test_game_chat_and_streamer_self_chat_overheard_only_during_active_task() -> None:
-    """空闲时收到玩家公屏或主播己方公屏零消耗忽略；执行活跃任务时注入 [公屏] 并按需唤醒，排除己方 maicraft:chat 重复。"""
+    """空闲时收到玩家游戏公屏或主播己方游戏公屏零消耗忽略；执行活跃任务时注入 [游戏公屏] 并按需唤醒，排除己方 maicraft:chat 重复。"""
     bus = EventBus()
     agent, llm, _bus = await make_minecraft_agent(bus=bus, live=True)
     try:
-        # 1. 空闲态（_task_finished=True）：玩家公屏与主播替发公屏都不入队、不唤醒、不调模型
+        # 1. 空闲态（_task_finished=True）：玩家游戏公屏与主播替发游戏公屏都不入队、不唤醒、不调模型
         agent._wake_event.clear()
         await bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
@@ -137,17 +137,17 @@ async def test_game_chat_and_streamer_self_chat_overheard_only_during_active_tas
             GameSelfChattedPayload(game="minecraft", message="好啦炉子先不管了"),
             source="test",
         )
-        # 游戏 Agent 自己通过 maicraft:chat 发出的公屏被去重排除，不重复注入上下文
+        # 游戏 Agent 自己通过 maicraft:chat 发出的游戏公屏被去重排除，不重复注入上下文
         await agent._send_self_chat("我看到牌子了", from_streamer=False)
         await bus.wait_until_drained()
 
         queued_texts = [item[1] for item in agent._message_queue]
         assert queued_texts == [
-            "[公屏] 玩家 同伴甲：麦麦过来，别管炉子了",
-            "[公屏·主播替你说] 好啦炉子先不管了",
+            "[游戏公屏] 玩家 同伴甲：麦麦过来，别管炉子了",
+            "[游戏公屏·主播替你说] 好啦炉子先不管了",
         ]
 
-        # 3. 活跃等待中收到喊停/点名公屏与主播替发公屏会立即唤醒 worker 并将 [公屏] 送进 LLM
+        # 3. 活跃等待中收到喊停/点名游戏公屏与主播替发游戏公屏会立即唤醒 worker 并将 [游戏公屏] 送进 LLM
         agent._task_suspended = False
         await agent.resume()
         await bus.emit(
@@ -164,16 +164,16 @@ async def test_game_chat_and_streamer_self_chat_overheard_only_during_active_tas
 
         await _wait_until(lambda: len(llm.seen) >= 1)
         joined = "\n".join(str(m.get("content") or "") for m in llm.seen[0])
-        assert "[公屏] 玩家 同伴甲：麦麦过来，别管炉子了" in joined
-        assert "[公屏·主播替你说] 好啦炉子先不管了" in joined
-        assert "[公屏] 玩家 同伴乙：先停一下，过来看看" in joined
+        assert "[游戏公屏] 玩家 同伴甲：麦麦过来，别管炉子了" in joined
+        assert "[游戏公屏·主播替你说] 好啦炉子先不管了" in joined
+        assert "[游戏公屏] 玩家 同伴乙：先停一下，过来看看" in joined
         assert "我看到牌子了" not in joined
     finally:
         await agent.stop()
 
 
 async def test_overhear_chat_dedup_expires_after_window_and_resets_on_new_task() -> None:
-    """公屏去重仅在 5 秒短窗内生效且换新任务即清空，同伴稍后或下一任务再喊“过来”可正常入队并唤醒循环。"""
+    """游戏公屏去重仅在 5 秒短窗内生效且换新任务即清空，同伴稍后或下一任务再喊“过来”可正常入队并唤醒循环。"""
     now_s = [100.0]
     bus = EventBus()
     agent, llm, _bus = await make_minecraft_agent(FakeMaicraft(), bus=bus, live=True, clock=lambda: now_s[0])
@@ -185,7 +185,7 @@ async def test_overhear_chat_dedup_expires_after_window_and_resets_on_new_task()
         await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, payload, source="test")
         await bus.wait_until_drained()
         await _wait_until(lambda: len(llm.seen) == 1)
-        assert any("[公屏] 玩家 同伴甲：过来" in str(m.get("content") or "") for m in llm.seen[0])
+        assert any("[游戏公屏] 玩家 同伴甲：过来" in str(m.get("content") or "") for m in llm.seen[0])
 
         # 1 秒后（5 秒短窗内）重复同文：去重跳过，不入队也不再次唤醒
         now_s[0] += 1.0

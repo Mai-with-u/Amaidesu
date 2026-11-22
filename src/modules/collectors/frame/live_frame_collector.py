@@ -3,7 +3,7 @@
 画面是持续流（不是被调才看的快照），按"持续流做采集器"的判据放在采集器层：
 每隔 ``interval_ms`` 取一帧，缩成小灰度图与上一次的画面比较，差异超过
 ``change_threshold``、或距上次超过 ``refresh_ms`` 时刷新比对基线并记日志。
-每次采样都覆盖暂存（``VisionImageStore``）的"最新帧"槽位，决策窗按需查询取帧，
+每次采样都覆盖暂存（``VisionImageStore``）的"最新帧"槽位，决策回合按需查询取帧，
 不经事件流。
 
 画面来源：
@@ -310,7 +310,7 @@ class LiveFrameCollector(BaseCollector):
         refresh = self.typed_config.refresh_ms
         overdue = refresh > 0 and now - self._last_published_ms >= refresh
         publish = change >= self.typed_config.change_threshold or overdue
-        # 每次成功采样都覆盖暂存里的"最新帧"槽位：决策窗挂帧是查询式的，
+        # 每次成功采样都覆盖暂存里的"最新帧"槽位：决策回合挂帧是查询式的，
         # 看的必须是刚截的画面。基线只在触达变化闸时重置，让"明显变化"
         # 的判定始终对着上一张稳定画面
         store = get_image_store()

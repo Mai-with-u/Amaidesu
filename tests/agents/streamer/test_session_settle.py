@@ -257,7 +257,7 @@ async def test_game_commitment_sticks_to_enabled_game_without_session_events(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
     """开错后马上重开的一两分钟里一条游戏事件都没记下：承诺明明是游戏里的事，挂到启用了的游戏
-    Agent 上照样算数，不会因为挂不上游戏而进常驻简报、不玩这个游戏时也被念叨。"""
+    Agent 上照样算数，不会因为挂不上游戏而进记忆摘要、不玩这个游戏时也被念叨。"""
     session_id = await _ended_session(store)
     await _speech(store, session_id, "这口气我记着了，下次接着救那块墓碑的女仆")
     llm = _reply(
@@ -682,7 +682,7 @@ async def test_session_without_speech_is_settled_without_model_call(
 
 
 class _BrokenCueLog:
-    """线索卡记录里读出坏行（不是线索卡的东西）：唠叨指标算到它就出错。"""
+    """记忆线索记录里读出坏行（不是记忆线索的东西）：唠叨指标算到它就出错。"""
 
     async def list_session_entries(self, *, live_session_id: int) -> List[Any]:
         return [object()]
@@ -1268,7 +1268,7 @@ def test_memory_prompt_examples_stay_out_of_eval_datasets() -> None:
         for raw in dataset.read_text(encoding="utf-8").splitlines():
             if raw.strip():
                 record = json.loads(raw)
-                # 多场序列样本的台词按场次分开放；游戏里的人那份另有她在公屏打的字，同样不能撞例句
+                # 多场序列样本的台词按场次分开放；游戏里的人那份另有她在游戏公屏打的字，同样不能撞例句
                 turns = [
                     *record.get("speech", []),
                     *(turn for session in record.get("sessions", []) for turn in session.get("speech", [])),
@@ -1374,7 +1374,7 @@ async def test_candidate_whose_name_is_not_in_the_danmaku_is_reported_not_listed
 async def test_resettling_after_an_approval_carries_the_viewer_line_into_the_snapshot(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """批准过候选的场次重新整理：观众来源行留着、接着带进重写的快照（稳定照批准时标的、不标放回），
+    """批准过候选的场次重新整理：观众定下的事行留着、接着带进重写的快照（稳定照批准时标的、不标放回），
     同一件事不再列成候选；模型这一轮又用同一句台词写的那一行不再写第二行。"""
     session_id = await _ended_session(store)
     await _viewer_message(store, session_id, content="猫叫芝麻吧", message_id="m1")
@@ -1656,7 +1656,7 @@ async def test_settle_reports_material_step_progress(store: SQLiteDatabase, prom
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    assert "取料 0/10：读游戏玩家与公屏" in texts, texts
+    assert "取料 0/10：读游戏玩家与游戏公屏" in texts, texts
     assert "取料 8/10：读本场游戏记录" in texts, texts
     assert "取料 9/10：读游戏社交事实" in texts, texts
 
@@ -1682,7 +1682,7 @@ async def test_settle_warns_when_material_step_is_slow(
     assert await settler.settle_session(session_id) is True
 
     warnings = [r["message"] for r in loguru_capture.records if r["level"] == "WARNING"]
-    assert any("读游戏玩家与公屏" in message and "61000" in message for message in warnings), warnings
+    assert any("读游戏玩家与游戏公屏" in message and "61000" in message for message in warnings), warnings
 
 
 async def test_settle_reports_model_stage_elapsed(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:

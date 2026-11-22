@@ -7,7 +7,7 @@
   场次时，从诊断事件流文件回读上一进程窗口的递话补进提醒队列，重启不再吞掉
   运营留言。
 - ``streamer.prompt_delivered``：决策执行器开窗取空提醒队列时发一条（载荷是这一窗
-  取走的递话原文）。续播重放按"收到 − 已送达"对账，已经送进决策窗的不再重放。
+  取走的递话原文）。续播重放按"收到 − 已送达"对账，已经送进决策回合的不再重放。
 """
 
 from typing import List
@@ -47,7 +47,7 @@ class StreamerPromptReceivedPayload(BasePayload):
 @register_event(CoreEvents.STREAMER_PROMPT_DELIVERED)
 class StreamerPromptDeliveredPayload(BasePayload):
     """
-    递话送进决策窗事件 Payload（提醒队列取空的单一送达点）。
+    递话送进决策回合事件 Payload（提醒队列取空的单一送达点）。
 
     Attributes:
         contents: 这一窗取走的递话全文（按入队先后；同文多条照实多次列出）

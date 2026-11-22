@@ -540,7 +540,7 @@ class ChatRepo(BaseRepo):
 
         线索推送每批查一次：某个承诺的编号已经出现在本场台词的引用里，就是被用上了，
         本场不再推这张卡。确知没送到观众面前的台词不算"用上了"——`dropped_at_ms`
-        非空的行排除，与回想、下播整理的送达口径一致。
+        非空的行排除，与回忆、下播整理的送达口径一致。
         """
 
         def _exec() -> List[str]:
@@ -1069,10 +1069,10 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    # -------------------- 回想工具（memory_recall）的检索面 --------------------
+    # -------------------- 回忆工具（memory_recall）的检索面 --------------------
 
     async def list_speech_by_ids(self, *, chat_ids: Sequence[int]) -> List[LiveChatMessage]:
-        """按主键取她播出了的台词（回想工具把检索结果还原成台词行用）。
+        """按主键取她播出了的台词（回忆工具把检索结果还原成台词行用）。
 
         只认已播出的：`sender_role='assistant'` 且 `dropped_at_ms IS NULL`；主键不存在或
         不是她播出的台词就不返回。按给定主键的先后排列。
@@ -1154,9 +1154,9 @@ class ChatRepo(BaseRepo):
         limit: int = 8,
         newest_first: bool = True,
     ) -> List[LiveChatMessage]:
-        """按关键词找某一场里的观众消息（回想工具用；多个关键词取交集）。
+        """按关键词找某一场里的观众消息（回忆工具用；多个关键词取交集）。
 
-        回想工具里"本场观众弹幕"永远限定本场（跨场回忆只走台词与档案），所以场次必须给。
+        回忆工具里"本场观众弹幕"永远限定本场（跨场回忆只走台词与档案），所以场次必须给。
         """
 
         def _exec() -> List[LiveChatMessage]:
@@ -1181,7 +1181,7 @@ class ChatRepo(BaseRepo):
     async def list_chat_session_bounds(self) -> List[Tuple[int, int]]:
         """有明细的场次主键与该场最后一条明细的时刻（最近在前）。
 
-        回想工具据此把结果定位成"本场 / 上一场 / 之前"，并逐场读回档案行；
+        回忆工具据此把结果定位成"本场 / 上一场 / 之前"，并逐场读回档案行；
         场次先后按场内最后一条明细的时刻算，不读场次表。
         """
 

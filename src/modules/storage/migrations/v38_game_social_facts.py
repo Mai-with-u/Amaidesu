@@ -7,11 +7,11 @@
   与证据行引用（弹幕 → live_chat、游戏公屏 → game_chat）；事实过时用取代表达
   （status 置 superseded 并回填 superseded_by），旧行留档备查。
 
-- ``game_chat.message_id``：公屏消息号（采集时发的随机短串），主播视野里公屏行末尾的 ``[id:…]``
+- ``game_chat.message_id``：游戏公屏消息号（采集时发的随机短串），主播视野里游戏公屏行末尾的 ``[id:…]``
   就是它；登记社交事实时模型填消息号，工具按"本场 + 消息号"查回行号。旧行补空串（没有号，查不到）。
   索引 ``(live_session_id, message_id)`` 只建在这里：建表汇总执行那一刻旧库还没有这一列。
 
-- 回想索引第五类来源：``memory_vectors_social_fact``（向量，外键级联）与 ``memory_fts_social_fact``
+- 回忆索引第五类来源：``memory_vectors_social_fact``（向量，外键级联）与 ``memory_fts_social_fact``
   （全文虚表，删行、改正文由两个触发器清掉对应索引行），只收现行行。
 
 社交事实表旧行无（新表）。建表语句在这里留一份定稿副本：建表汇总以后改动，不影响这一版迁移做过的事。
@@ -74,7 +74,7 @@ _GAME_CHAT_MESSAGE_INDEX = "CREATE INDEX IF NOT EXISTS idx_game_chat_message ON 
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """原地修改、幂等：公屏补消息号列与索引，建游戏社交事实表与两个索引（缺被引用的表就跳过）。"""
+    """原地修改、幂等：游戏公屏补消息号列与索引，建游戏社交事实表与两个索引（缺被引用的表就跳过）。"""
     if table_exists(conn, "game_chat"):
         if not column_exists(conn, "game_chat", "message_id"):
             conn.execute("ALTER TABLE game_chat ADD COLUMN message_id TEXT NOT NULL DEFAULT ''")

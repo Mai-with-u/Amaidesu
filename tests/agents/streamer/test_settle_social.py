@@ -64,7 +64,7 @@ def _settler(store: SQLiteDatabase, llm: Any, prompt_manager: PromptManager, *, 
 
 
 async def _scene(store: SQLiteDatabase) -> Dict[str, int]:
-    """一场：玩了 minecraft，Alex 在公屏说了两句，她播出一句台词；已有一条现行的进行中的事。"""
+    """一场：玩了 minecraft，Alex 在游戏公屏说了两句，她播出一句台词；已有一条现行的进行中的事。"""
     session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     await store.sessions.close_live_session(live_session_id=session, ended_at_ms=1_801_000)
     await store.events.insert_game_event(
@@ -127,7 +127,7 @@ async def test_fourth_call_updates_facts_and_interactions(store, prompt_manager)
             {
                 "kind": "works",
                 "text": "玩家1 改去挖钻石",
-                "chat": "公屏#1",
+                "chat": "游戏公屏#1",
                 "quote": "我去挖钻石",
                 "supersedes": env["old"],
             },
@@ -139,25 +139,25 @@ async def test_fourth_call_updates_facts_and_interactions(store, prompt_manager)
                 "player": "玩家1",
                 "kind": "together",
                 "what": "玩家1 一起去下界",
-                "chat": "公屏#2",
+                "chat": "游戏公屏#2",
                 "quote": "一起去下界",
             },
-            {"player": "玩家1", "kind": "helped", "what": "帮忙", "chat": "公屏#2", "quote": "没说过的话"},
+            {"player": "玩家1", "kind": "helped", "what": "帮忙", "chat": "游戏公屏#2", "quote": "没说过的话"},
         ],
     }
     llm = _answers(social)
     assert await _settler(store, llm, prompt_manager).settle_session(env["session"]) is True
 
-    # 第四调的原料是紧凑集：玩家公屏与现有事实在，她的台词不在
+    # 第四调的原料是紧凑集：玩家游戏公屏与现有事实在，她的台词不在
     social_call = llm.calls[-1]
     assert "刷铁机修好了" in str(social_call["input"]) and f"事实#{env['old']}" in str(social_call["input"])
     assert "好呀" not in str(social_call["input"])
-    # 公屏按时间序双侧行编排：她的公屏行标"她"插在对话流里（回答才看得出是在回答什么），
+    # 游戏公屏按时间序双侧行编排：她的游戏公屏行标"她"插在对话流里（回答才看得出是在回答什么），
     # 但没有编号——证据编号只发给玩家的行
     social_input = str(social_call["input"])
     her_row = social_input.index("她：那我等你钻石回来一起做个剑")
-    player_row = social_input.index("公屏#2")
-    assert her_row < player_row and "公屏#" not in social_input[her_row:player_row]
+    player_row = social_input.index("游戏公屏#2")
+    assert her_row < player_row and "游戏公屏#" not in social_input[her_row:player_row]
 
     active = await store.social_facts.list_active_facts(game="minecraft")
     # 模型写的玩家代号在落库前还原回真名：代号只在这一个调用里有效，
@@ -261,15 +261,21 @@ def _material(
 @pytest.mark.parametrize(
     ("row", "reason"),
     [
-        ({"kind": "gossip", "text": "x", "chat": "公屏#1", "quote": "箱子"}, "六类"),
+        ({"kind": "gossip", "text": "x", "chat": "游戏公屏#1", "quote": "箱子"}, "六类"),
         ({"kind": "sharing", "text": "箱子公用", "chat": None, "quote": ""}, "必须引"),
-        ({"kind": "sharing", "text": "箱子公用", "chat": "公屏#9", "quote": "箱子"}, "不是给出的"),
-        ({"kind": "sharing", "text": "箱子公用", "chat": "公屏#1", "quote": "柜子"}, "一字不差"),
+        ({"kind": "sharing", "text": "箱子公用", "chat": "游戏公屏#9", "quote": "箱子"}, "不是给出的"),
+        ({"kind": "sharing", "text": "箱子公用", "chat": "游戏公屏#1", "quote": "柜子"}, "一字不差"),
         ({"kind": "her_role", "text": "她管箱子", "chat": None, "quote": "箱子"}, "没引"),
-        ({"kind": "sharing", "text": "箱子公用", "chat": "公屏#1", "quote": "箱子", "supersedes": 2}, "运营者定的"),
-        ({"kind": "sharing", "text": "箱子公用", "chat": "公屏#1", "quote": "箱子", "supersedes": 3}, "不是同一类"),
         (
-            {"kind": "sharing", "text": "箱子公用", "chat": "公屏#1", "quote": "箱子", "supersedes": 99},
+            {"kind": "sharing", "text": "箱子公用", "chat": "游戏公屏#1", "quote": "箱子", "supersedes": 2},
+            "运营者定的",
+        ),
+        (
+            {"kind": "sharing", "text": "箱子公用", "chat": "游戏公屏#1", "quote": "箱子", "supersedes": 3},
+            "不是同一类",
+        ),
+        (
+            {"kind": "sharing", "text": "箱子公用", "chat": "游戏公屏#1", "quote": "箱子", "supersedes": 99},
             "不是给出的现行事实",
         ),
     ],
@@ -282,7 +288,7 @@ def test_validate_bounces(row: Dict[str, Any], reason: str) -> None:
 
 
 def test_validate_cap_and_scope() -> None:
-    """满额且全锁定或不支持自动腾退的类别拒收；未锁定 sharing 带公屏证据时自动腾退最旧条目；显式 supersedes 优先。"""
+    """满额且全锁定或不支持自动腾退的类别拒收；未锁定 sharing 带游戏公屏证据时自动腾退最旧条目；显式 supersedes 优先。"""
     # 原料渲染：满 4/4 的类别在提示词里显式标出槽位占用
     unlocked_facts = [
         _fact(10 + i, "sharing", updated_at_ms=1_000 + i * 100, updated_session_id=2) for i in range(MAX_FACTS_PER_KIND)
@@ -290,8 +296,8 @@ def test_validate_cap_and_scope() -> None:
     material = _material(unlocked_facts)
     assert "共享惯例（已满 4/4）" in material.text and "supersedes" in material.text
 
-    # sharing 满 4 条且漏填 supersedes，有扎实公屏证据时自动腾退最旧未锁定条目 #10
-    row = {"kind": "sharing", "text": "AE网络就是仓库", "chat": "公屏#1", "quote": "箱子"}
+    # sharing 满 4 条且漏填 supersedes，有扎实游戏公屏证据时自动腾退最旧未锁定条目 #10
+    row = {"kind": "sharing", "text": "AE网络就是仓库", "chat": "游戏公屏#1", "quote": "箱子"}
     check = validate_social_output({"facts": [row]}, material, live_session_id=5)
     assert check.missed == []
     assert len(check.facts) == 1
@@ -311,7 +317,7 @@ def test_validate_cap_and_scope() -> None:
     # 不在自动腾退白名单的 members 满 4 条时仍按满额拒收
     members_material = _material([_fact(30 + i, "members") for i in range(MAX_FACTS_PER_KIND)])
     members_check = validate_social_output(
-        {"facts": [{"kind": "members", "text": "新成员关系", "chat": "公屏#1", "quote": "箱子"}]},
+        {"facts": [{"kind": "members", "text": "新成员关系", "chat": "游戏公屏#1", "quote": "箱子"}]},
         members_material,
         live_session_id=5,
     )
@@ -321,18 +327,18 @@ def test_validate_cap_and_scope() -> None:
 @pytest.mark.parametrize(
     ("player_field", "chat_ref", "quote", "expected_pid"),
     [
-        ("玩家2", "公屏#2", "可以用/back回到上一个低点", 9),
-        ("PlayerB", "公屏#2", "可以用/back回到上一个低点", 9),
-        ("  playerb  ", "公屏#2", "可以用/back回到上一个低点", 9),
-        ("PlayerA", "公屏#1", "AE网络就是我们的仓库", 7),
-        ("PlayerB", "公屏#1", "AE网络就是我们的仓库", None),  # 真名与公屏说话人不符 → 拒收
-        ("UnknownPlayer", "公屏#2", "可以用/back回到上一个低点", None),  # 未知真名 → 拒收
+        ("玩家2", "游戏公屏#2", "可以用/back回到上一个低点", 9),
+        ("PlayerB", "游戏公屏#2", "可以用/back回到上一个低点", 9),
+        ("  playerb  ", "游戏公屏#2", "可以用/back回到上一个低点", 9),
+        ("PlayerA", "游戏公屏#1", "AE网络就是我们的仓库", 7),
+        ("PlayerB", "游戏公屏#1", "AE网络就是我们的仓库", None),  # 真名与游戏公屏说话人不符 → 拒收
+        ("UnknownPlayer", "游戏公屏#2", "可以用/back回到上一个低点", None),  # 未知真名 → 拒收
     ],
 )
 def test_interactions_accept_player_real_name_and_reject_mismatch(
     player_field: str, chat_ref: str, quote: str, expected_pid: int | None
 ) -> None:
-    """互动 player 既支持“玩家N”代号也兼容真名反查（忽略前后空格与大小写），但必须严格对上公屏说话人。"""
+    """互动 player 既支持“玩家N”代号也兼容真名反查（忽略前后空格与大小写），但必须严格对上游戏公屏说话人。"""
     material = _material(
         [],
         chat_lines=[
@@ -362,7 +368,7 @@ def test_interactions_accept_player_real_name_and_reject_mismatch(
 
 @pytest.mark.parametrize("kind", ["sharing", "setting", "open_question"])
 def test_auto_evict_skips_locked_and_current_session_for_high_value_chat_facts(kind: str) -> None:
-    """sharing / setting / open_question 满额时，带公屏原话证据的新事实跳过锁定与本场条目，依次腾退最旧旧条目。"""
+    """sharing / setting / open_question 满额时，带游戏公屏原话证据的新事实跳过锁定与本场条目，依次腾退最旧旧条目。"""
     facts = [
         _fact(1, kind, locked=1, updated_at_ms=500, updated_session_id=1),
         _fact(2, kind, locked=0, updated_at_ms=2_000, updated_session_id=3),
@@ -380,8 +386,13 @@ def test_auto_evict_skips_locked_and_current_session_for_high_value_chat_facts(k
     check = validate_social_output(
         {
             "facts": [
-                {"kind": kind, "text": "高价值新事实一", "chat": "公屏#1", "quote": "AE网络就是我们的仓库"},
-                {"kind": kind, "text": "高价值新事实二", "chat": "公屏#2", "quote": "弄太近容易弄坏岩浆传递机器吧"},
+                {"kind": kind, "text": "高价值新事实一", "chat": "游戏公屏#1", "quote": "AE网络就是我们的仓库"},
+                {
+                    "kind": kind,
+                    "text": "高价值新事实二",
+                    "chat": "游戏公屏#2",
+                    "quote": "弄太近容易弄坏岩浆传递机器吧",
+                },
             ]
         },
         material,
@@ -393,10 +404,10 @@ def test_auto_evict_skips_locked_and_current_session_for_high_value_chat_facts(k
 
 
 def test_open_question_without_chat_evidence_does_not_auto_evict() -> None:
-    """无公屏依据的归纳型 open_question 满额时不触发自动腾退，避免纯推测挤掉已有条目。"""
+    """无游戏公屏依据的归纳型 open_question 满额时不触发自动腾退，避免纯推测挤掉已有条目。"""
     material = _material([_fact(10 + i, "open_question", updated_at_ms=1_000 + i) for i in range(MAX_FACTS_PER_KIND)])
     check = validate_social_output(
-        {"facts": [{"kind": "open_question", "text": "无公屏猜测待弄清", "chat": None, "quote": ""}]},
+        {"facts": [{"kind": "open_question", "text": "无游戏公屏猜测待弄清", "chat": None, "quote": ""}]},
         material,
         live_session_id=75,
     )
@@ -493,7 +504,7 @@ def test_works_supersede_accepts_verified_game_record_and_rejects_invalid_uses()
         ),
         (
             {"kind": "sharing", "text": "共享", "chat": "记录#14", "quote": "回广场橙子摊旁搭烧烤摊", "supersedes": 52},
-            "不是给出的玩家公屏",
+            "不是给出的玩家游戏公屏",
         ),
         (
             {"kind": "works", "text": "未交付", "chat": "记录#15", "quote": "铺广场", "supersedes": 50},
@@ -523,7 +534,7 @@ def test_works_supersede_accepts_verified_game_record_and_rejects_invalid_uses()
 
 
 async def test_e2e_settle_closes_works_via_game_record_and_accepts_real_name_interaction(store, prompt_manager) -> None:
-    """端到端真库回归：无玩家公屏作证时凭游戏记录结案旧 works，并接受真名互动与自动腾退满额 sharing。"""
+    """端到端真库回归：无玩家游戏公屏作证时凭游戏记录结案旧 works，并接受真名互动与自动腾退满额 sharing。"""
     session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     await store.sessions.close_live_session(live_session_id=session, ended_at_ms=1_801_000)
     await store.events.insert_game_event(
@@ -572,7 +583,7 @@ async def test_e2e_settle_closes_works_via_game_record_and_accepts_real_name_int
                 "player": "PlayerB",
                 "kind": "helped",
                 "what": "提醒可以用 /back 回死亡点",
-                "chat": "公屏#1",
+                "chat": "游戏公屏#1",
                 "quote": "以防你不知道可以用/back回到上一个低点",
             }
         ],
@@ -658,7 +669,7 @@ def test_restore_names_whole_token_and_stale_works_auto_supersede_and_multisave_
                 {
                     "kind": "works",
                     "text": "玩家1 和 玩家10 修铁路",
-                    "chat": "公屏#1",
+                    "chat": "游戏公屏#1",
                     "quote": "来集合修铁路",
                     "supersedes": None,
                 },

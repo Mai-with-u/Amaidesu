@@ -1,6 +1,6 @@
 """streamer_social_fact 工具：按消息号查回依据行、各条打回分支、回执字段与条件注册。
 
-真库（临时 SQLite）：弹幕与公屏行按真实写入路径落库，工具经 Provider.invoke 调用。
+真库（临时 SQLite）：弹幕与游戏公屏行按真实写入路径落库，工具经 Provider.invoke 调用。
 """
 
 from __future__ import annotations
@@ -396,7 +396,7 @@ async def test_downgraded_works_yields_slot_when_kind_cap_is_full(store) -> None
 
 
 async def test_recall_finds_active_social_fact(store) -> None:
-    """回想索引多一类：现行社交事实查得到，被取代的查不到。"""
+    """回忆索引多一类：现行社交事实查得到，被取代的查不到。"""
     from src.agents.streamer.memory.index import MemoryIndexer
     from src.agents.streamer.memory.recall import MemoryRecallService
     from src.agents.streamer.memory.search import MemorySearch

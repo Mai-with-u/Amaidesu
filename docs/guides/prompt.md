@@ -48,7 +48,7 @@ pm.load_all()
 | `amaidesu_replyer_system` | `src/agents/streamer/prompts/` | Replyer 的 system 稳定段（人设与表达契约，构造期渲染） |
 | `summary_system` | `src/agents/streamer/prompts/` | 后台维护者话题摘要的系统提示词 |
 | `chapter_system` | `src/agents/streamer/prompts/` | 按章压缩的系统提示词（上下文检查点） |
-| `memory_archive_system` | `src/agents/streamer/prompts/` | 下播整理·场次档案（写这场干了什么，供下一场回想） |
+| `memory_archive_system` | `src/agents/streamer/prompts/` | 下播整理·场次档案（写这场干了什么，供下一场回忆） |
 | `memory_commitment_system` | `src/agents/streamer/prompts/` | 下播整理·找新承诺（从她播出的原话里找当众答应、还没兑现的事） |
 | `memory_commitment_close_system` | `src/agents/streamer/prompts/` | 下播整理·了结旧承诺（有人明确说做完了或不做时才调） |
 | `amaidesu_minecraft_agent` | `src/agents/minecraft/prompts/` | MinecraftAgent 系统提示词（事件驱动 ReAct AI 玩家） |
@@ -281,7 +281,7 @@ uv run python main.py
 
 - [组件开发指南](component.md) - 如何开发自定义采集器/工具/Agent
 - [Skill 编写与接入](skill.md) - 与提示词同构的玩法经验文档（目录常驻、正文按需）
-- [主播上下文构成](../architecture/streamer-context.md) - 主播 Agent 决策窗的消息形态、参考段与输入预算
+- [主播上下文构成](../architecture/streamer-context.md) - 主播 Agent 决策回合的消息形态、参考段与输入预算
 - [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 如何开发自定义拦截器
 - [开发规范](../../AGENTS.md#代码约定) - 代码风格和约定
 - [架构总览](../architecture/v2-architecture.md) - 架构设计总览

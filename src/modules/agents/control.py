@@ -1482,7 +1482,7 @@ class AgentControl:
 class SuggestAttachment(ToolCallAttachment):
     """framework_suggest 随调用单附带的宿主材料（不暴露给 LLM 工具参数 Schema）。
 
-    主播 Planner 在调用 framework_suggest 时把本窗观众原话经本附件递给 AgentControlProvider，
+    主播 Planner 在调用 framework_suggest 时把本回合观众原话经本附件递给 AgentControlProvider，
     使坐标、物品名与原始诉求逐字送达主控游戏侧，同时不污染 LLM 工具声明。
     """
 

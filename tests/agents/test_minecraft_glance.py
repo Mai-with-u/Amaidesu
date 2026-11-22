@@ -97,7 +97,7 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     assert view["work"]["goals"] == [
         {"ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
     ]
-    # 一句话现场排在最前面：主播的现场卡只放这一句白话，不带数字和坐标
+    # 一句话现场排在最前面：主播的事实快照只放这一句白话，不带数字和坐标
     assert list(view)[:2] == ["tool", "brief"]
     assert view["brief"] == (
         "在主世界的森林。白天，晴。血是满的，有点饿。手上拿着石斧。"

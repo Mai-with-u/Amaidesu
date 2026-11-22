@@ -1,7 +1,7 @@
 """谁说的话、谁做的事交到回复器：玩家找她的条目从账本出账，Planner 留最近几分钟的随 reply 交给 Replyer。
 
-复现的是第 58 场两处错：玩家扔来铁锭在上一窗入账、下一窗交接稿写成"凭空到手"，她说成天上掉的；
-玩家在公屏说"我勒个"，她冲上一句刚点过名的女仆说。这里核对结构化的人和回应对象一路交到了回复器，
+复现的是第 58 场两处错：玩家扔来铁锭在上一窗入账、下一窗发言要点写成"凭空到手"，她说成天上掉的；
+玩家在游戏公屏说"我勒个"，她冲上一句刚点过名的女仆说。这里核对结构化的人和回应对象一路交到了回复器，
 模型会不会照着说由 scripts/replyer_eval/attribution.py 真调模型评测。
 """
 
@@ -39,7 +39,7 @@ def _ts(hour: int, minute: int) -> int:
 
 
 def test_ledger_lists_player_chat_and_actions_with_names() -> None:
-    """玩家的公屏话与冲她做的动作列进本批的玩家条目；动作只留事实，不带后面怎么接的口径；系统消息不列。"""
+    """玩家的游戏公屏话与冲她做的动作列进本批的玩家条目；动作只留事实，不带后面怎么接的口径；系统消息不列。"""
     ledger = GameLedger()
     ledger.record_encounter(
         "minecraft", "player_body_language", _GIFT, True, _ts(23, 19), player="uuid-甲", who="玩家甲"
@@ -52,7 +52,7 @@ def test_ledger_lists_player_chat_and_actions_with_names() -> None:
 
     assert [note.line for note in notes] == [
         "[23:19 minecraft 动作] 玩家 玩家甲 朝我扔了 1 个铁锭，落在我脚边，朝我扔了 1 个铁锭，落在我脚边",
-        "[23:21 minecraft 公屏] 玩家 玩家甲：我勒个",
+        "[23:21 minecraft 游戏公屏] 玩家 玩家甲：我勒个",
     ]
     assert [(note.who, note.said) for note in notes] == [("玩家甲", False), ("玩家甲", True)]
     # 带着他是谁：她点名回应他时据此落库
@@ -76,7 +76,7 @@ def test_repeated_player_chat_folds_into_one_note_with_count() -> None:
         ledger.record_chat("minecraft", "玩家 玩家乙：在吗", _ts(20, 1), speaker="uuid-乙", who="玩家乙")
 
     (note,) = ledger.drain().player_notes
-    assert note.line == "[20:01 minecraft 公屏] 玩家 玩家乙：在吗（另 2 次相同）"
+    assert note.line == "[20:01 minecraft 游戏公屏] 玩家 玩家乙：在吗（另 2 次相同）"
 
 
 def _note(who: str, said: bool, at_ms: int) -> PlayerNote:
@@ -84,7 +84,7 @@ def _note(who: str, said: bool, at_ms: int) -> PlayerNote:
 
 
 def test_recent_notes_keep_last_ten_minutes_and_at_most_six() -> None:
-    """上一窗留下的与本窗新到的合在一起：十分钟以前的去掉，最多留六条，旧的先出。"""
+    """上一窗留下的与本回合新到的合在一起：十分钟以前的去掉，最多留六条，旧的先出。"""
     now = _ts(21, 0)
     stale = _note("玩家甲", False, _ts(20, 49))
     kept = (stale, _note("玩家甲", False, _ts(20, 51)))
@@ -98,7 +98,7 @@ def test_recent_notes_keep_last_ten_minutes_and_at_most_six() -> None:
     ("notes", "expected"),
     [
         ((_note("玩家甲", True, 1), _note("玩家甲", True, 2)), "玩家甲"),
-        # 冲她做动作的不算开口：回应对象只看公屏说话的人
+        # 冲她做动作的不算开口：回应对象只看游戏公屏说话的人
         ((_note("玩家甲", True, 1), _note("玩家乙", False, 2)), "玩家甲"),
         # 两位玩家都开口了：不猜在回谁
         ((_note("玩家甲", True, 1), _note("玩家乙", True, 2)), ""),
@@ -111,7 +111,7 @@ def test_sole_speaker_name(notes: Tuple[PlayerNote, ...], expected: str) -> None
     assert sole_speaker_name(notes) == expected
 
 
-# Replyer：交接稿里的回应对象与玩家条目段
+# Replyer：发言要点里的回应对象与玩家条目段
 
 
 def _replyer() -> Tuple[Replyer, MagicMock]:
@@ -134,14 +134,14 @@ async def test_reply_to_player_replaces_the_no_target_line() -> None:
         said=False,
         line="[23:19 minecraft 动作] 玩家 玩家甲 看着我空出手，朝我扔了 8 个卷心菜，落在我脚边，朝我扔了 17 个卷心菜种子",
     )
-    chat = PlayerNote(who="玩家甲", said=True, line="[00:08 minecraft 公屏] 玩家 玩家甲：我勒个")
-    plan = DecisionPlan(should_reply=True, topic_summary="玩家甲在公屏发了一句「我勒个」")
+    chat = PlayerNote(who="玩家甲", said=True, line="[00:08 minecraft 游戏公屏] 玩家 玩家甲：我勒个")
+    plan = DecisionPlan(should_reply=True, topic_summary="玩家甲在游戏公屏发了一句「我勒个」")
 
     await replyer.generate(plan, [], game_people=[gift, chat], reply_to="玩家甲")
 
     turn = _turn_kwargs(prompt)
     assert turn["plan"].startswith(
-        "提及的游戏同伴: 玩家甲（刚在公屏发言；他听不见口播，向观众提他用第三人称，不喊「你」）\n"
+        "提及的游戏同伴: 玩家甲（刚在游戏公屏发言；他听不见口播，向观众提他用第三人称，不喊「你」）\n"
     )
     assert "target" not in turn["plan"]
     section = turn["game_people_section"]
@@ -151,16 +151,16 @@ async def test_reply_to_player_replaces_the_no_target_line() -> None:
 
 
 async def test_people_section_keeps_the_latest_three_and_moves_fresh_chat_out_of_game_chat() -> None:
-    """玩家条目只留最近 3 条：本窗刚在公屏说的那句全文照给，游戏聊天一段不再重复（整段挪走时写"见下一段"，
-    不写"无"）；更早的长公屏话截到名字之后 18 个字。"""
+    """玩家条目只留最近 3 条：本回合刚在游戏公屏说的那句全文照给，游戏聊天一段不再重复（整段挪走时写"见下一段"，
+    不写"无"）；更早的长游戏公屏话截到名字之后 18 个字。"""
     replyer, prompt = _replyer()
     said = "我刚在你家门口放了一箱子东西你记得去拿啊里面有铁锭有面包"
     older = [
-        PlayerNote(who=name, said=True, line=f"[00:0{index} minecraft 公屏] 玩家 {name}：{said}")
+        PlayerNote(who=name, said=True, line=f"[00:0{index} minecraft 游戏公屏] 玩家 {name}：{said}")
         for index, name in enumerate(("玩家甲", "玩家乙", "玩家丙", "玩家丁"))
     ]
-    fresh = PlayerNote(who="玩家戊", said=True, line=f"[00:09 minecraft 公屏] 玩家 玩家戊：{said}")
-    plan = DecisionPlan(should_reply=True, topic_summary="接玩家戊在公屏说的话")
+    fresh = PlayerNote(who="玩家戊", said=True, line=f"[00:09 minecraft 游戏公屏] 玩家 玩家戊：{said}")
+    plan = DecisionPlan(should_reply=True, topic_summary="接玩家戊在游戏公屏说的话")
 
     await replyer.generate(
         plan, [], game_chat=[f"[minecraft] 玩家 玩家戊：{said}"], game_people=[*older, fresh], reply_to="玩家戊"
@@ -169,8 +169,8 @@ async def test_people_section_keeps_the_latest_three_and_moves_fresh_chat_out_of
     turn = _turn_kwargs(prompt)
     lines = turn["game_people_section"].strip().splitlines()[2:-1]
     assert lines == [
-        f"[00:02 minecraft 公屏] 玩家 玩家丙：{said[:18]}…",
-        f"[00:03 minecraft 公屏] 玩家 玩家丁：{said[:18]}…",
+        f"[00:02 minecraft 游戏公屏] 玩家 玩家丙：{said[:18]}…",
+        f"[00:03 minecraft 游戏公屏] 玩家 玩家丁：{said[:18]}…",
         fresh.line,
     ]
     assert turn["game_chat"] == "（见下一段）"
@@ -182,7 +182,7 @@ async def test_answered_notes_are_marked_and_get_one_more_rule() -> None:
     gift = PlayerNote(
         who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石，落在我脚边", answered=True
     )
-    hello = PlayerNote(who="玩家甲", said=True, line="[00:11 minecraft 公屏] 玩家 玩家甲：晚上好")
+    hello = PlayerNote(who="玩家甲", said=True, line="[00:11 minecraft 游戏公屏] 玩家 玩家甲：晚上好")
     plan = DecisionPlan(should_reply=True, topic_summary="聊挖矿")
 
     await replyer.generate(plan, [], game_people=[gift, hello])
@@ -195,8 +195,8 @@ async def test_answered_notes_are_marked_and_get_one_more_rule() -> None:
 
 
 async def test_reply_to_keeps_the_planner_target_and_says_how_he_found_her() -> None:
-    """回应对象写在前面，Planner 另填的 target（公屏原话片段）照旧跟着；只冲她做了事、没开口的玩家
-    不说成"在公屏跟你说话"。"""
+    """回应对象写在前面，Planner 另填的 target（游戏公屏原话片段）照旧跟着；只冲她做了事、没开口的玩家
+    不说成"在游戏公屏跟你说话"。"""
     replyer, prompt = _replyer()
     gift = PlayerNote(who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石")
     plan = DecisionPlan(should_reply=True, target="钻石那事", topic_summary="谢玩家乙扔来的钻石")
@@ -210,7 +210,7 @@ async def test_reply_to_keeps_the_planner_target_and_says_how_he_found_her() -> 
 
 
 async def test_danmaku_target_wins_over_reply_to_and_people_section_omitted() -> None:
-    """要回应的弹幕查到了：照旧给弹幕原文；没有玩家条目时整段省略，平常的决策窗不多占输入。"""
+    """要回应的弹幕查到了：照旧给弹幕原文；没有玩家条目时整段省略，平常的决策回合不多占输入。"""
     replyer, prompt = _replyer()
     batch = [
         RoomMessagePayload(
@@ -288,9 +288,9 @@ async def test_gift_from_the_previous_window_reaches_the_replyer() -> None:
 @pytest.mark.parametrize(
     ("target", "expected_reply_to"),
     [
-        # 第 58 场原样：玩家在公屏感叹、Planner 没填目标，回应对象是他
+        # 第 58 场原样：玩家在游戏公屏感叹、Planner 没填目标，回应对象是他
         (None, "玩家甲"),
-        # 回应的是本窗那条弹幕：对象是观众，不是玩家
+        # 回应的是本回合那条弹幕：对象是观众，不是玩家
         ("m1", ""),
     ],
     ids=["game-chat", "answers-danmaku"],
@@ -299,8 +299,10 @@ async def test_sole_game_speaker_becomes_reply_to_unless_answering_danmaku(
     target: Optional[str], expected_reply_to: str
 ) -> None:
     replyer = _CaptureReplyer()
-    planner = _planner(replyer, [_reply(target, topic_summary="玩家甲在公屏感叹了一句")])
-    chat = PlayerNote(who="玩家甲", said=True, line="[00:08 minecraft 公屏] 玩家 玩家甲：我勒个", timestamp_ms=now_ms())
+    planner = _planner(replyer, [_reply(target, topic_summary="玩家甲在游戏公屏感叹了一句")])
+    chat = PlayerNote(
+        who="玩家甲", said=True, line="[00:08 minecraft 游戏公屏] 玩家 玩家甲：我勒个", timestamp_ms=now_ms()
+    )
     batch = [
         RoomMessagePayload(
             message_type="danmaku", user=RoomMessageUser(id="u1", name="观众甲"), content="主播好", message_id="m1"
@@ -314,13 +316,13 @@ async def test_sole_game_speaker_becomes_reply_to_unless_answering_danmaku(
 
 # 第 58 场 00:08:56 那次回复器请求原样：账本 → Planner → 真实提示词渲染，名字换成占位
 
-# 交接稿照抄当晚 Planner 写的（只换了名字）：话题摘要里的"她"指主播自己
+# 发言要点照抄当晚 Planner 写的（只换了名字）：话题摘要里的"她"指主播自己
 _S58_SUMMARY = (
     "玩家 玩家甲 在游戏公屏上发了一句「我勒个」，没说明是在惊叹什么；她此刻站在营地棚子南面自己砌的那道墙边，"
     "手里拿着一扇做好的橡木门，墙上那格门洞还没凿开。"
 )
 _S58_GUIDANCE = "让她被这句没头没尾的感叹勾住，带着好奇去追问对方到底看见什么了，语气俏皮、有点被吊胃口的不服气。"
-# 公屏那句之后、Planner 开口之前，她刚冲女仆说过的一句：当晚回复器把"我勒个"安到了女仆头上
+# 游戏公屏那句之后、Planner 开口之前，她刚冲女仆说过的一句：当晚回复器把"我勒个"安到了女仆头上
 _S58_MAID_LINE = "哎小白你可算挪开了，画面终于清爽了……不过你走远了我还怪不习惯的，回来点？"
 
 
@@ -344,7 +346,7 @@ def prompts() -> Any:
 
 
 async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts: Any) -> None:
-    """当晚：玩家在公屏说"我勒个"，交接稿写"她此刻站在墙边"，回复器把"她"当成上一句刚点名的女仆，说成
+    """当晚：玩家在游戏公屏说"我勒个"，发言要点写"她此刻站在墙边"，回复器把"她"当成上一句刚点名的女仆，说成
     "小白你'我勒个'啥呀"。这一层不靠模型：改动后回复器的输入里，这句话明确记在玩家甲名下、来自游戏公屏，
     回应对象写明是玩家甲；刚点过名的女仆既不是说话人，也不是回应对象。
     """
@@ -371,7 +373,7 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
     ledger.record_chat("minecraft", "玩家 玩家甲：我勒个", now - 20_000, speaker="uuid-甲", who="玩家甲")
     batch = ledger.drain()
 
-    # Planner 当晚没填 target（面向全体）：本窗只有玩家甲在公屏开口，回应对象就是他
+    # Planner 当晚没填 target（面向全体）：本回合只有玩家甲在游戏公屏开口，回应对象就是他
     capture = _NoteCapture()
     planner = _planner(capture, [_reply(topic_summary=_S58_SUMMARY)])
     await planner.plan([], game_batch=batch)
@@ -397,11 +399,11 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
 
     # 说话人：玩家甲，在游戏公屏；点明向观众转述用第三人称、不要对着麦喊他“你”，原来的"无特定目标"一行换掉
     people = text.split("## 游戏里最近找你的人（谁说的、谁做的以此为准）", 1)[1]
-    assert re.search(r"\[\d\d:\d\d minecraft 公屏\] 玩家 玩家甲：我勒个", people)
+    assert re.search(r"\[\d\d:\d\d minecraft 游戏公屏\] 玩家 玩家甲：我勒个", people)
     assert re.search(r"\[\d\d:\d\d minecraft 动作\] 玩家 玩家甲 看着我空出手，朝我扔了 8 个卷心菜", people)
-    assert ("提及的游戏同伴: 玩家甲（刚在公屏发言；他听不见口播，向观众提他用第三人称，不喊「你」）") in text
+    assert ("提及的游戏同伴: 玩家甲（刚在游戏公屏发言；他听不见口播，向观众提他用第三人称，不喊「你」）") in text
     assert "无特定目标" not in text
-    assert '交接稿的"她"就是你' in text and "别安到女仆、宠物或观众头上" in text
+    assert '发言要点的"她"就是你' in text and "别安到女仆、宠物或观众头上" in text
     # 输入里每一处"我勒个"都记在玩家甲名下，没有一处和女仆连在一起
     wolege = [line for line in text.splitlines() if "我勒个" in line and "「我勒个」" not in line]
     assert wolege and all("玩家甲" in line and "小白" not in line for line in wolege)
@@ -410,6 +412,6 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
         "小白" not in people.split("\n## ", 1)[0]
         and "小白" not in text.split("提及的游戏同伴:", 1)[1].split("\n", 1)[0]
     )
-    # 第 66 场回归：回复器归属规矩不再默认"玩家公屏说的事多半在说你"，明确公屏全服可见、不在身边别往自己脚下套
-    assert "玩家公屏说的事多半在说你" not in people
-    assert "公屏全服可见" in people and "没说在你身边就别往自己脚下套" in people
+    # 第 66 场回归：回复器归属规矩不再默认"玩家游戏公屏说的事多半在说你"，明确游戏公屏全服可见、不在身边别往自己脚下套
+    assert "玩家游戏公屏说的事多半在说你" not in people
+    assert "游戏公屏全服可见" in people and "没说在你身边就别往自己脚下套" in people

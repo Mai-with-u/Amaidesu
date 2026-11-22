@@ -177,7 +177,7 @@ def assemble_request_messages(
         messages.append({"role": "user", "content": reference_text})
     elif len(messages) == 1:
         # 空窗兜底：对话与参考全空时保底一条 user 消息
-        messages.append({"role": "user", "content": "（本窗无对话与参考内容）"})
+        messages.append({"role": "user", "content": "（本回合无对话与参考内容）"})
     return messages
 
 
@@ -188,7 +188,7 @@ def step_extra_messages(
 ) -> List[Dict[str, Any]]:
     """算一次 ReAct 步请求要附加在消息序列之后的临时消息。
 
-    直播画面只挂在本窗第一次请求的尾部（后续步骤靠模型第一步的判断继续）；
+    直播画面只挂在本回合第一次请求的尾部（后续步骤靠模型第一步的判断继续）；
     上一步工具返回的截图只挂这一次请求尾部、不写回消息序列——下一步请求时
     它已消失，前缀与这一次逐字一致，画面内容由模型这一步的思考与决定带下去。
     """
@@ -594,11 +594,11 @@ def online_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
 
 
 def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str:
-    """本窗在游戏公屏说话的玩家：提醒在游戏里回话，并对照现场速览标明在身边、在线不在身边或已下线；没人开口时为空串。
+    """本回合在游戏公屏说话的玩家：提醒在游戏里回话，并对照现场速览标明在身边、在线不在身边或已下线；没人开口时为空串。
 
     游戏里的玩家听不到直播：问她事、跟她搭话的要在游戏里回一句，否则对方看到的就是她不理人。
     同时游戏公屏是全服广播，远处玩家探索时的环境感叹也会进来，还有玩家刚说完话就退服下线：
-    结合现场速览标出谁在身边、谁在线但不在身边、谁已经下线（已下线的不必再用公屏空喊，可在直播口播顺口带过），
+    结合现场速览标出谁在身边、谁在线但不在身边、谁已经下线（已下线的不必再用游戏公屏空喊，可在直播口播顺口带过），
     既保持对点名她、向她求助搭话或就在身边围观互动玩家的回应积极度，也防止把远处未点名她的环境感叹
     硬套成她自己手头工位的状况。点名关系靠行尾的 [提及…] 标注（采集器按文本判定的事实）锚定，
     决策模型不再从扁平行里自己猜指向。
@@ -611,7 +611,7 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
         return ""
     who = "、".join(f"玩家 {name}" for name in names)
     # 游戏内玩家听不到直播间口播：明确区分别人互相聊天的旁人对话与直接找她的搭话，
-    # 需要游戏内回字时先用 minecraft_chat_send 往公屏发字，再用 streamer_reply 收口直播口播。
+    # 需要游戏内回字时先用 minecraft_chat_send 往游戏公屏发字，再用 streamer_reply 收口直播口播。
     # 提及标注是采集器按文本判的事实（正文含她的名字，撞词也照标——"说她"是否等于"跟她说话"
     # 由模型按句意分辨），判据锚在标注上而不是让模型自己从一堆扁平行里猜谁在对谁说
     base = (
@@ -628,10 +628,10 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
     online_set = online_players_from_overview(overview)
     if nearby_set is None and online_set is None:
         return (
-            f"{base}公屏是全服广播：点名她、向她求助搭话或就在【现场速览】身边的照常积极回应；"
+            f"{base}游戏公屏是全服广播：点名她、向她求助搭话或就在【现场速览】身边的照常积极回应；"
             "不在身边且未点名她的环境感叹是对方那边的遭遇，别套成她手头工位的状况，拿不准可顺口问清在哪碰上的。"
         )
-    # 对照当刻速览将本窗发言过的玩家分为三类：就在身边 / 在线但不在身边（或未知在线全集时不在身边） / 刚说完已下线
+    # 对照当刻速览将本回合发言过的玩家分为三类：就在身边 / 在线但不在身边（或未知在线全集时不在身边） / 刚说完已下线
     here = [f"玩家 {name}" for name in names if nearby_set is not None and name in nearby_set]
     offline = [
         f"玩家 {name}"
@@ -648,14 +648,14 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
     if afar and not here and not offline:
         online_tag = "（仍在服内在线）" if online_set is not None else ""
         return (
-            f"{base}（现场核对：{'、'.join(afar)} 当前不在【现场速览】身边{online_tag}——公屏是全服广播，"
+            f"{base}（现场核对：{'、'.join(afar)} 当前不在【现场速览】身边{online_tag}——游戏公屏是全服广播，"
             "点名她或向她求助搭话的照常积极回应；未点名她的环境感叹是对方那边的遭遇，"
             "别硬套成她手头工位的状况，拿不准对方在说什么时可顺口问清在哪碰上的。）"
         )
     if offline and not here and not afar:
         return (
             f"{base}（现场核对：{'、'.join(offline)} 当前已下线（不在【现场速览】的 `online_players` 在线列表里），"
-            "无需再用 `minecraft_chat_send` 往公屏空喊，可在直播口播里顺口带过。）"
+            "无需再用 `minecraft_chat_send` 往游戏公屏空喊，可在直播口播里顺口带过。）"
         )
     clauses: List[str] = []
     if here:
@@ -663,13 +663,13 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
     if afar:
         online_tag = "（仍在服内在线）" if online_set is not None else ""
         clauses.append(
-            f"{'、'.join(afar)} 当前不在身边{online_tag}——公屏是全服广播，点名她或求助搭话的照常积极回应，"
+            f"{'、'.join(afar)} 当前不在身边{online_tag}——游戏公屏是全服广播，点名她或求助搭话的照常积极回应，"
             "未点名她的环境感叹别套成她手头工位的状况，拿不准可顺口问清在哪碰上的"
         )
     if offline:
         clauses.append(
             f"{'、'.join(offline)} 当前已下线（不在 `online_players` 在线列表里），"
-            "无需再用 `minecraft_chat_send` 往公屏空喊，可在直播口播里顺口带过"
+            "无需再用 `minecraft_chat_send` 往游戏公屏空喊，可在直播口播里顺口带过"
         )
     return f"{base}（现场核对：{'；'.join(clauses)}。）"
 
@@ -687,7 +687,7 @@ def goal_lines(
     delegations: Dict[str, Delegation],
     status_provider: Optional[DelegationStatusProvider] = None,
 ) -> List[GoalLine]:
-    """手上的事（即时反应的现场卡用）：与规划器读同一份源，只给当前在做或刚由游戏侧上报的一件，待办与撤单不给。"""
+    """手上的事（即时反应的事实快照用）：与规划器读同一份源，只给当前在做或刚由游戏侧上报的一件，待办与撤单不给。"""
     goals: List[GoalLine] = []
     for delegation in delegations.values():
         if delegation.report_kind in ("closed_by_initiator", "cancelled"):
@@ -724,7 +724,7 @@ def goal_lines(
 def compose_relay_content(content: str, source_dialogue: List[Dict[str, Any]], *, chat: bool = False) -> str:
     """补充要求或聊天回话的完整正文：按种类加抬头 + 主播原话 + 来源对话逐字引用。
 
-    附上本窗观众弹幕与近期游戏公屏原话，游戏侧能看到逐字的路点、坐标、物品名与原话，不只剩一层转述。
+    附上本回合观众弹幕与近期游戏公屏原话，游戏侧能看到逐字的路点、坐标、物品名与原话，不只剩一层转述。
     """
     head = PROMPT_CHAT_HEAD if chat else PROMPT_REQUIREMENT_HEAD
     return (
@@ -740,7 +740,7 @@ def compose_delegate_instruction(instruction: str, source_dialogue: List[Dict[st
 
     做什么由主播拿主意：游戏侧以本次目标为准，原话只补路点、坐标、地点名、物品名写法和禁用条件。
     实测"别死磕这台机器"配上"以原话为准"的"放块铁板试试"，游戏侧收到两个相反要求；
-    第 61 场 19:17 玩家在游戏公屏发的路点没随指令送到，导致角色盲游到海中央——因此本窗弹幕与
+    第 61 场 19:17 玩家在游戏公屏发的路点没随指令送到，导致角色盲游到海中央——因此本回合弹幕与
     近期游戏公屏原话一并逐字附上。抬头写"本次目标"而不是"委派"：游戏里动手的也是主播自己。
     """
     return (

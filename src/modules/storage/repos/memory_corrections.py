@@ -35,7 +35,7 @@ _COLUMNS = (
 
 
 def format_correction_note(verdict: str, summary: str) -> str:
-    """拼装简报行尾展示的更正短句（如"记错了——树场已重开不存在"）。"""
+    """拼装记忆摘要行尾展示的更正短句（如"记错了——树场已重开不存在"）。"""
     label = CORRECTION_VERDICT_LABELS.get(verdict, "更正")
     body = " ".join((summary or "").split())
     return f"{label}——{body}" if body else label

@@ -285,7 +285,7 @@ def test_planner_and_settle_prompts_carry_off_game_works_and_quote_anti_pollutio
     assert "存在【刚聊开的话头】" in planner_text
     assert "围绕该话头顺延这一轮讲出本场未说过的延伸看法或设定喜好算有增量" in planner_text
     assert "观众问起当前未在玩的场外作品或别的游戏时" in planner_text
-    assert "禁止在交接稿里编写无出处的亲身游玩经历" in planner_text
+    assert "禁止在发言要点里编写无出处的亲身游玩经历" in planner_text
 
     reply_props = build_reply_tool_spec().parameters_schema["properties"]
     assert "【刚聊开的话头】" in reply_props["is_novel"]["description"]

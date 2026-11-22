@@ -42,7 +42,7 @@ PINYIN_MIN_CHARS = 3
 # 一个字的触发词不收：单字子串匹配几乎每条弹幕都会撞上
 KEYWORD_MIN_CHARS = 2
 
-# 回想查询剔除的中文纯语法/疑问/时间口语虚词（含三字口语套话两字切分后的碎片，避免"上次那个是什么"把全库带虚词的旧话全捞出来）
+# 回忆查询剔除的中文纯语法/疑问/时间口语虚词（含三字口语套话两字切分后的碎片，避免"上次那个是什么"把全库带虚词的旧话全捞出来）
 _CN_RECALL_STOPWORDS: frozenset[str] = frozenset(
     (
         "上次 下次 那次 这次 什么 为什 怎么 怎样 哪儿 哪里 哪个 哪些 "
@@ -54,7 +54,7 @@ _CN_RECALL_STOPWORDS: frozenset[str] = frozenset(
     ).split()
 )
 
-# 回想查询剔除的英文疑问词、冠介连助词（保留 first/last 次序定位词，剥离单字母 i 与 before/after 防稀释 BM25）
+# 回忆查询剔除的英文疑问词、冠介连助词（保留 first/last 次序定位词，剥离单字母 i 与 before/after 防稀释 BM25）
 _EN_RECALL_STOPWORDS: frozenset[str] = frozenset(
     (
         "i what was the had with for did you how when where which from that this have been are were your "
@@ -162,7 +162,7 @@ def fts_or_query(text: str) -> Optional[str]:
 
 
 def recall_query_tokens(text: str) -> List[str]:
-    """提取回想检索的有效词项（去重保序，剔除口语/疑问虚词；整句全是虚词时回退原词表防空查报错）。"""
+    """提取回忆检索的有效词项（去重保序，剔除口语/疑问虚词；整句全是虚词时回退原词表防空查报错）。"""
     unique = list(dict.fromkeys(bigram_tokens(text)))
     if not unique:
         return []
@@ -171,7 +171,7 @@ def recall_query_tokens(text: str) -> List[str]:
 
 
 def fts_recall_query(text: str) -> Optional[str]:
-    """回想检索专用的 FTS5"或"查询：先剥离高频疑问词与语法虚词，全为虚词时自动回退原词表。"""
+    """回忆检索专用的 FTS5"或"查询：先剥离高频疑问词与语法虚词，全为虚词时自动回退原词表。"""
     tokens = recall_query_tokens(text)
     if not tokens:
         return None
@@ -201,7 +201,7 @@ def content_tokens(text: str, *, strip_trailing_modals: bool = False) -> List[st
 
 
 def is_stopword_token(token: str) -> bool:
-    """判断单个归一化词项是否属于回想停用虚词（供单字 LIKE 兜底过滤纯语气字）。"""
+    """判断单个归一化词项是否属于回忆停用虚词（供单字 LIKE 兜底过滤纯语气字）。"""
     norm = normalize(token)
     return not norm or norm in _CONTENT_STOPWORDS
 

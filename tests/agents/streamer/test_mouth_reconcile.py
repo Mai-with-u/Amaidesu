@@ -183,7 +183,7 @@ def _reply_tool_call(call_id: str, summary: str) -> ToolCall:
 async def test_session65_game_join_duplicate_welcome_is_suppressed_or_trimmed_end_to_end(
     planner_draft: str, expected_planner_speech: str | None, expected_silent: str | None
 ) -> None:
-    """第 65 场回归：公屏系统消息提示玩家加入游戏，即时反应 3 秒内已开口欢迎后，20 秒后规划器不再重复欢迎。"""
+    """第 65 场回归：游戏公屏系统消息提示玩家加入游戏，即时反应 3 秒内已开口欢迎后，20 秒后规划器不再重复欢迎。"""
     bus = EventBus()
     spoken_events: List[str] = []
 

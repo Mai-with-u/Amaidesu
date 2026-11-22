@@ -1,6 +1,6 @@
 """streamer_memory_correct —— 场内更正与更新记忆的工具（跟随当场主控动态开放）。
 
-给当场主控（主播规划器或当前自主主控游戏 Agent）一个场内实时纠错与同步出口：对常驻简报里的
+给当场主控（主播规划器或当前自主主控游戏 Agent）一个场内实时纠错与同步出口：对记忆摘要里的
 某一行档案（``档#N``）或某条惦记的承诺（``约#N``）标记 ``done``（做完了）/ ``progress``（本场有进展
 但尚未了结，仅适用于承诺）/ ``invalid``（不成立了）/ ``wrong``（记错了），并附本场证据：
 - ``game_receipt``：本场委派终态摘要、游戏事件（含物品交付回执，如存进对方箱子或朝对方扔出）或速览原文的逐字片段；
@@ -64,10 +64,10 @@ _VALID_VERDICTS = ("done", "progress", "invalid", "wrong")
 _VALID_EVIDENCE_KINDS = ("game_receipt", "player_chat", "operator", "self_seen")
 
 _DESCRIPTION = (
-    "场内更正或更新一条常驻简报里的记忆（档#N）或惦记的承诺（约#N）：标明做完了（done）、"
+    "场内更正或更新一条记忆摘要里的记忆（档#N）或惦记的承诺（约#N）：标明做完了（done）、"
     "推进了一部分但尚未了结（progress，仅适用于 约#N）、不成立了（invalid，如换了新世界或地形重置）"
     "或记错了（wrong），并给本场证据（游戏回执——含物品交付回执如存进对方箱子或朝对方扔出、"
-    "游戏玩家公屏的话、运营提醒，或你自己亲眼看到的画面/速览）。"
+    "游戏玩家游戏公屏的话、运营提醒，或你自己亲眼看到的画面/速览）。"
     "当场生效：本场后续立即同步最新状态；观众弹幕不能直接当依据。"
 )
 
@@ -76,7 +76,7 @@ _PARAMETERS: Dict[str, Any] = {
     "properties": {
         "target": {
             "type": "string",
-            "description": "要更正的简报或承诺账本条目编号，写成 档#N 或 约#N",
+            "description": "要更正的记忆摘要或承诺账本条目编号，写成 档#N 或 约#N",
         },
         "verdict": {
             "type": "string",
@@ -95,19 +95,19 @@ _PARAMETERS: Dict[str, Any] = {
             "enum": list(_VALID_EVIDENCE_KINDS),
             "description": (
                 "证据来源：game_receipt 游戏交付/物品交付回执（如存进对方箱子或朝对方扔出）/事件/速览回执；"
-                "player_chat 游戏玩家公屏的话；operator 运营提醒；self_seen 你在画面或速览里亲眼确认的现状"
+                "player_chat 游戏玩家游戏公屏的话；operator 运营提醒；self_seen 你在画面或速览里亲眼确认的现状"
             ),
         },
         "evidence_quote": {
             "type": "string",
             "description": (
                 "依据里的逐字片段（80 字以内；game_receipt / player_chat / operator 必填，"
-                "如物品交付回执里的存物或扔物原文、事件摘要或玩家公屏原话）"
+                "如物品交付回执里的存物或扔物原文、事件摘要或玩家游戏公屏原话）"
             ),
         },
         "evidence_message_id": {
             "type": "string",
-            "description": "若依据是游戏玩家公屏的话，可填那一行末尾 [id:…] 里的号（观众弹幕号不收）",
+            "description": "若依据是游戏玩家游戏公屏的话，可填那一行末尾 [id:…] 里的号（观众弹幕号不收）",
         },
     },
     "required": ["target", "verdict", "summary", "evidence_kind"],
@@ -148,7 +148,7 @@ def _strip_msg_id(raw: Any) -> str:
 
 
 class MemoryCorrectionToolProvider(BaseToolProvider):
-    """streamer_memory_correct 的 Provider：代码核对本场证据，写入更正并刷新本场简报。"""
+    """streamer_memory_correct 的 Provider：代码核对本场证据，写入更正并刷新本场记忆摘要。"""
 
     category: ClassVar[str] = "framework"
 
@@ -234,7 +234,7 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
 
         parsed = parse_memory_target(args.get("target"))
         if parsed is None:
-            return self._bounce(tool_name, "target 必须写成简报里的 档#N 或 约#N")
+            return self._bounce(tool_name, "target 必须写成记忆摘要里的 档#N 或 约#N")
         target_kind, target_id = parsed
 
         verdict_raw = str(args.get("verdict") or "").strip().lower()
@@ -255,7 +255,7 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
         if evidence_raw in ("danmaku", "viewer", "观众", "弹幕"):
             return self._bounce(
                 tool_name,
-                "观众弹幕的话要经人批准才进记忆，不能直接拿来更正简报或承诺",
+                "观众弹幕的话要经人批准才进记忆，不能直接拿来更正记忆摘要或承诺",
             )
         if evidence_raw not in _VALID_EVIDENCE_KINDS:
             return self._bounce(tool_name, f"evidence_kind 必须是 {' / '.join(_VALID_EVIDENCE_KINDS)} 之一")
@@ -268,14 +268,14 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
         if msg_id and await self._is_viewer_danmaku(int(session_id), msg_id):
             return self._bounce(
                 tool_name,
-                "这个消息号是观众弹幕；观众的话要经人批准才进跨场记忆，不能直接更正简报或承诺",
+                "这个消息号是观众弹幕；观众的话要经人批准才进跨场记忆，不能直接更正记忆摘要或承诺",
             )
 
         # 核对目标在本场可见且有效
         if target_kind == "archive":
             brief_ids = {int(item) for item in self._brief_archive_ids_provider()}
             if target_id not in brief_ids:
-                return self._bounce(tool_name, f"档#{target_id} 不在本场常驻简报里，无需场内更正")
+                return self._bounce(tool_name, f"档#{target_id} 不在本场记忆摘要里，无需场内更正")
         else:
             if self._commitments is None:
                 return self._bounce(tool_name, "承诺表未接入，无法更正承诺")
@@ -299,7 +299,7 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
             if matched_pair is None:
                 return self._bounce(
                     tool_name,
-                    f"evidence_quote 必须是本场游戏玩家公屏原话里的逐字片段（{_QUOTE_MAX_CHARS} 字以内）",
+                    f"evidence_quote 必须是本场游戏玩家游戏公屏原话里的逐字片段（{_QUOTE_MAX_CHARS} 字以内）",
                 )
             verified_quote, game_chat_id = matched_pair
         elif evidence_kind == "operator":
@@ -329,12 +329,12 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
         if self._on_written is not None:
             try:
                 await self._on_written()
-            except Exception as exc:  # noqa: BLE001 - 刷新简报异常不回滚已写入的更正
-                self._logger.warning(f"场内更正后刷新常驻简报失败: {exc}", exc=exc)
+            except Exception as exc:  # noqa: BLE001 - 刷新记忆摘要异常不回滚已写入的更正
+                self._logger.warning(f"场内更正后刷新记忆摘要失败: {exc}", exc=exc)
 
         target_label = f"档#{target_id}" if target_kind == "archive" else f"约#{target_id}"
         if target_kind == "archive":
-            effect = f"本场简报已为 {target_label} 附注「本场更正：{format_correction_note(verdict, summary)}」"
+            effect = f"本场记忆摘要已为 {target_label} 附注「本场更正：{format_correction_note(verdict, summary)}」"
         elif verdict == "progress":
             effect = f"{target_label} 已记录本场进展（仍未了结）：{summary}"
         else:
@@ -357,7 +357,7 @@ class MemoryCorrectionToolProvider(BaseToolProvider):
             return False
         try:
             rows = await self._chat.list_recent_live_chat(live_session_id=session_id, limit=200, sender_role="viewer")
-        except Exception as exc:  # noqa: BLE001 - 查不到时不误拦后续玩家公屏核对
+        except Exception as exc:  # noqa: BLE001 - 查不到时不误拦后续玩家游戏公屏核对
             self._logger.debug(f"核对消息号是否观众弹幕失败: {exc}", exc=exc)
             return False
         return any(str(row.message_id or "") == message_id for row in rows)

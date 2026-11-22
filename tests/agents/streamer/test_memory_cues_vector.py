@@ -363,7 +363,7 @@ async def test_cues_for_game_lead_reuses_player_place_rule_vector_without_leakin
     store: SQLiteDatabase,
     privacy: PrivacyService,
 ) -> None:
-    """cues_for_game_lead 复用玩家卡、地点卡、档案规则与非阻塞向量联想，守住限频、遗忘过滤与零观众隐私泄露。"""
+    """cues_for_game_lead 复用玩家线索、地点卡、档案规则与非阻塞向量联想，守住限频、遗忘过滤与零观众隐私泄露。"""
     memory = await _Memory(store).seed()
     old_sid = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms() - 50_000_000)
     await store.sessions.close_live_session(live_session_id=old_sid, ended_at_ms=memory.clock.now_ms() - 40_000_000)
@@ -449,7 +449,7 @@ async def test_cues_for_game_lead_reuses_player_place_rule_vector_without_leakin
         inside_jokes="倒立洗头：观众爱提的直播间老梗",
     )
 
-    # 校验 A：玩家卡 + 规则触发词命中，遗忘玩家被过滤，观众老梗与观众承诺绝不泄露
+    # 校验 A：玩家线索 + 规则触发词命中，遗忘玩家被过滤，观众老梗与观众承诺绝不泄露
     cards_a = await provider.cues_for_game_lead(
         game="minecraft",
         texts=("提醒一下主齿轮和倒立洗头还有秘密观众小蓝",),

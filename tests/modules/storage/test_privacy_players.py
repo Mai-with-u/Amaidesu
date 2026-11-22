@@ -31,7 +31,7 @@ async def wired(tmp_path: Path) -> AsyncIterator[Tuple[SQLiteDatabase, PrivacySe
 
 
 async def _alex_scene(store: SQLiteDatabase) -> Dict[str, int]:
-    """Alex（以前叫 Steve）：打过招呼、公屏说过话、她回应过他也答应过他事，游戏事件里也提到他。"""
+    """Alex（以前叫 Steve）：打过招呼、游戏公屏说过话、她回应过他也答应过他事，游戏事件里也提到他。"""
     session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     repo = store.game_players
     await repo.meet_player(game="minecraft", uuid=_ALEX, name="Steve", live_session_id=session, at_ms=1_010)
@@ -79,7 +79,7 @@ async def test_deleting_a_player_scrubs_him_and_keeps_him_forgotten(
         chat = [(row["direction"], row["content"]) for row in conn.execute("SELECT direction, content FROM game_chat")]
         speech = conn.execute("SELECT content, reply_player_id FROM live_chat WHERE id=?", (ids["speech"],)).fetchone()
         event = conn.execute("SELECT message FROM game_events").fetchone()
-    # 他说的那句随他删；她打在公屏、播出的话和游戏事件里他的名字（含以前的名字）换成"一位玩家"
+    # 他说的那句随他删；她打在游戏公屏、播出的话和游戏事件里他的名字（含以前的名字）换成"一位玩家"
     assert chat == [("streamer", "一位玩家 下次带你挖矿")]
     assert (speech["content"], speech["reply_player_id"]) == ("好呀 一位玩家，哦不，一位玩家", None)
     assert event["message"] == "帮 一位玩家 修好了房子"
@@ -138,7 +138,7 @@ async def test_deleting_a_viewer_takes_the_confirmed_player_too(
 
 
 async def _say(bus: EventBus, session_id: int, content: str, at_ms: int) -> None:
-    """Alex 在公屏说一句（核对过在线、带 UUID）。"""
+    """Alex 在游戏公屏说一句（核对过在线、带 UUID）。"""
     await bus.emit(
         CoreEvents.GAME_CHAT_RECEIVED,
         GameChatPayload(
@@ -159,7 +159,7 @@ async def _say(bus: EventBus, session_id: int, content: str, at_ms: int) -> None
 async def test_forget_me_typed_in_game_chat_has_the_same_grace_and_takes_linked_viewers(
     wired: Tuple[SQLiteDatabase, PrivacyService],
 ) -> None:
-    """玩家在公屏发"忘了我"：立即停止记录；宽限期内撤回就恢复；下播后清理删掉他和确认过的关联观众。"""
+    """玩家在游戏公屏发"忘了我"：立即停止记录；宽限期内撤回就恢复；下播后清理删掉他和确认过的关联观众。"""
     store, privacy = wired
     ids = await _alex_scene(store)
     bus = EventBus()
@@ -208,7 +208,7 @@ async def test_forget_me_typed_in_game_chat_has_the_same_grace_and_takes_linked_
 
 
 async def _she_types(bus: EventBus, session_id: int, message: str, at_ms: int) -> None:
-    """她在公屏打出去一句。"""
+    """她在游戏公屏打出去一句。"""
     await bus.emit(
         CoreEvents.GAME_SELF_CHATTED,
         GameSelfChattedPayload(game="minecraft", message=message, live_session_id=session_id, timestamp_ms=at_ms),
@@ -220,7 +220,7 @@ async def _she_types(bus: EventBus, session_id: int, message: str, at_ms: int) -
 async def test_her_public_chat_drops_a_deleted_player_everywhere_and_stays_masked_later(
     wired: Tuple[SQLiteDatabase, PrivacyService],
 ) -> None:
-    """删玩家时她所有场次的公屏话都换名字（含他没留记录的场次）；之后的场次他再来，她打的字落库前也遮掉。"""
+    """删玩家时她所有场次的游戏公屏话都换名字（含他没留记录的场次）；之后的场次他再来，她打的字落库前也遮掉。"""
     store, privacy = wired
     ids = await _alex_scene(store)
     quiet = await store.sessions.insert_live_session(started_at_ms=3_000, kind="live")
@@ -466,7 +466,7 @@ async def test_deleting_player_and_viewer_scrubs_social_facts_work_docs_and_chec
         saved_at_ms=1_100,
     )
 
-    # 1. 删玩家乙：他本人公屏作证的社交事实与更正整行删除，甲作证行与运营更正换成"一位玩家"，工作文档与断点同步清理
+    # 1. 删玩家乙：他本人游戏公屏作证的社交事实与更正整行删除，甲作证行与运营更正换成"一位玩家"，工作文档与断点同步清理
     assert await privacy.delete_player(player_id=yi.id) is True
     assert await store.social_facts.get_fact(fact_id=fact_by_yi) is None
     kept_jia = await store.social_facts.get_fact(fact_id=fact_by_jia)

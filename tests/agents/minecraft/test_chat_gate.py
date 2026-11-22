@@ -1,4 +1,4 @@
-"""Minecraft 公屏门控单测：事实标签、2 秒合并窗、优先级截留、刷屏冷却、远处旁听与近期原话滚动窗。"""
+"""Minecraft 游戏公屏门控单测：事实标签、2 秒合并窗、优先级截留、刷屏冷却、远处旁听与近期原话滚动窗。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _chat(
     distance: Optional[float] = None,
     suppressed: int = 0,
 ) -> GameChatPayload:
-    """构造测试用玩家公屏载荷，直接透传正式的 ``sender_distance`` 可选字段。"""
+    """构造测试用玩家游戏公屏载荷，直接透传正式的 ``sender_distance`` 可选字段。"""
     mentions = [GameChatMention(name="麦麦", type="self", id="")] if self_mention else []
     return GameChatPayload(
         game="minecraft",
@@ -48,15 +48,15 @@ def test_fact_tags_format_private_mention_distance_nearby_fallback_far_and_note(
     r_nearby_fallback = gate.ingest(_chat("同伴丁", "我刚放到你脚边了"), nearby_players={"同伴丁"})
     r_far = gate.ingest(_chat("远方路人", "主城今天真热闹", distance=80.0))
 
-    assert r_private.formatted_line == "[公屏·私聊] 同伴甲（来源未核验）：箱子密码在屋后"
-    assert r_mention.formatted_line == "[公屏·点名你] 同伴乙：麦麦来帮忙看下熔炉"
-    assert r_dist.formatted_line == "[公屏·身边12格] 同伴丙：这边缺圆石"
-    assert r_nearby_fallback.formatted_line == "[公屏·身边] 同伴丁：我刚放到你脚边了"
-    assert r_far.formatted_line == "[公屏·远处] 远方路人：主城今天真热闹"
+    assert r_private.formatted_line == "[游戏公屏·私聊] 同伴甲（来源未核验）：箱子密码在屋后"
+    assert r_mention.formatted_line == "[游戏公屏·点名你] 同伴乙：麦麦来帮忙看下熔炉"
+    assert r_dist.formatted_line == "[游戏公屏·身边12格] 同伴丙：这边缺圆石"
+    assert r_nearby_fallback.formatted_line == "[游戏公屏·身边] 同伴丁：我刚放到你脚边了"
+    assert r_far.formatted_line == "[游戏公屏·远处] 远方路人：主城今天真热闹"
 
 
 def test_far_unmentioned_chat_goes_to_eavesdrop_and_never_wakes_while_partner_wakes_within_2min() -> None:
-    """远处非点名公屏仅进旁听滑窗绝不唤醒；近 2 分钟互动同伴可唤醒，超过 2 分钟后退回旁听。"""
+    """远处非点名游戏公屏仅进旁听滑窗绝不唤醒；近 2 分钟互动同伴可唤醒，超过 2 分钟后退回旁听。"""
     clock = FakeClock(50_000)
     gate = MinecraftChatGate(clock=clock.now_ms)
 
@@ -65,13 +65,13 @@ def test_far_unmentioned_chat_goes_to_eavesdrop_and_never_wakes_while_partner_wa
     assert gate.next_flush_delay_ms() is None
 
     clock.tick(10_000)
-    assert gate.flush_due() is None, "纯远处非点名公屏绝不触发主动唤醒"
+    assert gate.flush_due() is None, "纯远处非点名游戏公屏绝不触发主动唤醒"
 
     eavesdrop = gate.drain_eavesdrop()
     assert eavesdrop is not None
     assert eavesdrop.should_wake is False
-    assert "[公屏旁听]" in eavesdrop.text
-    assert "[公屏·远处] 路人甲：谁有附魔书" in eavesdrop.text
+    assert "[游戏公屏旁听]" in eavesdrop.text
+    assert "[游戏公屏·远处] 路人甲：谁有附魔书" in eavesdrop.text
     assert gate.drain_eavesdrop() is None
 
     # 登记近期互动同伴：2 分钟内即便距离超过 24 格仍走唤醒合并窗
@@ -83,9 +83,9 @@ def test_far_unmentioned_chat_goes_to_eavesdrop_and_never_wakes_while_partner_wa
     clock.tick(2_000)
     batch = gate.flush_due()
     assert batch is not None and batch.should_wake is True
-    assert "[公屏合批]" in batch.text and "同伴甲：我把铁锭放进公共箱了" in batch.text
+    assert "[游戏公屏合批]" in batch.text and "同伴甲：我把铁锭放进公共箱了" in batch.text
 
-    # 跨过 2 分钟互动窗后，同一人远处非点名公屏退回旁听滑窗
+    # 跨过 2 分钟互动窗后，同一人远处非点名游戏公屏退回旁听滑窗
     clock.tick(130_000)
     expired_res = gate.ingest(_chat("同伴甲", "远处闲聊一句", distance=60.0))
     assert expired_res.routed_to == "eavesdrop"
@@ -175,19 +175,19 @@ def test_sustained_spam_enables_6s_wake_cooldown_and_recovers_after_quiet_period
 
 
 def test_recent_human_lines_rolling_window_keeps_8_chats_and_4_suggestions() -> None:
-    """近期人类原话滚动窗最多保留最近 8 条公屏与 4 条主播建议，并可格式化与导出纯文本用于去重。"""
+    """近期人类原话滚动窗最多保留最近 8 条游戏公屏与 4 条主播建议，并可格式化与导出纯文本用于去重。"""
     clock = FakeClock(300_000)
     gate = MinecraftChatGate(clock=clock.now_ms)
 
     for idx in range(10):
-        gate.ingest(_chat("同伴甲", f"公屏第 {idx} 句", distance=5.0))
+        gate.ingest(_chat("同伴甲", f"游戏公屏第 {idx} 句", distance=5.0))
     for idx in range(6):
         gate.record_streamer_suggestion(f"主播建议第 {idx} 条")
     # 相邻重复建议不重复占位
     gate.record_streamer_suggestion("主播建议第 5 条")
 
     assert len(gate.recent_player_chats()) == 8
-    assert all("公屏第 0 句" not in line and "公屏第 1 句" not in line for line in gate.recent_player_chats())
+    assert all("游戏公屏第 0 句" not in line and "游戏公屏第 1 句" not in line for line in gate.recent_player_chats())
     assert gate.recent_streamer_suggestions() == (
         "主播建议第 2 条",
         "主播建议第 3 条",
@@ -197,11 +197,11 @@ def test_recent_human_lines_rolling_window_keeps_8_chats_and_4_suggestions() -> 
 
     rendered = gate.format_recent_human_lines()
     assert "[近期人类原话]" in rendered
-    assert "近期主播建议：" in rendered and "近期玩家公屏：" in rendered
-    assert "主播建议第 5 条" in rendered and "公屏第 9 句" in rendered
+    assert "近期主播建议：" in rendered and "近期玩家游戏公屏：" in rendered
+    assert "主播建议第 5 条" in rendered and "游戏公屏第 9 句" in rendered
 
     dedup_texts = gate.recent_human_texts()
-    assert "公屏第 9 句" in dedup_texts and "主播建议第 5 条" in dedup_texts
+    assert "游戏公屏第 9 句" in dedup_texts and "主播建议第 5 条" in dedup_texts
 
 
 def test_legacy_payload_without_sender_distance_attribute_falls_back_to_nearby_players() -> None:
@@ -220,7 +220,7 @@ def test_legacy_payload_without_sender_distance_attribute_falls_back_to_nearby_p
 
     res = gate.ingest(legacy_payload, nearby_players={"旧版同伴"})
     assert res.accepted is True and res.routed_to == "wake_window"
-    assert res.formatted_line == "[公屏·身边] 旧版同伴：我就在你身后"
+    assert res.formatted_line == "[游戏公屏·身边] 旧版同伴：我就在你身后"
 
 
 def test_clear_pending_windows_drops_stale_batches_and_eavesdrop_while_keeping_recent_lines() -> None:
@@ -258,17 +258,17 @@ def test_high_priority_private_or_mention_is_never_dropped_or_mislabeled_after_3
     clock = FakeClock(350_000)
     gate = MinecraftChatGate(clock=clock.now_ms)
 
-    # 先发 3 条普通身边公屏
+    # 先发 3 条普通身边游戏公屏
     for idx in range(3):
         gate.ingest(_chat("同伴甲", f"公开消息{idx}", distance=6.0))
-    # 第 4 条发高优私聊：不得丢弃原文，也不得把"公开消息2"误改标为 [公屏·私聊]
+    # 第 4 条发高优私聊：不得丢弃原文，也不得把"公开消息2"误改标为 [游戏公屏·私聊]
     gate.ingest(_chat("同伴甲", "私下告诉你密室在树下", private=True))
     clock.tick(2_000)
     batch = gate.flush_due()
     assert batch is not None and batch.has_private is True
     assert batch.count == 3
-    assert any("[公屏·私聊] 同伴甲：私下告诉你密室在树下" in line for line in batch.lines)
-    assert all(not ("[公屏·私聊]" in line and "公开消息" in line) for line in batch.lines)
+    assert any("[游戏公屏·私聊] 同伴甲：私下告诉你密室在树下" in line for line in batch.lines)
+    assert all(not ("[游戏公屏·私聊]" in line and "公开消息" in line) for line in batch.lines)
     assert any("同人另发 1 条已折叠" in line for line in batch.lines)
 
     # 同人同内容先公开后私聊：绝不混并成一条把公开话改成私聊
@@ -278,12 +278,12 @@ def test_high_priority_private_or_mention_is_never_dropped_or_mislabeled_after_3
     clock.tick(2_000)
     mixed = gate.flush_due()
     assert mixed is not None and mixed.count == 2
-    assert any("[公屏·身边5格] 同伴乙：去东边" == line for line in mixed.lines)
-    assert any("[公屏·私聊] 同伴乙：去东边" == line for line in mixed.lines)
+    assert any("[游戏公屏·身边5格] 同伴乙：去东边" == line for line in mixed.lines)
+    assert any("[游戏公屏·私聊] 同伴乙：去东边" == line for line in mixed.lines)
 
 
 async def test_recent_human_texts_dedups_short_chat_with_unverified_note_in_short_term_memory() -> None:
-    """带 note 且短正文（<6 字）的近期公屏在 recent_human_texts 中带发言人原形，能精准与短期记忆去重。"""
+    """带 note 且短正文（<6 字）的近期游戏公屏在 recent_human_texts 中带发言人原形，能精准与短期记忆去重。"""
     clock = FakeClock(400_000)
     gate = MinecraftChatGate(clock=clock.now_ms)
     memory = SessionShortTermMemory(clock=clock.now_ms)
@@ -298,7 +298,7 @@ async def test_recent_human_texts_dedups_short_chat_with_unverified_note_in_shor
 
 
 def test_recent_chats_render_bidirectional_dialogue_with_relative_age_and_expire_by_ttl() -> None:
-    """近期公屏记录玩家与己方双向对话对并附带相对时间，超过 TTL（默认 10 分钟）自动过期淘汰。"""
+    """近期游戏公屏记录玩家与己方双向对话对并附带相对时间，超过 TTL（默认 10 分钟）自动过期淘汰。"""
     clock = FakeClock(1_000_000)
     gate = MinecraftChatGate(clock=clock.now_ms, recent_chat_ttl_ms=600_000)
 
@@ -312,7 +312,7 @@ def test_recent_chats_render_bidirectional_dialogue_with_relative_age_and_expire
     # 3 分钟后渲染：双向对话均带相对时间，且保留原事实标签
     clock.tick(180_000)
     rendered = gate.format_recent_human_lines()
-    assert "[公屏·身边5格·3分钟前] PlayerA：给你羊肉" in rendered
+    assert "[游戏公屏·身边5格·3分钟前] PlayerA：给你羊肉" in rendered
     assert "[你回过·3分钟前] 羊肉收下啦" in rendered
     assert "你回过：羊肉收下啦" in gate.recent_human_texts()
     assert len(gate.recent_chat_dialogues()) == 2
@@ -328,5 +328,5 @@ def test_recent_chats_render_bidirectional_dialogue_with_relative_age_and_expire
     # 再来新对话正常记入且只含新对话
     gate.ingest(_chat("PlayerA", "现在去下矿吗", distance=4.0))
     fresh_rendered = gate.format_recent_human_lines()
-    assert "[公屏·身边4格·刚刚] PlayerA：现在去下矿吗" in fresh_rendered
+    assert "[游戏公屏·身边4格·刚刚] PlayerA：现在去下矿吗" in fresh_rendered
     assert "给你羊肉" not in fresh_rendered

@@ -1,4 +1,4 @@
-"""主播 Agent 的记忆接线：账本仓储接上时才注册回想工具，开播拼常驻简报，点名用上即停推。
+"""主播 Agent 的记忆接线：账本仓储接上时才注册回忆工具，开播拼记忆摘要，点名用上即停推。
 
 旧的场次档案 / 长期记忆 / 观众画像已停写停注入，这里只测账本这条线。点名链路的用例用真实的
 场次管理器、场次盖章拦截器、记账器与 SQLite 临时库串起来，等待落库用共享等待助手，不用
@@ -63,7 +63,7 @@ def _prompts() -> Any:
     return prompt_manager
 
 
-_SESSION_MS = 30 * 60_000  # 正经一场的时长（够常驻简报的"上一场最短时长"）
+_SESSION_MS = 30 * 60_000  # 正经一场的时长（够记忆摘要的"上一场最短时长"）
 
 
 async def _ended_session(
@@ -118,12 +118,12 @@ def _build_agent(
 
 
 # ---------------------------------------------------------------------------
-# 账本接线：回想工具与常驻简报
+# 账本接线：回忆工具与记忆摘要
 # ---------------------------------------------------------------------------
 
 
 async def test_agent_registers_memory_recall_and_retired_tools_stay_gone(store: SQLiteDatabase) -> None:
-    """阶段 3b 起只有一个回想工具 memory_recall；旧的三个工具不再注册。"""
+    """阶段 3b 起只有一个回忆工具 memory_recall；旧的三个工具不再注册。"""
     registry = ToolRegistry()
     agent = _build_agent(store, FakeLLMManager(), tool_registry=registry)
     agent._register_tools()
@@ -200,7 +200,7 @@ async def test_danmaku_arrival_prefetches_its_query_vector(store: SQLiteDatabase
 
 
 async def test_refresh_brief_reads_previous_archive_and_pending_commitments(store: SQLiteDatabase) -> None:
-    """常驻简报按四分区取上一场档案与近期非私向未了结承诺（私向承诺不进简报）。"""
+    """记忆摘要按四分区取上一场档案与近期非私向未了结承诺（私向承诺不进简报）。"""
     previous_pk = await _ended_session(store, started=1_000)
     await store.archive.insert_line(
         live_session_id=previous_pk,
@@ -210,7 +210,7 @@ async def test_refresh_brief_reads_previous_archive_and_pending_commitments(stor
         game="minecraft",
     )
     await store.commitments.insert_commitment(what="继续炸 TNT", quote="下次接着炸 TNT", created_session_id=previous_pk)
-    # 对某位观众的私向承诺不进常驻简报；挂游戏的公开近期承诺取消轮播后进入【还惦记的事】
+    # 对某位观众的私向承诺不进记忆摘要；挂游戏的公开近期承诺取消轮播后进入【还惦记的事】
     await store.commitments.insert_commitment(what="给 ta 盖房子", viewer_id=9, created_session_id=previous_pk)
     await store.commitments.insert_commitment(
         what="继续挖矿", quote="回头继续挖矿", game="minecraft", created_session_id=previous_pk
@@ -258,7 +258,7 @@ async def test_next_brief_reflects_operator_corrections(store: SQLiteDatabase) -
 
 
 async def test_brief_rerender_is_byte_identical_when_ledger_unchanged(store: SQLiteDatabase) -> None:
-    """每个决策窗都按表快照重渲简报：表里简报用到的部分没变时，前后两份逐字节相同。
+    """每个决策回合都按表快照重渲简报：表里简报用到的部分没变时，前后两份逐字节相同。
 
     简报在 Planner 系统提示词的前段，逐字节相同前缀缓存才命中。简报不取的那些行（对某位
     观众的、挂游戏的承诺，彩排场的档案）变了也不该让它变；简报用到的行变了才变。
@@ -304,7 +304,7 @@ async def test_brief_is_empty_without_ledger_material(store: SQLiteDatabase) -> 
 
 
 async def test_brief_drops_commitment_once_cited_in_this_session(store: SQLiteDatabase) -> None:
-    """本场她已经点名提过的承诺，下一份简报不再列（与线索卡的用上即停同口径）；确知没送达的
+    """本场她已经点名提过的承诺，下一份简报不再列（与记忆线索的用上即停同口径）；确知没送达的
     那句不算提过。没在直播时没有"本场"，整份照列。"""
     previous = await _ended_session(store, started=1_000)
     cited = await store.commitments.insert_commitment(
@@ -430,7 +430,7 @@ async def test_open_start_settle_is_scheduled_in_background(store: SQLiteDatabas
 
 
 # ---------------------------------------------------------------------------
-# 点名链路：承诺卡 → use_memory → 台词落库带引用 → 本场不再推这张卡
+# 点名链路：承诺线索 → use_memory → 台词落库带引用 → 本场不再推这张卡
 # ---------------------------------------------------------------------------
 
 
@@ -478,7 +478,7 @@ async def _cards_for(store: SQLiteDatabase, session_pk: int, message: RoomMessag
 
 
 async def test_use_memory_lands_with_the_line_and_stops_the_card(store: SQLiteDatabase) -> None:
-    """老观众开口 → 推对 ta 的承诺卡 → Planner 用 use_memory 点名 → 台词带着引用落库 →
+    """老观众开口 → 推对 ta 的承诺线索 → Planner 用 use_memory 点名 → 台词带着引用落库 →
     本场再看到 ta，这张卡不再推（用上即停）。
 
     "停推"用一个新的线索推送实例判定：它没有本场推送记录，限频挡不住它，只有库里
@@ -561,7 +561,7 @@ async def test_use_memory_lands_with_the_line_and_stops_the_card(store: SQLiteDa
         pk = await manager.open_session(kind="live", title="画画")
         await wait_until(agent.is_live_active, what="开播回调跑完")
         first = _danmaku_from_xiaoyu("主播还记得我吗", "m1")
-        assert number in await _cards_for(store, pk, first), "点名之前，对小鱼的承诺卡照常推"
+        assert number in await _cards_for(store, pk, first), "点名之前，对小鱼的承诺线索照常推"
 
         await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, first, source="bilibili")
         await wait_until(lambda: writes.assistant_lines >= 1, what="点名的那句台词写进库")
@@ -573,7 +573,7 @@ async def test_use_memory_lands_with_the_line_and_stops_the_card(store: SQLiteDa
     planner_requests = [
         str(call.args[0]) for call in llm.generate.await_args_list if call.kwargs.get("profile") == "planner"
     ]
-    assert number in planner_requests[0], "Planner 这一窗看得到承诺卡"
+    assert number in planner_requests[0], "Planner 这一窗看得到承诺线索"
     assert [speech.memory_refs for speech in speeches] == [[number]], "台词带着点名的编号发出"
     stored_refs = await store.chat.list_session_memory_refs(live_session_id=pk)
     assert [memory_ref_numbers(raw) for raw in stored_refs] == [{commitment_id}], "引用随台词落库"

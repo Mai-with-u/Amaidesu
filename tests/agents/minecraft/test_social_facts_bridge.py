@@ -56,7 +56,7 @@ class _CountingSocialFactRepo:
 
 
 async def _seed_evidence_rows(db: SQLiteDatabase, *, save_id: str, save_name: str) -> tuple[int, int, int]:
-    """写入一条直播场次、一位在场玩家公屏原话与一条观众弹幕，返回 (session_id, game_chat_id, live_chat_id)。"""
+    """写入一条直播场次、一位在场玩家游戏公屏原话与一条观众弹幕，返回 (session_id, game_chat_id, live_chat_id)。"""
     session_id = await db.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     player = await db.game_players.meet_player(
         game="minecraft",

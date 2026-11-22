@@ -83,12 +83,12 @@ SCHEMA_VERSION: int = 51
 # - game_creatures          游戏生物名册（游戏 Agent 记住的同伴：主播起的名字、死没死，按世界分开）
 # - memory_vectors_*        记忆检索的向量索引（档案行、承诺、台词、游戏事件各一张；派生物）
 # - memory_fts_*            记忆检索的全文索引（FTS5 虚表，同上四类；派生物）
-# - memory_cue_log          线索卡记录（推了哪张、谁触发的、用上没有）
+# - memory_cue_log          记忆线索记录（推了哪张、谁触发的、用上没有）
 # - memory_edits            记忆页人工改动记录（审计，同时是整理评测的标准答案）
 # - viewer_candidates       观众候选（观众定下、她当场接受的事与她说欠着的承诺；人批准才进记忆）
 # - game_players            游戏里的人（按游戏给的 UUID 认出的别的玩家）
 # - game_player_interactions 和她的互动（打招呼、送东西、切磋、一起做的事、帮过忙）
-# - game_chat               公屏游戏聊天（私聊不落；认不出是谁说的只占位）
+# - game_chat               游戏公屏游戏聊天（私聊不落；认不出是谁说的只占位）
 # - player_candidates       玩家自述的待审候选（人批准才进记忆）
 # - viewer_player_links     运营者确认的观众与玩家对应（只用来连带删除）
 # - timeline_summary        摘要层
@@ -140,7 +140,7 @@ def build_schema_sql() -> str:
         # commitments —— 承诺表（她当众答应过、还没了结的事）
         + _COMMITMENTS_SQL
         + "\n"
-        # archive_lines —— 场次档案（每场几行，供下次开播回想上一场）
+        # archive_lines —— 场次档案（每场几行，供下次开播回忆上一场）
         + _ARCHIVE_LINES_SQL
         + "\n"
         # archive_snapshots / archive_snapshot_lines —— 滚动档案快照（只引用档案行）
@@ -179,7 +179,7 @@ def build_schema_sql() -> str:
         # memory_vectors_* / memory_fts_* —— 记忆检索的派生索引（排在来源表之后：触发器要引用它们）
         + _MEMORY_INDEX_SQL
         + "\n"
-        # memory_cue_log —— 线索卡记录
+        # memory_cue_log —— 记忆线索记录
         + _MEMORY_CUE_LOG_SQL
         + "\n"
         # memory_edits —— 记忆页人工改动记录（排在档案行之后：删行触发器要引用它）
@@ -502,8 +502,8 @@ CREATE TABLE IF NOT EXISTS forget_list (
 # 空串 = 不分存档或存档不明）：换了存档时，别的存档里的承诺不再当成眼前的事推给她。
 # keywords 是被动想起的触发词（JSON 字符串列表，同档案行）：观众提到这些词时把这条承诺推给她。
 # target_player_id 是对某位游戏玩家的承诺（→ game_players，玩家被删时承诺一起删）；对全体或对观众时为空。
-# evidence_game_chat_id 是她在游戏公屏打出去的那句（→ game_chat）：对玩家的承诺证据也可以是公屏上
-# 她自己打的字，这时 evidence_chat_id 为空；一句公屏只登记一条，重新整理时按它对齐编号。
+# evidence_game_chat_id 是她在游戏公屏打出去的那句（→ game_chat）：对玩家的承诺证据也可以是游戏公屏上
+# 她自己打的字，这时 evidence_chat_id 为空；一句游戏公屏只登记一条，重新整理时按它对齐编号。
 # 这两列的索引由 v32 迁移建（两列都是 v32 才补的，旧库执行建表汇总时它们还不存在）。
 
 _COMMITMENTS_SQL = """
@@ -534,7 +534,7 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 
 # --- archive_lines —— 场次档案 ---
 # 每场正式场下播后写的本场新事（≤8 行），标题加她播出原句的逐字片段，写完不改（运营者可删单行）。
-# 也是回想工具的检索单元；game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），
+# 也是回忆工具的检索单元；game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），
 # save_id / save_name 是那个世界的存档（整理时由代码按本场游戏事件判定，空串 = 不分存档或存档不明）。
 # 前几场仍然成立的事不复制进本场，由下面的快照引用原行。
 # keywords 是被动想起的触发词（JSON 字符串列表：名字、地名、物件名、梗的原词，至多 4 个，
@@ -542,7 +542,7 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 # human_locked = 1 表示运营者在记忆页改过这一行的标题、稳定标记、触发词或地点，或这一行是运营者新增的：
 # 之后的整理不能去掉或替换它，只有人能动。原话与证据行永远不改，只能随删除一起删。
 # source 是这一行的来源：streamer 是她自己说的（整理自动写、人新增的都是），viewer 是人批准的观众候选
-# （观众定下、她当场接受的事；原话仍是她那句回应）。viewer_chat_id 是观众来源的行挂着的那条弹幕，
+# （观众定下、她当场接受的事；原话仍是她那句回应）。viewer_chat_id 是观众定下的事所在行挂着的那条弹幕，
 # 按外键级联：删观众、忘了我、按句删弹幕时这一行随之删除。viewer_word 是批准时从候选抄来的观众定下的
 # 那个词，渲染原话时这一段不遮成"那位观众"（她自己说的行为空）。viewer_chat_id 的索引由 v31 迁移建
 # （这一列是 v31 才补的，旧库执行建表汇总时它还不存在）。
@@ -797,7 +797,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_learned_skills_lookup
 
 
 # --- memory_vectors_* / memory_fts_* —— 记忆检索的派生索引 ---
-# 回想与被动想起按两路查：全文（FTS5，按两个字一组切开后的词元，BM25 排序）与向量（嵌入，余弦）。
+# 回忆与被动想起按两路查：全文（FTS5，按两个字一组切开后的词元，BM25 排序）与向量（嵌入，余弦）。
 # 正本始终是档案行、承诺、她播出的台词、游戏里程碑与阶段汇报本身；这些表只是派生物，删掉随时能
 # 从正本重算。来源分四类，各一张向量表、一张全文表，行号就是来源行的主键：
 # - 向量表挂外键 ON DELETE CASCADE：删单行、按句删台词、删场次、改彩排时向量随来源行一起没，
@@ -871,8 +871,8 @@ END;
 """.strip()
 
 
-# --- memory_cue_log —— 线索卡记录 ---
-# 每批 Planner 前推出去的每张线索卡一行：哪一场、什么时候、什么卡、被哪几路命中（JSON 列表：观众弹幕、
+# --- memory_cue_log —— 记忆线索记录 ---
+# 每批 Planner 前推出去的每张记忆线索一行：哪一场、什么时候、什么卡、被哪几路命中（JSON 列表：观众弹幕、
 # 游戏地点、游戏情境、规则、她的台词……）、各路分数与触发词（JSON），她用上的时刻由"用上即停"回填。
 # 只记条目编号与分数，不记观众身份。条目被删时外键级联删掉对应记录；场次被删时整场记录一起删。
 # self_triggered = 只由她自己最近几句台词命中的卡（防止她自己越说越多，副作用指标单独统计它）。
@@ -925,7 +925,7 @@ END;
 # 下播整理列出的、要人批准才生效的三类事：viewer_defined 是观众定下、她当场接受却没复述的名字、设定、
 # 梗（标题不写昵称）；claimed_missing 是她说"上次答应过""欠着的"、承诺账上却找不到的事；viewer_self 是
 # 老观众主动说起并被她当场接住的持续性日常或喜好（标题以"ta "开头，批准后仍留在本表，仅在该老观众场内发言时
-# 经 viewer_id 读取进老观众线索卡，不进档案与承诺）。批准前对她完全不可见：简报、回想、检索索引不读这张表。
+# 经 viewer_id 读取进老观众线索，不进档案与承诺）。批准前对她完全不可见：记忆摘要、回忆、检索索引不读这张表。
 # 每条挂在两条台词记录上：观众那条弹幕（viewer_chat_id；她说欠着的一类只在她是回应某条弹幕时才有）
 # 与她那句回应（reply_chat_id），并经 viewer_id 关联观众行，三处均按外键级联——删观众、忘了我、按句删
 # 弹幕或台词、删场次时候选随之删除（viewer_id 列的索引由 v47 迁移建）。status 是 pending 待审 /
@@ -966,9 +966,9 @@ CREATE INDEX IF NOT EXISTS idx_viewer_candidates_reply_chat ON viewer_candidates
 # JSON 列表），同名不同 UUID 是两行；saves 是见过他的存档（JSON 列表，每项 save_id / save_name / online_mode，
 # 最后一项是那台服务器验不验账号 on / off / unknown，早先的项没有它按 unknown 读）。
 # 只自动记和她发生过的互动（game_player_interactions：打招呼按场合并计数，fact 是结构化事实的 JSON）；
-# 公屏聊天落 game_chat（私聊不落；direction 是 player 玩家说的 / streamer 她说的 / other 认不出是谁说的，
+# 游戏公屏落 game_chat（私聊不落；direction 是 player 玩家说的 / streamer 她说的 / other 认不出是谁说的，
 # 最后一种不存原话，只占一行位置），和弹幕一样受保留期管。玩家说的关于他自己的事列进 player_candidates
-# 待审，挂在他那句公屏聊天和她的回应（公屏那句或播出的台词）上。viewer_player_links 是运营者确认的
+# 待审，挂在他那句游戏公屏和她的回应（游戏公屏那句或播出的台词）上。viewer_player_links 是运营者确认的
 # 观众与玩家对应，只用来连带删除，从不告诉她。forget_requested_at_ms 是他在游戏公屏发"忘了我"的时刻：
 # 和观众同一个宽限期，到期删这位玩家与关联观众，期间他发撤回短语就清掉。玩家一行被删时，以上几张表与对他的承诺随外键一起删；
 # 她回应他的台词留着，live_chat.reply_player_id 置空（这一列的索引由 v32 迁移建）。
@@ -1044,7 +1044,7 @@ CREATE INDEX IF NOT EXISTS idx_viewer_player_links_player ON viewer_player_links
 # 一行 = 一条"当前游戏环境里人与人怎么相处"的可核对事实，与承诺表同构：行级状态、证据可核、
 # 人工锁。六类：setting 环境形态 / members 成员关系 / sharing 共享惯例 / works 进行中的事 /
 # her_role 她的角色 / open_question 待弄清。
-# 依据行按消息号查回：模型填它看得见的消息号（弹幕 live_chat.message_id；公屏 game_chat.message_id，
+# 依据行按消息号查回：模型填它看得见的消息号（弹幕 live_chat.message_id；游戏公屏 game_chat.message_id，
 # 采集时发的随机短串，由 v38 迁移给 game_chat 补列与 (live_session_id, message_id) 索引），工具查回行号写进证据列。
 # text 是一句事实陈述，不带评价词；quote 是依据的原文片段——非空时必须是对应聊天行的逐字子串，
 # 空引文行只允许 her_role 与 open_question 两类（归纳类，且只有下播整理能产出）。
@@ -1054,7 +1054,7 @@ CREATE INDEX IF NOT EXISTS idx_viewer_player_links_player ON viewer_player_links
 # 取代它的新行号——事实过时用取代表达，不物理删除。
 # human_locked = 1 表示运营者改过这一行：之后的整理与工具都不得改它或取代它，只能删。
 # save_id 是这个存档（Mod world.id）的编号，空串 = 该游戏不分环境、整游戏一本；save_name 是显示名。
-# 回想索引的第五类来源（memory_vectors_social_fact / memory_fts_social_fact）跟在本表后面建：外键与触发器要引用它；
+# 回忆索引的第五类来源（memory_vectors_social_fact / memory_fts_social_fact）跟在本表后面建：外键与触发器要引用它；
 # 只收现行行，被取代的行由检索时的条件挡掉。
 
 _GAME_SOCIAL_FACTS_SQL = """
@@ -1097,10 +1097,10 @@ END;
 
 
 # --- memory_corrections —— 场内更正 ---
-# 主播在规划器（或运营递话）对本场简报某行档案或某条惦记承诺做出的当场纠正：
+# 主播在规划器（或运营递话）对本场记忆摘要某行档案或某条惦记承诺做出的当场纠正：
 # target_kind 取 archive / commitment / general（运营递话无特定目标时常驻本场）。
 # verdict 取 done（做完了）/ invalid（不成立了）/ wrong（记错了）/ progress（本场进展）/ note（运营补充纠正）。
-# evidence_kind 取 game_receipt / player_chat / operator / self_seen；引用玩家公屏时挂外键，
+# evidence_kind 取 game_receipt / player_chat / operator / self_seen；引用玩家游戏公屏时挂外键，
 # 删玩家随级联删除。更正只在本场生效；下播整理将其作为必须处理的输入，人工可在 WebUI 撤回。
 _MEMORY_CORRECTIONS_SQL = """
 CREATE TABLE IF NOT EXISTS memory_corrections (

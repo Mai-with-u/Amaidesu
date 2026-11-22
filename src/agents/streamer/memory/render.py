@@ -9,10 +9,10 @@
 | 内容 | 不针对具体观众的承诺给标题加原话；对某位观众的承诺只给动作标题；档案给标题加原话 | 承诺只给动作标题；档案只给标题 |
 
 对某位观众的承诺在 规划器档也不给原话：原话可能夹着 ta 的私事（"阿杰别难过，
-失恋而已！下次进 MC 给你盖个小房子"），进了交接稿她就会当众问起；找承诺时只截
+失恋而已！下次进 MC 给你盖个小房子"），进了发言要点她就会当众问起；找承诺时只截
 答应的那半句是同一道防线的写入一侧。
 
-任何档都不出现精确天数、场次数和日期——所以交接稿没有"剥离数字"这一步，Planner
+任何档都不出现精确天数、场次数和日期——所以发言要点没有"剥离数字"这一步，Planner
 手里根本没有这些数字。
 """
 
@@ -107,7 +107,7 @@ __all__ = [
     "source_notes",
 ]
 
-# 单块档案列表的兼容默认上限（供 render_archive_block 单独渲染时截断；常驻简报按 zones 各区名额计）
+# 单块档案列表的兼容默认上限（供 render_archive_block 单独渲染时截断；记忆摘要按 zones 各区名额计）
 MAX_BRIEF_ARCHIVE_LINES = 12
 # 老观众在场一行最多几个人，超出的折成"等 N 位"
 MAX_PRESENCE_VIEWERS = 6
@@ -116,7 +116,7 @@ PRESENCE_RECENT_MS = 3 * 24 * 60 * 60 * 1000
 
 # 两档共用的抬头与提示
 _BRIEF_HEADER = "# 她记得的事（内部参考；以眼前为准，用不上就不提）"
-# 线索块和常驻简报一样写明"以眼前为准"：卡片是代码按线索找的旧事，眼前的现场说了算
+# 线索块和记忆摘要一样写明"以眼前为准"：卡片是代码按线索找的旧事，眼前的现场说了算
 _CUE_HEADER = (
     "【这一批想起来的事】"
     "（代码按线索找的，以眼前为准；不提也行。要用就把编号写进 streamer_reply 的 use_memory，一次一条；"
@@ -149,19 +149,19 @@ _SPOKEN_WHEN_EARLIER = "之前"
 _USED_THIS_SESSION = "（本场已提过）"
 # 人批准的观众候选写成的档案行：库里不记是哪位观众定的，提醒她只说"大家定的"，别编出一个具体的人
 VIEWER_SOURCE_NOTE = "和观众一起定的，不记得是哪一位，别点名"
-# 观众来源的行里，那位观众的名字在渲染时换成的代称（库里的原话不改）
+# 观众定下的事所在行里，那位观众的名字在渲染时换成的代称（库里的原话不改）
 SOURCE_VIEWER_LABEL = "那位观众"
 
 
 def source_notes(line: ArchiveLine) -> List[str]:
-    """档案行来源的注记：观众来源的行注明"和观众一起定的"，她自己说的不加。"""
+    """档案行来源的注记：观众定下的事所在行注明"和观众一起定的"，她自己说的不加。"""
     return [VIEWER_SOURCE_NOTE] if line.source == "viewer" else []
 
 
 def _line_texts(line: ArchiveLine) -> Tuple[str, str]:
-    """档案行渲染用的标题与原话：观众来源的行把原话里那位观众的名字换成"那位观众"。
+    """档案行渲染用的标题与原话：观众定下的事所在行把原话里那位观众的名字换成"那位观众"。
 
-    她当场回应时常点名（"阿杰说得对，就叫团子"），原样进简报她就会当众说出是哪一位定的，和"不记得是
+    她当场回应时常点名（"阿杰说得对，就叫团子"），原样进记忆摘要她就会当众说出是哪一位定的，和"不记得是
     哪一位"的注记自相矛盾，所以原话里的名字在渲染这一刻换掉，库里不改。标题不换：它是运营者亲眼看过
     才批的，留在标题里的名字说的是起的名字是什么，不是谁定的。原话里和观众定下的那个词相同的那一段
     也不换——观众叫"团子"、定下"给小猫取名团子"时，换掉就成了"取名那位观众"。
@@ -200,7 +200,7 @@ def render_commitment_number(commitment_id: int) -> str:
 
 
 def render_archive_number(archive_line_id: int) -> str:
-    """档案行编号的写法（档#41）：简报与线索卡里标着，Planner 用它点名；回复器档不用编号。"""
+    """档案行编号的写法（档#41）：记忆摘要与记忆线索里标着，Planner 用它点名；回复器档不用编号。"""
     return refs.render_archive_number(archive_line_id)
 
 
@@ -289,14 +289,14 @@ def render_archive_block(
     current_saves: Optional[Mapping[str, GameSave]] = None,
     used_ids: AbstractSet[int] = frozenset(),
 ) -> List[str]:
-    """单块档案行渲染成简报行（档#N、标题、她的原话；别的存档按存档号归并折成一行）。
+    """单块档案行渲染成记忆摘要行（档#N、标题、她的原话；别的存档按存档号归并折成一行）。
 
     每行带档案行编号，要提这件事就把编号写进 use_memory 点名。本场她已经点名用过的行
     （``used_ids``）留着、末尾标"（本场已提过）"：档案行是她知道的事实，撤掉她会在同一场里
     忘掉刚说过的名字和住处；标注只提醒她别再主动提。标注只在某一行第一次被用上时改一次文本。
 
     按游戏眼下所在的存档分（``current_saves``）：别的存档里的事按 ``(game, save_id)`` 归并名字并
-    每个存档折成一行，只说做过几件、细节去回想里查；没记下存档的游戏行照列，注明不确定是哪个存档。
+    每个存档折成一行，只说做过几件、细节去回忆里查；没记下存档的游戏行照列，注明不确定是哪个存档。
     """
     current = current_saves or {}
     limited = list(lines)[:MAX_BRIEF_ARCHIVE_LINES]
@@ -574,7 +574,7 @@ ZATSUDAN_HIGHLIGHT_ZONE = BriefZoneSpec(
 ROOM_ZONE = BriefZoneSpec(key="room", header=_ROOM_ZONE_HEADER, render=_render_room_zone)
 COMMITMENTS_ZONE = BriefZoneSpec(key="commitments", header=_COMMITMENTS_HEADER, render=_render_commitments_zone)
 
-# 常驻简报的有序分区表：新增分区只需在此追加一项，不动下方渲染骨架
+# 记忆摘要的有序分区表：新增分区只需在此追加一项，不动下方渲染骨架
 BRIEF_ZONES: Tuple[BriefZoneSpec, ...] = (
     WORLD_ZONE,
     RECENT_ZONE,
@@ -614,7 +614,7 @@ def _build_render_context(
     closed_commitments_this_session: Sequence[Tuple[int, str, str]] = (),
     speaking_mode: str = "gameplay",
 ) -> BriefRenderContext:
-    """把简报原始输入归一化为各分区共享的只读上下文（同句台词既写档案又记承诺时只留承诺）。"""
+    """把记忆摘要原始输入归一化为各分区共享的只读上下文（同句台词既写档案又记承诺时只留承诺）。"""
     listed = _listed_commitments(commitments)
     promised_lines = {int(item.evidence_chat_id) for item in listed if item.evidence_chat_id is not None}
     raw_items = _coerce_snapshot_lines(archive_lines, snapshot_lines)
@@ -652,7 +652,7 @@ def _build_render_context(
 
 
 def _render_folded_other_saves(ctx: BriefRenderContext) -> List[str]:
-    """别的存档里的记忆按 ``(game, save_id)`` 全简报归并成每个存档一行，名字取最后一次非空记录。
+    """别的存档里的记忆按 ``(game, save_id)`` 全记忆摘要归并成每个存档一行，名字取最后一次非空记录。
 
     常规边玩边说模式下别的存档的名场面照旧归入折叠计数、绝不串存档；纯杂谈模式下已展开进
     【一起经历过的名场面】的行不再重复计入折叠数。
@@ -719,7 +719,7 @@ def brief_archive_ids(
     speaking_mode: str = "gameplay",
     zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> List[int]:
-    """常驻简报里标着编号的档案行（Planner 点名的合法名单之一）：与 ``render_brief`` 跑同一套分区表。"""
+    """记忆摘要里标着编号的档案行（Planner 点名的合法名单之一）：与 ``render_brief`` 跑同一套分区表。"""
     ctx = _build_render_context(
         archive_lines=archive_lines,
         snapshot_lines=snapshot_lines,
@@ -737,7 +737,7 @@ def brief_archive_ids(
 
 
 def _listed_commitments(commitments: Sequence[Commitment]) -> List[Commitment]:
-    """简报承诺段列出的那几条：至多 ``MAX_BRIEF_COMMITMENTS`` 条，没有标题的不列。"""
+    """记忆摘要承诺段列出的那几条：至多 ``MAX_BRIEF_COMMITMENTS`` 条，没有标题的不列。"""
     return [item for item in list(commitments)[:MAX_BRIEF_COMMITMENTS] if (item.what or "").strip()]
 
 
@@ -752,7 +752,7 @@ def _render_other_save_line(*, game: str, save: GameSave, count: int, current: M
 
 
 def render_save_heads(current_saves: Mapping[str, GameSave]) -> List[str]:
-    """简报开头的"眼下在哪个存档"：每个分存档的游戏一行；还没进存档的提醒别把游戏进度当成眼前的事。"""
+    """记忆摘要开头的"眼下在哪个存档"：每个分存档的游戏一行；还没进存档的提醒别把游戏进度当成眼前的事。"""
     heads: List[str] = []
     for game in sorted(current_saves):
         save = current_saves[game]
@@ -783,7 +783,7 @@ def render_brief(
     speaking_mode: str = "gameplay",
     zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> str:
-    """Planner 系统提示词末尾的常驻简报；所有分区与别的存档折叠行都空时返回空串（整段省略）。
+    """Planner 系统提示词末尾的记忆摘要；所有分区与别的存档折叠行都空时返回空串（整段省略）。
 
     按 ``zones`` 定义的分区顺序渲染（边玩边说模式下【最近几场】后按需跟【忘不掉的名场面】，
     纯杂谈模式下展开跨存档【一起经历过的名场面】），每个分区各自计额、空区自动省略；
@@ -836,7 +836,7 @@ def render_cue_header() -> str:
 
 
 def render_game_card(commitment: Commitment, *, game: str, unsure_save: bool = False) -> str:
-    """游戏承诺卡：挂在这个游戏上、不针对具体观众的承诺；主播正在玩这个游戏时推。
+    """游戏承诺线索：挂在这个游戏上、不针对具体观众的承诺；主播正在玩这个游戏时推。
 
     卡面不写"现在开着"：线索推送只认"正在玩"（有进行中的委派任务或刚有游戏事件），
     但规划器自己看得见眼前现场，卡面替它断言反而容易说错。别的存档里答应的不推这张卡；
@@ -869,13 +869,13 @@ def render_social_fact_card(fact: "SocialFact") -> str:
 
 
 def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = False, note: str = "") -> str:
-    """档案卡（被动想起）：编号、时间词、标题与原话，末尾写为什么想起来。
+    """往事线索（被动想起）：编号、时间词、标题与原话，末尾写为什么想起来。
 
     ``note`` 是"在哪个存档里"一类的补充（见 ``saves.place_note``）；``why`` 写触发它的那件事
     （弹幕提到了某个词、她刚说到、走到了某个地点）。
     """
     when = _when_word(is_previous=is_previous, spoken=False)
-    # 观众来源的行：标题与原话里那位观众的名字换成"那位观众"
+    # 观众定下的事所在行：标题与原话里那位观众的名字换成"那位观众"
     title, quote = _line_texts(line)
     notes = [f"你说过「{quote}」"] if quote else []
     notes.extend(source_notes(line))
@@ -892,7 +892,7 @@ def render_recalled_commitment_card(
     unsure_save: bool = False,
     progress_note: str = "",
 ) -> str:
-    """按意思想起的承诺卡：不针对具体观众的未了结承诺，给原话，写为什么想起来（可附本场最新进展）。
+    """按意思想起的承诺线索：不针对具体观众的未了结承诺，给原话，写为什么想起来（可附本场最新进展）。
 
     承诺做没做是下播整理时判的，本场做了的还没记上——写"截至上一场还没做"，不替她断言眼下没做。
     """
@@ -907,7 +907,7 @@ def render_recalled_commitment_card(
 
 
 def render_joke_card(joke: str, *, message_id: str = "") -> str:
-    """老梗卡：观众提到了老梗栏里的梗。梗本身已在老梗栏里，卡面只提醒"有人提了"。"""
+    """老梗线索：观众提到了老梗栏里的梗。梗本身已在老梗栏里，卡面只提醒"有人提了"。"""
     who = f"弹幕 {message_id} " if message_id else "观众"
     return f"[老梗] {who}提到了「{joke}」：老梗栏里有这个梗，接不接看眼前。"
 
@@ -921,7 +921,7 @@ def render_viewer_card(
     place: str = "",
     progress_note: str = "",
 ) -> str:
-    """对某位观众的承诺卡：只给动作标题，不提当时的缘由与原话（可附本场最新进展）。
+    """对某位观众的承诺线索：只给动作标题，不提当时的缘由与原话（可附本场最新进展）。
 
     ``place`` 是挂了分存档游戏的承诺"在哪个存档里答应的"（见 ``saves.place_note``）：ta 开口时
     照推，但她得知道那件事是不是在眼下这个世界里。
@@ -955,10 +955,10 @@ def render_player_card(
     卡面只写和她发生过的互动事实与他当时的名字：打过几次招呼、送过什么、切磋输赢、一起做过什么；
     不写他什么时间段上线、不写私聊。最近一次往来在上一场时写"上一场"，其余写"之前"。
     ``statements`` 是人批准过的他的自述（标题, 在哪个存档说的说明），写成"他跟你说过"：没批准的不写，
-    自述也不进常驻简报，只在他找她时由这张卡提起。
+    自述也不进记忆摘要，只在他找她时由这张卡提起。
     ``promises`` 是答应过他、还没了结的事（承诺, 在哪个存档答应的说明），带承诺编号写在卡尾；
     若某条承诺有本场最新 ``commitment_progress``，顺带附注「（本场进展：…）」同步当前进度。
-    对玩家的承诺不进常驻简报，只在他露面时由这张卡提醒。
+    对玩家的承诺不进记忆摘要，只在他露面时由这张卡提醒。
     """
     promise_text = ""
     if promises:
@@ -1022,7 +1022,7 @@ def render_familiar_viewer_card(
     self_notes: Sequence[str] = (),
     authored_titles: Sequence[str] = (),
 ) -> str:
-    """场内老观众发言时的老观众线索卡：汇总关系定位、曾用名、已批准近况与共同造梗归属；两项内容皆空时返回空串。"""
+    """场内老观众发言时的老观众线索：汇总关系定位、曾用名、已批准近况与共同造梗归属；两项内容皆空时返回空串。"""
     notes = [item.strip() for item in self_notes if item and item.strip()]
     titles = [item.strip() for item in authored_titles if item and item.strip()]
     if not notes and not titles:
@@ -1098,7 +1098,7 @@ def _presence_tier(prev_seen_ms: Optional[int], now_ms: int) -> str:
 
 
 def render_forget_notice(*, message_id: str) -> str:
-    """回执行：本批有人发了"忘了我"。用弹幕编号指人，不写名字、不复述 ta 说过的事。"""
+    """遗忘回执：本批有人发了"忘了我"。用弹幕编号指人，不写名字、不复述 ta 说过的事。"""
     return (
         f'【已按"忘了我"处理】弹幕 {message_id} 的发送者：从现在起不再记录 ta，'
         'ta 的记录在下播后删除；删除前 ta 发"开玩笑的""算了"可以撤回。'
@@ -1107,7 +1107,7 @@ def render_forget_notice(*, message_id: str) -> str:
 
 
 def render_retract_notice(*, message_id: str) -> str:
-    """回执行：本批有人撤回了"忘了我"。"""
+    """遗忘回执：本批有人撤回了"忘了我"。"""
     return f'【已撤回"忘了我"】弹幕 {message_id} 的发送者：删除取消，照常记着 ta（撤回前那几条弹幕没记下）。'
 
 
@@ -1117,7 +1117,7 @@ def render_cue_block(
     presence: str = "",
     notices: Sequence[str] = (),
 ) -> str:
-    """参考段的线索块：卡片、老观众在场一行、回执行按序拼起来；全空时返回空串。"""
+    """参考段的线索块：卡片、老观众在场一行、遗忘回执按序拼起来；全空时返回空串。"""
     body = [line for line in [*cards, presence, *notices] if line]
     if not body:
         return ""
@@ -1126,12 +1126,12 @@ def render_cue_block(
 
 def render_spoken_archive(line: ArchiveLine, *, is_previous: bool = False) -> str:
     """回复器档：Planner 点名的那一行档案，交到 Replyer 手里（只给标题，不含编号与原话）。"""
-    # 观众来源的行：标题里那位观众的名字换成"那位观众"
+    # 观众定下的事所在行：标题里那位观众的名字换成"那位观众"
     title, _ = _line_texts(line)
     if not title:
         return ""
     when = _when_word(is_previous=is_previous, spoken=True)
-    # 回复器档只给标题，观众来源的再注一句：说"大家定的"，别编出一个具体的人
+    # 回复器档只给标题，观众定下的事的再注一句：说"大家定的"，别编出一个具体的人
     source = "（和观众一起定的，别说成是哪一位定的）" if source_notes(line) else ""
     return f"{_SPOKEN_HEADER}\n- {when}的事：{title}{source}。"
 

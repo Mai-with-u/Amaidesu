@@ -31,7 +31,7 @@ class TriggerKind(str, Enum):
     """触发原因种类（封闭枚举，成员覆盖现有全部触发词表）。
 
     - 批次刷新类（MessageBuffer.should_flush 产出）：弹幕聚合窗的四种刷新原因。
-    - 主动发言类（ProactiveTrigger.should_trigger 产出 + 下播道别）：主动决策窗的触发源。
+    - 主动发言类（ProactiveTrigger.should_trigger 产出 + 下播道别）：主动决策回合的触发源。
     - 控制台调试类（Dashboard 调试门面）：手动驱动一次决策。
     """
 
@@ -79,7 +79,7 @@ PROACTIVE_KINDS: frozenset[TriggerKind] = frozenset(
 )
 
 #: 没有任何新外部输入的主动触发种类（流程单推进、定时、冷场、游戏主控冷场兜底、收播道别、
-#: 断线续播）：这些决策窗不给手上的游戏活补充要求（Planner 豁免判断用）。
+#: 断线续播）：这些决策回合不给手上的游戏活补充要求（Planner 豁免判断用）。
 NO_INPUT_PROACTIVE_KINDS: frozenset[TriggerKind] = frozenset(
     {
         TriggerKind.RUNDOWN,

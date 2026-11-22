@@ -7,7 +7,7 @@
 - 触发：主播 Agent 只把高光目击（强敌/罕见矿藏进入视野）、高光里程碑（开箱发现稀罕宝物）与非自选的意外阵亡
   转进来（:meth:`react`）。同一时刻只生成一句，生成期间来的由头攒着并成一次反应；按细类分桶冷却。
 - 依据：系统提示词只有人设和几条规矩（含"被问到是不是真人时坦白自己是 AI"和人设里的边界栏），事实全在
-  每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、她刚说过的话）——实验里没有这张卡的即时反应会
+  每次附上的事实快照里（现在的状态、手上的目标、刚发生的事、她刚说过的话）——实验里没有这份事实快照的即时反应会
   理直气壮地编现场。即时反应不带任何记忆：长期笔记和备忘录都不给，几秒内的一句反应用不上，带上只会让她在
   急事里翻旧账、拖长输入。
 - 兜底：输出一到三行"情绪：台词"或"[沉默]"——情绪在一次反应里转了（先吓一跳再松口气）就拆成
@@ -196,7 +196,7 @@ def _reaction_dispatch_level(triggers: Sequence[Trigger]) -> Tuple[int, bool]:
 
 
 class Mouth:
-    """即时反应：攒由头、拼现场卡、生成一句、兜底后经发声分发器出声。"""
+    """即时反应：攒由头、拼事实快照、生成一句、兜底后经发声分发器出声。"""
 
     def __init__(
         self,
@@ -219,7 +219,7 @@ class Mouth:
         on_mouth_spoken: Optional[Callable[[str, int, str], None]] = None,
     ) -> None:
         """依赖全部构造注入：LLM、提示词、发声分发器（``dispatch_reaction``）、房间态势（``last_speech_ms`` /
-        ``activity_line`` / ``record_speech``），以及现场卡各段的数据来源。"""
+        ``activity_line`` / ``record_speech``），以及事实快照各段的数据来源。"""
         self._config = config
         self._llm = llm_service
         self._prompt = prompt_service
@@ -240,12 +240,12 @@ class Mouth:
 
         # 最近记录多留一些：游戏条目多时她说过的话也不至于被挤出去
         self._records: Deque[_Record] = deque(maxlen=max(30, config.history_items * 3))
-        # 单独保留最近说过的台词：高频身体/游戏事件刷屏时，她刚说过的话仍保底留在现场卡与复读闸里
+        # 单独保留最近说过的台词：高频身体/游戏事件刷屏时，她刚说过的话仍保底留在事实快照与复读闸里
         self._speeches: Deque[str] = deque(maxlen=20)
         self._pending: List[Trigger] = []
         self._wake = asyncio.Event()
         self._task: Optional[asyncio.Task[None]] = None
-        # 每类由头上次反应（或决定不说）的时刻：冷却期内同类只记进现场卡
+        # 每类由头上次反应（或决定不说）的时刻：冷却期内同类只记进事实快照
         self._last_reacted: Dict[str, int] = {}
         self._scene_brief = ""
         self._scene_at_ms = 0
@@ -442,7 +442,7 @@ class Mouth:
         return "；".join(dict.fromkeys(trigger.text for trigger in triggers))
 
     def _messages(self, triggers: Sequence[Trigger]) -> List[Dict[str, str]]:
-        """最近记录按对话排开（她说过的是 assistant），最后一条附现场卡与由头。"""
+        """最近记录按对话排开（她说过的是 assistant），最后一条附事实快照与由头。"""
         messages: List[Dict[str, str]] = []
         recent = list(self._records)[-self._config.history_items :] if self._config.history_items else []
         for record in recent:
@@ -490,7 +490,7 @@ class Mouth:
             return
         try:
             brief = await self._scene_reader()
-        except Exception as exc:  # noqa: BLE001 - 读不到就用旧的，卡里会写明是多久前看的
+        except Exception as exc:  # noqa: BLE001 - 读不到就用旧的，事实快照里会写明是多久前看的
             self._logger.warning(f"读一句话现场失败: {exc}", exc=True)
             return
         if brief:

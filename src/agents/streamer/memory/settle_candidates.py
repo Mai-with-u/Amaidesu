@@ -15,10 +15,10 @@
 
 "她说欠着、账上却找不到的"（``claimed_missing``）走同一个待审区，口径见 ``validate_claimed_missing``。
 
-游戏玩家在公屏说的关于他自己的事（玩家自述）进另一张待审表，口径见 ``validate_player_candidates``：
-个人信息、名字或梗词、去重与观众候选同一套，证据换成他那句公屏和她回他的那句。
+游戏玩家在游戏公屏说的关于他自己的事（玩家自述）进另一张待审表，口径见 ``validate_player_candidates``：
+个人信息、名字或梗词、去重与观众候选同一套，证据换成他那句游戏公屏和她回他的那句。
 
-候选批准前对她完全不可见：这里只产出待写进待审区的条目，简报、线索卡、回想都不读候选表。
+候选批准前对她完全不可见：这里只产出待写进待审区的条目，记忆摘要、记忆线索、回忆都不读候选表。
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ def _word_from_speaker(word: str, title: str, source_text: Optional[str]) -> boo
     """说话人定下的名字或梗词核得上吗：长度合规、标题里原样出现、他那句原文里也原样出现（压掉空白的写法也认）。
 
     观众只问"那只猫叫啥"、她自己说"叫奶糖"，模型容易把它当成观众定下的；名字不在弹幕里，就是她自己起的。
-    玩家自述同理：关键词不在他那句公屏里，就是她猜的或模型补的。
+    玩家自述同理：关键词不在他那句游戏公屏里，就是她猜的或模型补的。
     """
     if not (_WORD_MIN_CHARS <= len(word) <= _WORD_CHARS) or word not in title:
         return False
@@ -458,9 +458,9 @@ def _player_reply(
     players: PlayerChat,
     line_of: Callable[[Any], Optional[SettleSpeechLine]],
 ) -> Optional[Tuple[Optional[int], Optional[int], int, str]]:
-    """她回他的那句：返回（公屏行, 台词行, 时刻, 原文），对不上这位玩家返回 None。
+    """她回他的那句：返回（游戏公屏行, 台词行, 时刻, 原文），对不上这位玩家返回 None。
 
-    公屏那句（``chat``）要点了他的名、或紧接着他的话说；台词（``line``）要落库时记下在回应他、
+    游戏公屏那句（``chat``）要点了他的名、或紧接着他的话说；台词（``line``）要落库时记下在回应他、
     而且不是在回一条弹幕（回弹幕的那一句对象是观众）。
     """
     if raw.get("chat") not in (None, ""):
@@ -484,13 +484,13 @@ def validate_player_candidates(
     decided_titles: Mapping[int, Iterable[str]],
     rejected_player_chats: Iterable[int],
 ) -> PlayerCandidateCheck:
-    """把模型列的 ``player_candidates``（玩家在公屏说的关于他自己的事、她当场接住了）逐条核成待审候选。
+    """把模型列的 ``player_candidates``（玩家在游戏公屏说的关于他自己的事、她当场接住了）逐条核成待审候选。
 
-    - 对谁：玩家代号认得出；她回他的那句按 ``_player_reply`` 核对（公屏点名或紧接着、台词记下的回应对象）；
-    - 原话：``player_quote`` 是他在她那句之前说的、给模型看过的一句公屏的逐字片段，``quote`` 是她那句的逐字片段；
+    - 对谁：玩家代号认得出；她回他的那句按 ``_player_reply`` 核对（游戏公屏点名或紧接着、台词记下的回应对象）；
+    - 原话：``player_quote`` 是他在她那句之前说的、给模型看过的一句游戏公屏的逐字片段，``quote`` 是她那句的逐字片段；
     - 关键词：``word`` 两个字以上，在标题里、也在他那句原文里原样出现——不在他原话里的，是她猜的或模型补的；
     - 个人信息：标题、关键词、两段引文里有手机号、年龄、住址、学校、联系方式这类模式的整条丢掉，只计数；
-    - 去重：``decided_titles`` 是每位玩家已批、已驳回的标题，``rejected_player_chats`` 是驳回过的他那句公屏，
+    - 去重：``decided_titles`` 是每位玩家已批、已驳回的标题，``rejected_player_chats`` 是驳回过的他那句游戏公屏，
       都不再列；同一句他的话、同一句她的回应只列一条；一场至多三条；
     - 标题里的玩家代号换成"他"：代号只在这一场有意义。
     """
@@ -517,7 +517,7 @@ def validate_player_candidates(
                 )
             )
         game_chat_id, live_chat_id, reply_at_ms, reply_text = reply
-        # 他那句只在给模型看过、早于她这句回应的公屏里找：她接住的只能是他先说的话
+        # 他那句只在给模型看过、早于她这句回应的游戏公屏里找：她接住的只能是他先说的话
         his_line = players.player_line(player_id, str(raw.get("player_quote") or ""), before_ms=reply_at_ms)
         player_quote = verbatim_quote(raw.get("player_quote"), his_line.content if his_line else None, _QUOTE_CHARS)
         reply_quote = verbatim_quote(quote, reply_text, _QUOTE_CHARS)
@@ -527,7 +527,7 @@ def validate_player_candidates(
                     kind="candidate",
                     what=title,
                     quote=quote,
-                    reason="玩家自述：没有标题，或他那句、她那句不是给出的公屏与台词的逐字片段",
+                    reason="玩家自述：没有标题，或他那句、她那句不是给出的游戏公屏与台词的逐字片段",
                 )
             )
         if not _word_from_speaker(word, title, his_line.content):
@@ -538,7 +538,7 @@ def validate_player_candidates(
                     what=title,
                     quote=quote,
                     reason=(
-                        f"玩家自述：关键词「{word}」不在标题里，或不在他那句公屏原文里"
+                        f"玩家自述：关键词「{word}」不在标题里，或不在他那句游戏公屏原文里"
                         if word
                         else "玩家自述：没写关键词"
                     ),

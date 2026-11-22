@@ -124,7 +124,7 @@ async def test_pin_puts_an_evicted_line_first_in_the_newest_snapshot(store: SQLi
         (kept_id, False, True),
     ], "放回的行排最前，稳定与否沿用它上一次在快照里的标记"
     latest = await store.archive.latest_snapshot()
-    assert latest is not None and latest.lines[0].line.id == dropped_id, "常驻简报读到的就是这一份"
+    assert latest is not None and latest.lines[0].line.id == dropped_id, "记忆摘要读到的就是这一份"
     assert (await store.memory_review.session_state(live_session_id=second)).pinned_count == 1
 
     with pytest.raises(MemoryReviewError) as again:

@@ -221,7 +221,7 @@ async def trigger_proactive(
     if not callable(getattr(agent, "trigger_external_proactive", None)):
         return TriggerProactiveResponse(success=False, message="Agent 不支持外部主动发言触发")
 
-    # 导演点了话头时先经递话通道送进下一个决策窗的【运营提醒】段：
+    # 导演点了话头时先经递话通道送进下一个决策回合的【运营提醒】段：
     # 只置位主动信号的话，话头只会落进日志，她开口时根本不知道要聊什么
     hint = (request.topic_hint or "").strip()
     hint_delivered = False

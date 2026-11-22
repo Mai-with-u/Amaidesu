@@ -87,7 +87,7 @@ export interface ReviewViewers {
   }>;
 }
 
-/** 本场推过的一张线索卡（GET /api/v1/review/cues，按推送先后） */
+/** 本场推过的一张记忆线索（GET /api/v1/review/cues，按推送先后） */
 export interface ReviewCueItem {
   id: number;
   pushed_at_ms: number;
@@ -109,7 +109,7 @@ export interface ReviewCueItem {
   used_at_ms: number | null;
 }
 
-/** 某一场的线索卡列表 */
+/** 某一场的记忆线索列表 */
 export interface ReviewCueListResponse {
   items: ReviewCueItem[];
 }

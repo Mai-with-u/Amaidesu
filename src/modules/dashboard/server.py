@@ -196,7 +196,7 @@ class DashboardServer:
         # 未注入（极简启动/测试）时这些端点返回 503
         self.commitments_repo = commitments_repo
         self.archive_repo = archive_repo
-        # 注入线索卡记录仓储让 /api/v1/review/cues 列出本场推过的线索卡；未注入时该端点返回 503
+        # 注入记忆线索记录仓储让 /api/v1/review/cues 列出本场推过的记忆线索；未注入时该端点返回 503
         self.memory_cue_log_repo = memory_cue_log_repo
         # 记忆页人工审核：改标题、标稳定、放回、新增、标已审（未注入时这些端点返回 503）
         self.memory_review_repo = memory_review_repo

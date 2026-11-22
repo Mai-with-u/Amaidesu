@@ -1,6 +1,6 @@
 # ADR-072：直播记忆的混合检索与被动想起（派生索引 / 关键词与语义两路按名次融合 / 每批决策前按地点、触发词、意思相近推线索卡 / 语义一路配置了才开）
 
-- 状态：已采纳；取代 [主播记忆](../architecture/streamer-memory.md) 边界一节原有的"不做自由文本或语义检索，不做 embedding"；扩展 [ADR-066](066-memory-injection-switch.md) 的线索推送与回想工具：线索多了地点、触发词、意思相近三路，回想工具改用同一套检索
+- 状态：已采纳；取代 [主播记忆](../architecture/memory/README.md) 边界一节原有的"不做自由文本或语义检索，不做 embedding"；扩展 [ADR-066](066-memory-injection-switch.md) 的线索推送与回想工具：线索多了地点、触发词、意思相近三路，回想工具改用同一套检索
 - 日期：2026-11-06
 - 实现提交：存储从 0bc0a6c5a5024cf082e739ac22596bce820f7794（`git show 0bc0a6c5`，派生索引表 v29）起，到 eb7728c72e9dfc92c619a3d7b829406777fff31a（`git show eb7728c7`，模型页语义检索一区）止的主播记忆各笔，审查修复到 f97afdccc19609863e72122ee652a8f14256b9cf；按 subject 检索：`git log --grep "检索" --grep "线索" --grep "嵌入" --grep "索引"`
 

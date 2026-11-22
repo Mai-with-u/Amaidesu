@@ -1,7 +1,7 @@
 """下播整理列出玩家自述：找承诺那次顺带列出，代码核对对谁、原话、关键词、个人信息与去重，写进待审表。
 
-玩家在公屏说了关于他自己、下次还用得上的事，她当场接住了（直播里回应他，或在公屏回他），整理列成候选，
-人批准了才进他的玩家卡。核对全部是代码：模型说错了对象、编了他没说过的话、写进个人信息的都进不了待审表。
+玩家在游戏公屏说了关于他自己、下次还用得上的事，她当场接住了（直播里回应他，或在游戏公屏回他），整理列成候选，
+人批准了才进他的玩家线索。核对全部是代码：模型说错了对象、编了他没说过的话、写进个人信息的都进不了待审表。
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def _reply(*contents: str) -> FakeLLMManager:
 
 
 async def _scene(store: SQLiteDatabase) -> Dict[str, int]:
-    """一场：玩家甲说盖了风车房、她在直播里接住；玩家乙让她叫他小乙、她在公屏回；乙又说了年龄；甲说养了狗。"""
+    """一场：玩家甲说盖了风车房、她在直播里接住；玩家乙让她叫他小乙、她在游戏公屏回；乙又说了年龄；甲说养了狗。"""
     session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     await store.sessions.close_live_session(live_session_id=session, ended_at_ms=1_800_000)
     repo = store.game_players
@@ -107,7 +107,7 @@ async def _scene(store: SQLiteDatabase) -> Dict[str, int]:
 
 
 def _rows() -> List[Dict[str, Any]]:
-    """模型列的五条：两条成立；一条对象错（公屏#1 是在回乙）；一条关键词不在他原话里；一条带年龄。"""
+    """模型列的五条：两条成立；一条对象错（游戏公屏#1 是在回乙）；一条关键词不在他原话里；一条带年龄。"""
     return [
         {
             "player": "玩家1",
@@ -122,7 +122,7 @@ def _rows() -> List[Dict[str, Any]]:
             "player": "玩家2",
             "player_quote": "以后叫我小乙就行",
             "line": None,
-            "chat": "公屏#1",
+            "chat": "游戏公屏#1",
             "quote": "好嘞小乙",
             "title": "他希望被叫作小乙",
             "word": "小乙",
@@ -131,7 +131,7 @@ def _rows() -> List[Dict[str, Any]]:
             "player": "玩家1",
             "player_quote": "以后叫我小乙就行",
             "line": None,
-            "chat": "公屏#1",
+            "chat": "游戏公屏#1",
             "quote": "好嘞小乙",
             "title": "他希望被叫作小乙",
             "word": "小乙",
@@ -140,7 +140,7 @@ def _rows() -> List[Dict[str, Any]]:
             "player": "玩家1",
             "player_quote": "我养了只狗叫旺财",
             "line": None,
-            "chat": "公屏#3",
+            "chat": "游戏公屏#3",
             "quote": "的狗真可爱",
             "title": "他养了只狗叫旺财",
             "word": "小狗",
@@ -149,7 +149,7 @@ def _rows() -> List[Dict[str, Any]]:
             "player": "玩家2",
             "player_quote": "我今年15岁",
             "line": None,
-            "chat": "公屏#2",
+            "chat": "游戏公屏#2",
             "quote": "哇那你还挺小",
             "title": "他今年15岁",
             "word": "15岁",
@@ -178,7 +178,7 @@ async def test_player_self_statements_are_checked_and_listed_for_review(
     assert await _settler(store, llm, prompt_manager).settle_session(ids["session"]) is True
 
     prompt = llm.calls[1]["input"]
-    assert "玩家1：我在河边盖了个风车房" in prompt, "她在直播里接住的那句公屏也给模型看"
+    assert "玩家1：我在河边盖了个风车房" in prompt, "她在直播里接住的那句游戏公屏也给模型看"
     assert await _candidates(store) == [
         {
             "player_id": ids["jia"],
@@ -207,7 +207,7 @@ async def test_player_self_statements_are_checked_and_listed_for_review(
     assert report.candidates_listed == {"player_self": 2}
     assert report.candidates_personal_dropped == 1, "带年龄的整条丢掉，只计数"
     reasons = [item.reason for item in report.unregistered]
-    assert any("不是她回应这位玩家" in reason for reason in reasons), "公屏#1 回的是乙，记到甲头上不列"
+    assert any("不是她回应这位玩家" in reason for reason in reasons), "游戏公屏#1 回的是乙，记到甲头上不列"
     assert any("关键词「小狗」" in reason for reason in reasons), "关键词不在他原话里不列"
     assert all("15" not in item.what for item in report.unregistered), "个人信息的内容不写进报告"
 
@@ -317,7 +317,7 @@ async def test_output_cut_off_in_self_statements_keeps_the_rest(
 
 def test_player_candidates_eval_dry_self_check_passes() -> None:
     """玩家自述评测器（scripts/memory_eval/player_candidates.py）回放生产整理器的找承诺那次调用：理想输出
-    过生产校验必须一条不差，该列的那句他的话必须出现在公屏段里。取料或核对规则改了而评测没跟上，这里先红。"""
+    过生产校验必须一条不差，该列的那句他的话必须出现在游戏公屏段里。取料或核对规则改了而评测没跟上，这里先红。"""
     script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "player_candidates.py"
     completed = subprocess.run(
         [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False

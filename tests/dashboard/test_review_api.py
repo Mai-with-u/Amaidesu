@@ -538,7 +538,7 @@ async def test_speech_endpoint_requires_chat_repo(api) -> None:
 
 
 async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> None:
-    """按推送先后列出本场线索卡：条目写法、标题、来源、分数与用上时刻；条目删了标题留空。
+    """按推送先后列出本场记忆线索：条目写法、标题、来源、分数与用上时刻；条目删了标题留空。
 
     记录只存编号和分数：触发词、地点名按档案行眼下的字段现查；早先存进去的原词不往外给。
     """
@@ -624,7 +624,7 @@ async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> N
 
 
 async def test_cues_endpoint_requires_cue_log_repo(api) -> None:
-    """未装配线索卡记录仓储时 503（极简启动形态）。"""
+    """未装配记忆线索记录仓储时 503（极简启动形态）。"""
     client = await api()
 
     resp = await client.get("/api/v1/review/cues", params={"session_id": 1})

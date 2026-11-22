@@ -232,7 +232,7 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 
 #### 工具（按族列举，代表工具名）
 
-工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall`（回想她说过的台词、场次档案与答应过的事），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
+工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall`（回忆她说过的台词、场次档案与答应过的事），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
 
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|

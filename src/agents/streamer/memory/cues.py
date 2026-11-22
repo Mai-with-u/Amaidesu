@@ -1,10 +1,10 @@
 """线索推送：每批 Planner 调用前，按线索找出这一批该想起来的事。
 
-线索按优先级取，每批至多两张卡：
+线索按优先级取，每批至多两条线索：
 
 1. 对象开口：本批发言人按外部 ID 精确解析出观众编号（只读，不建观众；有待执行删除请求
-   的不算），名下有未了结承诺 → 推那张对 ta 的承诺卡，只给动作标题；本场未回应过的老观众
-   → 推老观众卡；本窗在游戏公屏开口或冲她做动作、以前和她有过往来的玩家 → 推玩家卡。
+   的不算），名下有未了结承诺 → 推那张对 ta 的承诺线索，只给动作标题；本场未回应过的老观众
+   → 推老观众线索；本回合在游戏公屏开口或冲她做动作、以前和她有过往来的玩家 → 推玩家线索。
 2. 游戏地点（被动想起）：角色从远处走到某个记住的地点跟前 → 推挂在这个地点上的档案行；
 3. 规则（被动想起）：本批观众弹幕或她最近 3 句台词提到了档案行的触发词或老梗 → 推那一条；
 4. 向量（被动想起）：本批观众弹幕或游戏情境的意思和某行档案、某条不针对具体观众的承诺相近 → 推那一条。
@@ -16,16 +16,16 @@
 地点、规则、向量三路怎么找候选见 ``passive``；被动想起可在配置里整体关掉，向量一路也可单独关掉
 （没配嵌入服务时自动不走）。
 
-限频与用上即停：同一张卡每场至多推两次、两次至少隔十分钟（计数在内存里，进程重启从零
-算）；本场台词的记忆引用里已经出现这张卡的编号（约#N 或 档#N），就是被用上了，本场不再推
-——这一条每批查一次库，进程重启也不丢。被动想起另有两条：常驻简报里已经列着的条目不推；
-只由她自己台词命中的（自触发）每条每场只推一次，免得她提一句、卡片推一张、她再接着说，
-越说越多。每推一张卡记一行线索卡记录（只记条目编号和分数，不记观众身份），检测到她用上时
+限频与用上即停：同一条线索每场至多推两次、两次至少隔十分钟（计数在内存里，进程重启从零
+算）；本场台词的记忆引用里已经出现这条线索的编号（约#N 或 档#N），就是被用上了，本场不再推
+——这一条每批查一次库，进程重启也不丢。被动想起另有两条：记忆摘要里已经列着的条目不推；
+只由她自己台词命中的（自触发）每条每场只推一次，免得她提一句、又推一条、她再接着说，
+越说越多。每推一条线索记一行线索推送记录（只记条目编号和分数，不记观众身份），检测到她用上时
 回填用上的时刻。
 
-线索块里有三种输出：卡（承诺卡、老观众卡、玩家卡、档案卡、老梗卡）、老观众在场一行
-（本批开口、本场之前来过至少三场正式场、这一批没有承诺卡、她本场还没回应过、没有待删
-请求的观众合成一行），以及本批遗忘命令的回执行。回执只认记账侧真正处理过的命令：弹幕里的
+线索块里有三种输出：线索条目（承诺线索、老观众线索、玩家线索、往事线索、老梗线索）、老观众在场一行
+（本批开口、本场之前来过至少三场正式场、这一批没有承诺线索、她本场还没回应过、没有待删
+请求的观众合成一行），以及本批的遗忘回执。遗忘回执只认记账侧真正处理过的命令：弹幕里的
 「忘了我」记账侧一定受理；撤回短语要记账侧确认那次撤回已经生效
 （``PrivacyService.was_retracted_in_session``）才回执，超级留言/礼物里的文本一律不回执。
 三者合成一个线索块交给参考段；没有线索时整块省略。
@@ -113,11 +113,11 @@ __all__ = [
 
 logger = get_logger("MemoryCueProvider")
 
-# 一批最多推几张卡、同一张卡每场最多推几次（只由她自己台词触发的必须来自两场以前且每场只推一次）
+# 一批最多推几条线索、同一条线索每场最多推几次（只由她自己台词触发的必须来自两场以前且每场只推一次）
 MAX_CARDS_PER_BATCH = 2
 MAX_PUSHES_PER_CARD = 2
 MAX_SELF_PUSHES_PER_CARD = 1
-# 同一张卡两次推送的最小间隔
+# 同一条线索两次推送的最小间隔
 PUSH_COOLDOWN_MS = 10 * 60 * 1000
 # 老观众在场一行的门槛：本场之前来过至少三场正式场
 MIN_SESSIONS_FOR_PRESENCE = 3
@@ -125,11 +125,11 @@ MIN_SESSIONS_FOR_PRESENCE = 3
 _MAX_COMMITMENTS_PER_VIEWER = 3
 # 挂在一个游戏上的未了结承诺最多看几条：别的存档里答应的不推，要往后多看几条才找得到眼下这个存档的
 _MAX_COMMITMENTS_PER_GAME = 20
-# 玩家卡尾至多写几条答应过他的事
+# 玩家线索尾至多写几条答应过他的事
 _MAX_PROMISES_PER_PLAYER = 2
-# 玩家卡上至多写几条他说过、人批准过的自述
+# 玩家线索上至多写几条他说过、人批准过的自述
 _MAX_STATEMENTS_PER_PLAYER = 2
-# 老观众卡上至多写几条已批准近况、至多写几条共同造梗归属
+# 老观众线索上至多写几条已批准近况、至多写几条共同造梗归属
 _MAX_NOTES_PER_FAMILIAR_VIEWER = 2
 _MAX_AUTHORED_PER_FAMILIAR_VIEWER = 2
 # 规则一路看她最近几句播出的台词
@@ -219,7 +219,7 @@ class MemoryCues:
     text: str = ""
     commitment_ids: Tuple[int, ...] = ()
     card_count: int = 0
-    # 卡片编号 → 对方称呼（对某位观众的卡才有；回复器档要拿它说"答应过谁"）
+    # 线索编号 → 对方称呼（对某位观众的承诺线索才有；回复器档要拿它说"答应过谁"）
     labels: Dict[int, str] = field(default_factory=dict)
     archive_ids: Tuple[int, ...] = ()
     # 本批由观众弹幕或玩家开口推上来的档案行：本场提过的旧事有人提到了，再点名不退回
@@ -261,7 +261,7 @@ def _forgetting(sender: _Sender) -> bool:
 
 @dataclass
 class _Card:
-    """这一批推出去的一张卡：卡面、条目、卡类，以及写进线索卡记录的来源与分数。"""
+    """这一批推出去的一条线索：正文、条目、类别，以及写进线索推送记录的来源与分数。"""
 
     key: ItemKey
     text: str
@@ -273,7 +273,7 @@ class _Card:
 
 @dataclass
 class _Round:
-    """一批线索的判定材料与结果：用过的、简报里列着的条目，眼下的存档，推了哪些、没推哪些。"""
+    """一批线索的判定材料与结果：用过的、记忆摘要里列着的条目，眼下的存档，推了哪些、没推哪些。"""
 
     used: Set[int]
     used_archive: Set[int]
@@ -299,7 +299,7 @@ class _Round:
         return tuple(int(card.key[1]) for card in self.cards if card.key[0] == kind)
 
     def asked_ids(self, kind: str) -> Tuple[int, ...]:
-        """本批由观众弹幕或游戏玩家开口推上来的卡指向的条目：有人提到了，本场提过也可以再接。"""
+        """本批由观众弹幕或游戏玩家开口推上来的线索指向的条目：有人提到了，本场提过也可以再接。"""
         return tuple(
             int(card.key[1])
             for card in self.cards
@@ -307,7 +307,7 @@ class _Round:
         )
 
     def commitment_ids(self) -> Tuple[int, ...]:
-        """本批能点名的承诺编号：承诺卡的，加玩家卡尾写着的答应过他的事（卡上印着约#N，她点了要认）。"""
+        """本批能点名的承诺编号：承诺线索的，加玩家线索尾写着的答应过他的事（线索上印着约#N，她点了要认）。"""
         ids = list(self.ids("commitment"))
         for card in self.cards:
             if card.kind == "player":
@@ -325,10 +325,10 @@ def _label(key: ItemKey) -> str:
     if kind == "social_fact":
         return f"事实#{int(value)}"
     if kind == "viewer_familiar":
-        # 只记观众编号，不写昵称（日志与线索卡记录同口径）
+        # 只记观众编号，不写昵称（日志与记忆线索记录同口径）
         return f"老观众#{int(value)}"
     if kind == "player":
-        # 只记玩家编号，不写名字（日志与线索卡记录同口径）
+        # 只记玩家编号，不写名字（日志与记忆线索记录同口径）
         return f"玩家#{int(value)}"
     return f"老梗「{value}」"
 
@@ -357,10 +357,10 @@ class MemoryCueProvider:
         social_fact_repo: Optional["SocialFactRepo"] = None,
         min_session_ms: int = 0,
     ) -> None:
-        """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
+        """仓储与时钟注入；隐私服务缺失时不出遗忘回执（看不见遗忘命令）。
 
-        ``previous_session_provider`` 给"上一场"的判定（承诺卡与档案卡的时间词）：缺省时
-        一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有档案卡；
+        ``previous_session_provider`` 给"上一场"的判定（承诺线索与往事线索的时间词）：缺省时
+        一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有往事线索；
         ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时被动想起三路都不跑；``search`` 缺失、
         没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。``game_player_repo`` 缺失时没有玩家卡；
         ``correction_repo`` 缺失时不附本场进展注记；``social_fact_repo`` 缺失时游戏主控意图联想
@@ -395,7 +395,7 @@ class MemoryCueProvider:
         self._announced_enter_viewers: Set[int] = set()
         # 本场观众来访统计轻缓存：观众主键 → (行关键快照元组, ViewerPresenceStats)，遗忘或换场立即作废
         self._presence_stats_cache: Dict[int, Tuple[Tuple[Any, ...], Any]] = {}
-        # 本批推送的卡：编号 → 对方称呼（回复器档据此说"答应过谁"）
+        # 本批推送的线索：编号 → 对方称呼（回复器档据此说"答应过谁"）
         self._round_labels: Dict[int, str] = {}
 
     # ------------------------------------------------------------------
@@ -415,12 +415,12 @@ class MemoryCueProvider:
         game_players: Sequence[Tuple[str, str]] = (),
         recent_enters: Sequence[Tuple[str, str]] = (),
     ) -> MemoryCues:
-        """算一批的线索：卡片、老观众在场一行、回执行合成一个块；没有线索返回空串。
+        """算一批的记忆线索：各条线索、老观众在场一行、遗忘回执合成一个块；没有线索返回空串。
 
-        ``current_saves`` 是分存档的游戏眼下所在的存档：游戏卡只推这个存档里答应的。
+        ``current_saves`` 是分存档的游戏眼下所在的存档：挂游戏的线索只推这个存档里答应的。
         ``situations`` 是各游戏角色离记住的地点多远（地点一路判到达用）；``brief_*_ids`` 是
-        常驻简报里列着的条目，被动想起不再推它们；``game_tasks`` 是各游戏手上还在做的委派原话
-        （游戏情境查询用）；``game_players`` 是本窗在游戏里开口或冲她做动作的玩家，(游戏, UUID)。
+        记忆摘要里列着的条目，被动想起不再推它们；``game_tasks`` 是各游戏手上还在做的委派原话
+        （游戏情境查询用）；``game_players`` 是本回合在游戏里开口或冲她做动作的玩家，(游戏, UUID)。
         """
         session_id = self._current_session_provider() if self._current_session_provider is not None else None
         if session_id is None:
@@ -450,7 +450,7 @@ class MemoryCueProvider:
             commitment_progress=commitment_progress,
         )
         self._round_labels = {}
-        # 对象开口（观众承诺、老观众卡、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
+        # 对象开口（观众承诺、老观众线索、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
         await self._viewer_cards(senders, state)
         if replied is not None:
             await self._familiar_viewer_cards(senders, replied, state)
@@ -465,7 +465,7 @@ class MemoryCueProvider:
                     self.note_name(player)
             self._situation.update(situations or {}, state.saves, game_tasks or {}, names=self._known_names)
             await self._vector_cards(sid, batch, senders, state)
-        # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众，并顺带认出只进房没说话的老观众
+        # 老观众一行不再因为"本批有别人的线索"整行消失；只跳过这一批拿了自己线索的观众，并顺带认出只进房没说话的老观众
         presence = await self._presence_line(
             sid, senders, state.carded_viewers, replied=replied, recent_enters=recent_enters
         )
@@ -525,7 +525,7 @@ class MemoryCueProvider:
             self._known_names.add(cleaned)
 
     def prefetch_game_text(self, text: str) -> None:
-        """游戏主控态收到公开玩家公屏时在后台非阻塞预取查询向量（遮名且过滤遗忘命令，绝不阻塞等待）。"""
+        """游戏主控态收到公开玩家游戏公屏时在后台非阻塞预取查询向量（遮名且过滤遗忘命令，绝不阻塞等待）。"""
         if not self._vector_on() or self._search is None:
             return
         if self._current_session_provider is None or self._current_session_provider() is None:
@@ -551,7 +551,7 @@ class MemoryCueProvider:
         brief_commitment_ids: Sequence[int] = (),
         limit: int = MAX_CARDS_PER_BATCH,
     ) -> List[str]:
-        """供自主主控游戏 Agent 按需拉取跨场被动记忆线索卡（纯只读、绝不泄露直播间观众隐私）。
+        """供自主主控游戏 Agent 按需拉取跨场被动记忆记忆线索（纯只读、绝不泄露直播间观众隐私）。
 
         复用路径：游戏玩家往来卡（``_player_cards``）-> 到达记住地点卡（``_place_cards`` 与显式
         ``arrived_places``）-> 档案触发词规则卡（``_rule_cards``，不含观众老梗）-> 非阻塞向量联想
@@ -589,7 +589,7 @@ class MemoryCueProvider:
         self._round_labels = {}
         excluded_compact = tuple(c for raw in (exclude_texts or ()) if (c := _compact_text(raw)))
 
-        # 游戏内往来玩家卡：过滤遗忘名单上的玩家，绝不触碰直播间观众表
+        # 游戏内往来玩家线索：过滤遗忘名单上的玩家，绝不触碰直播间观众表
         valid_players = await self._filter_game_players(normalized_game, players)
         if valid_players:
             await self._player_cards(sid, valid_players, state)
@@ -600,7 +600,7 @@ class MemoryCueProvider:
             for player_name in game_situation.players:
                 self.note_name(player_name)
 
-        # 地点到达与档案触发词规则卡（用 SOURCE_PLAYER 来源，天然跳过直播间老梗）
+        # 地点到达与档案触发词的规则一路线索（用 SOURCE_PLAYER 来源，天然跳过直播间老梗）
         if self._passive_enabled and not state.full:
             await self._pool.refresh_if_stale()
             if game_situation is not None:
@@ -1341,7 +1341,7 @@ class MemoryCueProvider:
         return [row.content for row in rows if row.dropped_at_ms is None and (row.content or "").strip()]
 
     async def _mark_used(self, session_id: int, used_archive: Set[int], used: Set[int]) -> None:
-        """本场已被点名用上的条目：回填线索卡记录里用上的时刻（只回填还没回填的）。"""
+        """本场已被点名用上的条目：回填记忆线索记录里用上的时刻（只回填还没回填的）。"""
         if self._cue_log is None or not (used_archive or used):
             return
         try:
@@ -1352,10 +1352,10 @@ class MemoryCueProvider:
                 used_at_ms=int(self._clock()),
             )
         except Exception as exc:  # noqa: BLE001 - 记录回填失败不挡推送，下一批再回填
-            logger.warning(f"回填线索卡用上时刻失败（下一批再试）: {exc}", exc=exc)
+            logger.warning(f"回填记忆线索用上时刻失败（下一批再试）: {exc}", exc=exc)
 
     async def _record_round(self, session_id: int, state: _Round) -> None:
-        """这一批推了什么、没推什么记一行日志；推出去的卡写进线索卡记录。"""
+        """这一批推了什么、没推什么记一行日志；推出去的线索写进线索推送记录。"""
         if state.cards:
             pushed = "、".join(
                 f"{_label(card.key)}（{card.kind}，来源 {'+'.join(card.sources) or '无'}）" for card in state.cards
@@ -1384,14 +1384,14 @@ class MemoryCueProvider:
         try:
             await self._cue_log.insert_entries(entries=entries)
         except Exception as exc:  # noqa: BLE001 - 记录写不进去不挡推送，日志里仍看得到这一批
-            logger.warning(f"写线索卡记录失败（这一批只留日志）: {exc}", exc=exc)
+            logger.warning(f"写记忆线索记录失败（这一批只留日志）: {exc}", exc=exc)
 
     # ------------------------------------------------------------------
-    # 卡片
+    # 各条线索
     # ------------------------------------------------------------------
 
     async def _viewer_cards(self, senders: Sequence[_Sender], state: _Round) -> None:
-        """对象开口：本批开口的观众名下有未了结承诺，推一张对 ta 的卡（每人一张）。"""
+        """对象开口：本批开口的观众名下有未了结承诺，推一条对 ta 的承诺线索（每人一条）。"""
         for sender in senders:
             if state.full:
                 return
@@ -1417,7 +1417,7 @@ class MemoryCueProvider:
                 break
 
     async def _familiar_viewer_cards(self, senders: Sequence[_Sender], replied: Set[int], state: _Round) -> None:
-        """老观众开口：本场尚未回应过的老观众若名下有已批准近况或共同造梗归属，推一张老观众卡（记录不带昵称）。"""
+        """老观众开口：本场尚未回应过的老观众若名下有已批准近况或共同造梗归属，推一张老观众线索（记录不带昵称）。"""
         if self._viewers is None:
             return
         notes_fn = getattr(self._viewers, "approved_viewer_notes", None)
@@ -1472,12 +1472,12 @@ class MemoryCueProvider:
             state.carded_viewers.update(cluster_ids)
 
     async def _player_cards(self, session_id: int, game_players: Sequence[Tuple[str, str]], state: _Round) -> None:
-        """对象开口扩到游戏玩家：本窗在游戏里开口或冲她做动作的玩家，以前有往来的推一张"这位是谁、和你有过什么"。
+        """对象开口扩到游戏玩家：本回合在游戏里开口或冲她做动作的玩家，以前有往来的推一张"这位是谁、和你有过什么"。
 
-        卡只推给这一窗找过她的那几位（按 UUID 对上，不会推错人）；同一位每场至多两次、隔十分钟，
+        线索只推给这一窗找过她的那几位（按 UUID 对上，不会推错人）；同一位每场至多两次、隔十分钟，
         本场她已经回应过他（台词记下了回应对象）就不再推——认出来了，用上即停。新面孔没有往来，不推。
-        人批准过的他的自述（至多两条）写成"他跟你说过"；答应过他、还没了结的事（至多两条）写在卡尾：
-        这两样都只在他露面时提，不进常驻简报。
+        人批准过的他的自述（至多两条）写成"他跟你说过"；答应过他、还没了结的事（至多两条）写在线索末尾：
+        这两样都只在他露面时提，不进记忆摘要。
         """
         if self._players is None or not game_players:
             return
@@ -1523,7 +1523,7 @@ class MemoryCueProvider:
                 detail["statement_ids"] = [int(item.id) for item in statements]
             if promises:
                 detail["commitment_ids"] = [int(item.id) for item in promises]
-                # 卡尾的约#N 她点了要认：回复器档说"答应过 Alex"，不说成"答应过大家"
+                # 线索末尾的约#N 她点了要认：回复器档说"答应过 Alex"，不说成"答应过大家"
                 for item in promises:
                     self._round_labels[int(item.id)] = player.name
             card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail=detail)
@@ -1544,7 +1544,7 @@ class MemoryCueProvider:
         situation: Optional[GameSituation],
         state: _Round,
     ) -> None:
-        """游戏主控侧已本地判定到达记住地标时，按本场每地点一次与同存档口径补推地点卡。"""
+        """游戏主控侧已本地判定到达记住地标时，按本场每地点一次与同存档口径补推地点一路的线索。"""
         distances: Dict[str, int] = {}
         if situation is not None:
             for nearby in situation.places:
@@ -1562,14 +1562,14 @@ class MemoryCueProvider:
             await self._emit_place_arrivals(arrivals, state)
 
     async def _emit_place_arrivals(self, arrivals: Sequence[Tuple[str, str, int]], state: _Round) -> None:
-        """把已确认到达的地点元组转成地点档案卡与相关未搁置公开承诺卡（遵守同存档与 10 分钟限频）。"""
+        """把已确认到达的地点元组转成地点往事线索与相关未搁置公开承诺线索（遵守同存档与 10 分钟限频）。"""
         game_commitments: Dict[str, List[Any]] = {}
         for game, place, distance in arrivals:
             for line in self._pool.lines_at(game, place, state.saves):
                 key: ItemKey = ("archive", int(line.id))
                 if self._skip(key, state, self._passive_blocked(key, state)):
                     continue
-                # 地点卡用提示语气，不替她断言眼下在哪：位置可能是几分钟前读到的，存档也只说"记录上"
+                # 地点一路的线索用提示语气，不替她断言眼下在哪：位置可能是几分钟前读到的，存档也只说"记录上"
                 same_save = place_of(line.game, line.save_id, state.saves) is SavePlace.SAME
                 text = render_archive_card(
                     line,
@@ -1577,7 +1577,7 @@ class MemoryCueProvider:
                     is_previous=self._line_in_previous_session(line.live_session_id, state),
                     note="记录上和眼下是同一个存档" if same_save else "",
                 )
-                # 线索卡记录不存地点名：复盘时从档案行眼下挂的地点现查，行删了就看不到
+                # 记忆线索记录不存地点名：复盘时从档案行眼下挂的地点现查，行删了就看不到
                 detail = {"distance": distance}
                 self._push(state, _Card(key=key, text=text, kind="place", sources=(SOURCE_PLACE,), detail=detail))
             if not place or state.full:
@@ -1628,7 +1628,7 @@ class MemoryCueProvider:
             if not text:
                 continue
             kind = "joke" if hit.key[0] == "joke" else "rule"
-            # 线索卡记录不存触发词原词（可能带观众昵称）：只存第几个触发词与匹配方式，复盘时从条目现查
+            # 记忆线索记录不存触发词原词（可能带观众昵称）：只存第几个触发词与匹配方式，复盘时从条目现查
             detail: Dict[str, Any] = {"keyword_index": list(hit.keyword_indexes), "how": list(hit.hows)}
             if hit.key[0] == "joke":
                 detail["joke_index"] = self._pool.joke_index(str(hit.key[1]))
@@ -1643,7 +1643,7 @@ class MemoryCueProvider:
             self._push(state, card)
 
     def _self_trigger_age_blocked(self, line_id: int, *, sid: int, state: _Round) -> Optional[str]:
-        """只由她自己台词命中的规则卡，必须来自两场以前（排掉本场及最近两个完结正式场内的行）。"""
+        """只由她自己台词命中的规则一路线索，必须来自两场以前（排掉本场及最近两个完结正式场内的行）。"""
         line = self._pool.archive_line(line_id)
         if line is None:
             return None
@@ -1740,7 +1740,7 @@ class MemoryCueProvider:
             self._push(
                 state, _Card(key=hit.key, text=text, kind="vector", sources=tuple(sorted(hit.sources)), detail=detail)
             )
-        # 没推出向量卡的语义查询同样把前三名余弦与融合分落库留痕，供阈值校准分析
+        # 没推出向量一路线索的语义查询同样把前三名余弦与融合分落库留痕，供阈值校准分析
         now = int(self._clock())
         for query_idx, (source, _message_id, result) in enumerate(results):
             if query_idx in recorded_queries or not result.vector_used:
@@ -1861,12 +1861,12 @@ class MemoryCueProvider:
         return None
 
     def _passive_blocked(self, key: ItemKey, state: _Round, *, limit: int = MAX_PUSHES_PER_CARD) -> Optional[str]:
-        """被动想起另加两条：常驻简报里已经列着的不推；这一批已经凑满上限的不推。"""
+        """被动想起另加两条：记忆摘要里已经列着的不推；这一批已经凑满上限的不推。"""
         kind, value = key
         if (kind == "commitment" and int(value) in state.brief_commitments) or (
             kind == "archive" and int(value) in state.brief_archive
         ):
-            return "已在简报"
+            return "已在记忆摘要"
         reason = self._blocked(key, state, limit=limit)
         if reason is None and state.full:
             return "每批上限"
@@ -1874,7 +1874,7 @@ class MemoryCueProvider:
 
     @staticmethod
     def _dormant_commitment(commitment: Any, state: _Round) -> bool:
-        """承诺已转成"搁了很久"时线索侧不再推卡（只留回想工具可查）。"""
+        """承诺已转成"搁了很久"时线索侧不再推送（只留回忆工具可查）。"""
         return is_commitment_dormant(
             commitment,
             recent_session_ids=state.recent_session_ids,
@@ -1892,7 +1892,7 @@ class MemoryCueProvider:
                 exclude_session_id=session_id,
                 limit=3,
             )
-        except Exception as exc:  # noqa: BLE001 - 查不到边界时不误拦承诺卡
+        except Exception as exc:  # noqa: BLE001 - 查不到边界时不误拦承诺线索
             logger.warning(f"线索推送查最近完结场次边界失败（本批不做场次过期拦截）: {exc}", exc=exc)
             return (), 0, None
         if not bounds:
@@ -1904,7 +1904,7 @@ class MemoryCueProvider:
 
     @staticmethod
     def _other_save(game: Optional[str], save_id: str, state: _Round) -> Optional[str]:
-        """别的存档里的事不催她提起（与游戏卡同口径）。"""
+        """别的存档里的事不催她提起（与挂游戏的线索同口径）。"""
         return "别的存档" if place_of(game, save_id, state.saves) is SavePlace.OTHER else None
 
     @staticmethod
@@ -1933,16 +1933,16 @@ class MemoryCueProvider:
         return int(session_id) == int(previous_session_id)
 
     async def _previous_session_id(self) -> Optional[int]:
-        """上一场 = 最近一个已整理、有档案行的同类型场次（与常驻简报同口径）。
+        """上一场 = 最近一个已整理、有档案行的同类型场次（与记忆摘要同口径）。
 
-        没注入回调或取不到时返回 None：承诺卡一律写"之前"，不把三场前的事说成上一场。
+        没注入回调或取不到时返回 None：承诺线索一律写"之前"，不把三场前的事说成上一场。
         """
         if self._previous_session_provider is None:
             return None
         try:
             value = await self._previous_session_provider()
         except Exception as exc:  # noqa: BLE001 - 取不到就按没有上一场处理，不挡线索推送
-            logger.warning(f"线索推送取上一场失败（承诺卡时间词写「之前」）: {exc}", exc=exc)
+            logger.warning(f"线索推送取上一场失败（承诺线索时间词写「之前」）: {exc}", exc=exc)
             return None
         return int(value) if value is not None else None
 
@@ -1957,7 +1957,7 @@ class MemoryCueProvider:
                 all_active = await self._corrections.list_active_by_session(live_session_id=int(session_id))
                 items = [item for item in all_active if item.target_kind == "commitment"]
         except Exception as exc:  # noqa: BLE001 - 本场进展读不到不挡其余线索推送
-            logger.warning(f"读本场承诺进展失败（卡片暂不附进展注记）: {exc}", exc=exc)
+            logger.warning(f"读本场承诺进展失败（线索暂不附进展注记）: {exc}", exc=exc)
             return {}
         progress: Dict[int, str] = {}
         for item in items:
@@ -1984,12 +1984,12 @@ class MemoryCueProvider:
                 target_player_id=player_id,
                 limit=limit,
             )
-        except Exception as exc:  # noqa: BLE001 - 查不到这张卡，不挡本批其余线索
-            logger.warning(f"读未了结承诺失败（本批少一张卡）: {exc}", exc=exc)
+        except Exception as exc:  # noqa: BLE001 - 查不到这条线索，不挡本批其余线索
+            logger.warning(f"读未了结承诺失败（本批少一条线索）: {exc}", exc=exc)
             return []
 
     # ------------------------------------------------------------------
-    # 老观众在场一行与回执行
+    # 老观众在场一行与遗忘回执
     # ------------------------------------------------------------------
 
     async def _presence_line(
@@ -2013,7 +2013,7 @@ class MemoryCueProvider:
             active_cluster_ids.update(cluster_ids)
             if sender.user_name:
                 active_names_lower.add(sender.user_name.strip().lower())
-            # 只跳过这一批拿了对 ta 本人承诺卡或老观众卡的观众；别人拿卡不压 ta 这一行
+            # 只跳过这一批拿了对 ta 本人承诺线索或老观众线索的观众；别人拿线索不压 ta 这一行
             if carded_viewers.intersection(cluster_ids):
                 continue
             if sender.earlier_sessions is not None:
@@ -2102,10 +2102,10 @@ class MemoryCueProvider:
         return entered_names
 
     def _command_notices(self, batch: Sequence[Any]) -> List[str]:
-        """本批遗忘命令的回执行：逐条看非模拟弹幕，不按发言人去重。
+        """本批的遗忘回执：逐条看非模拟弹幕，不按发言人去重。
 
         同一批里老观众先发"哈哈"再发"忘了我"时，按人去重只剩第一条，回执就丢了——
-        卡片与老观众一行才需要按人去重。只认记账侧真正处理过的命令：记账侧只处理
+        各条线索与老观众一行才需要按人去重。只认记账侧真正处理过的命令：记账侧只处理
         弹幕里的遗忘命令（超级留言、礼物、上舰里的文本不进遗忘流程），所以非弹幕消息
         一律不回执；撤回短语还要记账侧确认撤回已生效才回执。
         """

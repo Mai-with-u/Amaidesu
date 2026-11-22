@@ -91,7 +91,7 @@ def test_note_follows_whether_the_speaker_was_checked() -> None:
     # 有发言人 UUID：照旧当已核对
     signed = attribute_chat({"kind": "player", "sender": "Steve", "sender_id": _STEVE_ID, "text": "嗨"})
     assert signed.note == ""
-    # 没签名的服务器转来的公屏聊天：Mod 对过在线玩家列表，按这个人说的话转出
+    # 没签名的服务器转来的游戏公屏：Mod 对过在线玩家列表，按这个人说的话转出
     checked = attribute_chat({"kind": "player", "sender": "Steve", "sender_online": True, "text": "不是我的"})
     assert (checked.kind, checked.sender, checked.content, checked.note) == ("player", "Steve", "不是我的", "")
     # 命令方块的 /say 只借了个名字；旧版 Mod 不给这个字段：都附说明
@@ -442,7 +442,7 @@ async def test_private_messages_are_forwarded_and_marked() -> None:
 
 
 async def test_each_forwarded_line_gets_its_own_message_id() -> None:
-    """每条转出的公屏消息带随机短串消息号，两条不同。"""
+    """每条转出的游戏公屏消息带随机短串消息号，两条不同。"""
     collector, client, bus = await _primed()
     lines = [
         {"cursor": 4, "kind": "player", "sender": "Steve", "sender_online": True, "text": "一"},

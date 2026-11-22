@@ -1,7 +1,7 @@
 """ViewerCandidateRepo —— 观众候选（viewer_candidates）的读写：整理写进待审区，人批准或驳回。
 
 两类候选：``viewer_defined`` 是观众定下、她当场接受却没复述的名字、设定、梗；``claimed_missing`` 是她说
-"上次答应过""欠着的"、承诺账上却找不到的事。批准前对她完全不可见——简报、线索卡、回想、检索索引都
+"上次答应过""欠着的"、承诺账上却找不到的事。批准前对她完全不可见——记忆摘要、记忆线索、回忆、检索索引都
 只读档案行与承诺，不读这张表。
 
 - 整理写入：本场的待审候选整份替换（重新整理不会越堆越多），已批、已驳回的不动；
@@ -171,8 +171,8 @@ class ViewerCandidateRepo(BaseRepo):
     ) -> ViewerCandidate:
         """批准一条候选，返回批准后的候选（带生成的档案行或承诺编号；老观众近况原地留在候选表）。
 
-        观众定下的写成一行观众来源的档案行并放进最新快照；她说欠着的登记成一条未了结承诺；
-        老观众近况不写档案与承诺，仅在该老观众场内发言时进老观众卡。
+        观众定下的写成一行观众定下的事的档案行并放进最新快照；她说欠着的登记成一条未了结承诺；
+        老观众近况不写档案与承诺，仅在该老观众场内发言时进老观众线索。
         """
 
         def _exec() -> ViewerCandidate:
@@ -183,7 +183,7 @@ class ViewerCandidateRepo(BaseRepo):
                 commitment_id: Optional[int] = None
                 is_self_note = row["kind"] == VIEWER_SELF
                 if is_self_note:
-                    # 老观众近况：只按观众在场内老观众卡里读取，不写全局档案行、快照或承诺
+                    # 老观众近况：只按观众在场内老观众线索里读取，不写全局档案行、快照或承诺
                     pass
                 elif row["kind"] == CLAIMED_MISSING:
                     # 她说欠着的：登记成未了结承诺，证据是她说欠着的那一句（同一句只登记一次）
@@ -208,7 +208,7 @@ class ViewerCandidateRepo(BaseRepo):
                     commitment_id = int(cur.lastrowid or 0)
                 else:
                     # 观众定下的：原话是她那句回应的逐字片段，挂着那条弹幕；锁住（模型改不了、删不了），
-                    # 以普通行放进最新快照最前面，稳定与否照批准时人标的；不标放回，要一直留在简报里由人另外放回
+                    # 以普通行放进最新快照最前面，稳定与否照批准时人标的；不标放回，要一直留在记忆摘要里由人另外放回
                     owner = stored_snapshot_owner(conn)
                     taken = conn.execute(
                         "SELECT 1 FROM archive_lines WHERE live_session_id=? AND evidence_chat_id=?",
@@ -286,7 +286,7 @@ class ViewerCandidateRepo(BaseRepo):
         await self._run_in_executor(_exec)
 
     async def revoke(self, *, candidate_id: int, at_ms: int) -> ViewerCandidate:
-        """撤销已批准的老观众近况：撤下老观众卡、回到待审，14 天待审期从撤销时刻重算。"""
+        """撤销已批准的老观众近况：撤下老观众线索、回到待审，14 天待审期从撤销时刻重算。"""
 
         def _exec() -> ViewerCandidate:
             with self._manager.transaction(immediate=True) as conn:

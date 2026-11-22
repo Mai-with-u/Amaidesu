@@ -1,4 +1,4 @@
-"""游戏里的人仓储：按 UUID 认人、打招呼按场合并、公屏聊天只落公屏、观众关联与改彩排时撤掉互动。"""
+"""游戏里的人仓储：按 UUID 认人、打招呼按场合并、游戏公屏只落游戏公屏、观众关联与改彩排时撤掉互动。"""
 
 from __future__ import annotations
 
@@ -228,7 +228,7 @@ async def test_turning_a_session_into_rehearsal_drops_its_interactions(store: SQ
     await store.sessions.set_live_session_kind_with_ledger(
         live_session_id=session_id, kind="rehearsal", updated_at_ms=9_000
     )
-    # 彩排里的互动与待审自述不进正式的记忆；人还认得，公屏聊天作为原始记录照旧留着
+    # 彩排里的互动与待审自述不进正式的记忆；人还认得，游戏公屏作为原始记录照旧留着
     assert await store.game_players.list_interactions(player_id=alex.id) == []
     assert await store.execute("SELECT id FROM player_candidates") == []
     assert await store.game_players.get_player(player_id=alex.id) is not None
@@ -238,7 +238,7 @@ async def test_turning_a_session_into_rehearsal_drops_its_interactions(store: SQ
 async def test_self_statements_are_approved_or_rejected_once_and_only_approved_ones_reach_the_card(
     store: SQLiteDatabase,
 ) -> None:
-    """玩家自述：批准可以改标题、驳回留着；审过的不能再审；玩家卡只读批准过的，最近批准的在前，带存档。"""
+    """玩家自述：批准可以改标题、驳回留着；审过的不能再审；玩家线索只读批准过的，最近批准的在前，带存档。"""
     session = await _session(store)
     repo = store.game_players
     player = await repo.meet_player(
@@ -322,7 +322,7 @@ async def test_approving_a_self_statement_checks_the_title(store: SQLiteDatabase
 
 
 async def test_a_wrongly_approved_self_statement_can_be_revoked_or_deleted(store: SQLiteDatabase) -> None:
-    """批错了：撤销批准撤下玩家卡、回到待审（期限从撤销时重算）；删掉这一条哪种状态都行；动作都记进改动记录，不带文本。"""
+    """批错了：撤销批准撤下玩家线索、回到待审（期限从撤销时重算）；删掉这一条哪种状态都行；动作都记进改动记录，不带文本。"""
     session = await _session(store)
     repo = store.game_players
     player = await repo.meet_player(
@@ -352,7 +352,7 @@ async def test_a_wrongly_approved_self_statement_can_be_revoked_or_deleted(store
 
     revoked = await repo.revoke_player_candidate(candidate_id=candidate_id, at_ms=4_000)
     assert (revoked.status, revoked.decided_at_ms, revoked.created_at_ms) == ("pending", None, 4_000)
-    assert await repo.approved_statements(player_id=player.id) == [], "撤下玩家卡"
+    assert await repo.approved_statements(player_id=player.id) == [], "撤下玩家线索"
     assert await repo.expire_player_candidates(now_ms_value=2_001 + 14 * 24 * 60 * 60 * 1000) == 0, "期限从撤销时重算"
 
     await repo.delete_player_candidate(candidate_id=candidate_id, at_ms=5_000)

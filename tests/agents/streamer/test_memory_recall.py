@@ -1,4 +1,4 @@
-"""回想工具测试：memory_recall 的检索、排序、定位、遮名与异常降级。
+"""回忆工具测试：memory_recall 的检索、排序、定位、遮名与异常降级。
 
 真库（临时 SQLite），时间全用固定毫秒戳（HH:MM 只做形状断言，不依赖真实时钟）。
 台词、档案、承诺走混合检索（这里不配嵌入服务，只有关键词一路），每个用例先把索引补算好再查。
@@ -110,7 +110,7 @@ async def _index(store: SQLiteDatabase) -> None:
 
 
 async def _service(store: SQLiteDatabase, *, current_session: Optional[int] = None) -> MemoryRecallService:
-    """先补算索引，再建一个接了混合检索的回想服务。"""
+    """先补算索引，再建一个接了混合检索的回忆服务。"""
     await _index(store)
     return MemoryRecallService(
         chat_repo=store.chat,
@@ -144,7 +144,7 @@ async def test_recall_picks_the_most_relevant_eight_without_requiring_every_keyw
 
     text = await service.recall("挖矿 钻石", SCOPE_ALL, ORDER_NEWEST)
 
-    assert "【回想】关键词「挖矿 钻石」" in text
+    assert "【回忆】关键词「挖矿 钻石」" in text
     assert text.splitlines()[0].endswith("8 条")
     assert "挖矿挖到钻石了" in text
     assert "钻石真好看" in text, "不要求每个词都出现"
@@ -250,7 +250,7 @@ async def test_recall_searches_archive_lines_of_previous_session(store: SQLiteDa
 
 
 async def test_recall_says_a_viewer_sourced_line_was_decided_with_viewers(store: SQLiteDatabase) -> None:
-    """人批准的观众候选写成的行：回想结果注明和观众一起定的，别点名是哪一位。"""
+    """人批准的观众候选写成的行：回忆结果注明和观众一起定的，别点名是哪一位。"""
     first = await _session(store, started=1_000, ended=2_000)
     current = await _session(store, started=3_000)
     chat_id = await _streamer_says(store, first, "好，小羊就叫雪球", 1_100)
@@ -267,7 +267,7 @@ async def test_recall_says_a_viewer_sourced_line_was_decided_with_viewers(store:
 
 
 async def test_recall_gives_a_snapshot_row_once_dated_by_where_it_was_said(store: SQLiteDatabase) -> None:
-    """第二场的快照接住了第一场的一行：快照只引用原行，回想只给一条，时间按写下它的那一场标（之前）。"""
+    """第二场的快照接住了第一场的一行：快照只引用原行，回忆只给一条，时间按写下它的那一场标（之前）。"""
     first = await _session(store, started=1_000, ended=2_000)
     second = await _session(store, started=3_000, ended=4_000)
     current = await _session(store, started=5_000)
@@ -364,7 +364,7 @@ async def test_recall_ignores_viewer_name_keywords_with_notice(store: SQLiteData
     service = await _service(store, current_session=pk)
 
     text = await service.recall("老王 挖矿")
-    assert "（回想工具不按观众名字查，已忽略 1 个名字）" in text
+    assert "（回忆工具不按观众名字查，已忽略 1 个名字）" in text
     assert "关键词「老王 挖矿」" in text  # 抬头照抄原查询词，便于核对
     assert "今天挖矿很顺利" in text
 
@@ -495,7 +495,7 @@ async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteData
 
 
 async def test_recall_deduplicates_speech_covered_by_archive_or_commitment(store: SQLiteDatabase) -> None:
-    """同一句话既有台词又有档案行/公开承诺时只占一个回想名额，8 件独立往事都能进前 8 条。"""
+    """同一句话既有台词又有档案行/公开承诺时只占一个回忆名额，8 件独立往事都能进前 8 条。"""
     old = await _session(store, started=1_000, ended=2_000)
     current = await _session(store, started=3_000)
     # 7 件各有台词+档案行的往事 + 1 件有台词+公开承诺的往事：若不去重，前 4 件就会占满 8 个名额
@@ -681,7 +681,7 @@ async def test_recall_trims_weak_literal_matches_to_two_with_plain_notice(store:
 async def test_recall_reads_current_save_work_docs_with_masking_and_isolates_other_saves(
     store: SQLiteDatabase,
 ) -> None:
-    """回想只读命中眼下所在存档的工作笔记与未完成待办，跨场遮名、跳过已完结待办，且别的存档工作文档绝不串入。"""
+    """回忆只读命中眼下所在存档的工作笔记与未完成待办，跨场遮名、跳过已完结待办，且别的存档工作文档绝不串入。"""
     await seed_viewer(store.viewers, platform="bilibili", user_id="u1", user_name="路人甲", timestamp_ms=500)
     old = await _session(store, started=1_000, ended=50_000)
     current = await _session(store, started=100_000)
@@ -741,7 +741,7 @@ async def test_recall_reads_current_save_work_docs_with_masking_and_isolates_oth
 async def test_recall_searches_pinned_rules_with_masking_and_length_limit(
     store: SQLiteDatabase,
 ) -> None:
-    """存档工作文档的 pinned_rules 纳入回想检索，渲染为「当前存档长期规矩」，遵守遮名与长度上限。"""
+    """存档工作文档的 pinned_rules 纳入回忆检索，渲染为「当前存档长期规矩」，遵守遮名与长度上限。"""
     await seed_viewer(store.viewers, platform="bilibili", user_id="u2", user_name="路人乙", timestamp_ms=500)
     old = await _session(store, started=1_000, ended=50_000)
     current = await _session(store, started=100_000)

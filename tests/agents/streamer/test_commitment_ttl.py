@@ -1,4 +1,4 @@
-"""承诺过期与【还惦记的事】（D2-3）：两档过期、再提起恢复、不常驻不推卡但回想可查。"""
+"""承诺过期与【还惦记的事】（D2-3）：两档过期、再提起恢复、不常驻不推卡但回忆可查。"""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ async def _closed_live(store: SQLiteDatabase, index: int) -> int:
 async def test_short_term_and_three_session_stale_commitments_turn_dormant_yet_stay_recallable(
     store: SQLiteDatabase,
 ) -> None:
-    """带时间词隔一场即搁下，一般承诺连续三场未提即搁下；搁下后不进简报、不推观众卡，但回想照查。"""
+    """带时间词隔一场即搁下，一般承诺连续三场未提即搁下；搁下后不进简报、不推观众卡，但回忆照查。"""
     s1 = await _closed_live(store, 1)
     s2 = await _closed_live(store, 2)
     s3 = await _closed_live(store, 3)
@@ -143,7 +143,7 @@ async def test_short_term_and_three_session_stale_commitments_turn_dormant_yet_s
     )
     assert cues.card_count == 0
 
-    # 回想工具仍能查到搁了很久的承诺（不删）
+    # 回忆工具仍能查到搁了很久的承诺（不删）
     await MemoryIndexer(
         repo=store.memory_index,
         embedding=None,

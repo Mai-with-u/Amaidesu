@@ -7,7 +7,7 @@
 - ``commitments.close_source``：了结或作废来源（空串 未了结 / ``settle`` 下播整理 /
   ``correction`` 场内更正 / ``human`` 人工操作）；旧行按 ``close_chat_id`` 是否非空回填为
   ``settle`` 或 ``human``，支持人工撤回场内更正而不误伤人工结论。
-- ``memory_corrections``：场内更正表（主播决策工具或运营递话对本场简报行或承诺的当场纠正）。
+- ``memory_corrections``：场内更正表（主播决策工具或运营递话对本场记忆摘要行或承诺的当场纠正）。
 - ``settle_checkpoints``：下播整理每次模型调用解析成功后的输入指纹与输出缓存表。
 """
 

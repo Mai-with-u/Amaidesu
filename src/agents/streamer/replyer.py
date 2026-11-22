@@ -2,7 +2,7 @@
 
 system 只放稳定的两块：人设块（名字、直播身份、性格、说话风格、口吻示例）在前、占大头，
 提炼过的直播说话规矩在后；整段每轮逐字一致，请求前缀缓存靠它命中。
-user 是一条：她更早说过、聊天记录里已经看不到的几句，最近几条聊天记录原文，交接稿与本轮状态材料。
+user 是一条：她更早说过、聊天记录里已经看不到的几句，最近几条聊天记录原文，发言要点与本轮状态材料。
 聊天记录只截最近几条（本批弹幕刷屏时也不超过一批的条数），整份输入不随场长增长——
 后半场她也是先看到"自己是谁"，不会被几百条历史挤得像换了个人。
 
@@ -82,18 +82,18 @@ _PACE_RULE = {
 _GAME_RULE_LINE = "- 干活的是自己，用第一人称；同伴听不见直播，提他们用第三人称。别提派活这类幕后词。\n"
 _GAME_HEADING = "\n\n## 游戏里刚有人说的话\n\n"
 _GAME_TURN_RULES = (
-    "游戏里有人搭话时，按游戏聊天和交接稿说，别当成观众弹幕或冷场。\n"
+    "游戏里有人搭话时，按游戏聊天和发言要点说，别当成观众弹幕或冷场。\n"
     "台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；"
     "观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\n"
 )
 # 聊天记录只带最近这么多条原文（与 StreamerConfig.replyer_history_items 默认值对齐）；0 = 带整份历史
 _DEFAULT_HISTORY_ITEMS = 14
 
-# "更早一点你说过的话"最多从这么多句里挑：与本窗历史同一份语料，取最近的几句，
+# "更早一点你说过的话"最多从这么多句里挑：与本回合历史同一份语料，取最近的几句，
 # 让她开口前看清哪些话刚说过（聊天记录里已经看得到的那几句不重复列）
 _RECENT_SPEECH_LINES = 6
 # 这一段的保底行数：游戏聊天与玩家条目把预算挤光时也至少留两句——她刚说过的话是
-# 防逐字复读的唯一原料，最忙的窗口（玩家连续在公屏说话、游戏事件刷屏）恰恰是
+# 防逐字复读的唯一原料，最忙的窗口（玩家连续在游戏公屏说话、游戏事件刷屏）恰恰是
 # 复读风险最高的窗口，那一段不能被挤没了
 _RECENT_SPEECH_FLOOR = 2
 
@@ -104,13 +104,13 @@ _RECENT_SPEECH_HEADING = "## 更早一点你说过的话（比下面的聊天记
 # 游戏里最近找她的人那一段的标题：谁说的话、谁做的事以这一段为准
 _GAME_PEOPLE_HEADING = "## 游戏里最近找你的人（谁说的、谁做的以此为准）"
 # 玩家条目整段至多几条（最近的）、较早条目的正文至多几个字：满批时整份输入只剩个位数 token 的余量。
-# 本窗刚在公屏说的话（游戏聊天里也有）从游戏聊天那一段拿掉；其中她要接的那一句（回应对象说的，
+# 本回合刚在游戏公屏说的话（游戏聊天里也有）从游戏聊天那一段拿掉；其中她要接的那一句（回应对象说的，
 # 没有回应对象时是最新的一句）给得长一些，同窗别的玩家说的和较早条目一样截短——几位玩家同窗各说
 # 一句长话时，全文照给会让满批超预算
 _PEOPLE_LINES_MAX = 3
 _PEOPLE_NOTE_MAX_CHARS = 18
 _PEOPLE_FRESH_MAX_CHARS = 40
-# 游戏聊天一段：有玩家条目时，没进条目的公屏话（条目只留最近 3 条，多出来的、认不出是谁的）只报句数——
+# 游戏聊天一段：有玩家条目时，没进条目的游戏公屏话（条目只留最近 3 条，多出来的、认不出是谁的）只报句数——
 # 满批加三条玩家条目时整份输入贴近上限；没有玩家条目时留最近几句、每句截短，并和"更早一点你说过
 # 的话"合计至多 :data:`_RECENT_SPEECH_LINES` 行（游戏聊天占几行，她更早说过的话就少几行，
 # 她的原话另有 :data:`_RECENT_SPEECH_FLOOR` 行保底，由输入上限里的固定占位承担）
@@ -124,7 +124,7 @@ _ANSWERED_MARK = "（已接过）"
 # 没有玩家条目时那一段照常（游戏聊天占几行让几行，同样不破保底）
 _PEOPLE_AND_SPEECH_LINES = 3
 
-# 交接稿里没有特定回应对象时的 target 写法（Planner 没填，或填的消息 ID 查不到原话）
+# 发言要点里没有特定回应对象时的 target 写法（Planner 没填，或填的消息 ID 查不到原话）
 _NO_TARGET = "（无特定目标，面向全体观众）"
 
 # 游戏记录条目（游戏里程碑、长汇报）进聊天记录时正文最多留这么多字：
@@ -313,7 +313,7 @@ class Replyer:
             return None
 
         speech = _plain_text_speech(response.content)
-        # 交接稿里的编号已经洗过，她仍写出 档#N、约#N 说明有别的漏口：去掉并记警告，念出来观众听不懂
+        # 发言要点里的编号已经洗过，她仍写出 档#N、约#N 说明有别的漏口：去掉并记警告，念出来观众听不懂
         speech, numbers = strip_memory_numbers(speech)
         if numbers:
             self.logger.warning(f"Replyer 台词里出现 {numbers} 处记忆编号，已去掉: {speech[:50]!r}")
@@ -441,7 +441,7 @@ class Replyer:
         names_note = f"以下称呼必须完整保留：{'、'.join(names)}。" if names else ""
         retry_prompt = (
             f"刚才这句「{repeat.sentence}」你前面已经几乎一字不差地说过了（前面说的是「{repeat.earlier}」）。"
-            f"顺着上面的本次回复要求，换一个不一样的切入点和措辞重新说{budget_note}，不要加交接稿里没有的事。"
+            f"顺着上面的本次回复要求，换一个不一样的切入点和措辞重新说{budget_note}，不要加发言要点里没有的事。"
             f"{names_note}只输出台词。"
         )
         retry_messages = [
@@ -541,7 +541,7 @@ class Replyer:
 
         顺序：先按整份历史 + 本批查出要回应的那条原话（截取不能让较早的目标查不到）
         → 截出最近几条原文、补上本批里还看不到的弹幕 → 去掉记录里已经看得到的台词，
-        剩下的单列在聊天记录前面（它们都比记录早）→ 与交接稿、状态材料一起渲染。
+        剩下的单列在聊天记录前面（它们都比记录早）→ 与发言要点、状态材料一起渲染。
         """
         full_history = list(history or [])
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
@@ -551,10 +551,10 @@ class Replyer:
         target_text = _strip_id_tag(
             _strip_mention_tag(target_message), canonical.normalize_message_id(plan.target or "")
         )
-        # 玩家条目截短封顶，本窗在公屏说的那句从游戏聊天一段拿掉（条目里已有、还带着是谁说的）。
-        # 游戏聊天整段都挪进了条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上
+        # 玩家条目截短封顶，本回合在游戏公屏说的那句从游戏聊天一段拿掉（条目里已有、还带着是谁说的）。
+        # 游戏聊天整段都挪进了条目时写"见下一段"：写"无"会和下一段里刚在游戏公屏说的话对不上
         chat_before = list(game_chat or [])
-        # 交接稿的 target 不是弹幕、而是指着一句游戏聊天（那句的原文片段或说话人）：那一句的原话一定给到，
+        # 发言要点的 target 不是弹幕、而是指着一句游戏聊天（那句的原文片段或说话人）：那一句的原话一定给到，
         # 哪怕说话人认不出、或是挤不进条目的第 4 位玩家；回应对象（to_player）的条目同样一定在
         unresolved = _unresolved_target(plan.target)
         pinned_chat = "" if target_text or unresolved == _NO_TARGET else _chat_line_for(unresolved, chat_before)
@@ -581,7 +581,7 @@ class Replyer:
                 plan,
                 target_text=target_text,
                 reply_to=reply_to,
-                # 回应对象这一窗在公屏开过口：说"他刚在游戏公屏跟你说话"；只冲她做了事的说"刚在游戏里找过你"
+                # 回应对象这一窗在游戏公屏开过口：说"他刚在游戏公屏跟你说话"；只冲她做了事的说"刚在游戏里找过你"
                 reply_to_spoke=any(note.said and note.who == reply_to for note in game_people),
                 target_familiarity=target_familiarity,
             ),
@@ -821,7 +821,7 @@ def _length_rule(budget: int, mode: str, *, has_target: bool = False) -> str:
 
 
 def _note_body(line: str) -> str:
-    """条目行去掉行首 ``[时刻 游戏 公屏]`` 之后的部分（"玩家 X：原话"），和游戏聊天行比对用。"""
+    """条目行去掉行首 ``[时刻 游戏 游戏公屏]`` 之后的部分（"玩家 X：原话"），和游戏聊天行比对用。"""
     head, separator, body = line.partition("] ")
     return body if line.startswith("[") and separator else line
 
@@ -836,8 +836,8 @@ def _people_lines(
     """玩家条目渲染成行，并把已经在条目里的游戏聊天行拿掉：返回（条目行, 剩下的游戏聊天行）。
 
     只留最近 :data:`_PEOPLE_LINES_MAX` 条，回应对象的条目被挤出去时换回来（见 :func:`_pick_notes`）。
-    本窗刚在公屏说的话里，她要接的那一句正文至多 :data:`_PEOPLE_FRESH_MAX_CHARS` 字，其余条目截到
-    :data:`_PEOPLE_NOTE_MAX_CHARS` 字。要接的那一句：交接稿 target 指着的那句（``pinned_chat``）在条目里就是它，
+    本回合刚在游戏公屏说的话里，她要接的那一句正文至多 :data:`_PEOPLE_FRESH_MAX_CHARS` 字，其余条目截到
+    :data:`_PEOPLE_NOTE_MAX_CHARS` 字。要接的那一句：发言要点 target 指着的那句（``pinned_chat``）在条目里就是它，
     不在条目里（游戏聊天一段单列）时条目都截短；没有时是回应对象说的，再没有是最新的一句。
     没进条目的游戏聊天怎么写见 :func:`_game_chat_text`。满批时整份输入只剩个位数 token 的余量，
     几位玩家同窗各说一句长话原样列出会超。同一句不在两段里各出现一次。
@@ -853,7 +853,7 @@ def _people_lines(
         pinned_body = _note_body(pinned_chat)
         focus = next((i for i in newest_fresh if fresh[i] and _note_body(notes[i].line).startswith(pinned_body)), None)
     else:
-        # 回应对象本窗说的最近一句；没有回应对象（或他本窗没开口）时取最新的一句本窗公屏话
+        # 回应对象本回合说的最近一句；没有回应对象（或他本回合没开口）时取最新的一句本回合游戏公屏话
         focus = next((i for i in newest_fresh if fresh[i] and notes[i].who == reply_to), None)
         if focus is None:
             focus = next((i for i in newest_fresh if fresh[i]), None)
@@ -862,10 +862,10 @@ def _people_lines(
     for index, note in enumerate(notes):
         body = _note_body(note.line)
         if fresh[index]:
-            # 本窗公屏话已经在条目里（带着是谁说的），游戏聊天一段不再重复
+            # 本回合游戏公屏话已经在条目里（带着是谁说的），游戏聊天一段不再重复
             shown_chat.update(chat for chat in chat_bodies if body.startswith(chat))
         head = note.line[: len(note.line) - len(body)]
-        # 公屏话截"玩家 X："之后的原话，动作条目截"玩家 X "之后的那件事：名字再长也不被截掉
+        # 游戏公屏话截"玩家 X："之后的原话，动作条目截"玩家 X "之后的那件事：名字再长也不被截掉
         name, colon, said = body.partition("：")
         actor = f"玩家 {note.who} "
         if colon:
@@ -889,7 +889,7 @@ def _people_lines(
 
 def _pick_notes(notes: Sequence[PlayerNote], reply_to: str) -> List[PlayerNote]:
     """玩家条目留最近 :data:`_PEOPLE_LINES_MAX` 条；回应对象的条目都被挤出去时，换掉最早的一条、留下他最新的
-    那条（仍按先后排）：交接稿要她回他，回复器却看不到他说了什么、做了什么，只能瞎接。"""
+    那条（仍按先后排）：发言要点要她回他，回复器却看不到他说了什么、做了什么，只能瞎接。"""
     picked = list(notes[-_PEOPLE_LINES_MAX:])
     if not reply_to or any(note.who == reply_to for note in picked):
         return picked
@@ -898,7 +898,7 @@ def _pick_notes(notes: Sequence[PlayerNote], reply_to: str) -> List[PlayerNote]:
 
 
 def _chat_line_for(target: str, game_chat: Sequence[str]) -> str:
-    """交接稿 target 指着的那句游戏聊天：target 是那句的原文片段或说话人名字，取含它的最新一句；对不上为空串。"""
+    """发言要点 target 指着的那句游戏聊天：target 是那句的原文片段或说话人名字，取含它的最新一句；对不上为空串。"""
     text = target.strip()
     if len(text) < 2:
         return ""
@@ -908,9 +908,9 @@ def _chat_line_for(target: str, game_chat: Sequence[str]) -> str:
 def _game_chat_text(remaining: Sequence[str], *, has_people: bool, had_chat: bool, pinned: str = "") -> str:
     """游戏聊天一段的正文：有玩家条目时只报没列出的句数，没有时留最近几句、每句截短。
 
-    交接稿 target 指着的那句（``pinned``，没进条目的）一定列出：有条目时单列在句数前面、给到
+    发言要点 target 指着的那句（``pinned``，没进条目的）一定列出：有条目时单列在句数前面、给到
     :data:`_PEOPLE_FRESH_MAX_CHARS` 字；没有条目时它比最近几句早就换掉其中最早的一句。
-    整段挪进了玩家条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上。
+    整段挪进了玩家条目时写"见下一段"：写"无"会和下一段里刚在游戏公屏说的话对不上。
     """
     if has_people:
         rest = [line for line in remaining if line != pinned]
@@ -937,22 +937,22 @@ def _clip_chat_line(line: str, limit: int = _GAME_CHAT_LINE_MAX_CHARS) -> str:
 
 
 def _game_people_section(lines: Sequence[str]) -> str:
-    """最近几分钟游戏里玩家的公屏与动作条目连同归因规矩：整段前面留一个空行，没有条目时为空串（整段省略）。
+    """最近几分钟游戏里玩家的游戏公屏与动作条目连同归因规矩：整段前面留一个空行，没有条目时为空串（整段省略）。
 
-    规矩只在有条目时出现，平常的决策窗不多占输入。几句规矩各对一种线上出过的错：交接稿里指她自己的
-    "她"被当成刚点过名的女仆，玩家的公屏话随之安到女仆头上；玩家扔来的东西说成天上掉的；全服公屏里远处
+    规矩只在有条目时出现，平常的决策回合不多占输入。几句规矩各对一种线上出过的错：发言要点里指她自己的
+    "她"被当成刚点过名的女仆，玩家的游戏公屏话随之安到女仆头上；玩家扔来的东西说成天上掉的；全服游戏公屏里远处
     玩家在别处探险的环境感叹被她硬套到自己脚下工位。有她已回应过的条目时多一句，防止换话题时又谢一遍。
     """
     if not lines:
         return ""
-    # 有游戏玩家条目时注入归因边界：按交接稿核实的归属与在场关系说，禁止默认把全服公屏里的异地感叹认领到自己脚下
+    # 有游戏玩家条目时注入归因边界：按发言要点核实的归属与在场关系说，禁止默认把全服游戏公屏里的异地感叹认领到自己脚下
     rules = (
-        '交接稿的"她"就是你；转述说清是谁，别安到女仆、宠物或观众头上；写明谁送的别说成来路不明；'
-        "公屏全服可见，谁那边的处境按交接稿说，没说在你身边就别往自己脚下套。"
+        '发言要点的"她"就是你；转述说清是谁，别安到女仆、宠物或观众头上；写明谁送的别说成来路不明；'
+        "游戏公屏全服可见，谁那边的处境按发言要点说，没说在你身边就别往自己脚下套。"
     )
     # 有已接过的条目时才多一句：没有时这一句白占输入
     if _has_answered(lines):
-        rules += "标着已接过的你回过了，交接稿没提就别再说一遍。"
+        rules += "标着已接过的你回过了，发言要点没提就别再说一遍。"
     return f"\n\n{_GAME_PEOPLE_HEADING}\n\n" + "\n".join(lines) + f"\n{rules}"
 
 
@@ -1109,7 +1109,7 @@ def _boundaries_rule(boundaries: Any) -> str:
 
 
 def _unresolved_target(target: Optional[str]) -> str:
-    """要回应的原话查不到时，交接稿里 target 一行的写法。
+    """要回应的原话查不到时，发言要点里 target 一行的写法。
 
     Planner 填的是昵称或片段时照旧给出，她据此对号；填的是消息 ID 写法（``[id:…]`` /
     ``id:…``）却查不到原话时（ID 写错，或那条已被折进前情提要）不再给 ID——ID 对她
@@ -1138,18 +1138,18 @@ def _render_plan_text(
     reply_to_spoke: bool = True,
     target_familiarity: str = "",
 ) -> str:
-    """把 DecisionPlan 渲染为交接稿文本；查到要回应的原话时直接给原话，不再给消息 ID。
+    """把 DecisionPlan 渲染为发言要点文本；查到要回应的原话时直接给原话，不再给消息 ID。
 
     原话找不到时按 :func:`_unresolved_target` 给出 target（昵称或片段照旧，ID 写法不给）。
     没在回弹幕、在回应游戏里的某位玩家时，先写回应对象：写明是哪位玩家——不写的话，她会把这句
-    公屏话安到聊天记录里刚点过名的女仆、宠物头上。Planner 另填了 target（如公屏原话片段）时照旧跟在后面。
+    游戏公屏话安到聊天记录里刚点过名的女仆、宠物头上。Planner 另填了 target（如游戏公屏原话片段）时照旧跟在后面。
     """
     unresolved = _unresolved_target(plan.target)
     if target_text:
         target_line = f"target 原文: {target_text}\n{_familiarity_line(target_familiarity)}"
     elif reply_to:
         # 直播口播面向观众、游戏玩家听不见：紧凑标明向观众转述用第三人称、不喊玩家“你”
-        how = "刚在公屏发言" if reply_to_spoke else "刚在游戏里找过她"
+        how = "刚在游戏公屏发言" if reply_to_spoke else "刚在游戏里找过她"
         target_line = f"提及的游戏同伴: {reply_to}（{how}；他听不见口播，向观众提他用第三人称，不喊「你」）\n"
         if unresolved != _NO_TARGET:
             target_line += f"target: {unresolved}\n"

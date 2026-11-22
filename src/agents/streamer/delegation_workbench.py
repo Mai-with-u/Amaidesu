@@ -2,7 +2,7 @@
 
 职责（Planner 内部拆分，不进 ToolRegistry、无 ToolSpec、不注册）：
 - 状态承载：每个执行 Agent 最近一次受理的委派、最近几次补充过的要求、
-  最近几轮说出口的打算、本决策窗的工具回执
+  最近几轮说出口的打算、本决策回合的工具回执
 - 拦截规则：``framework_delegate`` / ``framework_prompt`` 两个注册工具名的
   受理逻辑（参数整备 + 受理后的状态迁移）收成名字 → 规则的映射表；
   LLM 视角零变化——这两个名字仍是 Planner 内部拦截的工具，名单语义不变
@@ -108,7 +108,7 @@ class DelegationWorkbench:
         # 每个执行 Agent 最近一次递达补充要求的时刻：判断"她求助之后我答复过没有"用。上面那份只留最近几条，
         # 给别的游戏补过几次话就会把这条挤掉，单靠它会把"答复过了"忘成"还没答复"，冷场窗又能递话
         self._last_relay_ms: Dict[str, int] = {}
-        # 本决策窗的工具回执（名字, 观察数据）：reply 交接时的状态跃迁事实块从这里取
+        # 本决策回合的工具回执（名字, 观察数据）：reply 交接时的状态跃迁事实块从这里取
         # 观察工具的关键字段，随 ReAct 循环逐步累积，begin_round() 在窗入口清空
         self._round_receipts: List[Tuple[str, Any]] = []
         # 委派受理后把"我在哪个游戏里开始做什么"记进时间线（经 PlannerEnv 构造期注入）；
@@ -153,7 +153,7 @@ class DelegationWorkbench:
 
     @property
     def round_receipts(self) -> List[Tuple[str, Any]]:
-        """本决策窗累积的工具回执（reply 交接的状态事实块素材）。"""
+        """本决策回合累积的工具回执（reply 交接的状态事实块素材）。"""
         return self._round_receipts
 
     @property
@@ -172,11 +172,11 @@ class DelegationWorkbench:
     # ==================== 记账动词 ====================
 
     def begin_round(self) -> None:
-        """决策窗入口：清空本窗回执（委派/递话/打算是跨窗记忆，不清）。"""
+        """决策回合入口：清空本回合回执（委派/递话/打算是跨窗记忆，不清）。"""
         self._round_receipts = []
 
     def reset(self) -> None:
-        """开播清场：已了结的委派连同补充过的要求清掉，已聊话题与本窗回执全部清空。
+        """开播清场：已了结的委派连同补充过的要求清掉，已聊话题与本回合回执全部清空。
 
         这几样大多只在一场之内有意义：上一场正常下播时游戏侧已经把委派结算掉，新场次的对话
         历史也从空白开始。留着它们，新的一场开头她会看到"两小时前在游戏里开始做某事"、把上一场
@@ -198,7 +198,7 @@ class DelegationWorkbench:
 
         新世界里没有那座房子、那条矿道，留着它们她会接着催一件在眼前世界里无从做起的事。
         账面还在做的委派保留：游戏 Agent 换存档时会自己看眼前再决定接着做还是上报，在那之前
-        身体手上确实还有这件事，清掉它她再派新的会被拒。已聊话题与本窗回执不分游戏，保留。
+        身体手上确实还有这件事，清掉它她再派新的会被拒。已聊话题与本回合回执不分游戏，保留。
         """
         delegation = self._delegations.get(game)
         if delegation is not None and self._in_flight(delegation):
@@ -207,7 +207,7 @@ class DelegationWorkbench:
         self._drop({game})
 
     def note_receipt(self, name: str, data: Dict[str, Any]) -> None:
-        """记一条本窗工具回执（通用调用路径的成功结果由 Planner 送来）。"""
+        """记一条本回合工具回执（通用调用路径的成功结果由 Planner 送来）。"""
         self._round_receipts.append((name, data))
 
     def note_intent(self, intent: Intent) -> None:
@@ -266,7 +266,7 @@ class DelegationWorkbench:
         """从任务账本现读各执行者的看板，将手头在做视图对齐到账本唯一事实源。
 
         - 账本上有在做（自动送达、提拔待办、回滚或运营直派）：立即更新 ``_delegations[agent]``，
-          决策参考段与即时反应的现场卡读到的都是此刻真正正在做的这一件；
+          决策参考段与即时反应的事实快照读到的都是此刻真正正在做的这一件；
         - 账本上没有在做，但原记录被搁回待办（shelved）：从手头在做移出，只在【待办】显示；
         - 账本上没有在做且不在待办（已终态）：保留 ``_delegations[agent]`` 显示刚了结的那件及怎么了结的。
         未注入看板查询（单测降级装配）时返回空字典，不改动既有内存记录。
@@ -297,7 +297,7 @@ class DelegationWorkbench:
         return boards
 
     def current_goals(self) -> List[GoalLine]:
-        """手上的事（即时反应的现场卡用）：先与任务账本看板对齐，再输出当前在做或刚由游戏上报的目标。"""
+        """手上的事（即时反应的事实快照用）：先与任务账本看板对齐，再输出当前在做或刚由游戏上报的目标。"""
         self.sync_from_ledger()
         return goal_lines(self._delegations, self._delegation_status_provider)
 
@@ -338,7 +338,7 @@ class DelegationWorkbench:
         """受理一个被拦截的工具调用，返回观察 JSON 文本。
 
         流程：无新输入闸（仅递话；对象停着等我拿主意时放行）→ 参数整备（记下主播自己的原话、附来源对话）
-        → 经 ToolRegistry 调用 → 成功受理则按规则做状态迁移并记本窗回执。
+        → 经 ToolRegistry 调用 → 成功受理则按规则做状态迁移并记本回合回执。
         ``on_result(name, result)`` 让调用方在结果返回时吸收副作用（如截图挂尾），
         成败结果都会到达。
         """

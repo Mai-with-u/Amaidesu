@@ -8,7 +8,7 @@ minecraft_chat_send / minecraft_context_fold / minecraft_context_recall）
 - 对外工作文档读取（minecraft_get_work_log）= 主播经 ToolRegistry 调，只读——叙事素材通道
 - 主播看一眼（minecraft_glance）= 主播经 ToolRegistry 调，只读——身体现状与周边的精简叙事视图，
   代替原始观察（原始观察的几何与证据是给游戏 Agent 规划用的）
-- 主播直发公屏（minecraft_chat_send）= 主播经 ToolRegistry 调——把主播拟好的一句话
+- 主播直发游戏公屏（minecraft_chat_send）= 主播经 ToolRegistry 调——把主播拟好的一句话
   经本 Agent 的 chat 能力执行器直接发进游戏公屏（只动手脚，不进本 Agent 的
   ReAct 决策循环）；仅文本输出，永不扩展为身体动作
 - 跨 Agent 派活走框架委派原语（framework_delegate；原 minecraft_send_prompt
@@ -114,9 +114,9 @@ STREAMER_GUIDE = (
 )
 
 # 游戏自主主控态工具面使用说明（给主播）：仅介绍只读观察工具与直播间叙事口径，
-# 不再教主播委派派活或代发游戏公屏；游戏内行动与公屏交流均由游戏侧自主主导。
+# 不再教主播委派派活或代发游戏公屏；游戏内行动与游戏公屏交流均由游戏侧自主主导。
 STREAMER_LEAD_GUIDE = (
-    "当前 Minecraft 处于游戏自主主控态：游戏内的目标规划、执行推进与游戏公屏聊天均由游戏侧直接主导。"
+    "当前 Minecraft 处于游戏自主主控态：游戏内的目标规划、执行推进与游戏公屏均由游戏侧直接主导。"
     "你只需使用两件只读工具了解现场用于直播间解说与互动："
     "想看一眼当前身体状态、背包、周围生物与设施以及手头进度用 minecraft_glance；"
     "想查看当前存档的待办清单、工作笔记和近期记录用 minecraft_get_work_log。"
@@ -421,7 +421,7 @@ def build_chat_send_spec() -> ToolSpec:
     return ToolSpec(
         name="chat_send",
         description=(
-            "把一句话发进游戏公屏聊天，游戏里的玩家看到的是她在说话。"
+            "把一句话发进游戏公屏，游戏里的玩家看到的是她在说话。"
             "只发文本，不做任何游戏内动作，也不影响游戏里正在进行的事；"
             "游戏侧没有确认交出去时返回错误，不当作已发送。"
         ),
@@ -666,7 +666,7 @@ class MinecraftToolProvider(GameToolProvider):
     report_callback: Optional[ReportCallback] = None
     # 主播看一眼：由 Agent 读观察并精简成叙事视图（未注入时不提供该工具）
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
-    # 主播直发公屏：由 Agent 复用自己的 chat 能力执行器并确认交出去（未注入时不提供该工具）
+    # 主播直发游戏公屏：由 Agent 复用自己的 chat 能力执行器并确认交出去（未注入时不提供该工具）
     chat_sender: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
     # 按名读技能正文（旧只读回调，兼容保留）与完整读写修订技能处理器（优先使用）
     skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
@@ -686,7 +686,7 @@ class MinecraftToolProvider(GameToolProvider):
     on_work_docs_changed: Optional[Callable[[], Awaitable[None]]] = None
     # 钉住规矩增删后的通知回调（参数 durable_changed=True 表示持久规矩变动需落库；同时刷新推理固定层）
     on_rules_changed: Optional[Callable[[bool], Awaitable[None]]] = None
-    # 当前是否处于游戏自主主控态的只读回调（由 Agent 注入；主控态下切换主播说明并拒绝主播代发公屏）
+    # 当前是否处于游戏自主主控态的只读回调（由 Agent 注入；主控态下切换主播说明并拒绝主播代发游戏公屏）
     is_in_lead_mode: Optional[Callable[[], bool]] = None
 
     @property
@@ -804,7 +804,7 @@ class MinecraftToolProvider(GameToolProvider):
             return business_fail_result(
                 tool_name,
                 started_ms,
-                "当前为游戏自主主控态，游戏公屏对话由游戏侧直接回应，主播侧不再代发公屏；"
+                "当前为游戏自主主控态，游戏公屏对话由游戏侧直接回应，主播侧不再代发游戏公屏；"
                 "如需转达观众建议或提醒，请改用 framework_suggest。",
             )
         return await run_dict_tool(

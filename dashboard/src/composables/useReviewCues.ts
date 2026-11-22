@@ -1,8 +1,8 @@
 /**
- * 场次复盘页「本场线索卡」的加载与来源筛选
+ * 场次复盘页「本场记忆线索」的加载与来源筛选
  *
  * 单场语义：切场先清空并丢弃过期响应（快速切换场次不会串卡片）；加载错误与空态
- * 分开（error 非空时页面渲染错误、不显示"这一场没有推过线索卡"）。筛选只在本地做，
+ * 分开（error 非空时页面渲染错误、不显示"这一场没有推过记忆线索"）。筛选只在本地做，
  * 切场时复位为"全部"。
  *
  * 不含定时器 / 订阅 / WebSocket，无 keep-alive 生命周期语义。
@@ -40,7 +40,7 @@ export function useReviewCues() {
       items.value = response.data.items;
     } catch (err) {
       if (seq !== requestSeq) return;
-      error.value = getApiErrorMessage(err, '本场线索卡加载失败');
+      error.value = getApiErrorMessage(err, '本场记忆线索加载失败');
     } finally {
       if (seq === requestSeq) loading.value = false;
     }

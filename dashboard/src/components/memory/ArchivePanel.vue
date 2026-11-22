@@ -4,10 +4,10 @@
       <div class="head-text">
         <div class="panel-title">场次档案</div>
         <p class="panel-hint">
-          每场正式场整理出的标题与原话，下一场开播回想“上一场”时用。整理自动生效，这里事后审：
+          每场正式场整理出的标题与原话，下一场开播回忆“上一场”时用。整理自动生效，这里事后审：
           改标题、标稳定会锁住这一行（之后的整理不能改它、删它），漏掉的事可以放回快照或从台词里新增。
-          锁住但没放回的行，快照满 12 行时会按规则被挤出简报，不算删掉（还在档案里，回想查得到）；
-          要一直留在简报里就放回，放回至多 4 行，满了先取消一条。
+          锁住但没放回的行，快照满 12 行时会按规则被挤出记忆摘要，不算删掉（还在档案里，回忆查得到）；
+          要一直留在记忆摘要里就放回，放回至多 4 行，满了先取消一条。
         </p>
       </div>
       <div class="head-actions">
@@ -202,7 +202,7 @@ function refreshCurrent(): void {
 async function removeLine(line: ArchiveLineItem): Promise<void> {
   if (
     !(await confirmAction(
-      `删除档案行「${line.text}」？删掉后这一行不会再出现在下一场开播的回想里，也不影响承诺账本。`,
+      `删除档案行「${line.text}」？删掉后这一行不会再出现在下一场开播的回忆里，也不影响承诺账本。`,
       '删除档案行',
     ))
   ) {
@@ -272,7 +272,7 @@ async function pinLine(line: ArchiveLineItem): Promise<void> {
   await mutateLine(line, () => ledgerApi.pinArchiveLine(line.id), '放回快照失败');
 }
 
-/** 取消放回：这一行还在快照里，之后按规则取舍，快照满了可能被挤出简报 */
+/** 取消放回：这一行还在快照里，之后按规则取舍，快照满了可能被挤出记忆摘要 */
 async function unpinLine(line: ArchiveLineItem): Promise<void> {
   await mutateLine(line, () => ledgerApi.unpinArchiveLine(line.id), '取消放回失败');
 }

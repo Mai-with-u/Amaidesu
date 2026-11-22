@@ -98,10 +98,10 @@ async def test_planner_gets_behavior_style_only_and_none_of_the_expression_side_
 
     kwargs = prompt.render.call_args.kwargs
     assert kwargs.get("behavior_style") == _PERSONA["behavior_style"]  # 行动准则是配置原文，边界栏不拼进去
-    # 边界栏作为独立变量进规划器（没配人设边界时用配置默认值），带"交接稿里别替她答应"的提醒
+    # 边界栏作为独立变量进规划器（没配人设边界时用配置默认值），带"发言要点里别替她答应"的提醒
     boundaries_rule = kwargs.get("boundaries_rule") or ""
     assert boundaries_line(StreamerPersonaConfig().boundaries) in boundaries_rule
-    assert "交接稿里别替她答应" in boundaries_rule
+    assert "发言要点里别替她答应" in boundaries_rule
     # 房管也要知道她是谁：名字与性格进规划器；措辞风格仍只归 Replyer 回复器
     assert (kwargs.get("bot_name"), kwargs.get("personality")) == (_PERSONA["bot_name"], _PERSONA["personality"])
     assert "style_constraints" not in kwargs

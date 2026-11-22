@@ -13,7 +13,7 @@ const eyebrow = computed<string>(() => {
   return '环节';
 });
 
-// 交接简报展开态：默认收起，只留一行入口；收回方向（brief 为 null）不渲染入口
+// 交接记忆摘要展开态：默认收起，只留一行入口；收回方向（brief 为 null）不渲染入口
 const briefOpen = ref(false);
 const brief = computed(() => props.entry.brief ?? null);
 
@@ -32,7 +32,7 @@ const expectedLabel = computed<string>(() => {
       <span class="beat-label">{{ entry.text }}</span>
       <span v-if="entry.badge" class="beat-action">{{ entry.badge }}</span>
       <span v-if="entry.note" class="beat-note">{{ entry.note }}</span>
-      <!-- 交接简报入口：仅交权方向（brief 非空）显示，默认收起 -->
+      <!-- 交接记忆摘要入口：仅交权方向（brief 非空）显示，默认收起 -->
       <button
         v-if="brief"
         type="button"
@@ -40,12 +40,12 @@ const expectedLabel = computed<string>(() => {
         :aria-expanded="briefOpen"
         @click="briefOpen = !briefOpen"
       >
-        {{ briefOpen ? '收起交接简报' : '查看交接简报' }}
+        {{ briefOpen ? '收起交接记忆摘要' : '查看交接记忆摘要' }}
       </button>
     </span>
     <span class="beat-rule" aria-hidden="true" />
     <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
-    <!-- 简报正文：展开后分节显示；空字段跳过不渲染 -->
+    <!-- 记忆摘要正文：展开后分节显示；空字段跳过不渲染 -->
     <div v-if="brief && briefOpen" class="beat-brief">
       <div v-if="brief.segment_title || brief.segment_goal || expectedLabel" class="brief-block">
         <span class="brief-cap">环节</span>
@@ -152,7 +152,7 @@ const expectedLabel = computed<string>(() => {
   background: var(--color-agent-bg);
   color: var(--color-agent);
 }
-/* 交接简报入口：文本按钮，对齐卡片既有克制视觉 */
+/* 交接记忆摘要入口：文本按钮，对齐卡片既有克制视觉 */
 .beat-brief-toggle {
   border: none;
   background: none;
@@ -168,7 +168,7 @@ const expectedLabel = computed<string>(() => {
 .beat-brief-toggle:hover {
   filter: brightness(0.9);
 }
-/* 简报正文：独占一行，紧贴分隔行下方，弱化底色不抢主内容 */
+/* 记忆摘要正文：独占一行，紧贴分隔行下方，弱化底色不抢主内容 */
 .beat-brief {
   flex-basis: 100%;
   display: flex;
@@ -206,7 +206,7 @@ const expectedLabel = computed<string>(() => {
 .brief-line.brief-dim {
   color: var(--text-secondary);
 }
-/* 多行文本（记忆简报）：保留原始换行 */
+/* 多行文本（记忆记忆摘要）：保留原始换行 */
 .brief-line.brief-pre {
   white-space: pre-line;
 }

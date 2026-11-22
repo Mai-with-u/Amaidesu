@@ -1,4 +1,4 @@
-"""决策时看一眼直播画面：每窗第一次请求必挂最新帧、帧龄告警限频、非视觉与无帧不看。"""
+"""决策时看一眼直播画面：每回合第一次请求必挂最新帧、帧龄告警限频、非视觉与无帧不看。"""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ class _Harness:
 
 
 async def test_frame_rides_first_request_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """画面挂在本窗第一次请求尾部；同窗后续步骤不再带。"""
+    """画面挂在本回合第一次请求尾部；同窗后续步骤不再带。"""
     harness = _Harness(monkeypatch)
     harness.frame = _slot("img_a", harness.now - 2_000)
     call = ToolCall(id="c1", name="memory_recall_session")
@@ -89,7 +89,7 @@ async def test_frame_rides_first_request_only(monkeypatch: pytest.MonkeyPatch) -
 
 
 async def test_every_window_sees_frame_even_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """跨窗必挂：即使画面 ref 没变（静止画面重复看是设计内行为），每窗第一次请求都带帧。"""
+    """跨窗必挂：即使画面 ref 没变（静止画面重复看是设计内行为），每回合第一次请求都带帧。"""
     harness = _Harness(monkeypatch)
     harness.frame = _slot("img_a", harness.now)
     assert _has_frame((await harness.window())[0])

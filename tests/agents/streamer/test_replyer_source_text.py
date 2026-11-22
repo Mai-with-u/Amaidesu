@@ -121,7 +121,7 @@ async def test_target_found_in_the_whole_session_not_just_the_recent_window() ->
 
 
 async def test_game_chat_rendered_or_placeholder() -> None:
-    """本窗新到的游戏聊天逐行给出；没有时用占位，模板不会出现字面变量。"""
+    """本回合新到的游戏聊天逐行给出；没有时用占位，模板不会出现字面变量。"""
     replyer, prompt = _replyer()
     plan = DecisionPlan(should_reply=True, topic_summary="游戏里有人问")
 
@@ -232,7 +232,7 @@ async def test_reply_tool_hands_recent_speeches_to_the_replyer(
 
 
 async def test_executor_splits_game_chat_view() -> None:
-    """决策执行器把游戏聊天全文交给 Planner 参考段，本窗新到的原话另传。"""
+    """决策执行器把游戏聊天全文交给 Planner 参考段，本回合新到的原话另传。"""
     planner = MagicMock()
     planner.plan = AsyncMock(return_value=RoundOutcome(silent_reason="natural"))
     executor = DecisionRoundExecutor(
@@ -264,7 +264,7 @@ async def test_executor_splits_game_chat_view() -> None:
 
 
 class _PlanRecordingReplyer:
-    """回复器桩：记下 reply 工具交来的交接稿。"""
+    """回复器桩：记下 reply 工具交来的发言要点。"""
 
     def __init__(self) -> None:
         self.plans: List[DecisionPlan] = []
@@ -275,7 +275,7 @@ class _PlanRecordingReplyer:
 
 
 async def test_reply_tool_strips_memory_numbers_from_the_handoff() -> None:
-    """房管照抄简报里的编号写进交接稿：交给说话侧之前去掉，她看不到就不会念出来。"""
+    """房管照抄简报里的编号写进发言要点：交给说话侧之前去掉，她看不到就不会念出来。"""
     replyer = _PlanRecordingReplyer()
     provider = ReplyToolProvider(replyer=cast(Replyer, replyer))
     arguments = {

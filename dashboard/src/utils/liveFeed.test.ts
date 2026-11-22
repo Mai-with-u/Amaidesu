@@ -1586,7 +1586,7 @@ describe('agent.lead.changed（动态主从切权事件）', () => {
   });
 });
 
-describe('agent.lead.changed 交接简报（handover_brief）', () => {
+describe('agent.lead.changed 交接记忆摘要（handover_brief）', () => {
   const fullBrief = {
     segment_id: 'seg-2',
     segment_title: '建房环游',
@@ -1622,10 +1622,10 @@ describe('agent.lead.changed 交接简报（handover_brief）', () => {
     expect(entry!.brief).toBeNull();
   });
 
-  it('缺省防御：字段缺失 / 脏形状 / 全空简报都安全回退 null，不炸', () => {
+  it('缺省防御：字段缺失 / 脏形状 / 全空记忆摘要都安全回退 null，不炸', () => {
     // 旧事件没有 handover_brief
     expect(toEntry(evt('agent.lead.changed', { lead_agent: 'streamer' }))!.brief).toBeNull();
-    // 非对象简报
+    // 非对象记忆摘要
     expect(handoverBriefOf('oops')).toBeNull();
     expect(handoverBriefOf([1, 2])).toBeNull();
     // 脏字段：数字变字符串、数组混脏项
@@ -1646,7 +1646,7 @@ describe('agent.lead.changed 交接简报（handover_brief）', () => {
       operator_notes: ['ok'],
       recent_speech: [],
     });
-    // 全空简报按无简报处理（segment_id 只有机器标识、无可读内容时不弹展开入口）
+    // 全空记忆摘要按无记忆摘要处理（segment_id 只有机器标识、无可读内容时不弹展开入口）
     expect(handoverBriefOf({ operator_notes: [] })).toBeNull();
     expect(handoverBriefOf({})).toBeNull();
   });

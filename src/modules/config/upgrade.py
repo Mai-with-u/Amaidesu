@@ -1098,7 +1098,7 @@ _upgrade_replyer_style_drop_emoji = swap_default(
 register_file_hook("agents.toml", "replyer_style_drop_emoji", "2.0.45", _upgrade_replyer_style_drop_emoji)
 
 # agents.toml v2.0.46：``[agents.streamer.live_frame]`` 的两道挂帧节流键退役。
-# 决策窗改为每窗必挂暂存里的最新帧，``max_age_ms`` / ``min_interval_ms`` 失去
+# 决策回合改为每回合必挂暂存里的最新帧，``max_age_ms`` / ``min_interval_ms`` 失去
 # 消费者。只处理本段内的这两个键——其他段的 ``min_interval_ms``（如 proactive）
 # 是活跃配置，不许误伤。
 _retire_live_frame_gates = drop_section_keys("agents.streamer.live_frame", ("max_age_ms", "min_interval_ms"))
@@ -1113,7 +1113,7 @@ _widen_recent_intents_window = swap_default("agents.streamer.planner_recent_inte
 register_file_hook("agents.toml", "widen_recent_intents_window", "2.0.47", _widen_recent_intents_window)
 
 # agents.toml v2.0.48：删 ``[agents.streamer.narrative]`` 段。游戏事件素材改为
-# 统一追加式历史：事件在决策窗边界批量写进对话时间线，不再逐窗重放，三个
+# 统一追加式历史：事件在决策回合边界批量写进对话时间线，不再逐窗重放，三个
 # 叙事缓冲及其保留期/条数上限/折叠窗配置失去消费者。段留在文件里即属未知
 # 段硬错，整段原地删除。
 _retire_streamer_narrative = drop_section("agents.streamer.narrative")

@@ -339,7 +339,7 @@ class ReplyToolProvider(BaseToolProvider):
 
         契约：
         - 接收 invocation.arguments：topic_summary / reply_guidance / target / emotion / intensity
-        - 本窗交接稿（思考流回调/弹幕批/游戏聊天/状态事实块/闸豁免）从
+        - 本回合发言要点（思考流回调/弹幕批/游戏聊天/状态事实块/闸豁免）从
           ``invocation.attachment`` 取（``ReplyRoundAttachment``；None 按空材料处理，
           attachment 为其他类型属编程错误，返回失败结果暴露）
         - 把意图参数适配为 DecisionPlan(should_reply=True)（Replyer.generate 接口形态）
@@ -364,7 +364,7 @@ class ReplyToolProvider(BaseToolProvider):
                 success=False,
                 error_message=(f"attachment 类型不符：期望 ReplyRoundAttachment，实为 {type(attachment).__name__}"),
             )
-        # None = 本窗无宿主材料，按空材料处理
+        # None = 本回合无宿主材料，按空材料处理
         materials = attachment if attachment is not None else ReplyRoundAttachment()
 
         args = invocation.arguments or {}
@@ -372,7 +372,7 @@ class ReplyToolProvider(BaseToolProvider):
         # 裁决时刻即时事实：reply 被调用即 Planner 已决定回应（表达生成之前）
         await self._emit_verdict(args, round_id=invocation.round_id)
 
-        # 房管写交接稿时可能照抄简报里的 档#N、约#N：交给说话侧之前去掉，她看不到编号就不会念出来
+        # 房管写发言要点时可能照抄记忆摘要里的 档#N、约#N：交给说话侧之前去掉，她看不到编号就不会念出来
         topic_summary, numbers_in_topic = strip_memory_numbers(str(args.get("topic_summary", "") or ""))
         reply_guidance, numbers_in_guidance = strip_memory_numbers(str(args.get("reply_guidance", "") or ""))
         raw_target = args.get("target", None)
@@ -382,7 +382,7 @@ class ReplyToolProvider(BaseToolProvider):
             target, numbers_in_target = strip_memory_numbers(raw_target)
         stripped = numbers_in_topic + numbers_in_guidance + numbers_in_target
         if stripped:
-            self._logger.info(f"reply_tool: 交接稿里带了 {stripped} 处记忆编号，交给说话侧之前去掉了")
+            self._logger.info(f"reply_tool: 发言要点里带了 {stripped} 处记忆编号，交给说话侧之前去掉了")
 
         # 新颖自检：false 或未如实申报布尔值都立即打回，防绕过
         declared_novel = args.get("is_novel")
@@ -409,7 +409,7 @@ class ReplyToolProvider(BaseToolProvider):
                 ),
             )
 
-        # 本窗弹幕批随 attachment 传入；主动发言或脱离 Planner 调用时为空列表
+        # 本回合弹幕批随 attachment 传入；主动发言或脱离 Planner 调用时为空列表
         batch: List[Any] = list(materials.round_batch)
 
         # 情绪值先收敛到枚举：名单外的已知中英文近义词就近映射属正常归一化（记 debug），

@@ -139,7 +139,7 @@ async def test_read_history_is_pure_read_without_window_boundary(store: SQLiteDa
     assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1"], "未出账的游戏事件不在时间线里"
     batch_before = agent._scope.current_window_batch()
     assert await agent._read_history() == view
-    assert agent._scope.current_window_batch() is batch_before, "读历史不覆写本窗批次"
+    assert agent._scope.current_window_batch() is batch_before, "读历史不覆写本回合批次"
 
 
 def _maintainer(store: SQLiteDatabase, pk: Optional[int] = 1, prompt_manager=None):

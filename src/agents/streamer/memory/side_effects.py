@@ -1,4 +1,4 @@
-"""一场的"别唠叨"指标：从本场台词点名的记忆编号和线索卡记录算出来。
+"""一场的"别唠叨"指标：从本场台词点名的记忆编号和记忆线索记录算出来。
 
 记忆系统每加一项"记得住"（召回、推卡），都要有一项"别唠叨、别说错"和它成对：召回调高了，
 同一件旧事一场被提几次、没人问时主动提几次、推出去的卡有多少她根本没用上，不能跟着变差。
@@ -22,11 +22,11 @@ from src.modules.storage.models.memory import CardKindStat, CueLogEntry, SideEff
 PROMPTED_WINDOW_MS = 60_000
 #: 开场头几分钟内提旧事单独计数的窗口（5 分钟）
 OPENING_WINDOW_MS = 5 * 60_000
-# 向量探测留痕行不算真正推出去的线索卡
+# 向量探测留痕行不算真正推出去的记忆线索
 _PROBE_CARD_KIND = "vector_probe"
 CIRCLING_WINDOW_MS = 30 * 60_000
 CIRCLING_MIN_MENTIONS = 3
-# 线索卡里算"有人提到"的来源：观众弹幕、游戏玩家开口；地点、情境、她自己的台词不算
+# 记忆线索里算"有人提到"的来源：观众弹幕、游戏玩家开口；地点、情境、她自己的台词不算
 _SOURCE_DANMAKU = "danmaku"
 _PEOPLE_SOURCES = frozenset({_SOURCE_DANMAKU, SOURCE_PLAYER})
 
@@ -41,7 +41,7 @@ def _speech_items(line: SettleSpeechLine) -> List[str]:
 
 
 def _card_item(card: CueLogEntry) -> Optional[str]:
-    """线索卡指向的条目编号；玩家卡、老梗卡不指向档案行或承诺时为 None。"""
+    """记忆线索指向的条目编号；玩家线索、老梗线索不指向档案行或承诺时为 None。"""
     if card.archive_line_id is not None:
         return refs.render_archive_number(card.archive_line_id)
     if card.commitment_id is not None:
@@ -77,7 +77,7 @@ def compute_side_effects(
     """算一场的唠叨与记忆健康指标；本场既没点名旧事、没推过卡、也没有更正时返回 None。
 
     没送达的台词不算她说过。"没人问时主动提"按两条判：这句不在回应观众弹幕或游戏玩家，
-    而且点名前一分钟内没有观众弹幕或玩家开口命中同一条的线索卡。
+    而且点名前一分钟内没有观众弹幕或玩家开口命中同一条的记忆线索。
     """
     delivered = sorted((line for line in speech if line.dropped_at_ms is None), key=lambda line: line.timestamp_ms)
     pushed_cards = [card for card in cards if card.card_kind != _PROBE_CARD_KIND]

@@ -22,15 +22,15 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
    （只引用原行、至多 12 行，见 ``rolling``）；
 2. 找新承诺：她的全部台词（附被回应的弹幕、回应的是哪位游戏玩家）、她在游戏公屏打的字加她能做的
    事，找出当众答应过、还没兑现的事；顺带列出她说欠着、账上却找不到的事（只进待审区，人批准才登记），
-   以及游戏玩家在公屏说的关于他自己、她当场接住了的事（玩家自述，进另一张待审表）；
+   以及游戏玩家在游戏公屏说的关于他自己、她当场接住了的事（玩家自述，进另一张待审表）；
 3. 了结旧承诺：只在本场之前有未了结承诺时才调，判她说没说明白做完了或不做了；
-4. 更新游戏社交事实：只在接了社交事实仓储、本场有玩家公屏、互动或现有事实时才调；原料是紧凑集
-   （玩家公屏、互动记录、游戏记录、记住的地点、现有事实），归纳她的角色与待弄清、补漏、修正场内
+4. 更新游戏社交事实：只在接了社交事实仓储、本场有玩家游戏公屏、互动或现有事实时才调；原料是紧凑集
+   （玩家游戏公屏、互动记录、游戏记录、记住的地点、现有事实），归纳她的角色与待弄清、补漏、修正场内
    写歪的行，顺带记下有原话作证的一起做的事与帮过忙（见 ``settle_social``）。
 
 校验全部是代码：逐字引文（原话必须是所引那一行文本的逐字子串且不超过上限）、所属游戏
 （必须是本场玩过的）、对谁（对具体观众时那一行必须回应了真实观众的弹幕；对游戏玩家时要按
-台词记下的回应对象、或公屏上点名与紧接着回话对上那位玩家，见 ``settle_players``）、不重复（与
+台词记下的回应对象、或游戏公屏上点名与紧接着回话对上那位玩家，见 ``settle_players``）、不重复（与
 已有承诺同一件事、或句子里已经提到某条承诺，都不新建）、只改未了结的承诺（运营者已判
 误记或已了结的不受她的话影响）。校验没通过的条目连同原话写进整理报告，由运营者判断
 要不要在 WebUI 手建。
@@ -203,13 +203,13 @@ _WEEKDAY_NAMES = ("周一", "周二", "周三", "周四", "周五", "周六", "�
 
 # 取料步骤清单：面板进度文案按这个顺序报"取料 k/N：步骤名"，慢步告警也按它点名
 _MATERIAL_STEPS: Tuple[str, ...] = (
-    "读游戏玩家与公屏",
+    "读游戏玩家与游戏公屏",
     "读游戏存档段",
     "读游戏事件",
     "读未了结与误记承诺",
     "读已了结承诺",
     "读上一份档案快照",
-    "读人批准的观众来源行",
+    "读人批准的观众定下的事行",
     "读本场地点动静",
     "读本场游戏记录",
     "读游戏社交事实",
@@ -268,9 +268,9 @@ class SettleMaterial:
     # 本场的地点动静与记住的地点：档案行的地点只能从这里挑，按地名或说话时在不在跟前核对
     place_marks: List[GamePlaceMark] = field(default_factory=list)
     places: List[str] = field(default_factory=list)
-    # 本场的游戏玩家：代号、她在公屏打的字、每一句能对上谁（对玩家的承诺按它核对）
+    # 本场的游戏玩家：代号、她在游戏公屏打的字、每一句能对上谁（对玩家的承诺按它核对）
     players: PlayerChat = field(default_factory=PlayerChat)
-    # 重新整理这一场时留下的观众来源行（人批准的观众候选）：模型看不到、动不了，代码接着带进快照
+    # 重新整理这一场时留下的观众定下的事行（人批准的观众候选）：模型看不到、动不了，代码接着带进快照
     carried: List[SnapshotLine] = field(default_factory=list)
     # 已了结的旧承诺标题：找"她说欠着、账上却找不到的"时一并比对
     closed_titles: List[Tuple[int, str]] = field(default_factory=list)
@@ -306,7 +306,7 @@ class SettleOutcome:
     # 观众候选（人批准才进记忆）与因个人信息丢掉的条数（含玩家自述）
     viewer_candidates: List[PendingViewerCandidate] = field(default_factory=list)
     candidates_personal_dropped: int = 0
-    # 玩家自述（人批准才进那位玩家的玩家卡）
+    # 玩家自述（人批准才进那位玩家的玩家线索）
     player_candidates: List["PendingPlayerCandidate"] = field(default_factory=list)
     # 第四次调用核过的社交事实与互动（一起做的事、帮过忙）
     social_facts: List["NewSocialFact"] = field(default_factory=list)
@@ -451,7 +451,7 @@ def close_user_prompt(material: SettleMaterial) -> str:
     """了结那次调用的用户提示词：账上还没了结的承诺 + 本场承诺进展/结案记录 + 本场台词 + 一句问法。
 
     问法列全四种了结（做完了、不做了、坦白做不到、换个方式兑现），与了结系统提示词的口径一致：
-    只问"做完或不做了"的话，她当众说"那个我真弄不来"之后这条承诺了结不了，会一直留在简报里，
+    只问"做完或不做了"的话，她当众说"那个我真弄不来"之后这条承诺了结不了，会一直留在记忆摘要里，
     她要么反复道歉，要么硬说做完了。离线评测按同一个函数拼提示词，量的就是生产实际发出去的文字。
     """
     commitment_notes = _render_commitment_corrections(material.corrections)
@@ -711,7 +711,7 @@ def _game_of(raw: Any, material: SettleMaterial) -> Optional[str]:
     """模型给的游戏名换成本场认得的游戏；认不出就当与游戏无关。
 
     挂的游戏要么本场有游戏事件，要么是启用了的游戏 Agent：开错后马上重开的一两分钟里
-    常常一条游戏事件都没记下，明明是游戏里的事却挂不上游戏，就会进常驻简报、不玩这个
+    常常一条游戏事件都没记下，明明是游戏里的事却挂不上游戏，就会进记忆摘要、不玩这个
     游戏时也每场被念叨。事件行前面标着存档（"minecraft「新档」"），模型偶尔把存档名
     一起抄进游戏名，这时只认前面的游戏名。
     """
@@ -739,7 +739,7 @@ def _place_of(row: Commitment) -> str:
 
 
 def _seen_line_ids(material: SettleMaterial) -> List[int]:
-    """整理读原料时看到的旧档案行：上一份快照的各行，加这一场接着带的观众来源行。"""
+    """整理读原料时看到的旧档案行：上一份快照的各行，加这一场接着带的观众定下的事行。"""
     previous = material.previous.lines if material.previous is not None else []
     return sorted({int(item.line.id) for item in (*previous, *material.carried)})
 
@@ -763,7 +763,7 @@ def _player_target(
 ) -> Tuple[Optional[int], str]:
     """对玩家的承诺是对哪位：模型写的代号必须按两条证据路径之一对上，返回 (玩家主键, 对不上的原因)。
 
-    台词行：落库时记下的回应对象必须就是他。公屏那句：点了他的名字，或者紧接着他的话说的。
+    台词行：落库时记下的回应对象必须就是他。游戏公屏那句：点了他的名字，或者紧接着他的话说的。
     """
     player_id = material.players.player_of(raw.get("player"))
     if player_id is None:
@@ -773,7 +773,7 @@ def _player_target(
             return None, "说的是对某位玩家答应，但这一行不是在回应这位玩家，未登记"
         return player_id, ""
     if chat is None or player_id not in material.players.targets.get(int(chat.id), frozenset()):
-        return None, "公屏这句没点这位玩家的名字，也不是紧接着他的话说的，未登记"
+        return None, "游戏公屏这句没点这位玩家的名字，也不是紧接着他的话说的，未登记"
     return player_id, ""
 
 
@@ -848,10 +848,10 @@ class SessionSettler:
 
         event_repo 缺失时原料少游戏这一类，整理照常跑；archive_repo 缺失时没有上一份快照
         可接，本场快照只有本场的事；game_names_provider 返回当前对主播可见的游戏 Agent 名，
-        用来写「她能做的事」；min_session_ms 与常驻简报的"上一场"时长下限同一个值，滚动之前
-        的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与公屏，
+        用来写「她能做的事」；min_session_ms 与记忆摘要的"上一场"时长下限同一个值，滚动之前
+        的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与游戏公屏，
         对玩家的承诺一条也认不出（模型写了也进未登记）。cue_log_repo 缺失时唠叨指标只按台词
-        点名算，线索卡那几项为空；social_fact_repo 缺失时不跑第四次调用（不更新游戏社交事实）；task_registry 是后台任务登记处（缺省 None
+        点名算，记忆线索那几项为空；social_fact_repo 缺失时不跑第四次调用（不更新游戏社交事实）；task_registry 是后台任务登记处（缺省 None
         时整理不登记，前端面板看不到这次整理，其余行为一致）；reasoning_effort 未传时优先尊重
         settle 档位配置（若档位留空再兜底 low 避免推理失控），显式传 None 或空串时不下发覆盖参数。
         """
@@ -1091,7 +1091,7 @@ class SessionSettler:
                 settle_report=report.model_dump_json() if has_report else None,
                 snapshot_kept=outcome.snapshot_kept,
                 viewer_candidates=outcome.viewer_candidates,
-                # 读原料时看到的旧行：调模型期间人批准、插进最新快照的观众来源行不在其中，落库时补进本场快照
+                # 读原料时看到的旧行：调模型期间人批准、插进最新快照的观众定下的事行不在其中，落库时补进本场快照
                 seen_line_ids=_seen_line_ids(material),
                 player_candidates=outcome.player_candidates,
                 social_facts=outcome.social_facts,
@@ -1137,9 +1137,9 @@ class SessionSettler:
         *,
         settled_at_ms: Optional[int] = None,
     ) -> Optional[SideEffectStats]:
-        """本场的唠叨指标；读线索卡记录失败时只按台词点名算，算的时候出错就不给这一节，都不拖累整理。
+        """本场的唠叨指标；读记忆线索记录失败时只按台词点名算，算的时候出错就不给这一节，都不拖累整理。
 
-        指标是附带的：档案、承诺、了结已经由模型产出，指标算错（线索卡记录里有坏行之类）不能让这一场
+        指标是附带的：档案、承诺、了结已经由模型产出，指标算错（记忆线索记录里有坏行之类）不能让这一场
         整理整个记失败、下次再白调一遍模型。
         """
         cards: List[CueLogEntry] = []
@@ -1147,7 +1147,7 @@ class SessionSettler:
             try:
                 cards = await self._cue_log.list_session_entries(live_session_id=int(session.id))
             except Exception as exc:  # noqa: BLE001 - 指标是附带的，读不到卡照样整理
-                logger.warning(f"场次 {session.id} 读线索卡记录失败，唠叨指标不含线索卡: {exc}", exc=exc)
+                logger.warning(f"场次 {session.id} 读记忆线索记录失败，唠叨指标不含记忆线索: {exc}", exc=exc)
         corrections_made = 0
         corrections_reverted = 0
         if self._corrections is not None:
@@ -1229,13 +1229,13 @@ class SessionSettler:
         *,
         progress: Optional[ProgressReporter] = None,
     ) -> SettleMaterial:
-        """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、游戏玩家与公屏、她能做的事、旧承诺。
+        """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、游戏玩家与游戏公屏、她能做的事、旧承诺。
 
         ``progress`` 报取料进度：每步开始时报"取料 k/N：步骤名"（k 是已完成的步数，
         N 是取料步骤总数），运营者据此区分"在干活"与"卡死"。缺省 None 时不报
         （离线评测脚本直接调本方法）。
         """
-        # 先认本场的玩家：台词里"回应玩家N"的代号要和公屏段同一套
+        # 先认本场的玩家：台词里"回应玩家N"的代号要和游戏公屏段同一套
         players = await self._material_step(0, self._load_players(session, delivered), progress)
         saves = await self._material_step(1, self._load_saves(session), progress)
         games, games_text = await self._material_step(2, self._render_games(session, saves), progress)
@@ -1470,14 +1470,14 @@ class SessionSettler:
         return game_records(events, delegations)
 
     async def _load_players(self, session: LiveSession, delivered: Sequence[SettleSpeechLine]) -> PlayerChat:
-        """本场的游戏玩家与公屏聊天；读不到就当没有（对玩家的承诺这一场认不出，其余照常整理）。"""
+        """本场的游戏玩家与游戏公屏；读不到就当没有（对玩家的承诺这一场认不出，其余照常整理）。"""
         if self._players is None:
             return PlayerChat()
         try:
             lines: List["GameChatLine"] = list(
                 await self._players.list_session_game_chat(live_session_id=int(session.id))
             )
-            # 台词里回应过的玩家（在回弹幕的行不算）先拿代号；回应时刻用来把他被接住的那句公屏也给模型看
+            # 台词里回应过的玩家（在回弹幕的行不算）先拿代号；回应时刻用来把他被接住的那句游戏公屏也给模型看
             replies = [
                 (player, int(line.timestamp_ms)) for line in delivered if (player := _reply_player_of(line)) is not None
             ]
@@ -1489,7 +1489,7 @@ class SessionSettler:
                 if player is not None:
                     players[player_id] = player
         except Exception as exc:  # noqa: BLE001 - 少了玩家只少一类承诺对象，整理照常跑
-            logger.warning(f"场次 {session.id} 读游戏玩家与公屏失败，这一场认不出对玩家的承诺: {exc}", exc=exc)
+            logger.warning(f"场次 {session.id} 读游戏玩家与游戏公屏失败，这一场认不出对玩家的承诺: {exc}", exc=exc)
             return PlayerChat()
         return build_player_chat(
             speech_player_ids=spoken, lines=lines, players=players, clock_text=_clock_text, speech_replies=replies
@@ -1518,7 +1518,7 @@ class SessionSettler:
         """本场要接着滚的上一份快照（开播早于本场的最近一份；旧场次由几场旧档案现拼）。
 
         读失败按整理失败处理、下次再试：没接住上一份就写，本场快照会顶掉前几场的事，
-        简报从此再也看不到它们。
+        记忆摘要从此再也看不到它们。
         """
         if self._archive is None:
             return None
@@ -1532,9 +1532,9 @@ class SessionSettler:
             raise SettleError(f"取上一份档案快照失败：{exc}") from exc
 
     async def _load_carried(self, session: LiveSession) -> List[SnapshotLine]:
-        """这一场重新整理时要接着带进快照的观众来源行；第一次整理时一条也没有。
+        """这一场重新整理时要接着带进快照的观众定下的事行；第一次整理时一条也没有。
 
-        读失败按整理失败处理、下次再试：没带上就写，人批准过的事会从她的简报里消失。
+        读失败按整理失败处理、下次再试：没带上就写，人批准过的事会从她的记忆摘要里消失。
         """
         if self._archive is None:
             return []
@@ -1545,7 +1545,7 @@ class SessionSettler:
                 )
             )
         except Exception as exc:  # noqa: BLE001 - 读不到就不写，免得冲掉人批准过的事
-            raise SettleError(f"取人批准过的观众来源行失败：{exc}") from exc
+            raise SettleError(f"取人批准过的观众定下的事行失败：{exc}") from exc
 
     async def _load_familiar_viewer_ids(self, session: LiveSession, delivered: Sequence[SettleSpeechLine]) -> Set[int]:
         """解析本场被她回应过的非模拟观众里属于老观众（close / regular）且未请求遗忘的观众主键集合。"""
@@ -1586,7 +1586,7 @@ class SessionSettler:
         编号是模型输出用来指回具体台词的键：整场台词超过模型窗口预算时只保留一部分，
         按保留顺序重新编号，台词行本身仍指向原行。返回的第三项是裁剪说明（未裁剪为 None），
         由调用方写进整理报告。同一观众整场用同一个代号，模特才能说清「对谁答应的」而不用昵称。
-        回应游戏玩家的那一句标"回应玩家N"，代号与公屏段同一套（``player_codes``，玩家主键 → 代号）。
+        回应游戏玩家的那一句标"回应玩家N"，代号与游戏公屏段同一套（``player_codes``，玩家主键 → 代号）。
         """
         codes: Dict[int, str] = {}
         bodies: List[str] = []
@@ -1889,7 +1889,7 @@ class SessionSettler:
         )
         open_id_set = {int(row.id) for row in material.open_commitments}
         mentioned_ids = sorted(((material.mentioned_ref_ids | same_as_mentioned) & open_id_set) - closed_set)
-        # 人批准的观众来源行：重新整理时接着带进快照，和接住的旧行一起按规则取舍；基底里已有的不重复带
+        # 人批准的观众定下的事行：重新整理时接着带进快照，和接住的旧行一起按规则取舍；基底里已有的不重复带
         kept_ids = {int(item.line.id) for item in plan.kept}
         carried = [item for item in material.carried if int(item.line.id) not in kept_ids]
         # 替换既有旧快照行的进度更新排在本场普通新事之前：旧行已从 plan.kept 摘除，优先占额可防被单场普通新事名额挤出而造成新旧双丢
@@ -1930,9 +1930,9 @@ class SessionSettler:
         )
 
     async def _check_player_candidates(self, rows: Any, material: SettleMaterial) -> PlayerCandidateCheck:
-        """核对找承诺那次顺带列出的玩家自述：只进待审表，人批准才进那位玩家的玩家卡。
+        """核对找承诺那次顺带列出的玩家自述：只进待审表，人批准才进那位玩家的玩家线索。
 
-        本场没有游戏玩家与公屏原料时不核对（模型没见过他们的话）；字段不是列表时只告警、当没有：
+        本场没有游戏玩家与游戏公屏原料时不核对（模型没见过他们的话）；字段不是列表时只告警、当没有：
         这一项是附带的，不该让整场整理失败。批准、驳回记录读不到时照常核对，只是少了这一道去重。
         """
         if rows is None or rows == [] or self._players is None or not material.players.codes:
@@ -2020,7 +2020,7 @@ class SessionSettler:
                 decided_self_titles, rejected_self_chats = await decided_self_fn()
             except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
                 logger.warning(f"读审过的老观众近况候选失败，本次不按审过的记录去重: {exc}", exc=exc)
-        # 去重依据：上一份档案、本场留下的观众来源行（重新整理时批准过的不再列）、本场新写的行
+        # 去重依据：上一份档案、本场留下的观众定下的事行（重新整理时批准过的不再列）、本场新写的行
         base = [*(material.previous.lines if material.previous is not None else []), *material.carried]
         new_evidence, new_titles = taken_from(new_lines)
         old_evidence, old_titles = taken_from(base)
@@ -2186,7 +2186,7 @@ class SessionSettler:
     def _verified_quote(self, line: Union[SettleSpeechLine, "GameChatLine"], quote: Any) -> Optional[str]:
         """逐字引文校验：原话必须是那一行文本的逐字子串、且不超过上限，否则返回 None。
 
-        对玩家的承诺引的可以是她在公屏打的那句（同样按它的原文核对）。
+        对玩家的承诺引的可以是她在游戏公屏打的那句（同样按它的原文核对）。
         给模型看的台词把连续空白压成了一个空格，模型照抄压缩后的文本也算逐字引文；
         原文与压缩文本两种口径都接受，否则换行/多空格的句子会被系统性地误判。
         """
@@ -2426,8 +2426,8 @@ class SessionSettler:
     ) -> Tuple[List[PendingCommitment], List[UnregisteredItem]]:
         """新承诺的校验：逐字引文、所属游戏、对谁、不重复。
 
-        对游戏玩家的承诺证据可以是台词行（记下了在回应他），也可以是她在公屏打的那句（``chat``），
-        对谁按 ``_player_target`` 核对；公屏那句只登记对玩家的承诺。
+        对游戏玩家的承诺证据可以是台词行（记下了在回应他），也可以是她在游戏公屏打的那句（``chat``），
+        对谁按 ``_player_target`` 核对；游戏公屏那句只登记对玩家的承诺。
 
         ``closed_ids`` 是本次整理了结的旧承诺编号。台词点名了某条旧承诺（记忆引用里有它的编号）时：
         那条本场被了结了，这一行里的新答应多半是换了个做法（"画我画不了，下次用方块给你拼一幅"），
@@ -2450,11 +2450,14 @@ class SessionSettler:
             if line is None and chat is None:
                 missed.append(
                     UnregisteredItem(
-                        kind="commitment", what=what, quote=quote, reason="引用的不是本场她的台词或她在公屏打的字"
+                        kind="commitment",
+                        what=what,
+                        quote=quote,
+                        reason="引用的不是本场她的台词或她在游戏公屏打的字",
                     )
                 )
                 continue
-            where = f"第 {raw.get('line')} 行" if line is not None else f"公屏 {raw.get('chat')}"
+            where = f"第 {raw.get('line')} 行" if line is not None else f"游戏公屏 {raw.get('chat')}"
             if not what:
                 missed.append(UnregisteredItem(kind="commitment", quote=quote, reason="没有动作标题"))
                 continue
@@ -2536,10 +2539,13 @@ class SessionSettler:
                 )
                 continue
             if chat is not None and target not in _TARGET_PLAYER:
-                # 公屏上冲所有人说的话看不出是对哪位玩家，也不是播给观众的台词：不登记
+                # 游戏公屏上冲所有人说的话看不出是对哪位玩家，也不是播给观众的台词：不登记
                 missed.append(
                     UnregisteredItem(
-                        kind="commitment", what=what, quote=quote, reason="公屏上打的字只登记对某位玩家的承诺，未登记"
+                        kind="commitment",
+                        what=what,
+                        quote=quote,
+                        reason="游戏公屏上打的字只登记对某位玩家的承诺，未登记",
                     )
                 )
                 continue
@@ -2572,7 +2578,7 @@ class SessionSettler:
                     missed.append(UnregisteredItem(kind="commitment", what=what, quote=quote, reason=reason))
                     continue
             if chat is not None:
-                # 公屏那句一定是在那个游戏、那个存档里打的：游戏与存档取它自己的
+                # 游戏公屏那句一定是在那个游戏、那个存档里打的：游戏与存档取它自己的
                 game_name: Optional[str] = _game_of(chat.game, material) or chat.game
                 save_id, save_name = chat.save_id, chat.save_name
             else:

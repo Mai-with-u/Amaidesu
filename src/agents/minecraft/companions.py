@@ -37,7 +37,7 @@ def build_companion_collectors(
     """构造身体事件流与聊天流两个采集器（未启动）；Agent 的 MCP 关着时为空表。
 
     ``context`` 是组合根透传的跨 Agent 参考事实：聊天流采集器判"玩家聊天提到她"需要主播的人设名
-    （玩家在公屏叫的名字），那份配置在 streamer 段，这里只按名取用、不感知 streamer 包内部。
+    （玩家在游戏公屏叫的名字），那份配置在 streamer 段，这里只按名取用、不感知 streamer 包内部。
     """
     config = companion_config(agent_config)
     if config is None:

@@ -1,4 +1,4 @@
-"""线索推送：承诺卡、老观众在场一行与遗忘命令回执行。"""
+"""线索推送：承诺线索、老观众在场一行与遗忘回执。"""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def _provider(
 
 
 # ---------------------------------------------------------------------------
-# 承诺卡
+# 承诺线索
 # ---------------------------------------------------------------------------
 
 
@@ -214,7 +214,7 @@ async def test_new_session_resets_push_counters(store: SQLiteDatabase) -> None:
 
 
 async def test_game_commitment_does_not_carousel_merely_because_game_is_open(store: SQLiteDatabase) -> None:
-    """游戏承诺取消轮播：仅开着游戏不再每批轮推挂该游戏的承诺卡。"""
+    """游戏承诺取消轮播：仅开着游戏不再每批轮推挂该游戏的承诺线索。"""
     session_id = await _session(store)
     await store.commitments.insert_commitment(what="继续炸 TNT", quote="下次接着炸 TNT", game="Minecraft")
     provider = _provider(store, session_id=session_id)
@@ -472,7 +472,7 @@ async def test_viewer_card_says_which_save_the_promise_was_made_in(store: SQLite
 
 
 # ---------------------------------------------------------------------------
-# 被动想起：规则与地点两路的档案卡、老梗卡
+# 被动想起：规则与地点两路的往事线索、老梗线索
 # ---------------------------------------------------------------------------
 
 
@@ -512,7 +512,7 @@ def _passive(store: SQLiteDatabase, session_id: int, clock: _Clock, **extra: Any
 
 
 async def test_danmaku_keyword_pushes_archive_card_and_logs_it(store: SQLiteDatabase) -> None:
-    """弹幕提到触发词：推那行档案（带 档#N，写为什么想起来），编号进点名名单，记一行线索卡记录。"""
+    """弹幕提到触发词：推那行档案（带 档#N，写为什么想起来），编号进点名名单，记一行记忆线索记录。"""
     session_id = await _session(store)
     line_id = await _old_line(store)
     clock = _Clock()
@@ -532,7 +532,7 @@ async def test_danmaku_keyword_pushes_archive_card_and_logs_it(store: SQLiteData
 
 
 async def test_archive_card_stops_once_she_used_it_and_backfills_the_log(store: SQLiteDatabase) -> None:
-    """档案卡被她点名用上（档#N 进了台词的记忆引用），本场不再推，记录回填用上的时刻。"""
+    """往事线索被她点名用上（档#N 进了台词的记忆引用），本场不再推，记录回填用上的时刻。"""
     session_id = await _session(store)
     line_id = await _old_line(store)
     clock = _Clock()
@@ -662,7 +662,7 @@ async def test_walking_up_to_a_remembered_place_pushes_its_lines_once(store: SQL
 
 
 async def test_inside_joke_card_only_when_a_viewer_brings_it_up(store: SQLiteDatabase) -> None:
-    """观众弹幕提到老梗栏里的梗或别名：推一张老梗卡；她自己说到不推（老梗栏写明别自己翻出来）。"""
+    """观众弹幕提到老梗栏里的梗或别名：推一张老梗线索；她自己说到不推（老梗栏写明别自己翻出来）。"""
     session_id = await _session(store)
     jokes = "倒立洗头/洗头挑战：她说过输了就倒立洗头"
     await _her_line(store, session_id, "今天不搞倒立洗头")
@@ -678,7 +678,7 @@ async def test_inside_joke_card_only_when_a_viewer_brings_it_up(store: SQLiteDat
 async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_persists_after_reply(
     store: SQLiteDatabase, privacy: PrivacyService
 ) -> None:
-    """老观众发言：有已批准近况或共同造梗时推老观众卡（cue_log 不落昵称、压制重复在场行）；本场回复后卡停推但熟悉度映射照常保留，发忘了我立即清空。"""
+    """老观众发言：有已批准近况或共同造梗时推老观众线索（cue_log 不落昵称、压制重复在场行）；本场回复后卡停推但熟悉度映射照常保留，发忘了我立即清空。"""
     old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 200_000_000, kind="live")
     await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 190_000_000)
 
@@ -760,7 +760,7 @@ async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_pe
     assert "[老观众·阿杰]" in first.text
     assert "ta 跟你说过：ta 平时爱拼木模型。" in first.text
     assert "当初「小羊取名绒球」就是和 ta 一起定的。" in first.text
-    assert "老观众在场" not in first.text, "已推老观众卡时不再叠重复的老观众在场行"
+    assert "老观众在场" not in first.text, "已推老观众线索时不再叠重复的老观众在场行"
     assert dict(first.familiarity_by_message_id) == {"m_ajie_1": "close", "m_ajie_2": "close"}
 
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
@@ -771,7 +771,7 @@ async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_pe
     )
     assert "阿杰" not in str(entry.model_dump()), "cue_log 绝不落观众昵称"
 
-    # 本场主播已回应过阿杰后：老观众卡停推，但 familiarity_by_message_id 依然把阿杰的新弹幕标为 close
+    # 本场主播已回应过阿杰后：老观众线索停推，但 familiarity_by_message_id 依然把阿杰的新弹幕标为 close
     await store.chat.insert_live_chat(
         live_session_id=session_id,
         timestamp_ms=clock.value,
@@ -796,7 +796,7 @@ async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_pe
     assert "[老观众·阿杰]" not in after_reply.text
     assert dict(after_reply.familiarity_by_message_id) == {"m_ajie_3": "close"}
 
-    # 一旦发送"忘了我"命令，当场清掉缓存，不再输出熟悉度映射也不推老观众卡
+    # 一旦发送"忘了我"命令，当场清掉缓存，不再输出熟悉度映射也不推老观众线索
     forget_round = await provider.collect(
         batch=[_message(external_id="u_ajie", name="阿杰", content="忘了我吧", message_id="m_ajie_forget")]
     )

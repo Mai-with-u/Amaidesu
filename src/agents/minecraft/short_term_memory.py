@@ -1,7 +1,7 @@
-"""Minecraft 本场短期动态记忆（纯内存级，开播/下播清空，绝不将玩家公屏写入跨场数据库）。
+"""Minecraft 本场短期动态记忆（纯内存级，开播/下播清空，绝不将玩家游戏公屏写入跨场数据库）。
 
 负责在本场游玩期间收录 3 类高信号短文本，并支持“中文两字切分关键词 + 可选向量余弦”混合召回：
-1. 玩家公屏/私聊（``player_chat``）：有界滚动保存（默认上限 200 条），仅保留本场有效对话；
+1. 玩家游戏公屏/私聊（``player_chat``）：有界滚动保存（默认上限 200 条），仅保留本场有效对话；
 2. 主动折叠块摘要与保留原话（``fold_block``）：供 ``minecraft_context_recall`` 字面未命中时同义回捞；
 3. 当前存档工作文档切片（``work_doc``）：包含工作笔记段落、长期钉住规矩与本场临时规矩，按内容指纹变化增量更新。
 
@@ -69,7 +69,7 @@ DEFAULT_MAX_PLAYER_CHATS = 200
 DEFAULT_MAX_FOLD_BLOCKS = 80
 DEFAULT_MIN_COSINE = 0.48
 DEFAULT_WAIT_VECTOR_MS = 1_200
-# 公屏记忆时间衰减：半衰期 20 分钟；超过 45 分钟的孤立短闲聊大幅降权并低于门槛直接过滤，防止陈旧闪回
+# 游戏公屏记忆时间衰减：半衰期 20 分钟；超过 45 分钟的孤立短闲聊大幅降权并低于门槛直接过滤，防止陈旧闪回
 DEFAULT_CHAT_HALF_LIFE_MS = 20 * 60 * 1_000
 DEFAULT_CHAT_STALE_THRESHOLD_MS = 45 * 60 * 1_000
 DEFAULT_CHAT_STALE_PENALTY = 0.25
@@ -273,7 +273,7 @@ class _ShortTermEntry:
 
 
 class SessionShortTermMemory:
-    """本场游玩期内存级动态记忆：收纳公屏、折叠块与工作文档切片，支持关键词 + 向量混合召回。"""
+    """本场游玩期内存级动态记忆：收纳游戏公屏、折叠块与工作文档切片，支持关键词 + 向量混合召回。"""
 
     def __init__(
         self,
@@ -348,7 +348,7 @@ class SessionShortTermMemory:
         private: bool = False,
         timestamp_ms: int = 0,
     ) -> Optional[str]:
-        """收录一条玩家公屏或私聊短文本（纯内存有界保存，拒收空白与原始 JSON 噪声）。"""
+        """收录一条玩家游戏公屏或私聊短文本（纯内存有界保存，拒收空白与原始 JSON 噪声）。"""
         cleaned = " ".join((content or "").split())
         if not cleaned or _looks_like_raw_json_blob(cleaned):
             return None
@@ -427,7 +427,7 @@ class SessionShortTermMemory:
     ) -> Optional[str]:
         """收录一段主动折叠块的摘要与保留原话，供后续字面未命中时的同义语义回捞。
 
-        含私聊信息的折叠块（显式 ``private=True`` 或内容出现 ``[公屏·私聊]``/``[私聊]`` 标记）
+        含私聊信息的折叠块（显式 ``private=True`` 或内容出现 ``[游戏公屏·私聊]``/``[私聊]`` 标记）
         会强制标为 ``private=True``，绝不外发外部嵌入 API，且召回结果透传私聊标记供上游隔离。
         """
         bid = (block_id or "").strip()
@@ -579,7 +579,7 @@ class SessionShortTermMemory:
 
         ``wait_vector_ms=0`` 用于被动快路（如 ``[脑中闪过]``）：查询向量已缓存时立即融合余弦；
         未就绪则在后台非阻塞起算留给下一次，本次毫秒级直接返回关键词命中，不被慢嵌入拖死或取消。
-        ``wait_vector_ms=None`` 时沿用构造默认等待上限（供主动回想工具使用）。
+        ``wait_vector_ms=None`` 时沿用构造默认等待上限（供主动回忆工具使用）。
         """
         clean_query = (query or "").strip()
         if not clean_query or limit <= 0:
@@ -641,7 +641,7 @@ class SessionShortTermMemory:
             )
             decay = self._time_decay_factor(entry, age_ms)
             decayed_score = raw_score * decay
-            # 超过陈旧门槛（默认 45 分钟）的旧公屏若衰减后仍低于门槛，直接过滤杜绝远古闲聊闪回
+            # 超过陈旧门槛（默认 45 分钟）的旧游戏公屏若衰减后仍低于门槛，直接过滤杜绝远古闲聊闪回
             if (
                 entry.kind == KIND_PLAYER_CHAT
                 and self._chat_stale_threshold_ms > 0
@@ -683,14 +683,14 @@ class SessionShortTermMemory:
         """按条目类型与距今时长计算时间衰减因子：
         - 工作笔记与规矩（work_doc）：持续生效不衰减（1.0）；
         - 折叠块（fold_block）：温和指数衰减（半衰期 60 分钟，保底 0.35），兼顾近段优先与长场次主动回捞；
-        - 玩家与己方公屏（player_chat）：指数衰减（默认半衰期 20 分钟），超过 45 分钟的孤立短闲聊叠加大幅降权。
+        - 玩家与己方游戏公屏（player_chat）：指数衰减（默认半衰期 20 分钟），超过 45 分钟的孤立短闲聊叠加大幅降权。
         """
         if entry.kind == KIND_WORK_DOC or age_ms <= 0 or self._chat_half_life_ms <= 0:
             return 1.0
         if entry.kind == KIND_FOLD_BLOCK:
             fold_half_life = self._chat_half_life_ms * 3
             return max(_FOLD_DECAY_FLOOR, 0.5 ** (age_ms / fold_half_life))
-        # 公屏对话：按 20 分钟半衰期指数衰减
+        # 游戏公屏对话：按 20 分钟半衰期指数衰减
         decay = 0.5 ** (age_ms / self._chat_half_life_ms)
         if self._chat_stale_threshold_ms > 0 and age_ms >= self._chat_stale_threshold_ms:
             # 超过 45 分钟的孤立短闲聊额外降权，彻底避免仅凭发信人名字高分满血闪回
@@ -864,7 +864,7 @@ class SessionShortTermMemory:
 
 def _contains_private_marker(summary: str, preserved_lines: Sequence[str]) -> bool:
     """兜底识别折叠摘要或保留原话中是否夹带私聊标签，防止调用方漏标导致私聊外泄。"""
-    markers = ("[公屏·私聊]", "[私聊]")
+    markers = ("[游戏公屏·私聊]", "[私聊]")
     if any(marker in summary for marker in markers):
         return True
     return any(marker in line for line in preserved_lines for marker in markers)

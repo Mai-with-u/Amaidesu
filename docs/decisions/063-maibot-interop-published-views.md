@@ -110,4 +110,4 @@ ADR-059 的做法是：两边都用时，笔记的正本放在 MaiBot 适配器�
 - [ADR-067：清掉旧记忆的存储面](067-irreversible-memory-cleanup.md)——本篇的共享笔记发布与收约定随旧笔记退役
 - [ADR-061：QQ 群里只留 QQ 麦麦一张嘴](061-qq-group-single-voice.md)
 - [ADR-062：拟人与账号运营归 MaiBot，Amaidesu 只管直播](062-persona-and-ops-belong-to-maibot.md)
-- 架构事实：[主播记忆](../architecture/streamer-memory.md)
+- 架构事实：[主播记忆](../architecture/memory/README.md)

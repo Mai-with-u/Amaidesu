@@ -1,4 +1,4 @@
-"""现场卡：嘴开口前读的事实快照——目标与现状分开、按秒标时间、超长时按优先级取舍。"""
+"""事实快照：嘴开口前读的事实快照——目标与现状分开、按秒标时间、超长时按优先级取舍。"""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def test_long_card_drops_low_priority_sections_first() -> None:
 
 
 def test_card_has_no_notebook_section() -> None:
-    """现场卡不再有备忘录（悬着的事）一段：嘴不拿任何记忆，输入里也没有这个字段可填。"""
+    """事实快照不再有备忘录（悬着的事）一段：嘴不拿任何记忆，输入里也没有这个字段可填。"""
     card = build_scene_card(_inputs())
     assert "悬着的事" not in card
     assert "notebook" not in SceneInputs.__dataclass_fields__

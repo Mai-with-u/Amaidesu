@@ -189,7 +189,7 @@ _REMINDER_QUEUE_MAX = 5
 # 窗口下界；找不到时退回扫描窗起点。正常重启间隔远小于该值，只是防扫描拖成灾
 _PROMPT_REPLAY_SCAN_MS = 24 * 60 * 60 * 1000
 
-# 续播只重放上一进程结束前这么久之内收到、又还没送进决策窗的递话（毫秒）：
+# 续播只重放上一进程结束前这么久之内收到、又还没送进决策回合的递话（毫秒）：
 # 更早的运营指令多半已经过时，重放出来让她照着做比丢了更糟
 _PROMPT_REPLAY_RECENT_MS = 10 * 60 * 1000
 
@@ -225,7 +225,7 @@ _INTENTIONAL_RECLAIM_REASONS = frozenset(
 
 # 收播道别那一轮正在结束的那一场（其余时候为 None）。只在道别那一轮自己的调用链里看得见：
 # _execute_round 开头设上、跑完（含出错）复位。回复器读历史（reply 工具 → _read_history）与
-# 回想工具取场次类型都在这条调用链上（同一任务，或这一轮派生的任务——派生任务创建时复制上下文），
+# 回忆工具取场次类型都在这条调用链上（同一任务，或这一轮派生的任务——派生任务创建时复制上下文），
 # 读得到这一场；下播瞬间并发的常规轮次、调试轮次、道别期间新开场次的回调各在自己的任务里，
 # 读到的是 None，照常按进行中场次走。不挂在 Agent 实例上，正是为了不漏给这些并发轮次
 _CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_closing_session", default=None)
@@ -235,7 +235,7 @@ _CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_cl
 # 道别那一轮能开口。与 _CLOSING_SESSION 同理放在上下文变量里，并发的轮次各看各的
 _ROUND_LIVE_EPOCH: ContextVar[Optional[int]] = ContextVar("streamer_round_live_epoch", default=None)
 
-# 本轮决策窗的触发原因（_execute_round 开头设上、跑完复位）：供话头工作台在窗口渲染与发言收尾中
+# 本轮决策回合的触发原因（_execute_round 开头设上、跑完复位）：供话头工作台在窗口渲染与发言收尾中
 # 识别游戏待定夺唤醒、收播道别或断线续播，并发轮次各自隔离
 _ROUND_TRIGGER_CAUSE: ContextVar[Optional[TriggerCause]] = ContextVar("streamer_round_trigger_cause", default=None)
 
@@ -374,11 +374,11 @@ class StreamerAgent(BaseAgent):
                 索引任务把档案行、承诺、台词、游戏事件补进全文与向量索引；None 时不补算
             embedding_setup: 可选嵌入服务装配结果；None 或没配嵌入模型时索引只补全文
             game_player_repo: 可选 ``GamePlayerRepo``（游戏里的人）——玩家在游戏里开口或冲她做动作时，
-                推一张"这位是谁、和你有过什么"的玩家卡；下播整理按它核对对玩家的承诺。缺失时没有玩家卡，
+                推一张"这位是谁、和你有过什么"的玩家线索；下播整理按它核对对玩家的承诺。缺失时没有玩家线索，
                 对玩家的承诺也认不出。
             social_fact_repo: 可选 ``SocialFactRepo``（游戏社交事实）——注入时注册 ``streamer_social_fact``
-                工具、参考段常驻【游戏社交事实】、回想工具多查这一类；缺失时三处都没有。
-            memory_cue_log_repo: 可选 ``MemoryCueLogRepo``（线索卡记录）——被动想起每推一张卡记一行，
+                工具、参考段常驻【游戏社交事实】、回忆工具多查这一类；缺失时三处都没有。
+            memory_cue_log_repo: 可选 ``MemoryCueLogRepo``（线索推送记录）——被动想起每推一条线索记一行，
                 复盘面板读；None 时只记日志
             event_repo: 可选 ``EventRepo``（游戏事件）——场次档案的游戏进展原料；
                 None 时回顾少这一类原料
@@ -472,11 +472,11 @@ class StreamerAgent(BaseAgent):
         # 记账器（可选）：注入时接管下播清理时序（见 _finish_stream_end）
         self._stream_ledger = stream_ledger
         # 本场游戏活动：游戏名 → 最后一次事件时刻，以及本场出现过事件的游戏。
-        # 游戏承诺卡只认"正在玩"（见 _playing_games），下播整理取"本场玩过"（见 _session_game_names）
+        # 游戏承诺线索只认"正在玩"（见 _playing_games），下播整理取"本场玩过"（见 _session_game_names）
         self._game_activity_ms: Dict[str, int] = {}
         self._session_games: set[str] = set()
-        # 分存档的游戏眼下所在的存档（每个决策窗开窗前从工具面拉一次），与每个游戏上一次
-        # 认出的存档：简报、线索卡、回想按前者分存档；换存档按后者认（中间回过主菜单也认得出）
+        # 分存档的游戏眼下所在的存档（每个决策回合回合开始前从工具面拉一次），与每个游戏上一次
+        # 认出的存档：记忆摘要、记忆线索、回忆按前者分存档；换存档按后者认（中间回过主菜单也认得出）
         self._current_saves: Dict[str, GameSave] = {}
         self._known_saves: Dict[str, GameSave] = {}
         # 仓储注入（组合根按需分发；None 时对应能力降级。流程单三仓储由
@@ -500,11 +500,11 @@ class StreamerAgent(BaseAgent):
             if viewer_repo is not None and chat_repo is not None
             else None
         )
-        # 账本两仓储（承诺 + 场次档案）：下播整理写入，常驻简报/线索卡/回想工具读取
+        # 账本两仓储（承诺 + 场次档案）：下播整理写入，记忆摘要/记忆线索/回忆工具读取
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
         self._game_player_repo = game_player_repo
-        # 场内记忆更正仓储：从已有 SQLite 账本仓储同库派生，供场内更正工具、运营常驻提醒与简报渲染共用
+        # 场内记忆更正仓储：从已有 SQLite 账本仓储同库派生，供场内更正工具、运营常驻提醒与记忆摘要渲染共用
         _correction_cm = (
             archive_repo.connection_manager
             if isinstance(archive_repo, BaseRepo)
@@ -519,14 +519,14 @@ class StreamerAgent(BaseAgent):
             if _correction_cm is not None and (archive_repo is not None or commitments_repo is not None)
             else None
         )
-        # 待落库的本场运营常驻提醒（receive_prompt 同步入口入队，下一窗重渲简报前异步落进 memory_corrections）
+        # 待落库的本场运营常驻提醒（receive_prompt 同步入口入队，下一窗重渲记忆摘要前异步落进 memory_corrections）
         self._pending_operator_notes: deque[str] = deque()
-        # 游戏社交事实：场内工具登记、参考段每批现读、回想工具查（None 时三处都关）
+        # 游戏社交事实：场内工具登记、参考段每批现读、回忆工具查（None 时三处都关）
         self._social_fact_repo = social_fact_repo
         # 社交事实读取失败的正式告警只发一次（每进程一条 core.error），后续失败仅记日志
         self._social_facts_alert_emitted = False
         self._event_repo = event_repo
-        # 隐私服务：线索推送要按配置的短语表判定"忘了我"与撤回（缺失时不出回执行）
+        # 隐私服务：线索推送要按配置的短语表判定"忘了我"与撤回（缺失时不出遗忘回执）
         self._privacy_service = privacy_service
         self._logger = get_logger("StreamerAgent")
         # 主播记忆整理的后台任务（启动补写整理、收播整理），强引用防 GC 中途回收。
@@ -546,7 +546,7 @@ class StreamerAgent(BaseAgent):
         # 强制触发判定就是一次集合归属判定（消息类型 ∈ 强制名单），直接持有
         # 名单内联判定，不再为它单设类
         self._force_message_types = frozenset(config.force.force_message_types)
-        # 房间态势（纯规则滑动窗口）与本场口头流水（区分即时反应与决策出口，出声前对账与现场卡共用）
+        # 房间态势（纯规则滑动窗口）与本场口头流水（区分即时反应与决策出口，出声前对账与事实快照共用）
         self._room_state = RoomState()
         self._spoken_log = SpokenLog()
 
@@ -753,11 +753,11 @@ class StreamerAgent(BaseAgent):
                 prompt_manager=prompt_manager,
                 # 「她能做的事」是能力清单：启用的游戏 Agent 名，不含形象等非游戏工具面
                 game_names_provider=self._enabled_game_names,
-                # 旧场次现拼基底时数"时长够的场次"，与简报的"上一场"同一个下限
+                # 旧场次现拼基底时数"时长够的场次"，与记忆摘要的"上一场"同一个下限
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
-                # 游戏里的人：对玩家的承诺按台词记下的回应对象、公屏点名与紧接着回话核对
+                # 游戏里的人：对玩家的承诺按台词记下的回应对象、游戏公屏点名与紧接着回话核对
                 game_player_repo=game_player_repo,
-                # 唠叨指标里线索卡那几项：推了几张、用上几张、只由她自己的台词触发的几张
+                # 唠叨指标里记忆线索那几项：推了几张、用上几张、只由她自己的台词触发的几张
                 cue_log_repo=memory_cue_log_repo,
                 # 第四次调用：更新游戏社交事实（没接仓储时不跑）
                 social_fact_repo=social_fact_repo,
@@ -786,8 +786,8 @@ class StreamerAgent(BaseAgent):
             )
 
         # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮。
-        # 混合检索与它共用同一个仓储和嵌入客户端，回想工具（以后还有被动想起）都走它
-        # 线索卡记录：被动想起推出去的每张卡、用上的时刻（交给线索推送写）
+        # 混合检索与它共用同一个仓储和嵌入客户端，回忆工具（以后还有被动想起）都走它
+        # 线索推送记录：被动想起推出去的每条线索、用上的时刻（交给线索推送写）
         self._memory_cue_log_repo = memory_cue_log_repo
         self._memory_indexer: Optional[MemoryIndexer] = None
         self._memory_search: Optional[MemorySearch] = None
@@ -802,14 +802,14 @@ class StreamerAgent(BaseAgent):
             )
             self._memory_search = MemorySearch(repo=memory_index_repo, embedding=setup.client)
 
-        # 常驻简报：按"上一场的档案 + 不针对人的未了结承诺"渲染，每窗按表快照重渲
+        # 记忆摘要：按"上一场的档案 + 不针对人的未了结承诺"渲染，每回合按表快照重渲
         self._memory_brief_text: str = ""
         self._memory_brief_ids: tuple[int, ...] = ()
-        # 常驻简报里标着编号的档案行（点名档案行的合法名单之一）
+        # 记忆摘要里标着编号的档案行（点名档案行的合法名单之一）
         self._memory_brief_archive_ids: tuple[int, ...] = ()
-        # 本场已点名提过的档案行（随简报每窗重算）：Planner 拦住没人问起时的复提
+        # 本场已点名提过的档案行（随记忆摘要每回合重算）：Planner 拦住没人问起时的复提
         self._memory_used_archive_ids: tuple[int, ...] = ()
-        # 最近一次渲染简报所用的说话模式（gameplay / zatsudan）：流程单切环节改变了模式时立即触发重渲
+        # 最近一次渲染记忆摘要所用的说话模式（gameplay / zatsudan）：流程单切环节改变了模式时立即触发重渲
         self._memory_brief_speaking_mode: str = ""
         # 线索推送：每批按弹幕与开着的游戏算"这一批想起来的事"；状态只活在本场
         self._memory_cues: Optional[MemoryCueProvider] = memory_cues
@@ -832,7 +832,7 @@ class StreamerAgent(BaseAgent):
                 vector_enabled=self.typed_config.memory_passive_recall_vector_enabled,
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
             )
-        # 回想工具：她说过的话、档案行、不针对具体人的承诺、当前存档工作笔记、本场观众弹幕
+        # 回忆工具：她说过的话、档案行、不针对具体人的承诺、当前存档工作笔记、本场观众弹幕
         self._memory_recall: Optional[MemoryRecallService] = None
         if commitments_repo is not None and chat_repo is not None and archive_repo is not None:
             self._memory_recall = MemoryRecallService(
@@ -856,7 +856,7 @@ class StreamerAgent(BaseAgent):
         # 递话/外部触发到达即唤醒位：receive_prompt 与 trigger_external_proactive
         # 置位，flush 循环的等待立即醒来评估递话——递话不必陪弹幕批次等完整个 tick
         self._flush_kick = asyncio.Event()
-        # 放行限速等待期间的新输入中断版本号与唤醒事件：弹幕、玩家公屏或游戏急事到达即递增并置位，
+        # 放行限速等待期间的新输入中断版本号与唤醒事件：弹幕、玩家游戏公屏或游戏急事到达即递增并置位，
         # 让正在等待放行的自主独白立刻中止等待、撤回过时台词并释放锁。
         self._fresh_input_version: int = 0
         self._pace_wakeup = asyncio.Event()
@@ -897,7 +897,7 @@ class StreamerAgent(BaseAgent):
             summary_profile=SUMMARY_PROFILE,
         )
         # 场次作用域：这一场记得什么（游戏账本、私聊行、未落库轮、时间线 notes、
-        # 本窗批次、上场回顾快照）与决策窗开窗的单一承载。入账动词经 scope.ledger
+        # 本回合批次、上场回顾快照）与决策回合开窗的单一承载。入账动词经 scope.ledger
         # 直打账本接口；出账/清场/读历史/补记走 scope 自己的动词（见 session_scope.py）。
         # 测试可注入替身（替身自带账本/时间线时以替身为准）
         self._scope = session_scope or SessionScope(
@@ -907,7 +907,7 @@ class StreamerAgent(BaseAgent):
             session_manager=session_manager,
             logger=self._logger,
         )
-        # 运营递话提醒队列（receive_prompt 入队；下个决策窗以【运营提醒】段
+        # 运营递话提醒队列（receive_prompt 入队；下个决策回合以【运营提醒】段
         # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
         self._reminder_queue: deque[str] = deque(maxlen=_REMINDER_QUEUE_MAX)
         # 进程启动时刻（core.startup 到达即更新）：续播重放以它为界划上一进程窗口。
@@ -1048,7 +1048,7 @@ class StreamerAgent(BaseAgent):
         if self.typed_config.background.enabled:
             await self._background.start()
 
-        # 先加载流程单再起记忆善后任务，使首次简报直接按开场环节的说话模式渲染
+        # 先加载流程单再起记忆善后任务，使首次记忆摘要直接按开场环节的说话模式渲染
         await self._rundown_coord.start()
 
         # 收播整理善后：上次退出时没整理完的场次（没写回顾，或回顾写完后整理被打断），
@@ -1070,7 +1070,7 @@ class StreamerAgent(BaseAgent):
         if self._mouth is not None:
             await self._mouth.start()
 
-        # 动态主从协调器接线：同步 lead_mode 开关、绑定实况解说/交权简报/切权与候选就绪监听及口播回声转发
+        # 动态主从协调器接线：同步 lead_mode 开关、绑定实况解说/交权记忆摘要/切权与候选就绪监听及口播回声转发
         if self._lead_coordinator is not None:
             if hasattr(self._lead_coordinator, "set_enabled"):
                 self._lead_coordinator.set_enabled(self.typed_config.lead_mode == "dynamic")
@@ -1251,15 +1251,15 @@ class StreamerAgent(BaseAgent):
 
         名单口径（注册处声明）：
         - ``streamer_reply``：LLM 可调的真工具，注册 + 名单 ``["streamer"]``
-          （自己的工具填自己）；Planner 经 registry 统一调用，本窗交接稿
+          （自己的工具填自己）；Planner 经 registry 统一调用，本回合发言要点
           随 ``ToolInvocation.attachment`` 传入（不经实例槽位）。
         - ``rundown_control``：注册（provider="rundown"，可见名单动态计算：
           主播恒可见，游戏主控态并入当前主控游戏 Agent——环节推进归当场主控）
           进 ToolRegistry，与其他工具同一路径被 Planner 调用；主控切换回调处
           经 ``refresh_provider_tools`` 刷新名单。
-        - ``memory_recall``：回想工具（provider="memory"，名单 ``["streamer"]``），
+        - ``memory_recall``：回忆工具（provider="memory"，名单 ``["streamer"]``），
           台词/承诺/档案三个仓储都注入时才注册；没注册时工具面里没有它，
-          提示词里关于回想工具的条款照常渲染。
+          提示词里关于回忆工具的条款照常渲染。
         - ``streamer_social_fact``：登记游戏社交事实（provider="streamer"，名单 ``["streamer"]``），
           社交事实仓储注入时才注册；没注册时 Planner 的工具列表里没有它。
         """
@@ -1291,10 +1291,10 @@ class StreamerAgent(BaseAgent):
             )
             self.register_tool_provider(self._rundown_tool_provider, registry=self._tool_registry)
             registered = "streamer_reply / streamer_note / rundown_control"
-            # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕（唯一的回想工具）
+            # 回忆工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕（唯一的回忆工具）
             if self._memory_recall is not None:
                 recall_kwargs: Dict[str, Any] = {}
-                # 当回想工具工厂支持扩展可见名单时，动态传入具备自主领航能力的游戏 Agent 查询回调（零硬编码游戏名）
+                # 当回忆工具工厂支持扩展可见名单时，动态传入具备自主领航能力的游戏 Agent 查询回调（零硬编码游戏名）
                 if "extra_visible_agents" in inspect.signature(build_memory_recall_provider).parameters:
                     recall_kwargs["extra_visible_agents"] = (
                         self._lead_coordinator.lead_capable_agents if self._lead_coordinator is not None else None
@@ -1365,7 +1365,7 @@ class StreamerAgent(BaseAgent):
                 model_class=RoomMessagePayload,
             )
         # 进房（room.message.enter）：只记 RoomState 的进房名单（活跃度行的
-        # 欢迎原料），不是对话消息——不进决策缓冲、不触发决策窗
+        # 欢迎原料），不是对话消息——不进决策缓冲、不触发决策回合
         self._event_bus.on(
             CoreEvents.ROOM_MESSAGE_ENTER,
             self._on_room_enter,
@@ -1378,9 +1378,9 @@ class StreamerAgent(BaseAgent):
             self._on_room_state_watched,
             model_class=RoomStateWatchedPayload,
         )
-        # 直播画面不在此订阅：决策窗挂帧查询式读图像暂存的 latest 槽位（见 _latest_live_frame）
+        # 直播画面不在此订阅：决策回合挂帧查询式读图像暂存的 latest 槽位（见 _latest_live_frame）
         # 游戏事件（三通道）：游戏 Agent（如 MinecraftAgent）emit game.*
-        # → 主播侧入待入账队列，决策窗边界批量追加进对话时间线（按 payload.game
+        # → 主播侧入待入账队列，决策回合边界批量追加进对话时间线（按 payload.game
         # 过滤可扩展到多游戏）
         self._event_bus.on(
             CoreEvents.GAME_MILESTONE,
@@ -1467,7 +1467,7 @@ class StreamerAgent(BaseAgent):
         payload: LiveStartedPayload,
         source: str,
     ) -> None:
-        """live.started 回调：开播，放行主动发言，重置本场状态并拼第一份常驻简报。
+        """live.started 回调：开播，放行主动发言，重置本场状态并拼第一份记忆摘要。
 
         断线续播场（``resumed=True``）是新场开播的减法：不清场（当场的对话
         历史在库里，按场次主键接着读）、先还原流程单实例快照让中断的进度
@@ -1475,7 +1475,7 @@ class StreamerAgent(BaseAgent):
         """
         del event_name, source
         resumed = payload.resumed
-        # 标记开播初始化进行中：避免并发到达的候选游戏就绪通知抢在流程单恢复与简报刷新前触发半成品交权
+        # 标记开播初始化进行中：避免并发到达的候选游戏就绪通知抢在流程单恢复与记忆摘要刷新前触发半成品交权
         self._live_start_in_progress = True
         try:
             # 开播计数先加：上一场的下播回调若还在等道别那一轮，跑完后据此知道已经换场、不再清场
@@ -1523,16 +1523,16 @@ class StreamerAgent(BaseAgent):
                 self._talk_workbench.consume_interrupted_tail()
                 if self._task_ledger is not None:
                     self._task_ledger.clear_provider_outcomes()
-            # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
-            # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
-            # 新简报，这期间简报退化为更早一场的档案
+            # 按场次类型先拼第一份记忆摘要（正式场接正式场、彩排场接彩排场）；此后每回合按表快照重渲。
+            # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策回合自然重渲出
+            # 新记忆摘要，这期间记忆摘要退化为更早一场的档案
             self._sync_current_saves()
             await self._refresh_memory_brief(kind=payload.kind, announce=True)
             self._settle_pending_before_brief()
             # 线索推送的计数与回执追踪只在本场内有效，开播先清零
             if self._memory_cues is not None:
                 self._memory_cues.reset()
-            # 游戏活动也随场次重置：游戏承诺卡只看这一场"正在玩"什么，上一场的事件不带过来
+            # 游戏活动也随场次重置：游戏承诺线索只看这一场"正在玩"什么，上一场的事件不带过来
             self._game_activity_ms.clear()
             self._session_games.clear()
             self._commentary_buffer.clear()
@@ -1545,7 +1545,7 @@ class StreamerAgent(BaseAgent):
                 self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
                 # 先从诊断事件流划出上一进程的时间段，递话与玩家聊天的重放共用这一段
                 previous_window = self._previous_process_window()
-                # 续播重放递话：上一进程里还没送进决策窗的运营留言随重启丢了，从诊断事件流
+                # 续播重放递话：上一进程里还没送进决策回合的运营留言随重启丢了，从诊断事件流
                 # 补进提醒队列——接回那一轮（或下一轮）以【运营提醒】送达，必达跨重启
                 self._replay_prompts_from_event_log(previous_window)
                 # 续播重放玩家聊天：上一进程最后一轮决策之后玩家在游戏里说的话她还没接，
@@ -1573,7 +1573,7 @@ class StreamerAgent(BaseAgent):
                     self._logger.exception(f"场次 {payload.live_session_id} 的续播接回那一轮出错: {exc}")
         finally:
             self._live_start_in_progress = False
-        # 开播且流程单与常驻简报就绪后评估动态主从（如首段即为游玩环节且游戏就绪则自动交权）
+        # 开播且流程单与记忆摘要就绪后评估动态主从（如首段即为游玩环节且游戏就绪则自动交权）
         await self._sync_lead_mode(reason="live_started")
 
     async def _restore_interrupted_delegations(self, live_session_id: int) -> None:
@@ -1638,7 +1638,7 @@ class StreamerAgent(BaseAgent):
         return prev_startup_ms, prev_end_ms
 
     def _replay_prompts_from_event_log(self, previous_window: Optional[Tuple[int, int]]) -> None:
-        """续播重放递话：上一进程结束前收到、却没来得及送进决策窗的递话补回提醒队列。
+        """续播重放递话：上一进程结束前收到、却没来得及送进决策回合的递话补回提醒队列。
 
         对账口径是"收到 − 已送达"：按时间先后走一遍 streamer.prompt_received 与
         streamer.prompt_delivered，送达一条就划掉最早一条同文的收到记录，剩下的才是
@@ -1734,7 +1734,7 @@ class StreamerAgent(BaseAgent):
     def _load_resume_chat_replay(self, previous_window: Optional[Tuple[int, int]]) -> None:
         """续播重放玩家聊天：只补上一进程里她还没接过的那段尾巴，存一次性缓冲。
 
-        上一进程活着的时候游戏聊天照常进决策窗、她基本都回过了；真正没接的，是上一进程
+        上一进程活着的时候游戏聊天照常进决策回合、她基本都回过了；真正没接的，是上一进程
         最后一轮台词确实播出了的决策开窗之后才到的那几句（界线取开窗时刻而不是她开口的
         时刻：她回上一句时刚到的话还没进那一窗）。窗口 = 从那一刻到本进程启动，且不早于
         上一进程结束前 ``resume_replay_window_ms``；这段里找不到这样的一轮时兜底为整段
@@ -1777,7 +1777,7 @@ class StreamerAgent(BaseAgent):
                 continue
             ts = int(row.get("timestamp_ms", 0))
             time_text = datetime.fromtimestamp(ts / 1000).strftime("%H:%M") if ts > 0 else "--:--"
-            # 续播重放也是决策参考：提及标注与实时决策窗同款，判据对两种来源一视同仁
+            # 续播重放也是决策参考：提及标注与实时决策回合同款，判据对两种来源一视同仁
             mentioned = self_mention_word(payload)
             mark = f" [提及{mentioned}]" if mentioned else ""
             lines.append(f"{time_text} {_game_chat_line(payload)}{mark}")
@@ -1823,7 +1823,7 @@ class StreamerAgent(BaseAgent):
         return max(aired_opens) if aired_opens else None
 
     def _drain_resume_replay(self) -> str:
-        """取空续播重放缓冲（决策执行器在决策窗入口调用；注入一次制）。"""
+        """取空续播重放缓冲（决策执行器在决策回合入口调用；注入一次制）。"""
         if not self._resume_chat_replay:
             return ""
         text = "\n".join(self._resume_chat_replay)
@@ -1855,7 +1855,7 @@ class StreamerAgent(BaseAgent):
         # _running 已为 False，进程退出时的道别无意义，不触发。forced 豁免
         # 重复闸：道别话题常与收尾环节的发言字面重合，被误抑制就永远说不出再见。
         # await 形态：本回调由事件总线的后台任务驱动，await 不阻塞发布方，
-        # 且保证道别决策窗赶在事件面仍在、发言管线未停的窗口内完整走完
+        # 且保证道别决策回合赶在事件面仍在、发言管线未停的窗口内完整走完
         # （说完再见再做收播整理与记忆清理）。
         # 被新开的场次顶掉（如彩排直接转正式开播）不是真下播：紧接着就是下一场
         # 的开播，道别要好几秒才生成完，会落进新场次、在正式直播开头说"今天就到
@@ -2043,26 +2043,26 @@ class StreamerAgent(BaseAgent):
             self._memory_indexer.request_run()
 
     # ==================================================================
-    # 主播记忆：常驻简报 / 线索推送 / 回想工具 / 下播整理
+    # 主播记忆：记忆摘要 / 线索推送 / 回忆工具 / 下播整理
     # ==================================================================
 
     @property
     def memory_brief_text(self) -> str:
-        """本场常驻简报的正文（空串 = 还没有可记的事）。
+        """本场记忆摘要的正文（空串 = 还没有可记的事）。
 
-        每个决策窗按台账表快照重渲：表没变时逐字节相同（系统提示词前缀缓存仍命中），
+        每个决策回合按台账表快照重渲：表没变时逐字节相同（系统提示词前缀缓存仍命中），
         直播中运营者纠错、上一场整理刚写完，下一个窗口就反映出来。
         """
         return self._memory_brief_text
 
     @property
     def memory_brief_commitment_ids(self) -> Tuple[int, ...]:
-        """常驻简报里出现的承诺编号（Planner 点名的合法名单之一，观测与测试用）。"""
+        """记忆摘要里出现的承诺编号（Planner 点名的合法名单之一，观测与测试用）。"""
         return self._memory_brief_ids
 
     @property
     def memory_brief_archive_ids(self) -> Tuple[int, ...]:
-        """常驻简报里标着编号的档案行（Planner 点名的合法名单之一，观测与测试用）。"""
+        """记忆摘要里标着编号的档案行（Planner 点名的合法名单之一，观测与测试用）。"""
         return self._memory_brief_archive_ids
 
     @property
@@ -2073,8 +2073,8 @@ class StreamerAgent(BaseAgent):
     def _current_session_pk(self) -> Optional[int]:
         """进行中场次主键；收播道别那一轮取正在结束的那一场（无场次管理器或未开播为 None）。
 
-        道别那一轮里场次管理器已经把进行中场次清空，而回想工具的"本场"、线索推送的
-        场次、常驻简报的"上一场"都还要按这一场算；这一场只在道别轮自己的调用链里
+        道别那一轮里场次管理器已经把进行中场次清空，而回忆工具的"本场"、线索推送的
+        场次、记忆摘要的"上一场"都还要按这一场算；这一场只在道别轮自己的调用链里
         看得见（见 ``_CLOSING_SESSION``），并发轮次照常取进行中场次。
         """
         closing = _CLOSING_SESSION.get()
@@ -2114,7 +2114,7 @@ class StreamerAgent(BaseAgent):
 
     @property
     def current_speaking_mode(self) -> str:
-        """常驻简报使用的当前说话模式（"gameplay" 常规边玩边说 / "zatsudan" 纯杂谈）。"""
+        """记忆摘要使用的当前说话模式（"gameplay" 常规边玩边说 / "zatsudan" 纯杂谈）。"""
         return self._current_speaking_mode()
 
     def _has_enabled_game(self) -> bool:
@@ -2145,7 +2145,7 @@ class StreamerAgent(BaseAgent):
         )
 
     def _current_speaking_mode(self) -> str:
-        """判定常驻简报使用的环节说话模式（"zatsudan" 纯杂谈 / "gameplay" 常规边玩边说）。
+        """判定记忆摘要使用的环节说话模式（"zatsudan" 纯杂谈 / "gameplay" 常规边玩边说）。
 
         流程单当前环节显式标为 talk，或流程单已加载且本场未启用任何游戏时按纯杂谈展开跨存档名场面；
         主线游玩环节、启用了游戏的常规直播（含游戏委派短暂等待回复期间）均保持边玩边说的严格存档隔离，
@@ -2180,7 +2180,7 @@ class StreamerAgent(BaseAgent):
         return any(hint in haystack for hint in ("提问箱", "棉花糖", "话题卡", "话题匣", "qna", "快问快答", "自由闲聊"))
 
     def _render_talk_workbench_for_window(self, has_viewer_batch: bool, *, urgent_game: bool = False) -> str:
-        """为本决策窗渲染话头工作台（杂谈档【当前话头与本节提纲】或边玩边说档【刚聊开的话头】）；空闲窗读完即清尾句提醒。"""
+        """为本决策回合渲染话头工作台（杂谈档【当前话头与本节提纲】或边玩边说档【刚聊开的话头】）；空闲窗读完即清尾句提醒。"""
         self._sync_talk_workbench()
         if self._current_speech_mode() == "talk":
             rendered = self._talk_workbench.render()
@@ -2207,7 +2207,7 @@ class StreamerAgent(BaseAgent):
         return rendered
 
     async def _refresh_talk_cards_for_window(self, has_viewer_batch: bool) -> str:
-        """为本决策窗刷新并渲染【可抽的话题卡 / 提问箱】（真人弹幕在场时不预摆）。"""
+        """为本决策回合刷新并渲染【可抽的话题卡 / 提问箱】（真人弹幕在场时不预摆）。"""
         if self._topic_deck is None:
             return ""
         self._sync_talk_workbench()
@@ -2278,7 +2278,7 @@ class StreamerAgent(BaseAgent):
         判据按优先级：任务记录表里有 executor 是它、状态未终了的任务 → 算正在玩；
         否则才看游戏事件（game.* / body / chat）的最近时刻是否落在 ``_GAME_ACTIVE_WINDOW_MS`` 内。
         两条都不满足 → 不算在玩。只看事件与任务，不看工具面是否可见，所以形象等
-        非游戏工具面不会混进游戏承诺卡。
+        非游戏工具面不会混进游戏承诺线索。
         """
         playing: set[str] = set()
         if self._task_ledger is not None:
@@ -2480,7 +2480,7 @@ class StreamerAgent(BaseAgent):
             )
 
     async def _wake_memory_indexer(self) -> None:
-        """社交事实写成后叫醒索引任务补一轮（回想马上查得到）；没装索引时什么都不做。"""
+        """社交事实写成后叫醒索引任务补一轮（回忆马上查得到）；没装索引时什么都不做。"""
         if self._memory_indexer is not None:
             self._memory_indexer.request_run()
 
@@ -2518,7 +2518,7 @@ class StreamerAgent(BaseAgent):
     def _current_session_kind(self) -> SessionKind:
         """进行中场次的类型；未开播按正式场算（开播前的闲聊读的是正式直播的上一场）。
 
-        收播道别那一轮里进行中场次已清空，按正在结束的那一场取：彩排场道别时回想
+        收播道别那一轮里进行中场次已清空，按正在结束的那一场取：彩排场道别时回忆
         "上一场"仍只翻彩排场，不会被当成正式场。这一场只在道别那一轮自己的调用链里看得见
         （见 ``_CLOSING_SESSION``）：道别期间并发的常规轮次、刚开的新场次照常取进行中场次的类型。
         """
@@ -2529,10 +2529,10 @@ class StreamerAgent(BaseAgent):
         return kind if kind in SESSION_KINDS else SESSION_KIND_LIVE
 
     async def _previous_session_id(self) -> Optional[int]:
-        """上一场 = 最近一个已整理、有档案行、时长够的同类型场次（与常驻简报同口径）。
+        """上一场 = 最近一个已整理、有档案行、时长够的同类型场次（与记忆摘要同口径）。
 
-        承诺卡的时间词按它给：登记在上一场的写"上一场"，其余写"之前"。没有档案仓储
-        （账本没启用）或读不到时返回 None，承诺卡一律写"之前"。
+        承诺线索的时间词按它给：登记在上一场的写"上一场"，其余写"之前"。没有档案仓储
+        （账本没启用）或读不到时返回 None，承诺线索一律写"之前"。
         """
         if self._archive_repo is None:
             return None
@@ -2542,11 +2542,11 @@ class StreamerAgent(BaseAgent):
                 min_duration_ms=self.typed_config.memory_brief_min_session_ms,
             )
         except Exception as exc:  # noqa: BLE001 - 取不到就按没有上一场处理，不挡线索推送
-            self._logger.warning(f"取上一场编号失败（承诺卡时间词写「之前」）: {exc}", exc=exc)
+            self._logger.warning(f"取上一场编号失败（承诺线索时间词写「之前」）: {exc}", exc=exc)
             return None
 
     async def _bootstrap_recaps(self) -> None:
-        """启动善后：补完上次退出时没整理完的场次，再拼好常驻简报。"""
+        """启动善后：补完上次退出时没整理完的场次，再拼好记忆摘要。"""
         await self._settle_ledger()
         self._sync_current_saves()
         await self._refresh_memory_brief(announce=True)
@@ -2556,7 +2556,7 @@ class StreamerAgent(BaseAgent):
 
         下播整理在后台跑：道别那一轮、等队尾台词（最多 30 秒）、三次模型调用，常超过
         一分钟；开播回调不能同步等它，否则上一场没整理完时开播要卡到模型返回。这里先
-        按当前表快照拼简报，整理在后台跑完后的下一个决策窗重渲时自然生效，这期间简报
+        按当前表快照拼记忆摘要，整理在后台跑完后的下一个决策回合重渲时自然生效，这期间记忆摘要
         里没有刚结束那一场的档案。同一场若下播后台整理还在跑，SessionSettler 的按场次
         在途表会让两边共享同一个任务，不会重复调模型。
         """
@@ -2576,7 +2576,7 @@ class StreamerAgent(BaseAgent):
         announce: bool = False,
         speaking_mode: Optional[str] = None,
     ) -> None:
-        """同步各游戏当前存档并按台账快照重渲常驻简报（公开接缝，供决策窗与测试驱动重渲）。"""
+        """同步各游戏当前存档并按台账快照重渲记忆摘要（公开接缝，供决策回合与测试驱动重渲）。"""
         self._sync_current_saves()
         await self._refresh_memory_brief(kind=kind, announce=announce, speaking_mode=speaking_mode)
 
@@ -2587,7 +2587,7 @@ class StreamerAgent(BaseAgent):
         announce: bool = False,
         speaking_mode: Optional[str] = None,
     ) -> None:
-        """按台账快照重渲常驻简报（每决策窗一次，环节切换说话模式时亦触发）；仓储缺失时为空。
+        """按台账快照重渲记忆摘要（每决策回合一次，环节切换说话模式时亦触发）；仓储缺失时为空。
 
         渲染只依赖表快照与当前环节说话模式：表没变、说话模式没换时输出逐字节相同，Planner 系统提示词的
         前缀缓存仍命中；表变了（直播中纠错、上一场整理刚写完）或切进纯杂谈环节，下一窗就反映出来。
@@ -2619,8 +2619,8 @@ class StreamerAgent(BaseAgent):
                 privacy_service=self._privacy_service,
                 speaking_mode=resolved_mode,
             )
-        except Exception as exc:  # noqa: BLE001 - 简报拼不出来只省这一段，不挡开播
-            self._logger.warning(f"拼常驻简报失败（本场省略简报段）: {exc}", exc=exc)
+        except Exception as exc:  # noqa: BLE001 - 记忆摘要拼不出来只省这一段，不挡开播
+            self._logger.warning(f"拼记忆摘要失败（本场省略记忆摘要段）: {exc}", exc=exc)
             self._memory_brief_text = ""
             self._memory_brief_ids = ()
             self._memory_brief_archive_ids = ()
@@ -2635,7 +2635,7 @@ class StreamerAgent(BaseAgent):
             await self._log_brief_summary(brief)
 
     async def _flush_pending_operator_notes(self) -> None:
-        """把运营在本场递进来的提醒落进 memory_corrections，使它在本场常驻简报与下播整理中一直可见。"""
+        """把运营在本场递进来的提醒落进 memory_corrections，使它在本场记忆摘要与下播整理中一直可见。"""
         if not self._pending_operator_notes:
             return
         session_id = self._current_session_pk()
@@ -2649,19 +2649,19 @@ class StreamerAgent(BaseAgent):
                     live_session_id=int(session_id),
                     content=note,
                 )
-            except Exception as exc:  # noqa: BLE001 - 单条提醒落库异常不阻塞本窗简报渲染
+            except Exception as exc:  # noqa: BLE001 - 单条提醒落库异常不阻塞本回合记忆摘要渲染
                 self._logger.warning(f"本场运营常驻提醒落库失败: {exc}", exc=exc)
 
     async def _log_brief_summary(self, brief: Any) -> None:
-        """开播时记一条简报摘要：上一场编号、档案行数、播出台词数与承诺条数。"""
+        """开播时记一条记忆摘要摘要：上一场编号、档案行数、播出台词数与承诺条数。"""
         if brief.previous_session_id is None:
             self._logger.info(
-                f"常驻简报已装入：没有上一场，承诺 {len(brief.commitment_ids)} 条（{len(brief.text)} 字）"
+                f"记忆摘要已装入：没有上一场，承诺 {len(brief.commitment_ids)} 条（{len(brief.text)} 字）"
             )
             return
         speech_count = await self._count_delivered_speech(int(brief.previous_session_id))
         self._logger.info(
-            f"常驻简报已装入：上一场 #{brief.previous_session_id}，档案 {brief.archive_line_count} 行，"
+            f"记忆摘要已装入：上一场 #{brief.previous_session_id}，档案 {brief.archive_line_count} 行，"
             f"播出台词 {speech_count} 句，承诺 {len(brief.commitment_ids)} 条（{len(brief.text)} 字）"
         )
 
@@ -2706,11 +2706,11 @@ class StreamerAgent(BaseAgent):
         exclude_texts: Sequence[str] = (),
         limit: int = 2,
     ) -> List[str]:
-        """供主控游戏 Agent 按需拉取跨场被动记忆线索卡（复用 MemoryCueProvider，绝不泄露观众隐私）。"""
+        """供主控游戏 Agent 按需拉取跨场被动记忆记忆线索（复用 MemoryCueProvider，绝不泄露观众隐私）。"""
         if self._memory_cues is None:
             return []
-        # 游戏主控期间主播 Planner 零唤醒，按需拉线索前只读同步一次当前存档，确保按存档隔离的档案与玩家卡准确命中；
-        # 主播的常驻简报并不注入游戏 Agent 上下文，因此这里不传 brief_*_ids 屏蔽上一场档案，只共享本场已用与 10 分钟限频
+        # 游戏主控期间主播 Planner 零唤醒，按需拉线索前只读同步一次当前存档，确保按存档隔离的档案与玩家线索准确命中；
+        # 主播的记忆摘要并不注入游戏 Agent 上下文，因此这里不传 brief_*_ids 屏蔽上一场档案，只共享本场已用与 10 分钟限频
         self._sync_current_saves()
         return await self._memory_cues.cues_for_game_lead(
             game=game,
@@ -2957,7 +2957,7 @@ class StreamerAgent(BaseAgent):
         scope: str,
         limit: int,
     ) -> List[RecallEntry]:
-        """委托动态主从协调器聚合活跃游戏 Agent 的本场短期记忆条目，并转换为回想条目。
+        """委托动态主从协调器聚合活跃游戏 Agent 的本场短期记忆条目，并转换为回忆条目。
 
         隐私边界：私聊条目在未开播或全历史（非本场）检索时一律过滤，防止私聊跨场或面向公开外泄。
         """
@@ -2994,9 +2994,9 @@ class StreamerAgent(BaseAgent):
     async def _collect_memory_cues(
         self, batch: List[Any], open_games: Sequence[str], game_players: Sequence[Tuple[str, str]] = ()
     ) -> Any:
-        """本批线索：承诺卡、玩家卡、被动想起的档案卡与老梗卡、老观众在场一行、回执行；没启用线索推送时返回 None。
+        """本批线索：承诺线索、玩家线索、被动想起的往事线索与老梗线索、老观众在场一行、遗忘回执；没启用线索推送时返回 None。
 
-        常驻简报里列着的条目交过去：同一件事简报里有了，卡片不再推一遍。``game_players`` 是本窗在游戏里
+        记忆摘要里列着的条目交过去：同一件事记忆摘要里有了，线索就不再推一遍。``game_players`` 是本回合在游戏里
         开口或冲她做动作的玩家，(游戏, UUID)：有往来的推一张"这位是谁、和你有过什么"。
         """
         if self._memory_cues is None:
@@ -3054,7 +3054,7 @@ class StreamerAgent(BaseAgent):
         payload: GamePayload,
         source: str,
     ) -> None:
-        """game.* 事件回调：事件行入待入账队列，下个决策窗边界批量追加进时间线。
+        """game.* 事件回调：事件行入待入账队列，下个决策回合边界批量追加进时间线。
 
         行标签带事件类型（``游戏·<game>·<类型>``），规划器据此区分"剧情推进"
         （milestone）与"需要定夺"（report）；message 本体经术语脱敏（任务号/观测
@@ -3068,7 +3068,7 @@ class StreamerAgent(BaseAgent):
                 payload.game, payload.event_type, payload.message, payload.timestamp_ms or now_ms()
             )
             if self._mouth is not None and payload.event_type != "error" and message:
-                # 非报错的游戏进展与交付留进即时反应的近期背景，使现场卡知道刚做成什么；
+                # 非报错的游戏进展与交付留进即时反应的近期背景，使事实快照知道刚做成什么；
                 # 只有高光里程碑（如开箱发现稀罕宝物）才让即时反应当场惊呼一句（P1 高光优先级）
                 self._mouth.note_game(message)
                 if payload.event_type == "milestone" and payload.notable:
@@ -3131,11 +3131,11 @@ class StreamerAgent(BaseAgent):
         )
 
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
-        """任务变化通知（``task.changed``，仅发起方是自己时被调）：停滞告警送进决策窗并履行决断义务。
+        """任务变化通知（``task.changed``，仅发起方是自己时被调）：停滞告警送进决策回合并履行决断义务。
 
         数据面修复（场 65 实证）：基类默认只记日志，停滞告警进不了决策上下文，
         告警发了主播也做不出决断（全场 11 次告警零反应）。这里把 alert 类告警
-        （``payload.alert=True``）记进游戏账本当决策窗必读材料（委派原话、已停
+        （``payload.alert=True``）记进游戏账本当决策回合必读材料（委派原话、已停
         多久、第几次告警，形态同遭遇 / 递话类注入）并置位待定夺信号唤醒决策；
         同一委派按决断兜底计数，排队 / 停着等定夺的第 N 次告警仍无决断时自动
         撤单并补一条场记事实（"这件事我喊停了"），主播下一窗顺带交代。非告警
@@ -3198,8 +3198,8 @@ class StreamerAgent(BaseAgent):
     def _record_delegation(self, agent: str, instruction: str) -> None:
         """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。
 
-        委派行直写时间线，不进决策窗批次（批次只收三类游戏事件通道的条目）。
-        受理即算"开始玩这个游戏"：游戏承诺卡据此出现，不必等那个游戏报出第一个事件；
+        委派行直写时间线，不进决策回合批次（批次只收三类游戏事件通道的条目）。
+        受理即算"开始玩这个游戏"：游戏承诺线索据此出现，不必等那个游戏报出第一个事件；
         同时第一件委派已落地，开播【上次收尾】提前收闸不再注入。
         """
         self._opening_wrapup_active = False
@@ -3227,8 +3227,8 @@ class StreamerAgent(BaseAgent):
                 payload.summary,
                 bool(getattr(payload, "resolved", False)),
                 payload.timestamp_ms or now_ms(),
-                # 只有冲她做肢体动作的玩家算找过她，本窗据此推他的玩家卡；跟随状况上挂的是她跟着的人，
-                # 他没来找她，不推卡、不算她在回应谁
+                # 只有冲她做肢体动作的玩家算找过她，本回合据此推他的玩家线索；跟随状况上挂的是她跟着的人，
+                # 他没来找她，不推他的线索、不算她在回应谁
                 player=payload.player_uuid if payload.kind == "player_body_language" else "",
                 # 冲她做动作的人的名字：回复器据此说清是谁扔来的、谁拍的她，不说成凭空到手
                 who=payload.player_name if payload.kind == "player_body_language" else "",
@@ -3270,7 +3270,7 @@ class StreamerAgent(BaseAgent):
 
         玩家聊天是有人在跟游戏里的我说话：主播主控态下置位待决策信号及时接住；
         游戏自主主控态下由游戏侧直接主导游戏公屏交流，主播侧仅记录近况供回答观众知情，
-        不触发主播主动决策，避免与游戏侧抢回公屏。系统消息只作参考。私聊行不进时间线。
+        不触发主播主动决策，避免与游戏侧抢回游戏公屏。系统消息只作参考。私聊行不进时间线。
         """
         del event_name, source
         try:
@@ -3279,7 +3279,7 @@ class StreamerAgent(BaseAgent):
             if payload.private:
                 self._scope.record_private_chat(f"[{payload.game}] {body}")
             else:
-                # 记下这句是谁说的：本窗只有一位核对过的玩家开口时，她这一窗的话落库时记成在回应他
+                # 记下这句是谁说的：本回合只有一位核对过的玩家开口时，她这一窗的话落库时记成在回应他
                 # 带上玩家名：回复器据此分清这句是哪位玩家说的，不安到刚点过名的女仆、宠物头上
                 self._game_ledger.record_chat(
                     payload.game,
@@ -3294,7 +3294,7 @@ class StreamerAgent(BaseAgent):
                 if self._mouth is not None:
                     self._mouth.note_game(body)
                 if payload.kind != "player":
-                    # 公屏系统消息里的玩家加入提示（如"系统消息：玩家甲加入了游戏"）：登记待欢迎名，防即时反应与决策重复欢迎
+                    # 游戏公屏系统消息里的玩家加入提示（如"系统消息：玩家甲加入了游戏"）：登记待欢迎名，防即时反应与决策重复欢迎
                     joined_player = extract_player_join_name(payload.content) or extract_player_join_name(body)
                     if joined_player:
                         self._room_state.record_player_join(joined_player)
@@ -3307,14 +3307,14 @@ class StreamerAgent(BaseAgent):
                 if self._memory_cues is not None:
                     if payload.sender:
                         self._memory_cues.note_name(payload.sender)
-                    # 游戏主控态收到公开公屏时顺手在后台非阻塞预取查询向量，供 2 秒合批刷出时零等待命中
+                    # 游戏主控态收到公开游戏公屏时顺手在后台非阻塞预取查询向量，供 2 秒合批刷出时零等待命中
                     if self._is_game_lead_active() and not payload.private and payload.content:
                         self._memory_cues.prefetch_game_text(payload.content)
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}", exc=True)
 
     async def _on_self_chatted(self, event_name: str, payload: GameSelfChattedPayload, source: str) -> None:
-        """``game.self.chatted`` 回调：她在游戏公屏说出去的一句入待入账队列，下个决策窗进时间线。
+        """``game.self.chatted`` 回调：她在游戏公屏说出去的一句入待入账队列，下个决策回合进时间线。
 
         游戏那一面会自己找玩家搭话（第 58 场问人要蒲公英），不记下来的话玩家回一句"找到了"，
         她在直播里接不上。这是她自己的话：不促发决策、不交回复器当别人刚说的话。
@@ -3324,13 +3324,13 @@ class StreamerAgent(BaseAgent):
             self._note_game_activity(payload.game)
             at_ms = payload.timestamp_ms or now_ms()
             self._game_ledger.record_self_chat(payload.game, payload.message, at_ms)
-            # 同一句也记进游戏那边的流水：【游戏那边此刻】列她近五分钟在公屏说过什么
+            # 同一句也记进游戏那边的流水：【游戏那边此刻】列她近五分钟在游戏公屏说过什么
             self._game_side.note_self_chat(payload.game, payload.message, at_ms)
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
-            self._logger.warning(f"收集她自己的公屏话失败: {exc}", exc=True)
+            self._logger.warning(f"收集她自己的游戏公屏话失败: {exc}", exc=True)
 
     def _game_now(self, agents: Sequence[str]) -> GameNow:
-        """游戏那边此刻的读数（Planner 每窗拼【游戏那边此刻】用）：各 Agent 此刻那一步与最近的判断、近期目标成败，加她的公屏话。"""
+        """游戏那边此刻的读数（Planner 每回合拼【游戏那边此刻】用）：各 Agent 此刻那一步与最近的判断、近期目标成败，加她的游戏公屏话。"""
         current = now_ms()
         readings: Dict[str, AgentNow] = {}
         for agent in agents:
@@ -3371,7 +3371,7 @@ class StreamerAgent(BaseAgent):
         """这个游戏 Agent 最近说的一句判断与时刻：任务账本里它名下在跑的委派快照的旁注，取最新的一句。
 
         这是游戏那一面自己的推理（"门在左边，先拆一格墙出去"），可能看错，所以只进【游戏那边此刻】并标明
-        不一定对；不进对话时间线、不促发决策。每窗决策前读一次，不订阅它的回复事件——Agent 只听输入与
+        不一定对；不进对话时间线、不促发决策。每回合决策前读一次，不订阅它的回复事件——Agent 只听输入与
         基础设施事件。没接任务账本或没有时为 ("", 0)。
         """
         if self._task_ledger is None:
@@ -3389,7 +3389,7 @@ class StreamerAgent(BaseAgent):
         return latest
 
     def _current_segment_title(self) -> str:
-        """当前流程单环节的标题（即时反应的现场卡用）；没有流程单为空。"""
+        """当前流程单环节的标题（即时反应的事实快照用）；没有流程单为空。"""
         return self._rundown_coord.current_segment_title()
 
     async def _read_scene_brief(self) -> str:
@@ -3444,7 +3444,7 @@ class StreamerAgent(BaseAgent):
         )
 
     async def _fresh_context_since_open(self, since_ms: int) -> Dict[str, Any]:
-        """决策台词因与即时反应或新现场矛盾退回重想时，附上本窗开窗后即时反应说的话、待入账新事件与最新一句话现场。"""
+        """决策台词因与即时反应或新现场矛盾退回重想时，附上本回合开窗后即时反应说的话、待入账新事件与最新一句话现场。"""
         ctx: Dict[str, Any] = {
             "mouth_just_said": [entry.text for entry in self._spoken_log.mouth_since(since_ms)],
             "latest_game_events": self._game_ledger.pending_lines()[-8:],
@@ -3760,7 +3760,7 @@ class StreamerAgent(BaseAgent):
 
         # 环节推进归当场主控：流程单段类型为游戏段时不置位 rundown_pending（无论主控切换是否完成——
         # 开播瞬间主控切换尚未完成时运行时主控判据会落空，改按段类型判据杜绝竞态窗口的双开场白），
-        # 改为将新环节同步给游戏侧（未进入游戏主控时 publish 内部为空操作，交接简报会带环节信息）
+        # 改为将新环节同步给游戏侧（未进入游戏主控时 publish 内部为空操作，交接记忆摘要会带环节信息）
         if not is_talk_segment and self._lead_coordinator is not None:
             segment = self._rundown_coord.current_segment()
             if segment is not None:
@@ -3803,9 +3803,9 @@ class StreamerAgent(BaseAgent):
             )
 
     def receive_prompt(self, *, content: str, source: str = "") -> bool:
-        """接收递话（运营/跨 Agent 留言）：入提醒队列，下个决策窗必达。
+        """接收递话（运营/跨 Agent 留言）：入提醒队列，下个决策回合必达。
 
-        不冒充观众弹幕、不进对话历史——队列内容在决策窗入口取空，以
+        不冒充观众弹幕、不进对话历史——队列内容在决策回合入口取空，以
         【运营提醒】段注入 Planner 参考块（消费即送达，一次制）。队列
         满时拒收（返回 False）：必达语义不允许静默挤掉旧条目。
         """
@@ -3870,13 +3870,13 @@ class StreamerAgent(BaseAgent):
         loop.create_task(self._event_bus.emit(event_name, payload, source="StreamerAgent"))
 
     def _drain_reminders(self) -> str:
-        """取空提醒队列（决策执行器在决策窗入口调用；送达一次制）。"""
+        """取空提醒队列（决策执行器在决策回合入口调用；送达一次制）。"""
         if not self._reminder_queue:
             return ""
         items = list(self._reminder_queue)
         lines = [f"- {item}" for item in items]
         self._reminder_queue.clear()
-        # 送达留痕：决策窗一取走就记一条送达事件，续播重放据此只补重启时还没送出去的
+        # 送达留痕：决策回合一取走就记一条送达事件，续播重放据此只补重启时还没送出去的
         self._emit_from_sync(CoreEvents.STREAMER_PROMPT_DELIVERED, StreamerPromptDeliveredPayload(contents=items))
         return "\n".join(lines)
 
@@ -3997,7 +3997,7 @@ class StreamerAgent(BaseAgent):
             # 弹幕批次滞留期间递话到达也照常成轮，批次原地不动继续等自己的
             # 放行条件。只有这一轮真的执行了才结束本 tick：递话被防接龙挡住时
             # 接着看弹幕批次，到期就照常开窗，递话随这一窗送达（决策执行器在
-            # 任何决策窗入口都取空提醒队列）。否则她每说一句都刷新防接龙计时，
+            # 任何决策回合入口都取空提醒队列）。否则她每说一句都刷新防接龙计时，
             # 递话一直排着，弹幕回复和礼物感谢跟着停到防接龙放行为止
             reminder_evaluated = False
             if self._reminder_queue:
@@ -4104,7 +4104,7 @@ class StreamerAgent(BaseAgent):
             rundown_overdue=self._rundown_coord.is_overdue(now_ms=self._clock()),
             rundown_ready=self._rundown_coord.is_active(),
             # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
-            # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
+            # （送达在决策执行器取空队列处发生，任何决策回合都会消费）
             reminder_pending=bool(self._reminder_queue),
             talk_mode=self._current_speech_mode() == "talk",
             viewer_waiting_since_ms=None if self._buffer.is_empty else self._buffer.first_arrival_ms,
@@ -4141,7 +4141,7 @@ class StreamerAgent(BaseAgent):
 
         ``closing_session`` 只在收播道别那一轮给出（正在结束的那一场）。决策执行器开窗按
         这一场读历史、道别句带这一场的编号；reply 工具经 :meth:`_read_history` 给回复器取
-        历史、回想工具取场次类型，也都按这一场——这两处不经参数传递，靠 ``_CLOSING_SESSION``
+        历史、回忆工具取场次类型，也都按这一场——这两处不经参数传递，靠 ``_CLOSING_SESSION``
         这个上下文变量读到。
 
         每一轮开头都把上下文变量设成本轮的值（常规轮次设 None），跑完（含出错）用 token
@@ -4157,8 +4157,8 @@ class StreamerAgent(BaseAgent):
         live_token = _ROUND_LIVE_EPOCH.set(self._session_epoch if self._live_active and not is_signoff else None)
         cause_token = _ROUND_TRIGGER_CAUSE.set(trigger_cause)
         try:
-            # 开窗前先看各游戏眼下在哪个存档（换了存档清掉那个游戏手头的事），再按台账快照重渲
-            # 常驻简报（直播中纠错下一窗生效；表没变、存档没换时逐字节相同，缓存不失效）
+            # 回合开始前先看各游戏眼下在哪个存档（换了存档清掉那个游戏手头的事），再按台账快照重渲
+            # 记忆摘要（直播中纠错下一窗生效；表没变、存档没换时逐字节相同，缓存不失效）
             self._sync_current_saves()
             await self._refresh_memory_brief()
             result = await self._rounds.execute(
@@ -4259,7 +4259,7 @@ class StreamerAgent(BaseAgent):
         return ok, message, view
 
     # ==================================================================
-    # 动态主从：自动切权、交权简报、回声转发与实况解说直通 Replyer
+    # 动态主从：自动切权、交权记忆摘要、回声转发与实况解说直通 Replyer
     # ==================================================================
 
     @property
@@ -4292,7 +4292,7 @@ class StreamerAgent(BaseAgent):
 
         触发条件：游戏侧在 live.started 后置位就绪或 MCP 重连恢复后经 LeadCoordinator 广播；
         若主播自身尚在执行 _on_live_started 初始化则直接返回，由初始化末尾统一调用 _sync_lead_mode，
-        确保交权简报必定包含最新流程单与常驻简报，且全路径严守 live_active/lead_mode/override/in_talk/in_closing 门禁。
+        确保交权记忆摘要必定包含最新流程单与记忆摘要，且全路径严守 live_active/lead_mode/override/in_talk/in_closing 门禁。
         """
         del agent_name
         if not self._running or not self._lead_hooks_bound or self._live_start_in_progress:
@@ -4354,7 +4354,7 @@ class StreamerAgent(BaseAgent):
         2. 若未开播、正处收尾道别、配置为 ``streamer_only``、人工覆盖锁定 ``streamer``，
            或自动模式下流程单处于 ``talk`` 环节 → 当前在游戏主控则立即收权并记下收尾摘要；
         3. 若当前主控游戏已静默不再就绪（含候选为空）→ 兜底上报不可用降级回主播并唤醒圆场；
-        4. 若全部条件满足且存在就绪的自主领航游戏候选 → 组装只读交权简报并交权给目标游戏。
+        4. 若全部条件满足且存在就绪的自主领航游戏候选 → 组装只读交权记忆摘要并交权给目标游戏。
         """
         coord = self._lead_coordinator
         if coord is None:
@@ -4496,7 +4496,7 @@ class StreamerAgent(BaseAgent):
                 )
 
     async def _build_lead_handover_context(self, target_agent: str) -> LeadHandoverContext:
-        """构建交给自主领航游戏 Agent 的只读现场简报（复用现有常驻简报与社交事实视图，零游戏名硬编码）。"""
+        """构建交给自主领航游戏 Agent 的只读现场记忆摘要（复用现有记忆摘要与社交事实视图，零游戏名硬编码）。"""
         segment = self._rundown_coord.current_segment()
         segment_id = segment.id if segment is not None else ""
         segment_title = segment.title if segment is not None else ""
@@ -4508,7 +4508,7 @@ class StreamerAgent(BaseAgent):
         save = self._current_saves.get(target_agent)
         save_name = save.name if save is not None and save.name else ""
 
-        # 复用现有常驻简报（未了结承诺、上一场档案、运营备注）+ 该游戏当前存档的社交事实
+        # 复用现有记忆摘要（未了结承诺、上一场档案、运营备注）+ 该游戏当前存档的社交事实
         if not self._memory_brief_text and self._commitments_repo is not None and self._archive_repo is not None:
             await self._refresh_memory_brief()
         brief_parts: List[str] = []
@@ -4541,8 +4541,8 @@ class StreamerAgent(BaseAgent):
             if not resident:
                 return ""
             return render_social_facts(resident, self._clock(), age_text)
-        except Exception as exc:  # noqa: BLE001 - 社交事实读取失败不阻断交权简报组装
-            self._logger.warning(f"构建交权简报读取 '{target_agent}' 社交事实失败（已省略）: {exc}", exc=True)
+        except Exception as exc:  # noqa: BLE001 - 社交事实读取失败不阻断交权记忆摘要组装
+            self._logger.warning(f"构建交权记忆摘要读取 '{target_agent}' 社交事实失败（已省略）: {exc}", exc=True)
             return ""
 
     async def _handle_game_commentary(self, req: CommentaryRequest) -> CommentaryAck:

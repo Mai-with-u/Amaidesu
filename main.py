@@ -618,14 +618,14 @@ async def create_app_components(
             memory_index_repo=database.memory_index,
             embedding_setup=embedding_setup,
             memory_cue_log_repo=database.memory_cue_log,
-            # 游戏里的人：玩家在游戏里开口或冲她做动作时推他的玩家卡
+            # 游戏里的人：玩家在游戏里开口或冲她做动作时推他的玩家线索
             game_player_repo=database.game_players,
             # 游戏社交事实：主播场内登记、参考段常驻、下播整理归纳
             social_fact_repo=database.social_facts,
             # 自备话题匣与提问箱：主播杂谈档预摆未用卡片与主动抽卡
             talk_card_repo=database.talk_cards,
             event_repo=database.events,
-            # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
+            # 删除/遮名服务：回忆工具与线索推送按它遮名、核对遗忘命令
             privacy_service=privacy_service,
             # 存储账本：下播收尾由主播 Agent 编排（等道别与整理落库后再做清理）
             storage_ledger=storage_ledger,
@@ -779,13 +779,13 @@ async def create_app_components(
                 memory_index_repo=database.memory_index,
                 embedding_setup=embedding_setup,
                 memory_cue_log_repo=database.memory_cue_log,
-                # 游戏里的人：玩家在游戏里开口或冲她做动作时推他的玩家卡
+                # 游戏里的人：玩家在游戏里开口或冲她做动作时推他的玩家线索
                 game_player_repo=database.game_players,
                 # 游戏社交事实：主播场内登记、参考段常驻、下播整理归纳
                 social_fact_repo=database.social_facts,
                 talk_card_repo=database.talk_cards,
                 event_repo=database.events,
-                # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
+                # 删除/遮名服务：回忆工具与线索推送按它遮名、核对遗忘命令
                 privacy_service=privacy_service,
                 # 存储账本：主播 Agent 据此编排下播收尾
                 storage_ledger=storage_ledger,
@@ -1012,7 +1012,7 @@ async def create_app_components(
             # 承诺表：承诺与场次档案（下播整理写入；WebUI 查看与纠错）
             commitments_repo=database.commitments,
             archive_repo=database.archive,
-            # 复盘页「本场线索卡」：被动想起推了什么、用上没有
+            # 复盘页「本场记忆线索」：被动想起推了什么、用上没有
             memory_cue_log_repo=database.memory_cue_log,
             # 记忆页人工审核：改标题、标稳定、放回快照、新增一行、标已审
             memory_review_repo=database.memory_review,
@@ -1149,7 +1149,7 @@ async def _start_storage_ledger(
             name_match_window_ms=name_match_window_ms,
             privacy=privacy,
             retention=retention,
-            # 游戏里的人：公屏聊天、她在公屏说的话、玩家互动随本落库器一起落库
+            # 游戏里的人：游戏公屏、她在游戏公屏说的话、玩家互动随本落库器一起落库
             game_player_repo=database.game_players,
         )
         if auto_start:

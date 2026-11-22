@@ -9,8 +9,8 @@
           >
         </div>
         <p class="panel-hint">
-          观众定下、她当场接受了却没自己复述的事，熟客主动说起的持续近况与喜好，以及她说“欠着”、账上却找不到的事。
-          批准前她完全看不到；标题可以先改再批，熟客近况批准后只进该熟客的场内卡片。待审的列出后 14
+          观众定下、她当场接受了却没自己复述的事，老观众主动说起的持续近况与喜好，以及她说“欠着”、账上却找不到的事。
+          批准前她完全看不到；标题可以先改再批，老观众近况批准后只进该老观众的场内线索。待审的列出后 14
           天没人审会自动删掉。
         </p>
       </div>
@@ -211,8 +211,8 @@ async function reject(item: CandidateItem): Promise<void> {
 }
 
 async function revoke(item: CandidateItem): Promise<void> {
-  const who = item.viewer_name || '这位熟客';
-  const warning = `撤销后「${item.title}」从 ${who} 的熟客卡上撤下，回到待审，可以改了标题再批或驳回。`;
+  const who = item.viewer_name || '这位老观众';
+  const warning = `撤销后「${item.title}」从 ${who} 的老观众线索上撤下，回到待审，可以改了标题再批或驳回。`;
   if (!(await confirmAction(warning, '撤销批准', { type: 'warning' }))) return;
   await mutate(item, () => ledgerApi.revokeCandidate(item.id), '已撤销，回到待审', '撤销失败');
 }
@@ -221,7 +221,7 @@ async function remove(item: CandidateItem): Promise<void> {
   const warning =
     item.status === 'rejected'
       ? `删掉「${item.title}」：删了以后同一句话下次整理可能再被列出。`
-      : `删掉「${item.title}」：批准过的会从熟客卡上撤下，删了不能恢复。`;
+      : `删掉「${item.title}」：批准过的会从老观众线索上撤下，删了不能恢复。`;
   if (!(await confirmAction(warning, '删除这一条', { type: 'warning' }))) return;
   await mutate(item, () => ledgerApi.deleteCandidate(item.id), '已删掉', '删除失败');
 }

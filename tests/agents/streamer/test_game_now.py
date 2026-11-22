@@ -1,4 +1,4 @@
-"""【游戏那边此刻】：每窗重建一块游戏里此刻的读数，放在 Planner 参考段最后，只给 Planner。
+"""【游戏那边此刻】：每回合重建一块游戏里此刻的读数，放在 Planner 参考段最后，只给 Planner。
 
 第 58 场她把楼上有平台的房子说成"就一层"、说"花一直在包里"：新读的现场夹在参考段中间，后面几十行
 已聊话题各带一份十几二十分钟前的状态快照，新读数被埋住。这里钉住这一块的内容、先后、封顶与读数来处。
@@ -53,7 +53,7 @@ def _record(notes: List[str], status: str = "running", **snapshot: Any) -> Any:
 
 
 def test_block_lists_task_step_results_judgement_chat_then_overview() -> None:
-    """一件手上的事的几行读数在前，她近 5 分钟的公屏话随后，现场速览放在最后；结果换成中文、内部编号脱掉。
+    """一件手上的事的几行读数在前，她近 5 分钟的游戏公屏话随后，现场速览放在最后；结果换成中文、内部编号脱掉。
     委派原话只在前段写一遍，这里不重复；状态里那一步结果下面另有一行，不写两遍。"""
     reading = AgentNow(
         step="去营地门口把门装上",
@@ -100,7 +100,7 @@ def test_step_and_judgement_from_before_this_task_are_left_out() -> None:
     assert "停了，没交付结果，做没做完不确定" in text and "做完了" not in text and "此刻那一步" not in text
 
     # 续播认领的：重启前被打断，做到哪不确定（和前段委派状态同一句）；
-    # 嘴的现场卡保留"还没重新委派"的语义，但工具名照本层约定脱敏（规划器参考段才带工具名）
+    # 嘴的事实快照保留"还没重新委派"的语义，但工具名照本层约定脱敏（规划器参考段才带工具名）
     cut = _delegation(report_kind="interrupted", reported_ms=_NOW)
     text = render_game_now({"minecraft": cut}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
     assert "重启前在做这件事，被打断了，做到哪不确定" in text and "此刻那一步" not in text
@@ -192,7 +192,7 @@ def test_block_is_empty_without_anything_and_overview_alone_still_shows() -> Non
 
 
 def test_block_besides_overview_stays_within_600_tokens() -> None:
-    """除现场速览外整块约 600 token 以内（cl100k 口径）：每项截短，公屏话至多 3 句。"""
+    """除现场速览外整块约 600 token 以内（cl100k 口径）：每项截短，游戏公屏话至多 3 句。"""
     encoding = get_encoding()
     if encoding is None:
         pytest.skip("cl100k 词表不可用（离线且没有本地缓存），无法按 cl100k 口径计数")
@@ -283,7 +283,7 @@ async def test_planner_puts_the_block_last_with_the_overview_inside() -> None:
 
 async def test_agent_feeds_step_judgement_and_self_chat_and_clears_them_at_live_start() -> None:
     """主播 Agent 的读数：任务账本里游戏 Agent 自己发起、还在跑的最近一步的目的，它名下委派快照旁注里的
-    最近一句判断（每窗读账本，不订阅回复事件），她近 5 分钟的公屏话；开播清掉上一场的公屏话。"""
+    最近一句判断（每回合读账本，不订阅回复事件），她近 5 分钟的游戏公屏话；开播清掉上一场的游戏公屏话。"""
     ledger = TaskLedger()
     for task_id, purpose in (("goal_1", "挖石头"), ("goal_2", "去营地门口把门装上")):
         ledger.register(
@@ -337,7 +337,7 @@ async def test_agent_feeds_step_judgement_and_self_chat_and_clears_them_at_live_
 
 
 async def test_agent_records_provider_goal_outcomes_across_delegations() -> None:
-    """A4 近期目标成败清单：provider 目标终态（成了/做了一半/没成）记入账本缓冲，委派终态移除后仍可供每窗查询核对。"""
+    """A4 近期目标成败清单：provider 目标终态（成了/做了一半/没成）记入账本缓冲，委派终态移除后仍可供每回合查询核对。"""
     ledger = TaskLedger()
     ledger.register(
         task_id="maicraft-goal-11",

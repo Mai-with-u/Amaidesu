@@ -1,6 +1,6 @@
 # ADR-075：游戏里的人按 UUID 认（玩家表放 Amaidesu / 只自动记她亲身经历的互动 / 对某位玩家的承诺按两条证据路径核对 / 玩家与观众对号由运营者确认且永不告诉她 / 删玩家与公屏"忘了我"）
 
-- 状态：已采纳；扩展 [主播记忆](../architecture/streamer-memory.md) 的承诺"对谁"（多一种：游戏玩家）与线索推送的"对象开口"（扩到游戏玩家）；删除口径扩展 [ADR-068](068-memory-privacy-retention-and-forget.md)
+- 状态：已采纳；扩展 [主播记忆](../architecture/memory/README.md) 的承诺"对谁"（多一种：游戏玩家）与线索推送的"对象开口"（扩到游戏玩家）；删除口径扩展 [ADR-068](068-memory-privacy-retention-and-forget.md)
 - 日期：2026-11-06
 - 实现提交：与本 ADR 同批交付（推送前按 dev 变基，hash 以推送后为准），按 subject 检索：`git log --grep "游戏玩家" --grep "玩家卡" --grep "公屏" --grep "对玩家的承诺" --grep "删游戏玩家"`；也可 `git log -- docs/decisions/075-game-players-by-uuid.md`
 

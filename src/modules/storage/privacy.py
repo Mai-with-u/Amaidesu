@@ -12,7 +12,7 @@
 - **删除函数**：单一事务清除观众行、曾用名、弹幕、对 ta 的承诺、相同外部 ID 的模拟回放副本，清空付费三表的身份/留言/原始消息，
   按每个昵称的使用期找出重叠或出现过的场次，把这些场次的主播台词、档案、承诺、话题摘要、时间线摘要、整理报告、游戏事件正文与生物死亡说明里的昵称
   替换为"一位观众"，最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。过渡期的旧画像表与旧笔记目录已由 v25 迁移整体删除。
-- **游戏玩家**：删玩家时他的互动、公屏聊天、对他的承诺、待审自述随外键级联删掉，名字在他出现过的场次里换成
+- **游戏玩家**：删玩家时他的互动、游戏公屏、对他的承诺、待审自述随外键级联删掉，名字在他出现过的场次里换成
   "一位玩家"，UUID 的摘要（种类 ``<游戏>_uuid``）进不记录名单，之后他再出现也不再记。删观众、"忘了我"时，
   运营者确认过的关联玩家一并删掉。玩家在游戏公屏发"忘了我"也算：同一套口令、同一个宽限期，到期删这位
   玩家以及运营者确认过的关联观众。
@@ -43,7 +43,7 @@ from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("PrivacyService")
 
-# 替换昵称、遮名、回想遮名的最短长度（单字昵称不替换，防误伤日常用字）
+# 替换昵称、遮名、回忆遮名的最短长度（单字昵称不替换，防误伤日常用字）
 MIN_MASK_NAME_LEN: int = 2
 # 宽限删除最迟执行时限（发令后 24 小时）
 GRACE_DELETE_MAX_MS: int = 24 * 3_600_000
@@ -244,12 +244,12 @@ class PrivacyService:
         self._state_lock = threading.Lock()
         # 本场发言过的不记录名单观众昵称（下播清空，落库前替换主播台词中的称呼）
         self._session_masked_names: Set[str] = set()
-        # 本场在公屏开过口的不记录名单玩家名（下播清空；她的台词与公屏话落库前换成"一位玩家"）
+        # 本场在游戏公屏开过口的不记录名单玩家名（下播清空；她的台词与游戏公屏话落库前换成"一位玩家"）
         self._session_masked_player_names: Set[str] = set()
         # 发"忘了我"时还没有玩家行的玩家（不记录名单摘要 → 发令时刻）：宽限期里撤回要认得出他。
         # 只在内存里：进程重启后认不出，他就留在名单里（宁可多忘，不让别人删过的人借撤回恢复）
         self._rowless_player_forgets: Dict[bytes, int] = {}
-        # 本场触发过有效撤回的消息编号与发送者键，供稍后执行的 Planner 线索推送生成回执行
+        # 本场触发过有效撤回的消息编号与发送者键，供稍后执行的 Planner 线索推送生成遗忘回执
         self._session_retracted_msg_ids: Set[str] = set()
         self._session_retracted_senders: Set[Tuple[str, str, str]] = set()
         self._session_forget_senders: Set[Tuple[str, str, str]] = set()
@@ -366,14 +366,14 @@ class PrivacyService:
                 self._session_masked_names.add(text)
 
     def add_masked_player_name(self, name: Optional[str]) -> None:
-        """把不记录名单玩家的名字加入本场遮名集合（2 字以上）：她之后的台词与公屏话里遮成"一位玩家"。"""
+        """把不记录名单玩家的名字加入本场遮名集合（2 字以上）：她之后的台词与游戏公屏话里遮成"一位玩家"。"""
         text = (name or "").strip()
         if len(text) >= MIN_MASK_NAME_LEN:
             with self._state_lock:
                 self._session_masked_player_names.add(text)
 
     def mask_speech(self, speech_text: str) -> str:
-        """主播台词或她的公屏话落库前，把本场遮名集合里的观众昵称换成"一位观众"、玩家名换成"一位玩家"。"""
+        """主播台词或她的游戏公屏话落库前，把本场遮名集合里的观众昵称换成"一位观众"、玩家名换成"一位玩家"。"""
         with self._state_lock:
             names = list(self._session_masked_names)
             players = list(self._session_masked_player_names)
@@ -745,7 +745,7 @@ class PrivacyService:
                     " WHERE game = ? AND uuid = ?",
                     (at_ms, game, uuid),
                 )
-            # 她这一场之后的台词与公屏话里再提到他，落库前遮成"一位玩家"
+            # 她这一场之后的台词与游戏公屏话里再提到他，落库前遮成"一位玩家"
             self.add_masked_player_name(name)
             with self._state_lock:
                 self._forget_requests += 1
@@ -818,7 +818,7 @@ class PrivacyService:
         with_linked_viewers: bool = False,
         at_ms: Optional[int] = None,
     ) -> bool:
-        """删一位游戏玩家：他的互动、公屏聊天、对他的承诺、待审自述随外键级联删掉，名字换成"一位玩家"。
+        """删一位游戏玩家：他的互动、游戏公屏、对他的承诺、待审自述随外键级联删掉，名字换成"一位玩家"。
 
         默认把他的 UUID 加进不记录名单，之后他再出现也不再记。``with_linked_viewers`` 为真时，运营者
         确认过的关联观众一并删掉（他自己在游戏公屏发"忘了我"的情形，和观众同一个口径）。
@@ -979,7 +979,7 @@ class PrivacyService:
 
             _scrub_payment_tables_for_viewer(conn, viewer_ids=all_viewer_ids, external_ids=list(ext_ids))
 
-            # 运营者确认过"这位观众就是游戏里的某某"的，那位玩家一并删：他在游戏里的互动、公屏聊天、
+            # 运营者确认过"这位观众就是游戏里的某某"的，那位玩家一并删：他在游戏里的互动、游戏公屏、
             # 对他的承诺随之级联；加不加进不记录名单跟这位观众一致
             for player_id in _linked_player_ids(conn, all_viewer_ids):
                 _delete_player_rows(conn, player_id=player_id, secret_key=secret_key, at_ms=at_ms)
@@ -1035,7 +1035,7 @@ def _linked_viewer_ids(conn: sqlite3.Connection, player_id: int) -> List[int]:
 
 
 def _player_sessions(conn: sqlite3.Connection, player_id: int) -> List[int]:
-    """这位玩家出现过的场次：和她有过互动、在公屏说过话、她的台词回应过他、首次与最近一次见到他。"""
+    """这位玩家出现过的场次：和她有过互动、在游戏公屏说过话、她的台词回应过他、首次与最近一次见到他。"""
     rows = conn.execute(
         "SELECT live_session_id FROM game_player_interactions WHERE player_id = ?"
         " UNION SELECT live_session_id FROM game_chat WHERE player_id = ?"
@@ -1051,7 +1051,7 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
     """在调用方的事务里删一位玩家：先把他的名字在他出现过的场次里换成"一位玩家"，再删玩家行（其余级联）。
 
     ``secret_key`` 给了才把 UUID 摘要加进不记录名单。名字替换与观众同一个范围和口径（台词、档案、承诺、
-    整理报告、游戏事件正文、她的公屏话），按名字从长到短替换；短于两个字的名字不替换，防误伤日常用字。
+    整理报告、游戏事件正文、她的游戏公屏话），按名字从长到短替换；短于两个字的名字不替换，防误伤日常用字。
     """
     if not table_exists(conn, "game_players"):
         return False
@@ -1072,7 +1072,7 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
         former = []
     names = {str(row["name"] or "").strip(), *(str(name).strip() for name in former if isinstance(name, str))}
     session_ids = _player_sessions(conn, player_id)
-    # 必须在删 game_players 级联删掉 game_chat 之前删掉本人公屏作证的社交事实（evidence_game_chat_id 为 SET NULL）
+    # 必须在删 game_players 级联删掉 game_chat 之前删掉本人游戏公屏作证的社交事实（evidence_game_chat_id 为 SET NULL）
     if table_exists(conn, "game_social_facts") and table_exists(conn, "game_chat"):
         conn.execute(
             "DELETE FROM game_social_facts WHERE evidence_game_chat_id IN"
@@ -1082,7 +1082,7 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
     for name in sorted((name for name in names if len(name) >= MIN_MASK_NAME_LEN), key=len, reverse=True):
         if session_ids:
             _apply_session_nickname_erase(conn, session_ids=session_ids, nickname=name, label=MASKED_PLAYER_LABEL)
-        # 她在公屏打出去的话与他人作证的社交事实：所有场次都换，不只他留过记录的那几场
+        # 她在游戏公屏打出去的话与他人作证的社交事实：所有场次都换，不只他留过记录的那几场
         _apply_global_nickname_erase(conn, nickname=name, label=MASKED_PLAYER_LABEL)
         # 跨重启工作文档：按长到短换成代称
         _replace_name_in_work_docs(conn, nickname=name, label=MASKED_PLAYER_LABEL, game=str(row["game"] or ""))
@@ -1286,8 +1286,8 @@ _SESSION_NICKNAME_ERASE_RULES: Tuple[_NicknameEraseRule, ...] = (
     ),
 )
 
-# 玩家删除流程专用的全表规则：她在公屏打出去的话与游戏社交事实不按场次限定
-# （她可能在他没开口的场次里点他的名；玩家说的公屏行随玩家行级联删，不在这里）
+# 玩家删除流程专用的全表规则：她在游戏公屏打出去的话与游戏社交事实不按场次限定
+# （她可能在他没开口的场次里点他的名；玩家说的游戏公屏行随玩家行级联删，不在这里）
 _GLOBAL_NICKNAME_ERASE_RULES: Tuple[_NicknameEraseRule, ...] = (
     _NicknameEraseRule(
         table="game_chat",
@@ -1378,7 +1378,7 @@ def _apply_session_nickname_erase(
 
 
 def _apply_global_nickname_erase(conn: sqlite3.Connection, *, nickname: str, label: str = MASKED_VIEWER_LABEL) -> None:
-    """按全表规则把不限于场次的文本（她的公屏话、游戏社交事实）里的名字换成代称。"""
+    """按全表规则把不限于场次的文本（她的游戏公屏话、游戏社交事实）里的名字换成代称。"""
     if not nickname:
         return
     for rule in _GLOBAL_NICKNAME_ERASE_RULES:

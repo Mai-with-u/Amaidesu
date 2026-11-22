@@ -132,7 +132,7 @@ async def test_intent_section_absent(reply_ok: bool, config: dict) -> None:
 
 
 async def test_unread_summary_consumed_once() -> None:
-    """未读摘要被一个决策窗取走后不再重复注入，直到后台写入新摘要。
+    """未读摘要被一个决策回合取走后不再重复注入，直到后台写入新摘要。
 
     实测"观众向主播问好并表达惊喜"在多轮请求里反复出现，诱导主播重复播报同一件事。
     """

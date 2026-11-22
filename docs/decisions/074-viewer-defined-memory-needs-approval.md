@@ -1,6 +1,6 @@
 # ADR-074：观众定下的事经人批准进记忆（修改设计公理 1：观众的话只有经人批准、且她当场接受过，才进跨场记忆 / 她说欠着、账上找不到的事同样只列候选）
 
-- 状态：已采纳；修改 [主播记忆](../architecture/streamer-memory.md) 设计公理 1 的"观众的话进不了任何跨场记忆"；与 [ADR-073](073-settlement-human-review.md) 共用记忆页的审核入口
+- 状态：已采纳；修改 [主播记忆](../architecture/memory/README.md) 设计公理 1 的"观众的话进不了任何跨场记忆"；与 [ADR-073](073-settlement-human-review.md) 共用记忆页的审核入口
 - 日期：2026-11-06
 - 实现提交：6fbca53c55e15a074edbc1126c68c73c7daf236e（`git show 6fbca53c`，存储 v31）、0edb0b34b4613fb66ef436d168500d2c66234e54（整理列出观众候选，档案提示词 1.8）、2151fa13f1870e0324f3f1a82449e1990c70433c（记忆页审核区）、eeb23083910a244ed743dc98a505271a335a7796（观众来源的行注明和观众一起定的）；"她说欠着的"与本 ADR 同批交付，按 subject 检索：`git log --grep "欠着"`
 

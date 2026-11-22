@@ -1,4 +1,4 @@
-"""委派停滞告警的决断兜底：告警进决策窗材料、决断计数、第 N 次告警自动撤单。
+"""委派停滞告警的决断兜底：告警进决策回合材料、决断计数、第 N 次告警自动撤单。
 
 构成：``DelegationStallWatch`` 直测（计数 / 决断判定 / 状态映射，注入假时钟）+
 StreamerAgent 挂接测（``on_task_notification`` 把材料记进游戏账本、置位待定夺信
@@ -157,7 +157,7 @@ async def test_streamer_routes_alerts_into_decision_material_and_cancels_on_thre
         agent.on_task_notification(_alert())
         assert agent._proactive_signals.game_pending is True, "告警置位待定夺信号唤醒决策"
         lines = agent._game_ledger.pending_lines()
-        assert any("task_alert" in line and "帮我栽一批树苗" in line for line in lines), "告警进决策窗必读材料"
+        assert any("task_alert" in line and "帮我栽一批树苗" in line for line in lines), "告警进决策回合必读材料"
         assert not invokes, "未到阈值不撤单"
 
         agent.on_task_notification(_alert())

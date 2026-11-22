@@ -9,8 +9,8 @@
           >
         </div>
         <p class="panel-hint">
-          游戏玩家在公屏说的关于他自己的事（怎么称呼他、家或在盖的东西在哪、起了名的动物），她当场接住了。
-          批准前她看不到；批准后只在这位玩家在游戏里找她时写在他的玩家卡上，不进开播简报。待审的列出后
+          游戏玩家在游戏公屏说的关于他自己的事（怎么称呼他、家或在盖的东西在哪、起了名的动物），她当场接住了。
+          批准前她看不到；批准后只在这位玩家在游戏里找她时写在他的玩家线索上，不进开播记忆摘要。待审的列出后
           14 天没人审会自动删掉。
         </p>
       </div>
@@ -98,11 +98,11 @@
 
 <script setup lang="ts">
 /**
- * 玩家自述审核区 —— 游戏玩家说的关于他自己的事，人批准才进他的玩家卡
+ * 玩家自述审核区 —— 游戏玩家说的关于他自己的事，人批准才进他的玩家线索
  *
- * 下播整理从她接住的那几句公屏里列出候选（他那句原话 + 她回他的那句），代码核过对象与原话。
- * 批准（标题可以先改）后只在这位玩家在游戏里找她时写在玩家卡上，不进开播简报；驳回的以后不再列。
- * 自述挂在他那句公屏上：删除这位玩家或他发“忘了我”时一起删掉。批错了可以撤销批准（回到待审），
+ * 下播整理从她接住的那几句游戏公屏里列出候选（他那句原话 + 她回他的那句），代码核过对象与原话。
+ * 批准（标题可以先改）后只在这位玩家在游戏里找她时写在玩家线索上，不进开播记忆摘要；驳回的以后不再列。
+ * 自述挂在他那句游戏公屏上：删除这位玩家或他发“忘了我”时一起删掉。批错了可以撤销批准（回到待审），
  * 哪种状态的都可以整条删掉。
  *
  * 不含定时器 / 订阅 / WebSocket，无 keep-alive 生命周期语义。
@@ -149,7 +149,7 @@ async function approve(item: PlayerCandidateItem): Promise<void> {
     actionError.value = titleError;
     return;
   }
-  const warning = `批准后「${title}」写在 ${item.player_name || '这位玩家'} 的玩家卡上：他在游戏里找她时她会想起来。删除这位玩家或他发“忘了我”时会一起删掉。`;
+  const warning = `批准后「${title}」写在 ${item.player_name || '这位玩家'} 的玩家线索上：他在游戏里找她时她会想起来。删除这位玩家或他发“忘了我”时会一起删掉。`;
   if (!(await confirmAction(warning, '批准玩家自述', { type: 'info' }))) return;
   await mutate(item, () => playersApi.approveCandidate(item.id, { title }), '已批准', '批准失败');
 }
@@ -164,7 +164,7 @@ async function reject(item: PlayerCandidateItem): Promise<void> {
 }
 
 async function revoke(item: PlayerCandidateItem): Promise<void> {
-  const warning = `撤销后「${item.title}」从 ${item.player_name || '这位玩家'} 的玩家卡上撤下，回到待审，可以改了标题再批或驳回。`;
+  const warning = `撤销后「${item.title}」从 ${item.player_name || '这位玩家'} 的玩家线索上撤下，回到待审，可以改了标题再批或驳回。`;
   if (!(await confirmAction(warning, '撤销批准', { type: 'warning' }))) return;
   await mutate(item, () => playersApi.revokeCandidate(item.id), '已撤销，回到待审', '撤销失败');
 }
@@ -173,7 +173,7 @@ async function remove(item: PlayerCandidateItem): Promise<void> {
   const warning =
     item.status === 'rejected'
       ? `删掉「${item.title}」：删了以后同一句话下次整理可能再被列出。`
-      : `删掉「${item.title}」：批准过的会从玩家卡上撤下，删了不能恢复。`;
+      : `删掉「${item.title}」：批准过的会从玩家线索上撤下，删了不能恢复。`;
   if (!(await confirmAction(warning, '删除这一条', { type: 'warning' }))) return;
   await mutate(item, () => playersApi.deleteCandidate(item.id), '已删掉', '删除失败');
 }

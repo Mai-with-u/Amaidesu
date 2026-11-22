@@ -1,4 +1,4 @@
-"""回想工具 ``memory_recall``：按关键词把她记得的事找回来。
+"""回忆工具 ``memory_recall``：按关键词把她记得的事找回来。
 
 旧的记忆工具按固定键取数（往前第几场的回顾、某位观众的印象、本场备忘录），要求主播
 先知道该问哪一类；观众的问题通常只给得出一个词。本工具按关键词查多个来源，把内容连同
@@ -87,13 +87,13 @@ MEMORY_RECALL_TOOL_NAME = "memory_recall"
 # 工具目录分类：与旧记忆工具同组（工具页按它归组、随主播 Agent 启用）
 MEMORY_TOOL_CATEGORY = "memory"
 
-# 一次回想最多给几条
+# 一次回忆最多给几条
 MAX_RESULTS = 8
 # 混合检索多取一些候选：对某位观众的承诺会被筛掉，台词与引用它的档案行/承诺及同场邻句也会合并去重，留足余量才够选满 8 条
 _SEARCH_POOL = 32
-# 回想工具是她主动调的，查询向量没算好时可以等一小会儿（被动想起不等）
+# 回忆工具是她主动调的，查询向量没算好时可以等一小会儿（被动想起不等）
 RECALL_VECTOR_WAIT_MS = 1_500
-# 回想语义路余弦底线：低于该阈值的低相关向量不参与 RRF 融合投票，避免全库只有 0.25 余弦时仍凑满候选
+# 回忆语义路余弦底线：低于该阈值的低相关向量不参与 RRF 融合投票，避免全库只有 0.25 余弦时仍凑满候选
 RECALL_MIN_COSINE = 0.50
 # 整次查询仅剩字面弱擦边时至多保留的条数与平实提醒
 WEAK_MATCH_MAX_RESULTS = 2
@@ -115,7 +115,7 @@ _SHORT_TERM_CONTAINS_DEDUP_MIN_LEN = 8
 # 走混合检索的来源：精炼账本（档案、承诺）排在裸台词前，平分时优先给出带标题与存档注记的行
 _RECALL_SOURCES: Tuple[IndexSource, ...] = ("archive", "commitment", "speech")
 _RECALL_SOURCES_WITH_EVENTS: Tuple[IndexSource, ...] = (*_RECALL_SOURCES, "event")
-# 社交事实六类在回想结果里的叫法
+# 社交事实六类在回忆结果里的叫法
 _SOCIAL_FACT_LABELS = {
     "setting": "环境形态",
     "members": "成员关系",
@@ -157,7 +157,7 @@ CROSS_SESSION_MASK_LABEL = "某位观众"
 MEMORY_RECALL_SPEC = ToolSpec(
     name="recall",
     description=(
-        "回想过去的事：你说过的话、每场的档案、答应过的事、游戏里做到哪一步、当前存档工作笔记、本场弹幕，"
+        "回忆过去的事：你说过的话、每场的档案、答应过的事、游戏里做到哪一步、当前存档工作笔记、本场弹幕，"
         "按关键词找出最相关的几条（几个关键词用空格分开，不要求每个词都出现，越相关越靠前选）。"
         "问「上次那个事」「之前提到过什么」「我答应过什么」时用。不按观众名字查人——不知道某位观众是谁就问她本人。"
     ),
@@ -191,7 +191,7 @@ MEMORY_RECALL_SPEC = ToolSpec(
 
 @dataclass(frozen=True)
 class RecallEntry:
-    """回想工具最终选出的一条结果：来源类别、来源行主键、排序用的时刻、渲染文本及已承载的原话主键。"""
+    """回忆工具最终选出的一条结果：来源类别、来源行主键、排序用的时刻、渲染文本及已承载的原话主键。"""
 
     source: str
     source_id: int
@@ -202,7 +202,7 @@ class RecallEntry:
 
 @dataclass(frozen=True)
 class RecallOutcome:
-    """一次回想的完整产出：给模型看的整段文本、最终入选的条目清单，以及语义一路是否参与。"""
+    """一次回忆的完整产出：给模型看的整段文本、最终入选的条目清单，以及语义一路是否参与。"""
 
     text: str
     entries: Tuple[RecallEntry, ...]
@@ -211,7 +211,7 @@ class RecallOutcome:
 
 @dataclass(frozen=True)
 class _RecallContext:
-    """一次回想的查询上下文：关键词、排序方向、本场与上一场、遮名用的昵称表。"""
+    """一次回忆的查询上下文：关键词、排序方向、本场与上一场、遮名用的昵称表。"""
 
     keywords: Sequence[str]
     scope: str
@@ -321,13 +321,13 @@ def _extract_work_doc_items(
 
 
 def _strip_bullet_prefix(text: str) -> str:
-    """去掉回想条目行首的短横线项目符号，便于统一渲染与正文去重。"""
+    """去掉回忆条目行首的短横线项目符号，便于统一渲染与正文去重。"""
     stripped = (text or "").strip()
     return stripped[2:].strip() if stripped.startswith("- ") else stripped
 
 
 def _recall_body_norm(text: str) -> str:
-    """提取回想条目冒号后的实质正文并归一化，避免不同来源前缀掩盖同内容重复。"""
+    """提取回忆条目冒号后的实质正文并归一化，避免不同来源前缀掩盖同内容重复。"""
     body = _strip_bullet_prefix(text)
     if "：" in body:
         _prefix, after = body.split("：", 1)
@@ -461,11 +461,11 @@ class MemoryRecallService:
         self._saves_provider = saves_provider
 
     async def recall(self, query: str, scope: str = SCOPE_ALL, order: str = ORDER_RELEVANT) -> str:
-        """执行一次回想，返回给模型看的文本；查询异常不抛，转成「没查到（原因）」。"""
+        """执行一次回忆，返回给模型看的文本；查询异常不抛，转成「没查到（原因）」。"""
         return (await self.recall_detailed(query, scope=scope, order=order)).text
 
     async def recall_detailed(self, query: str, scope: str = SCOPE_ALL, order: str = ORDER_RELEVANT) -> RecallOutcome:
-        """执行一次回想，同时返回渲染文本、最终入选条目与语义路开关（供离线评测与诊断直接核对）。"""
+        """执行一次回忆，同时返回渲染文本、最终入选条目与语义路开关（供离线评测与诊断直接核对）。"""
         scope_value = _normalize_scope(scope)
         order_value = _normalize_order(order)
         started_ms = int(self._clock())
@@ -521,7 +521,7 @@ class MemoryRecallService:
         known = set(names)
         ignored = [keyword for keyword in keywords if keyword in known]
         effective = [keyword for keyword in keywords if keyword not in known]
-        notice = f"（回想工具不按观众名字查，已忽略 {len(ignored)} 个名字）" if ignored else ""
+        notice = f"（回忆工具不按观众名字查，已忽略 {len(ignored)} 个名字）" if ignored else ""
         if not effective:
             return (
                 RecallOutcome(
@@ -545,7 +545,7 @@ class MemoryRecallService:
         try:
             archive_bounds = await self._archive_repo.list_archived_session_bounds()
         except Exception as exc:  # noqa: BLE001 - 档案读不到只少这一路结果，节奏照常
-            logger.warning(f"回想工具读档案场次失败（本次跳过档案）: {type(exc).__name__}: {exc}", exc=True)
+            logger.warning(f"回忆工具读档案场次失败（本次跳过档案）: {type(exc).__name__}: {exc}", exc=True)
             archive_bounds = []
         context = _RecallContext(
             keywords=effective,
@@ -748,7 +748,7 @@ class MemoryRecallService:
         commitments: Dict[int, Any] = {}
         for commitment_id in ids["commitment"]:
             row = await self._commitments_repo.get_commitment(commitment_id=commitment_id)
-            # 对某位观众、某位玩家的承诺不经回想翻给全场
+            # 对某位观众、某位玩家的承诺不经回忆翻给全场
             if row is not None and not row.has_target and row.status in ("open", "closed"):
                 commitments[commitment_id] = row
         # 档案行与承诺关联的证据台词若不在 speech 候选里，也读出供实词核对（防止证据原话含查询词而摘要标题简写漏判）
@@ -1035,8 +1035,8 @@ class MemoryRecallService:
             return []
         try:
             raw_entries = await self._short_term_recall(query, context.scope, MAX_RESULTS)
-        except Exception as exc:  # noqa: BLE001 - 短期召回属增强通道，异常记日志降级不打断主回想
-            logger.warning(f"回想工具调用短期记忆回调失败（本次跳过）: {type(exc).__name__}: {exc}", exc=True)
+        except Exception as exc:  # noqa: BLE001 - 短期召回属增强通道，异常记日志降级不打断主回忆
+            logger.warning(f"回忆工具调用短期记忆回调失败（本次跳过）: {type(exc).__name__}: {exc}", exc=True)
             return []
         sanitized: List[RecallEntry] = []
         for item in raw_entries or ():
@@ -1071,8 +1071,8 @@ class MemoryRecallService:
                 continue
             try:
                 record = await self._work_docs_repo.get_work_docs(game=game, save_id=save.id)
-            except Exception as exc:  # noqa: BLE001 - 工作文档读取异常只跳过这一路，不打断回想主流程
-                logger.warning(f"回想工具读取 {game} 存档 {save.id!r} 工作文档失败: {exc}", exc=True)
+            except Exception as exc:  # noqa: BLE001 - 工作文档读取异常只跳过这一路，不打断回忆主流程
+                logger.warning(f"回忆工具读取 {game} 存档 {save.id!r} 工作文档失败: {exc}", exc=True)
                 continue
             if record is None:
                 continue
@@ -1200,8 +1200,8 @@ class MemoryRecallService:
                 continue
             try:
                 spans = await self._event_repo.list_session_save_spans(live_session_id=int(session_id))
-            except Exception as exc:  # noqa: BLE001 - 查不到那场的存档只少一句注，回想照常
-                logger.warning(f"回想工具读场次 {session_id} 的存档段失败（不注存档）: {exc}", exc=exc)
+            except Exception as exc:  # noqa: BLE001 - 查不到那场的存档只少一句注，回忆照常
+                logger.warning(f"回忆工具读场次 {session_id} 的存档段失败（不注存档）: {exc}", exc=exc)
                 continue
             note = session_note(spans, context.current_saves)
             if note:
@@ -1240,7 +1240,7 @@ class MemoryRecallService:
         body = f"- {when} 你说（档案「{title}」）"
         if quote:
             body += f"：「{quote}」"
-        # 观众来源的行注明和观众一起定的（不记得是哪一位）；存档注记照旧
+        # 观众定下的事所在行注明和观众一起定的（不记得是哪一位）；存档注记照旧
         notes = [*source_notes(line), place_note(line.game, line.save_id, line.save_name, context.current_saves)]
         if any(notes):
             body += f"（{'；'.join(item for item in notes if item)}）"
@@ -1301,7 +1301,7 @@ class MemoryRecallService:
         """跨场结果把已知观众昵称换成「某位观众」；本场结果原样返回。
 
         跨场结果再过一道本场遮名集合（``PrivacyService.mask_speech``）：本场发过
-        "忘了我"的观众，名字不该经回想工具回流进决策。
+        "忘了我"的观众，名字不该经回忆工具回流进决策。
         """
         if not text:
             return text
@@ -1320,7 +1320,7 @@ class MemoryRecallService:
         """一行工具抬头：关键词、范围、顺序、条数。"""
         scope_text = "本场" if scope == SCOPE_THIS_STREAM else "全部"
         order_text = {ORDER_RELEVANT: "相关在前", ORDER_NEWEST: "最新在前"}.get(order, "最早在前")
-        return f"【回想】关键词「{query}」｜范围：{scope_text}｜顺序：{order_text}｜{count} 条"
+        return f"【回忆】关键词「{query}」｜范围：{scope_text}｜顺序：{order_text}｜{count} 条"
 
     def _previous_session(
         self,
@@ -1337,15 +1337,15 @@ class MemoryRecallService:
         """全部可用作遮名与昵称识别的观众昵称：2 字以上、非占位名。
 
         读不到观众表时按"没有已知昵称"降级：本次不遮名、也不识别昵称关键词，
-        回想本身照常进行（遮名是辅助能力，不该让整次查询失败）。
+        回忆本身照常进行（遮名是辅助能力，不该让整次查询失败）。
         """
         if self._viewer_repo is None:
             return []
         try:
             raw_names = await self._viewer_repo.list_known_names()
-        except Exception as exc:  # noqa: BLE001 - 遮名辅助能力降级，不反噬回想本身
+        except Exception as exc:  # noqa: BLE001 - 遮名辅助能力降级，不反噬回忆本身
             logger.warning(
-                f"回想工具读取观众昵称失败（本次不遮名、也不识别昵称关键词）: {type(exc).__name__}: {exc}",
+                f"回忆工具读取观众昵称失败（本次不遮名、也不识别昵称关键词）: {type(exc).__name__}: {exc}",
                 exc=True,
             )
             return []
@@ -1362,8 +1362,8 @@ class MemoryRecallService:
             return {}
         try:
             return dict(self._saves_provider())
-        except Exception as exc:  # noqa: BLE001 - 读不到存档只少几句注，不反噬回想本身
-            logger.warning(f"回想工具读取眼下存档失败（本次不注存档）: {exc}", exc=exc)
+        except Exception as exc:  # noqa: BLE001 - 读不到存档只少几句注，不反噬回忆本身
+            logger.warning(f"回忆工具读取眼下存档失败（本次不注存档）: {exc}", exc=exc)
             return {}
 
     def _current_session(self) -> Optional[int]:
@@ -1372,8 +1372,8 @@ class MemoryRecallService:
             return None
         try:
             value = self._current_session_provider()
-        except Exception as exc:  # noqa: BLE001 - 回调异常按未开播处理，不反噬回想本身
-            logger.warning(f"回想工具读取进行中场次失败（按未开播处理）: {type(exc).__name__}: {exc}", exc=True)
+        except Exception as exc:  # noqa: BLE001 - 回调异常按未开播处理，不反噬回忆本身
+            logger.warning(f"回忆工具读取进行中场次失败（按未开播处理）: {type(exc).__name__}: {exc}", exc=True)
             return None
         return int(value) if value is not None else None
 
@@ -1388,7 +1388,7 @@ def _path_counts(found: Sequence[SearchHit], vector_used: bool) -> str:
 
 
 class _MemoryRecallProvider(BaseToolProvider):
-    """回想工具 Provider：按运行期回调动态计算 ``memory_recall`` 的可见 Agent 名单。"""
+    """回忆工具 Provider：按运行期回调动态计算 ``memory_recall`` 的可见 Agent 名单。"""
 
     category: ClassVar[str] = MEMORY_TOOL_CATEGORY
     # 名册启停变化（如热启用或停用自主游戏 Agent）时随 AgentManager 自动刷新可见名单
@@ -1433,7 +1433,7 @@ class _MemoryRecallProvider(BaseToolProvider):
         return visible
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """列出回想工具规格：每次列出时现算 ``visible_to``，不修改模块级常量规格。"""
+        """列出回忆工具规格：每次列出时现算 ``visible_to``，不修改模块级常量规格。"""
         return [replace(MEMORY_RECALL_SPEC, visible_to=self._visible_agents())]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -1451,7 +1451,7 @@ def build_memory_recall_provider(
     *,
     extra_visible_agents: Optional[Callable[[], Sequence[str]]] = None,
 ) -> ToolProvider:
-    """组装回想工具 Provider（provider="memory"，工具全名 ``memory_recall``）。
+    """组装回忆工具 Provider（provider="memory"，工具全名 ``memory_recall``）。
 
     默认仅对 ``"streamer"`` 可见；传入 ``extra_visible_agents`` 回调时，每次 ``list_tools()``
     动态把具备自主领航能力等附加 Agent 注册名并入 ``visible_to``（零硬编码游戏名）。

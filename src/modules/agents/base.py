@@ -317,7 +317,7 @@ class BaseAgent(abc.ABC):
         return False
 
     async def enter_lead(self, context: LeadHandoverContext) -> bool:
-        """接管游戏主控权并接收交接简报（返回 True 表示成功进入自主主控态）。
+        """接管游戏主控权并接收交接记忆摘要（返回 True 表示成功进入自主主控态）。
 
         触发条件：流程单进入游戏环节或运营手动切换至该游戏主控时由协调器调用。
         默认拒收返回 False，对既有非自主 Agent 保持完全兼容。
@@ -354,7 +354,7 @@ class BaseAgent(abc.ABC):
         """接收流程单环节变更同步通知（纯同步旁路写入，默认空操作）。
 
         触发条件：处于游戏自主主控期间流程单推进或续时，且新环节仍维持游戏主控时，
-        由动态主从协调器同步给当前主控游戏 Agent，防止游戏侧交接简报整场停留在旧环节。
+        由动态主从协调器同步给当前主控游戏 Agent，防止游戏侧交接记忆摘要整场停留在旧环节。
         """
         del segment_id, segment_title, segment_goal, expected_ms
         return None
@@ -409,7 +409,7 @@ class BaseAgent(abc.ABC):
         scope: str = "all",
         limit: int = 6,
     ) -> Sequence[Mapping[str, Any]]:
-        """查询本 Agent 持有的本场短期记忆只读条目（默认空实现，供跨 Agent 记忆回想聚合）。
+        """查询本 Agent 持有的本场短期记忆只读条目（默认空实现，供跨 Agent 记忆回忆聚合）。
 
         返回只读字典序列，约定包含 ``text`` / ``timestamp_ms`` / ``source_label`` / ``private``
         等结构化字段；未实现或无记忆时返回空元组，框架层不耦合任何具体游戏实现。

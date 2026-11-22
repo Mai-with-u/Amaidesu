@@ -221,7 +221,7 @@ async def test_rundown_pending_survives_reminder_preemption(rig_factory) -> None
     """同一 tick 被更高优先级的运营递话抢占时环节切换信号保留，队列清空后下一 tick 触发。
 
     决策执行器换为不消费递话队列的替身（经构造注入面注入），递话不被送达消费
-    （真实送达在任何决策窗取空队列），借此把"被抢占的 tick"稳定放大成可观察窗口；
+    （真实送达在任何决策回合取空队列），借此把"被抢占的 tick"稳定放大成可观察窗口；
     替身切回"照常取空队列"后恢复正常送达。
     """
     executor = FakeRoundExecutor()
@@ -238,7 +238,7 @@ async def test_rundown_pending_survives_reminder_preemption(rig_factory) -> None
     # reminder 抢占每个 tick，rundown 信号保留待送达窗口让位之后
     assert agent.get_statistics()["total_proactive"] >= 1 and agent._proactive_signals.rundown_pending is True
 
-    executor.drain_reminders = True  # 恢复正常送达：决策窗照常取空递话队列
+    executor.drain_reminders = True  # 恢复正常送达：决策回合照常取空递话队列
     await asyncio.sleep(0.15)
     assert agent._proactive_signals.rundown_pending is False
     assert agent.get_statistics()["total_proactive"] >= 2
@@ -273,13 +273,13 @@ async def _wait_decisions(rig: _Rig, count: int, timeout: float = 3.0) -> list:
 
 
 async def test_signoff_fires_on_manual_live_end(rig_factory) -> None:
-    """真收播（场次结束、Agent 仍运行）触发一轮 forced 决策窗，reason 为 signoff。"""
+    """真收播（场次结束、Agent 仍运行）触发一轮 forced 决策回合，reason 为 signoff。"""
     rig = await rig_factory([_planner_step(_reply_call())], proactive={"enabled": False})
     await rig.bus.emit(
         CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
     )
     await asyncio.sleep(0.1)
-    assert rig.decisions == []  # 开播本身不触发决策窗
+    assert rig.decisions == []  # 开播本身不触发决策回合
 
     await rig.bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=1, reason="手动结束"), source="test")
     decisions = await _wait_decisions(rig, 1)
@@ -320,7 +320,7 @@ async def test_signoff_not_fired_on_stopped_agent(rig_factory) -> None:
 
 
 async def test_reminder_reaches_planner_after_live_end(rig_factory) -> None:
-    """下播后运营递话仍送达：豁免开播闸触发决策窗并取空队列（递话必达）。"""
+    """下播后运营递话仍送达：豁免开播闸触发决策回合并取空队列（递话必达）。"""
     rig = await rig_factory([_planner_step(_reply_call())], proactive={"enabled": True})
     agent = rig.agent
     assert agent.is_live_active() is False

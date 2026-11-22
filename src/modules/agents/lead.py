@@ -10,7 +10,7 @@
   - 游戏主控 → 主播解说：``bind_commentary_handler`` + ``submit_commentary``
   - 主播发声 → 游戏回声：``publish_spoken_echo``（同步直转，零唤醒）
   - 主播/观众 → 游戏非强杀建议：``send_suggestion``
-  - 交权简报按需构建：``bind_handover_builder``
+  - 交权记忆摘要按需构建：``bind_handover_builder``
   - 权威承诺账本只读拉取：``set_commitment_ledger_provider`` + ``fetch_commitment_ledger``
 """
 
@@ -63,7 +63,7 @@ LeadOverride = Union[Literal["auto", "streamer"], str]
 
 
 class LeadHandoverContext(BaseModel):
-    """交权给自主游戏 Agent 时随带的一份结构化现场简报。"""
+    """交权给自主游戏 Agent 时随带的一份结构化现场记忆摘要。"""
 
     segment_id: str = ""
     segment_title: str = ""
@@ -274,7 +274,7 @@ class LeadCoordinator:
         self._commentary_handler = handler
 
     def bind_handover_builder(self, builder: Optional[HandoverBuilder]) -> None:
-        """绑定交权简报构建器（手动切到游戏主控且未显式传入构建器时调用；传 None 解绑）。"""
+        """绑定交权记忆摘要构建器（手动切到游戏主控且未显式传入构建器时调用；传 None 解绑）。"""
         self._handover_builder = builder
 
     def set_passive_cue_provider(self, callback: Optional[PassiveCueProvider]) -> None:
@@ -432,7 +432,7 @@ class LeadCoordinator:
 
         - ``"auto"``：解除人工覆盖，恢复跟随流程单/健康态自动判定（不强制打断当前主控态）。
         - ``"streamer"``：锁定主播主控，若当前在游戏主控则立即收权。
-        - 具体候选游戏名：校验支持自主领航且就绪后构建交接简报，立即交权并锁定覆盖策略。
+        - 具体候选游戏名：校验支持自主领航且就绪后构建交接记忆摘要，立即交权并锁定覆盖策略。
 
         Raises:
             ValueError: ``target`` 为空、不是 ``"auto"`` / ``"streamer"`` 且不在自主领航候选名单中。
@@ -640,7 +640,7 @@ class LeadCoordinator:
         reason: str,
         builder: Optional[HandoverBuilder],
     ) -> LeadHandoverContext:
-        """调用交接简报构建器；无构建器或构建异常时回落默认简报。"""
+        """调用交接记忆摘要构建器；无构建器或构建异常时回落默认记忆摘要。"""
         if builder is None:
             return LeadHandoverContext(reason=reason)
         try:
@@ -649,9 +649,9 @@ class LeadCoordinator:
                 built = await built
             if isinstance(built, LeadHandoverContext):
                 return built if built.reason else built.model_copy(update={"reason": reason})
-            logger.warning(f"handover_builder 返回非 LeadHandoverContext（{type(built).__name__}），使用默认简报")
-        except Exception as exc:  # noqa: BLE001 - 简报构建失败不阻断人工切换
-            logger.warning(f"构建交接简报失败（target={target_name}，使用默认简报）: {exc}", exc=True)
+            logger.warning(f"handover_builder 返回非 LeadHandoverContext（{type(built).__name__}），使用默认记忆摘要")
+        except Exception as exc:  # noqa: BLE001 - 记忆摘要构建失败不阻断人工切换
+            logger.warning(f"构建交接记忆摘要失败（target={target_name}，使用默认记忆摘要）: {exc}", exc=True)
         return LeadHandoverContext(reason=reason)
 
     async def _dispatch_emitted(self, payloads: List[AgentLeadChangedPayload]) -> None:
@@ -980,7 +980,7 @@ class LeadCoordinator:
         """向当前主控或已注册具备自主领航能力的 Agent 聚合本场短期记忆条目（异常隔离、零游戏名硬编码）。
 
         查询顺序：若此刻存在主控游戏 Agent 则优先查它，随后补充其余在册且未停机的自主领航候选，
-        单个 Agent 抛异常仅记告警并继续，不阻断上层记忆回想。
+        单个 Agent 抛异常仅记告警并继续，不阻断上层记忆回忆。
         """
         clean_query = (query or "").strip()
         if not clean_query or limit <= 0:

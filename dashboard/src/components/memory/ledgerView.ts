@@ -104,7 +104,7 @@ export function unregisteredKindLabel(kind: UnregisteredKind): string {
 /** 观众候选类型 → 页面标签 */
 export function candidateKindLabel(kind: CandidateKind): string {
   if (kind === 'claimed_missing') return '她说欠着的';
-  if (kind === 'viewer_self') return '熟客近况';
+  if (kind === 'viewer_self') return '老观众近况';
   return '观众定下的';
 }
 
@@ -118,8 +118,8 @@ export function candidateApproveWarning(
     return `批准后登记成一条未了结承诺「${title}」，之后每场都会提醒她兑现。先确认她不是顺着观众的话编的。`;
   }
   if (kind === 'viewer_self') {
-    const who = viewerName || '这位熟客';
-    return `批准后「${title}」只记在 ${who} 的熟客卡上：仅在 ta 直播间发言时提示，不进开播简报；删除这位观众或 ta 发“忘了我”时会一起删掉。`;
+    const who = viewerName || '这位老观众';
+    return `批准后「${title}」只记在 ${who} 的老观众线索上：仅在 ta 直播间发言时提示，不进开播记忆摘要；删除这位观众或 ta 发“忘了我”时会一起删掉。`;
   }
   return `批准后「${title}」进记忆，下一场开播会记得。这条记忆挂在那位观众的弹幕上：删除这位观众或 ta 发“忘了我”时会一起删掉。`;
 }
@@ -155,7 +155,7 @@ export function candidateReportText(
   const claimed = listed?.claimed_missing ?? 0;
   const players = listed?.player_self ?? 0;
   if (defined) parts.push(`观众定下的 ${defined} 条`);
-  if (viewerSelf) parts.push(`熟客近况 ${viewerSelf} 条`);
+  if (viewerSelf) parts.push(`老观众近况 ${viewerSelf} 条`);
   if (claimed) parts.push(`她说欠着的 ${claimed} 条`);
   if (players) parts.push(`玩家自述 ${players} 条`);
   const head = parts.length ? `列进待审区：${parts.join('、')}` : '';
@@ -166,7 +166,7 @@ export function candidateReportText(
 /** 唠叨指标的建议阈值：只在文案里标"偏多"，不拦人；前几场测试直播的实测出来后再定 */
 const NAGGING_LIMITS = { maxPerItem: 3, unpromptedPerHour: 4, cardsPerPlayer: 2 } as const;
 
-/** 整理报告里的唠叨指标一句话：同一件旧事提了几次、没人问时主动提几次、推的卡用上几张；都没有返回 null */
+/** 整理报告里的唠叨指标一句话：同一件旧事提了几次、没人问时主动提几次、推的线索用上几条；都没有返回 null */
 export function sideEffectText(stats: SideEffectStats | null | undefined): string | null {
   if (!stats) return null;
   const over = (flag: boolean) => (flag ? '（偏多）' : '');
@@ -190,10 +190,10 @@ export function sideEffectText(stats: SideEffectStats | null | undefined): strin
     const self = stats.self_triggered_cards
       ? `，只由她自己的话触发 ${stats.self_triggered_cards} 张`
       : '';
-    parts.push(`线索卡推了 ${pushed} 张、用上 ${used} 张${self}`);
+    parts.push(`记忆线索推了 ${pushed} 张、用上 ${used} 张${self}`);
   }
   if (stats.max_cards_per_player > NAGGING_LIMITS.cardsPerPlayer) {
-    parts.push(`同一位玩家被推卡 ${stats.max_cards_per_player} 张（偏多）`);
+    parts.push(`同一位玩家被推线索 ${stats.max_cards_per_player} 条（偏多）`);
   }
   return parts.join('；') || null;
 }
@@ -209,7 +209,7 @@ export function snapshotChangeLabel(action: SnapshotChangeAction): string {
   return labels[action];
 }
 
-/** 常驻简报至多列 12 行档案：锁住但没放回的行满了会按规则被挤出简报（仍在档案里，回想查得到） */
+/** 记忆摘要至多列 12 行档案：锁住但没放回的行满了会按规则被挤出记忆摘要（仍在档案里，回忆查得到） */
 export const SNAPSHOT_BRIEF_LINES = 12;
 
 /** 档案行标题上限（与后端审核仓储一致，和整理写的行同一上限） */
@@ -285,7 +285,7 @@ export function settleAttemptsExhausted(attempts: number, maxAttempts: number): 
  * 这一场之后是否已经有整理好的正式场。
  *
  * 有的话，重新整理这一场只重算它自己的档案快照：它原来的档案行会从之后几场的快照里撤掉，
- * 新写的不会进去（之后几场不重放）。确认框据此提醒运营者，要把结果带到简报里，得按时间顺序
+ * 新写的不会进去（之后几场不重放）。确认框据此提醒运营者，要把结果带到记忆摘要里，得按时间顺序
  * 把之后几场也依次重新整理。
  */
 export function hasLaterSettledSession(

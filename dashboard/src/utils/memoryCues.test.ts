@@ -1,4 +1,4 @@
-// memoryCues 的测试：线索卡的卡类与来源叫法、一行分数说明、条目是否已删、来源筛选
+// memoryCues 的测试：记忆线索的卡类与来源叫法、一行分数说明、条目是否已删、来源筛选
 
 import { describe, expect, it } from 'vitest';
 
@@ -46,7 +46,7 @@ describe('memoryCues', () => {
     expect(cueScoreText(cue({ detail }))).toBe(expected);
   });
 
-  it('档案行与承诺卡标题为空即条目已删；老梗卡没有条目，不算删', () => {
+  it('档案行与承诺线索标题为空即条目已删；老梗线索没有条目，不算删', () => {
     expect(cueItemGone(cue({ title: '' }))).toBe(true);
     expect(cueItemGone(cue())).toBe(false);
     expect(cueItemGone(cue({ archive_line_id: null, title: '', label: '老梗「倒立洗头」' }))).toBe(

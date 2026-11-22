@@ -4,12 +4,12 @@
 她下次开播该记得的事由快照给出：每个整理过的正式场留一份快照（``archive_snapshots`` /
 ``archive_snapshot_lines``），引用这一场新写的行与前几场仍然成立的行，至多 12 行。快照只引用
 原行、不复制：原行被删时外键级联撤掉所有快照里的引用，删观众替换原行文本时快照看到的也是
-替换后的文本，回想工具遮名照样生效。
+替换后的文本，回忆工具遮名照样生效。
 
 滚动之前的旧场次没有存下的快照，由它与更早几场的档案行现拼（:func:`_legacy_snapshot`），
-升级后的第一次整理从这里接起。常驻简报取最近一个时长够的场次的快照
+升级后的第一次整理从这里接起。记忆摘要取最近一个时长够的场次的快照
 （:meth:`ArchiveRepo.latest_snapshot`），整理取开播早于本场的最近一份快照作基底
-（:meth:`ArchiveRepo.snapshot_before`），回想工具按场次查各场自己的档案行。
+（:meth:`ArchiveRepo.snapshot_before`），回忆工具按场次查各场自己的档案行。
 """
 
 from __future__ import annotations
@@ -61,10 +61,10 @@ def archive_line_of(row: Any) -> ArchiveLine:
 
 
 def with_source_viewer_names(conn: sqlite3.Connection, lines: Sequence[ArchiveLine]) -> List[ArchiveLine]:
-    """观众来源的行带上那条弹幕的发送者用过的名字（弹幕上的名字、观众的现名与曾用名）。
+    """观众定下的事所在行带上那条弹幕的发送者用过的名字（弹幕上的名字、观众的现名与曾用名）。
 
-    她那句回应常常点了这位观众的名（"阿杰说得对，就叫团子"），原话逐字存着不改；渲染进简报、
-    线索卡、回复器档时按这里带出的名字换成"那位观众"，她就不会当众说出是哪一位定的。
+    她那句回应常常点了这位观众的名（"阿杰说得对，就叫团子"），原话逐字存着不改；渲染进记忆摘要、
+    记忆线索、回复器档时按这里带出的名字换成"那位观众"，她就不会当众说出是哪一位定的。
     她自己说的行、弹幕已经不在的行（观众被删时这一行随外键一起删）不带。
     """
     chat_ids = sorted({int(line.viewer_chat_id) for line in lines if line.source == "viewer" and line.viewer_chat_id})
@@ -267,7 +267,7 @@ def _snapshot_of(
 
 
 def _latest_long_enough(conn: sqlite3.Connection, kind: SessionKind, min_duration_ms: int) -> Optional[_Candidate]:
-    """最近一个时长够的候选场次（常驻简报与承诺卡的"上一场"）。"""
+    """最近一个时长够的候选场次（记忆摘要与承诺线索的"上一场"）。"""
     for candidate in _candidates(conn, "", (kind,)):
         if _long_enough(candidate, min_duration_ms):
             return candidate
@@ -337,7 +337,7 @@ class ArchiveRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_lines_by_ids(self, *, line_ids: Sequence[int]) -> List[ArchiveLine]:
-        """按主键取档案行（回想工具把检索结果还原成档案行用）；按给定主键的先后排列，不存在的跳过。"""
+        """按主键取档案行（回忆工具把检索结果还原成档案行用）；按给定主键的先后排列，不存在的跳过。"""
         ids = [int(line_id) for line_id in dict.fromkeys(line_ids)]
         if not ids:
             return []
@@ -356,10 +356,10 @@ class ArchiveRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def carried_viewer_lines(self, *, live_session_id: int, started_at_ms: int) -> List[SnapshotLine]:
-        """重新整理这一场时要接着带进快照的观众来源行（人批准的观众候选写成的行）。
+        """重新整理这一场时要接着带进快照的观众定下的事行（人批准的观众候选写成的行）。
 
         整理重跑时这些行不删（它们不是整理写的），整理器把它们接着放进重写的快照。两类：这一场自己的
-        观众来源行；这一场现有快照里引用的观众来源行（批准时这一场是最新快照，别的场次的候选也插在
+        观众定下的事行；这一场现有快照里引用的观众定下的事行（批准时这一场是最新快照，别的场次的候选也插在
         这里）。稳定与否、最近提起的时刻、是否放回照这一场现有快照里那一行；这一场快照里没有的，稳定
         与否和最近提起照最近一份引用它的快照、不算放回；都没有就按不稳定、本场开播时刻算。
         """
@@ -462,7 +462,7 @@ class ArchiveRepo(BaseRepo):
     async def latest_snapshot(
         self, *, kind: SessionKind = SESSION_KIND_LIVE, min_duration_ms: int = 0
     ) -> Optional[ArchiveSnapshot]:
-        """常驻简报读的快照：「上一场」（口径同 :meth:`get_last_archived_session_id`）的快照。"""
+        """记忆摘要读的快照：「上一场」（口径同 :meth:`get_last_archived_session_id`）的快照。"""
 
         def _exec() -> Optional[ArchiveSnapshot]:
             with self._manager.transaction() as conn:
@@ -517,8 +517,8 @@ class ArchiveRepo(BaseRepo):
     ) -> List[Tuple[int, int]]:
         """最近已结束且时长达标的同类型场次的 ``(场次主键, 开播时刻)``（从新到旧，不论整理完没有）。
 
-        用于常驻简报两处判定：一是核对当前拿到的快照是不是紧邻的上一场（若最近一场还没整理完，
-        快照来自更早的场次，简报不能把它标成"上一场"）；二是算出"最近三场"的开播时刻下界，
+        用于记忆摘要两处判定：一是核对当前拿到的快照是不是紧邻的上一场（若最近一场还没整理完，
+        快照来自更早的场次，记忆摘要不能把它标成"上一场"）；二是算出"最近三场"的开播时刻下界，
         让【最近几场】的"再往前两场"只收最近三场内写下或被再提起过的事件。
         """
         cap = max(1, int(limit))
@@ -542,10 +542,10 @@ class ArchiveRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_archived_session_bounds(self, *, limit: int = 200) -> List[Tuple[int, int]]:
-        """有档案行的场次与它的开播时刻（开播时刻倒序），供回想工具逐场检索。
+        """有档案行的场次与它的开播时刻（开播时刻倒序），供回忆工具逐场检索。
 
         只用档案行判断"这一场有没有档案"，不看 live_chat：保留期清理会把早年弹幕删掉，
-        档案还在，回想工具不能因此查不到。
+        档案还在，回忆工具不能因此查不到。
         """
 
         def _exec() -> List[Tuple[int, int]]:

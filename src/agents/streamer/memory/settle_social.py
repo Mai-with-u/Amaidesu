@@ -2,7 +2,7 @@
 
 原料是紧凑集，不含她的台词全量与观察回包：
 
-- 本场玩家在游戏公屏说的、存了原话的那些句子（编号"公屏#N"，只在这一次调用里有意义）；
+- 本场玩家在游戏公屏说的、存了原话的那些句子（编号"游戏公屏#N"，只在这一次调用里有意义）；
 - 本场记下的互动（打招呼、送东西、切磋）；
 - 本场游戏记录（交付了的委派、做成了的里程碑与上报，与档案那次同一份）；
 - 本场记住的地点；
@@ -11,14 +11,14 @@
 校验全部是代码，与场内工具同一套口径：
 
 - kind 是六类之一，text 非空且不超长；
-- 非归纳类必须引一句公屏（chat），quote 是那句原文一字不差的片段（压掉连续空白的写法也认）；
+- 非归纳类必须引一句游戏公屏（chat），quote 是那句原文一字不差的片段（压掉连续空白的写法也认）；
   归纳类（她的角色、待弄清）可以不引，引了就照样核对；
 - 取代目标须是给模型看过的现行行、同类、没被运营者锁定；
 - 每类在一个游戏存档里的现行行数加上本场新写的不超过上限（取代不占新名额）；
-- 互动只收 together / helped，必须引那位玩家自己说的一句公屏。
+- 互动只收 together / helped，必须引那位玩家自己说的一句游戏公屏。
 
-没通过的写进整理报告的未登记清单。事实挂的游戏与存档：引了公屏的取那句公屏的游戏与存档，没引的
-取本场最后一句玩家公屏所在的游戏与存档（都没有时取本场玩过的第一个游戏、按开播时刻认存档）。
+没通过的写进整理报告的未登记清单。事实挂的游戏与存档：引了游戏公屏的取那句游戏公屏的游戏与存档，没引的
+取本场最后一句玩家游戏公屏所在的游戏与存档（都没有时取本场玩过的第一个游戏、按开播时刻认存档）。
 """
 
 from __future__ import annotations
@@ -63,20 +63,20 @@ logger = get_logger("SettleSocial")
 
 # 每类在一个存档里至多几行现行事实（与场内工具同一个数）
 MAX_FACTS_PER_KIND = MAX_ACTIVE_FACTS_PER_KIND
-# 一场至多给模型看多少句玩家公屏（刷屏的场次只留最后这些）
+# 一场至多给模型看多少句玩家游戏公屏（刷屏的场次只留最后这些）
 _MAX_PLAYER_LINES = 120
-# 公屏对话双侧行的总量上限：她的行进对话流后行数随场次增长，截到最近的这些行
+# 游戏公屏对话双侧行的总量上限：她的行进对话流后行数随场次增长，截到最近的这些行
 _MAX_DIALOG_LINES = 160
 _TEXT_MAX_CHARS = 60
 _QUOTE_MAX_CHARS = 80
 _WHAT_MAX_CHARS = 30
-_CHAT_PREFIX = "公屏#"
+_CHAT_PREFIX = "游戏公屏#"
 _RECORD_PREFIX = "记录#"
 _FACT_PREFIX = "事实#"
 _PLAYER_PREFIX = "玩家"
 # 单趟整词匹配玩家代号（"玩家1"不命中"玩家10"的前缀）
 _PLAYER_CODE_RE = re.compile(rf"{_PLAYER_PREFIX}(\d+)(?!\d)")
-# 满额后允许按“最旧未锁定条目”自动腾退的类别：仅当新事实具备经核实的玩家公屏原话证据时触发，
+# 满额后允许按“最旧未锁定条目”自动腾退的类别：仅当新事实具备经核实的玩家游戏公屏原话证据时触发，
 # 避免模型漏填 supersedes 时把新学到的服务器关键规矩或共用惯例直接丢弃
 _AUTO_EVICT_KINDS = frozenset({"sharing", "setting", "open_question"})
 _KIND_ORDER: Tuple[str, ...] = ("setting", "members", "sharing", "works", "her_role", "open_question")
@@ -97,7 +97,7 @@ class SocialMaterial:
     """第四次调用的原料：给模型看的一整段，与核对时要用的编号表。"""
 
     text: str = ""
-    # 公屏编号 → 那一句玩家公屏
+    # 游戏公屏编号 → 那一句玩家游戏公屏
     chat_by_number: Dict[int, GameChatLine] = field(default_factory=dict)
     # 玩家主键 → 本次调用里的代号
     player_codes: Dict[int, str] = field(default_factory=dict)
@@ -105,9 +105,9 @@ class SocialMaterial:
     player_names: Dict[int, str] = field(default_factory=dict)
     # 给模型看过的现行事实（行号 → 行）
     facts: Dict[int, SocialFact] = field(default_factory=dict)
-    # 给模型看过的本场游戏记录（记录编号 → 游戏记录；仅用于取代既有 works 事实时的无公屏作证核验）
+    # 给模型看过的本场游戏记录（记录编号 → 游戏记录；仅用于取代既有 works 事实时的无游戏公屏作证核验）
     records_by_number: Dict[int, GameRecord] = field(default_factory=dict)
-    # 没引公屏的归纳行挂在哪：(游戏, 存档编号, 存档名)
+    # 没引游戏公屏的归纳行挂在哪：(游戏, 存档编号, 存档名)
     default_scope: Tuple[str, str, str] = ("", "", "")
     # 本场之前最近两场已完结正式场的编号与第二近场开播时刻（判 works 是否隔两场未再证实）
     recent_two_session_ids: Tuple[int, ...] = ()
@@ -115,7 +115,7 @@ class SocialMaterial:
 
     @property
     def empty(self) -> bool:
-        """没有任何能据以更新的原料（没有玩家公屏、没有互动、没有现有事实）时为真，第四次调用不必跑。"""
+        """没有任何能据以更新的原料（没有玩家游戏公屏、没有互动、没有现有事实）时为真，第四次调用不必跑。"""
         return not self.text
 
     def restore_names(self, text: str) -> str:
@@ -194,7 +194,7 @@ def build_social_material(
 ) -> SocialMaterial:
     """拼第四次调用的原料。``player_names`` 是玩家主键 → 现在的名字（读不到的玩家不给代号）。
 
-    公屏按时间序双侧行编排：玩家的行带编号（作证据），她的行标"她"不带编号（引不了，
+    游戏公屏按时间序双侧行编排：玩家的行带编号（作证据），她的行标"她"不带编号（引不了，
     证据必须是别人的话）——只给玩家的行，一句回答看不出是在回答什么（她问小百合去哪了、
     玩家答"在菜地旁边"，模型会把这句回答嫁接到别的话题上编出缝合事实）。
     """
@@ -266,7 +266,7 @@ def build_social_material(
     if spoken:
         last = spoken[-1]
         distinct_saves = {line.save_id for line in spoken if line.game == last.game and line.save_id}
-        # 一场里跨过多个存档时，无引文的归纳行挂整游戏级，避免误绑到最后一句公屏所在的存档
+        # 一场里跨过多个存档时，无引文的归纳行挂整游戏级，避免误绑到最后一句游戏公屏所在的存档
         scope = (last.game, "", "") if len(distinct_saves) > 1 else (last.game, last.save_id, last.save_name)
     elif games:
         save = saves.save_at(games[0], int(started_at_ms))
@@ -289,7 +289,7 @@ def build_social_material(
 
 
 def _number(raw: Any, prefix: str) -> Optional[int]:
-    """模型写的编号（"公屏#3"、"#3"、3）换成数字；认不出返回 None。"""
+    """模型写的编号（"游戏公屏#3"、"#3"、3）换成数字；认不出返回 None。"""
     if raw is None or isinstance(raw, bool):
         return None
     if isinstance(raw, int):
@@ -393,15 +393,15 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         supersedes = _number(raw.get("supersedes"), _FACT_PREFIX)
         if is_record_ref:
             # 仅针对 works 且正在取代有效现行条目的结案/进度更新场景，放行经核实的游戏记录作证，
-            # 避免自主完工/复活因无玩家公屏复述而永远无法结案旧账
+            # 避免自主完工/复活因无玩家游戏公屏复述而永远无法结案旧账
             if kind != "works":
-                _miss(check, text, quote, "引的不是给出的玩家公屏")
+                _miss(check, text, quote, "引的不是给出的玩家游戏公屏")
                 continue
             if raw.get("supersedes") not in (None, "") and supersedes is None:
                 _miss(check, text, quote, "取代的编号认不出")
                 continue
             if supersedes is None:
-                _miss(check, text, quote, "新建记着的事须引玩家公屏，只有取代既有事实才可用游戏记录作证")
+                _miss(check, text, quote, "新建记着的事须引玩家游戏公屏，只有取代既有事实才可用游戏记录作证")
                 continue
             old = material.facts.get(supersedes)
             if old is None or supersedes in superseded:
@@ -432,10 +432,10 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
             chat_number = _number(raw_chat, _CHAT_PREFIX)
             line = material.chat_by_number.get(chat_number) if chat_number is not None else None
             if raw_chat not in (None, "") and line is None:
-                _miss(check, text, quote, "引的不是给出的玩家公屏")
+                _miss(check, text, quote, "引的不是给出的玩家游戏公屏")
                 continue
             if line is None and kind not in QUOTE_OPTIONAL_KINDS:
-                _miss(check, text, quote, "这一类必须引一句玩家公屏作依据")
+                _miss(check, text, quote, "这一类必须引一句玩家游戏公屏作依据")
                 continue
             if line is not None:
                 checked = verbatim_quote(quote, line.content, _QUOTE_MAX_CHARS)
@@ -444,7 +444,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
                     continue
                 verified = checked
             elif quote:
-                _miss(check, text, quote, "写了原话却没引是哪句公屏")
+                _miss(check, text, quote, "写了原话却没引是哪句游戏公屏")
                 continue
             if raw.get("supersedes") not in (None, "") and supersedes is None:
                 _miss(check, text, quote, "取代的编号认不出")
@@ -493,7 +493,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
                         _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
                         continue
                 elif kind in _AUTO_EVICT_KINDS and line is not None:
-                    # 满额的共享惯例/环境形态/待弄清在收到带玩家公屏逐字原话证据的新事实时，
+                    # 满额的共享惯例/环境形态/待弄清在收到带玩家游戏公屏逐字原话证据的新事实时，
                     # 按“非本场优先 -> 最后证实时刻最早 -> 更早场次 -> 更小行号”自动腾退最旧未锁定条目，
                     # 防止模型漏填 supersedes 导致服务器关键规矩被静默丢弃
                     evict_candidates = [
@@ -519,7 +519,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
                         superseded.add(supersedes)
                         logger.info(
                             f"场次 {live_session_id} 社交事实[{_KIND_LABELS[kind]}]已满 {MAX_FACTS_PER_KIND} 条，"
-                            f"自动以公屏证据新事实取代最旧未锁定条目 {_FACT_PREFIX}{supersedes}："
+                            f"自动以游戏公屏证据新事实取代最旧未锁定条目 {_FACT_PREFIX}{supersedes}："
                             f"「{oldest_unlocked.text}」->「{material.restore_names(text)}」"
                         )
                     else:
@@ -567,7 +567,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
             _miss(check, what, quote, "互动只收一起做的事（together）与帮过忙（helped），且要写做了什么")
             continue
         if player_id is None or line is None or line.player_id != player_id:
-            _miss(check, what, quote, "互动要引那位玩家自己在公屏说的一句")
+            _miss(check, what, quote, "互动要引那位玩家自己在游戏公屏说的一句")
             continue
         verified = verbatim_quote(quote, line.content, _QUOTE_MAX_CHARS)
         if verified is None:

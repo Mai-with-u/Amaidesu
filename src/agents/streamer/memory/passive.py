@@ -537,13 +537,13 @@ class CueText:
 class PassiveHit:
     """一条被想起的候选：条目、命中它的全部来源与依据。
 
-    ``message_id`` 是第一条命中它的观众弹幕，只给卡面点名用，不进线索卡记录（记录不带观众身份）。
+    ``message_id`` 是第一条命中它的观众弹幕，只给卡面点名用，不进记忆线索记录（记录不带观众身份）。
     """
 
     key: ItemKey
     sources: Set[str] = field(default_factory=set)
     keywords: List[str] = field(default_factory=list)
-    # 命中的触发词在条目触发词表里排第几（从 0 起）：线索卡记录只存这个，不存原词
+    # 命中的触发词在条目触发词表里排第几（从 0 起）：记忆线索记录只存这个，不存原词
     keyword_indexes: List[int] = field(default_factory=list)
     hows: List[str] = field(default_factory=list)
     message_id: str = ""

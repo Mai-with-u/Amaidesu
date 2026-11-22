@@ -202,10 +202,10 @@ async def session_cues(
     server: ServerDep,
     session_id: Annotated[int, Query(gt=0, description="场次 id（live_sessions 主键）")],
 ) -> ReviewCueItems:
-    """单场推过的线索卡（按推送先后）：被动想起与承诺卡推了什么、谁触发的、她用上没有。"""
+    """单场推过的记忆线索（按推送先后）：被动想起与承诺线索推了什么、谁触发的、她用上没有。"""
     repo = server.memory_cue_log_repo
     if repo is None:
-        raise HTTPException(status_code=503, detail="线索卡记录仓储未装配")
+        raise HTTPException(status_code=503, detail="记忆线索记录仓储未装配")
     entries = [
         entry
         for entry in await repo.list_session_entries(live_session_id=session_id)
@@ -222,7 +222,7 @@ async def session_cues(
             label, title = f"约#{entry.commitment_id}", commitment_titles.get(entry.commitment_id, "")
         elif entry.card_kind == "viewer_familiar":
             viewer_id = entry.detail.get("viewer_id")
-            label = f"老观众#{int(viewer_id)}" if isinstance(viewer_id, int) else "老观众卡"
+            label = f"老观众#{int(viewer_id)}" if isinstance(viewer_id, int) else "老观众线索"
             title = ""
         elif entry.card_kind == "social_fact":
             fact_id = entry.detail.get("social_fact_id")
@@ -248,12 +248,12 @@ async def session_cues(
     return ReviewCueItems(items=items)
 
 
-# 线索卡记录里不该有的原词键：早先的记录存过触发词、地点名与老梗原词，复盘时一律不往外给
+# 记忆线索记录里不该有的原词键：早先的记录存过触发词、地点名与老梗原词，复盘时一律不往外给
 _RAW_WORD_KEYS = ("keywords", "place", "joke")
 
 
 def _joke_label(detail: Dict[str, Any]) -> str:
-    """老梗卡的条目写法：记录只存它在老梗栏里排第几条，不存梗的原词。"""
+    """老梗线索的条目写法：记录只存它在老梗栏里排第几条，不存梗的原词。"""
     index = detail.get("joke_index")
     return f"老梗第 {int(index) + 1} 条" if isinstance(index, int) else "老梗"
 
@@ -279,7 +279,7 @@ def _cue_detail(card_kind: str, stored: Dict[str, Any], line: Optional[Any]) -> 
 
 
 async def _archive_lines(server: Any, ids: List[Optional[int]]) -> Dict[int, Any]:
-    """线索卡指向的档案行（标题、触发词、地点现查用）；没装配档案仓储时为空（面板只显示编号）。"""
+    """记忆线索指向的档案行（标题、触发词、地点现查用）；没装配档案仓储时为空（面板只显示编号）。"""
     wanted = [int(item) for item in ids if item is not None]
     if not wanted or server.archive_repo is None:
         return {}
@@ -288,7 +288,7 @@ async def _archive_lines(server: Any, ids: List[Optional[int]]) -> Dict[int, Any
 
 
 async def _commitment_titles(server: Any, ids: List[Optional[int]]) -> Dict[int, str]:
-    """线索卡指向的承诺动作标题；没装配承诺仓储时为空（面板只显示编号）。"""
+    """记忆线索指向的承诺动作标题；没装配承诺仓储时为空（面板只显示编号）。"""
     titles: Dict[int, str] = {}
     if server.commitments_repo is None:
         return titles

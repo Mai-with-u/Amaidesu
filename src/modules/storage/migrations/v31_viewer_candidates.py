@@ -9,7 +9,7 @@
   删观众、忘了我、按句删弹幕或台词、删场次时候选随之删除。``status`` 是待审 / 已批 / 已驳回；
   批准后生成的档案行或承诺记在 ``archive_line_id`` / ``commitment_id``（那一行再被删时置空）。
 - ``archive_lines.source``：这一行是主播自己说的（``streamer``，旧行一律是）还是批准的观众候选
-  （``viewer``）；``archive_lines.viewer_chat_id``：观众来源的行挂着的那条弹幕，同样按外键级联删除。
+  （``viewer``）；``archive_lines.viewer_chat_id``：观众定下的事所在行挂着的那条弹幕，同样按外键级联删除。
 
 建表语句在这里留一份定稿副本：建表汇总以后改动，不影响这一版迁移做过的事。
 """

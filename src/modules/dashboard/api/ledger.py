@@ -19,13 +19,13 @@
 - POST   /memory/settle/{session_id}/reviewed 标已审
 - POST   /memory/settle/{session_id}/resettle 重新排进整理队列（清整理完成时刻与重试次数）
 - GET    /memory/candidates                   观众候选（待审 / 已批 / 已驳回）与待审数
-- POST   /memory/candidates/{id}/approve      批准（观众定下的写成档案行，她说欠着的登记成承诺，老观众近况进老观众卡）
+- POST   /memory/candidates/{id}/approve      批准（观众定下的写成档案行，她说欠着的登记成承诺，老观众近况进老观众线索）
 - POST   /memory/candidates/{id}/reject       驳回（同一条以后不再列）
 - POST   /memory/candidates/{id}/revoke       撤销已批准的老观众近况（回到待审）
 - DELETE /memory/candidates/{id}              删除一条候选
 
 人改过的行之后的整理不能去掉或替换，人放回、新增的行整理不挤掉；每次改动都记进改动记录。
-观众候选批准前对她完全不可见；弹幕原文里的已知观众昵称按回想工具的口径遮成"某位观众"。
+观众候选批准前对她完全不可见；弹幕原文里的已知观众昵称按回忆工具的口径遮成"某位观众"。
 
 账本是"她说过什么"的证据面：原话片段由整理时逐字校验过，删掉台词行也不影响阅读。
 本模块不做 SQL，读写全部经仓储；未注入仓储时端点返回 503。
@@ -99,7 +99,7 @@ OptionalReviewRepoDep = Annotated[
 CandidateRepoDep = Annotated[
     "ViewerCandidateRepo", Depends(server_component("viewer_candidate_repo", missing_detail="观众候选不可用"))
 ]
-# 候选列表遮名的称呼：和回想工具跨场遮名同一个说法
+# 候选列表遮名的称呼：和回忆工具跨场遮名同一个说法
 _MASKED_VIEWER = "某位观众"
 
 # 列表筛选用：一次最多回多少条承诺
@@ -334,7 +334,7 @@ async def pin_archive_line(line_id: int, review: ReviewRepoDep) -> LedgerMutatio
 
 @router.post("/archive/lines/{line_id}/unpin", response_model=LedgerMutationResponse)
 async def unpin_archive_line(line_id: int, review: ReviewRepoDep) -> LedgerMutationResponse:
-    """取消放回：这一行改回普通行，还在快照里；快照满 12 行时可能被挤出简报（仍在档案里，回想查得到）。"""
+    """取消放回：这一行改回普通行，还在快照里；快照满 12 行时可能被挤出记忆摘要（仍在档案里，回忆查得到）。"""
     try:
         await review.unpin_line(line_id=int(line_id), at_ms=now_ms())
     except MemoryReviewError as exc:
@@ -424,7 +424,7 @@ async def resettle_session(
     失败场次与整理完但想重做的场次共用这一个出口；重跑时整场替换，不会写出重复行。
     不存在的场次返回 404；彩排场从不整理、进行中的场次还没内容可整理，都返回 409。
     这一场有人改过的行、或它的快照里有人放回的行时也返回 409：整场替换会把人工改动冲掉。
-    人批准的观众来源行不拦：重新整理不删它们，整理器把它们接着带进重写的快照。
+    人批准的观众定下的事行不拦：重新整理不删它们，整理器把它们接着带进重写的快照。
     """
     session = await sessions.get_live_session(live_session_id=int(live_session_id))
     if session is None:
@@ -556,7 +556,7 @@ async def approve_candidate(
     viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
     request: Optional[CandidateApproveRequest] = None,
 ) -> CandidateItem:
-    """批准：观众定下的写成档案行并放进最新快照，她说欠着的登记成未了结承诺，老观众近况留供场内老观众卡读取。"""
+    """批准：观众定下的写成档案行并放进最新快照，她说欠着的登记成未了结承诺，老观众近况留供场内老观众线索读取。"""
     body = request or CandidateApproveRequest()
     title = body.title if body.title is not None and body.title.strip() else None
     try:
@@ -593,7 +593,7 @@ async def revoke_candidate(
     candidates: CandidateRepoDep,
     viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
 ) -> CandidateItem:
-    """撤销已批准的老观众近况：撤下老观众卡并回到待审，14 天待审期重算。"""
+    """撤销已批准的老观众近况：撤下老观众线索并回到待审，14 天待审期重算。"""
     try:
         row = await candidates.revoke(candidate_id=int(candidate_id), at_ms=now_ms())
     except MemoryReviewError as exc:

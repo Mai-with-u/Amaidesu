@@ -637,7 +637,7 @@ async def test_lead_loop_bounded_idle_wakeup_then_halts_until_external_event(fak
 
 
 async def test_lead_mode_directly_handles_player_chat_even_casual_banter(fake_clock: Any) -> None:
-    """主控态下身边同伴的日常闲聊公屏经 2 秒合批窗唤醒游戏循环，由游戏侧直接用 chat 回应同伴。"""
+    """主控态下身边同伴的日常闲聊游戏公屏经 2 秒合批窗唤醒游戏循环，由游戏侧直接用 chat 回应同伴。"""
     server = FakeMaicraft()
     replied = [False]
 
@@ -675,7 +675,7 @@ async def test_lead_mode_directly_handles_player_chat_even_casual_banter(fake_cl
         )
         await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
 
-        # 发送一条身边同伴（10 格内）不含喊停/点名关键词的普通日常闲聊公屏，推进假时钟 2 秒后经合批唤醒
+        # 发送一条身边同伴（10 格内）不含喊停/点名关键词的普通日常闲聊游戏公屏，推进假时钟 2 秒后经合批唤醒
         await env["bus"].emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -693,8 +693,8 @@ async def test_lead_mode_directly_handles_player_chat_even_casual_banter(fake_cl
 
         await _wait_until(lambda: replied[0] and not agent.batch_active)
         prompt_text = _texts(llm.seen[1])
-        assert "[公屏合批]" in prompt_text
-        assert "[公屏·身边10格] 同伴甲：今天建得不错呀" in prompt_text
+        assert "[游戏公屏合批]" in prompt_text
+        assert "[游戏公屏·身边10格] 同伴甲：今天建得不错呀" in prompt_text
         chat_calls = [args for args in server.calls_to("execute") if (args.get("goal") or {}).get("ability") == "chat"]
         assert len(chat_calls) == 1
         assert chat_calls[0]["goal"]["parameters"]["message"] == "谢谢夸奖，一会来参观"

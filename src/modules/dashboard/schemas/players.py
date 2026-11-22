@@ -43,7 +43,7 @@ class PlayerItem(BaseModel):
     )
     linked_viewers: List[LinkedViewer] = Field(default_factory=list, description="确认过的关联观众")
     forget_requested_at_ms: Optional[int] = Field(
-        default=None, description="他在公屏发'忘了我'的时刻；宽限期满后自动删除"
+        default=None, description="他在游戏公屏发'忘了我'的时刻；宽限期满后自动删除"
     )
 
 
@@ -67,14 +67,14 @@ class PlayerMutationResponse(BaseModel):
 
 
 class PlayerCandidateItem(BaseModel):
-    """玩家自述的一行：他在公屏说的关于他自己的事、她当场接住了，人批准才进他的玩家卡。"""
+    """玩家自述的一行：他在游戏公屏说的关于他自己的事、她当场接住了，人批准才进他的玩家线索。"""
 
     id: int = Field(description="候选主键")
     live_session_id: int = Field(description="列出它的场次")
     player_id: int = Field(description="说这件事的玩家")
     player_name: str = Field(default="", description="这位玩家最近一次见到时的名字；读不到为空")
     title: str = Field(description="标题（用'他'指他）")
-    player_quote: str = Field(description="他那句公屏的逐字片段")
+    player_quote: str = Field(description="他那句游戏公屏的逐字片段")
     reply_quote: str = Field(description="她回他的那句的逐字片段")
     reply_in: Literal["game_chat", "speech"] = Field(description="她在哪儿回的：game_chat 游戏公屏 / speech 直播里")
     status: str = Field(description="pending 待审 / approved 已批 / rejected 已驳回")

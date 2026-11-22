@@ -83,9 +83,9 @@ class TalkWorkbench:
     # ------------------------------------------------------------------
 
     def sync_segment(self, segment_id: Optional[str], beats: List[str]) -> None:
-        """每个决策窗开头同步当前环节：换了环节（或提纲被导演改了）就重置进度。
+        """每个决策回合开头同步当前环节：换了环节（或提纲被导演改了）就重置进度。
 
-        同一环节、同一份提纲重复调用不动进度，所以可以放心每窗都调。
+        同一环节、同一份提纲重复调用不动进度，所以可以放心每回合都调。
         """
         clean = [b for b in beats if b.strip()]
         if segment_id == self._segment_id and clean == self._beats:

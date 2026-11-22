@@ -3,9 +3,9 @@
 覆盖：
 1. 自动随开播 / 流程单 talk↔play / 下播切换主控与收尾摘要承接；
 2. 游戏不可用被动降级回主播、写入近况并唤醒圆场，以及恢复就绪后周期巡检交回；
-3. 交权简报（LeadHandoverContext）组装：流程单、存档名、常驻简报/社交事实、运营备忘、最近 3 句台词；
+3. 交权简报（LeadHandoverContext）组装：流程单、存档名、记忆摘要/社交事实、运营备忘、最近 3 句台词；
 4. 游戏主控态停用高频 rundown_ready 并启用低频冷场兜底，且冷场兜底轮零游戏控制工具；
-5. 观众弹幕轻从路由（隐藏委派/公屏发送工具、保留建议与只读查询、跳过自动沉重速览）与游戏公屏不唤醒主播；
+5. 观众弹幕轻从路由（隐藏委派/游戏公屏发送工具、保留建议与只读查询、跳过自动沉重速览）与游戏公屏不唤醒主播；
 6. 实况解说直通轻量 Replyer（零 Planner 调用）、最小间隔防抖合并、streamer.speech 落库、复位冷场计时与并发串行；
 7. spoken echo 零唤醒回传游戏侧；
 8. 四档语音优先级与非自选意外阵亡二级硬打断透传及 P2 护栏；
@@ -193,7 +193,7 @@ class _FakeRundownRepo:
 
 
 class _FakeGameToolProvider(BaseToolProvider):
-    """带存档读数与只读查询/公屏发送工具的通用游戏工具提供者。"""
+    """带存档读数与只读查询/游戏公屏发送工具的通用游戏工具提供者。"""
 
     def __init__(self, game_name: str = "adventure", save_name: str = "星空营地") -> None:
         self._game = game_name
@@ -648,7 +648,7 @@ def test_proactive_trigger_skips_rundown_ready_and_uses_idle_fallback_in_game_le
 
 
 async def test_game_lead_idle_fallback_and_viewer_rounds_filter_tools_and_skip_auto_glance(prompts: Any) -> None:
-    """轻从模式工具隔离：观众轮隐藏委派与公屏发送、保留建议与只读查询且不自动预抓速览；冷场兜底轮零游戏控制权。"""
+    """轻从模式工具隔离：观众轮隐藏委派与游戏公屏发送、保留建议与只读查询且不自动预抓速览；冷场兜底轮零游戏控制权。"""
     clock = _FakeClock()
     manager = AgentManager()
     game = _FakeAutonomousGameAgent(ready=True)
@@ -735,7 +735,7 @@ async def test_game_lead_idle_fallback_and_viewer_rounds_filter_tools_and_skip_a
     )
 
     try:
-        # 1) 观众弹幕轻从轮：隐藏委派/结单/递话/公屏发字，保留 reply/suggest/memory/只读速览/流程单，且不自动抓速览
+        # 1) 观众弹幕轻从轮：隐藏委派/结单/递话/游戏公屏发字，保留 reply/suggest/memory/只读速览/流程单，且不自动抓速览
         danmaku = RoomMessagePayload(
             message_type="danmaku",
             message_id="m_viewer_1",
@@ -787,12 +787,12 @@ async def test_game_lead_idle_fallback_and_viewer_rounds_filter_tools_and_skip_a
 
 
 # ---------------------------------------------------------------------------
-# 5. 游戏主控态下玩家公屏不唤醒主播决策（只记近况）
+# 5. 游戏主控态下玩家游戏公屏不唤醒主播决策（只记近况）
 # ---------------------------------------------------------------------------
 
 
 async def test_game_chat_records_context_without_waking_streamer_in_game_lead(prompts: Any) -> None:
-    """游戏主控态收到玩家公屏时只记近况不置位主播决策信号；主播主控态照常唤醒。"""
+    """游戏主控态收到玩家游戏公屏时只记近况不置位主播决策信号；主播主控态照常唤醒。"""
     clock = _FakeClock()
     bus = EventBus()
     manager = AgentManager()
@@ -825,7 +825,7 @@ async def test_game_chat_records_context_without_waking_streamer_in_game_lead(pr
         assert lead_coord.is_game_lead is True
         round_exec.calls.clear()
 
-        # 游戏主控态下发玩家公屏
+        # 游戏主控态下发玩家游戏公屏
         await bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -1294,7 +1294,7 @@ async def test_streamer_only_mode_disables_handover_completely(prompts: Any) -> 
         assert not agent.is_game_lead_active
         assert game.enter_contexts == []
 
-        # 主播主控态下收到玩家公屏照常置位唤醒信号（传统委派链路完全回退）
+        # 主播主控态下收到玩家游戏公屏照常置位唤醒信号（传统委派链路完全回退）
         await bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -1316,7 +1316,7 @@ async def test_streamer_only_mode_disables_handover_completely(prompts: Any) -> 
 
 
 def test_planner_react_prompt_includes_sync_promised_game_action_rule(prompts: Any) -> None:
-    """提示词守则回归：口头或公屏答应改动游戏行动时须同步通过工具通知执行侧。"""
+    """提示词守则回归：口头或游戏公屏答应改动游戏行动时须同步通过工具通知执行侧。"""
     rendered = prompts.render(
         "amaidesu_planner_react",
         bot_name="麦麦",
@@ -1512,7 +1512,7 @@ async def test_game_commentary_with_about_player_enforces_target_budget_guard(pr
 
 
 async def test_planner_framework_suggest_passes_viewer_source_dialogue_via_attachment(prompts: Any) -> None:
-    """主播 Planner 调 framework_suggest 时经 ToolInvocation.attachment 透传本窗观众原话（保留坐标/物品名）。"""
+    """主播 Planner 调 framework_suggest 时经 ToolInvocation.attachment 透传本回合观众原话（保留坐标/物品名）。"""
     clock = _FakeClock()
     manager = AgentManager()
     game = _FakeAutonomousGameAgent(ready=True)
@@ -1785,7 +1785,7 @@ async def test_game_lead_enter_welcome_batches_unwelcomed_viewers_via_replyer_wi
 
 
 async def test_periodic_lead_sync_waits_for_live_start_and_preserves_game_lead_entered_ms(prompts: Any) -> None:
-    """开播回调等待常驻简报刷新期间，周期巡检绝不抢跑交权；且若已处合法主控则不清空进入锚点。"""
+    """开播回调等待记忆摘要刷新期间，周期巡检绝不抢跑交权；且若已处合法主控则不清空进入锚点。"""
     clock = _FakeClock()
     bus = EventBus()
     manager = AgentManager()
@@ -2126,7 +2126,7 @@ async def test_game_commentary_correction_bypasses_min_interval_debounce(prompts
 
 
 async def test_memory_recall_registration_passes_lead_capable_agents_when_supported() -> None:
-    """StreamerAgent 注册真实 memory_recall Provider 时动态传入 lead_capable_agents，向自主游戏暴露回想工具（零硬编码游戏名）。"""
+    """StreamerAgent 注册真实 memory_recall Provider 时动态传入 lead_capable_agents，向自主游戏暴露回忆工具（零硬编码游戏名）。"""
     clock = _FakeClock()
     manager = AgentManager()
     game = _FakeAutonomousGameAgent(ready=True)

@@ -112,8 +112,8 @@ describe('确认关联与删观众的文案', () => {
 });
 
 describe('玩家自述', () => {
-  it('她回他的那句在哪儿说的：公屏或直播里', () => {
-    expect(playerReplyWhere({ reply_in: 'game_chat' })).toBe('公屏');
+  it('她回他的那句在哪儿说的：游戏公屏或直播里', () => {
+    expect(playerReplyWhere({ reply_in: 'game_chat' })).toBe('游戏公屏');
     expect(playerReplyWhere({ reply_in: 'speech' })).toBe('直播里');
   });
 });

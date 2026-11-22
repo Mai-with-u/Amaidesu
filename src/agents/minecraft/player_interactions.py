@@ -49,7 +49,7 @@ _SPAR_RESULTS: Dict[str, str] = {
 #: 记着多少场还没收手的切磋（下令后没等到结束就换世界、断线的，最早的先丢）
 _MAX_PENDING_SPARS = 16
 
-#: 记着最近多少个已经报过的公屏说话目标（同一个目标从回复和事件流两头都可能看到结束）
+#: 记着最近多少个已经报过的游戏公屏说话目标（同一个目标从回复和事件流两头都可能看到结束）
 _MAX_ANNOUNCED_CHATS = 64
 
 
@@ -97,17 +97,17 @@ def body_language_interactions(
 
 
 class SelfChatLog:
-    """她在公屏打出去的话：公屏说话的目标结束、那句交出去了，取一次原话；同一个目标只取一次。
+    """她在游戏公屏打出去的话：游戏公屏说话的目标结束、那句交出去了，取一次原话；同一个目标只取一次。
 
     ``chat`` 结果细节带 ``message``（发了哪句）与 ``submitted``（交出去没有）；打字中途被替换、取消的
-    ``submitted=false``，不算说过。对一只生物说话（细节带 ``to``）不进公屏，以 ``/`` 开头的是游戏命令，都不算。
+    ``submitted=false``，不算说过。对一只生物说话（细节带 ``to``）不进游戏公屏，以 ``/`` 开头的是游戏命令，都不算。
     """
 
     def __init__(self) -> None:
         self._seen: Dict[int, None] = {}
 
     def take(self, run: GoalRun) -> str:
-        """结束了的公屏说话目标 → 交出去的那句话；不是、没交出去或已经取过的为空串。"""
+        """结束了的游戏公屏说话目标 → 交出去的那句话；不是、没交出去或已经取过的为空串。"""
         ability = run.ability
         if not run.finished or not (ability == "chat" or ability.endswith(":chat")) or run.goal_id in self._seen:
             return ""

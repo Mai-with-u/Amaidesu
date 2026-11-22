@@ -166,7 +166,7 @@ async def test_pending_reminder_does_not_starve_due_batch(
     - 没挡住：递话那一轮主动发言执行
     """
     executor = FakeRoundExecutor()
-    executor.drain_reminders = True  # 真实执行器在任何决策窗入口都取空提醒队列
+    executor.drain_reminders = True  # 真实执行器在任何决策回合入口都取空提醒队列
     # 单批上限 1 条：一条弹幕进缓冲即到期（batch_full），不靠真实时间流逝
     agent = make_streamer_agent({"batch": {"batch_max_size": 1}}, round_executor=executor)
     agent._live_active = True

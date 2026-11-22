@@ -245,7 +245,7 @@ export interface LeadStateResponse {
   reason: string;
 }
 
-/** 主控权交接简报（agent.lead.changed 载荷的 handover_brief 字段）。
+/** 主控权交接记忆摘要（agent.lead.changed 载荷的 handover_brief 字段）。
  *  交权方向（含目标拒收回滚）非 null；收回方向为 null。字段由后端拼装，
  *  前端消费时全部防御解析（缺字段跳过不渲染） */
 export interface LeadHandoverBrief {
@@ -1730,7 +1730,7 @@ export interface ArchiveLineCreatePayload {
 /** 整理时没能登记的条目类型：承诺 / 档案行 / 观众候选 */
 export type UnregisteredKind = 'commitment' | 'archive' | 'candidate';
 
-/** 观众候选类型：观众定下的 / 她说欠着的 / 熟客近况 */
+/** 观众候选类型：观众定下的 / 她说欠着的 / 老观众近况 */
 export type CandidateKind = 'viewer_defined' | 'claimed_missing' | 'viewer_self';
 
 /** 观众候选状态：待审 / 已批 / 已驳回 */
@@ -1750,7 +1750,7 @@ export interface CandidateItem {
   kind: CandidateKind;
   /** 标题（不写观众昵称） */
   title: string;
-  /** 熟客近况所属观众当前昵称；其余候选为空 */
+  /** 老观众近况所属观众当前昵称；其余候选为空 */
   viewer_name?: string | null;
   /** 观众那条弹幕里定下这件事的那一段（已知昵称已遮成某位观众）；她说欠着的一类可能为空 */
   viewer_quote: string;
@@ -1807,7 +1807,7 @@ export interface PlayerItem {
   /** 互动条数（按种类；没出现的种类就是 0） */
   interactions: Partial<Record<PlayerInteractionKind, number>>;
   linked_viewers: PlayerLinkedViewer[];
-  /** 他在公屏发"忘了我"的时刻；宽限期满后自动删除 */
+  /** 他在游戏公屏发"忘了我"的时刻；宽限期满后自动删除 */
   forget_requested_at_ms: number | null;
 }
 
@@ -1816,7 +1816,7 @@ export interface PlayerListResponse {
   items: PlayerItem[];
 }
 
-/** 玩家自述的一行：他在公屏说的关于他自己的事、她当场接住了，人批准才进他的玩家卡 */
+/** 玩家自述的一行：他在游戏公屏说的关于他自己的事、她当场接住了，人批准才进他的玩家线索 */
 export interface PlayerCandidateItem {
   id: number;
   live_session_id: number;
@@ -1825,7 +1825,7 @@ export interface PlayerCandidateItem {
   player_name: string;
   /** 标题（用"他"指他） */
   title: string;
-  /** 他那句公屏的逐字片段 */
+  /** 他那句游戏公屏的逐字片段 */
   player_quote: string;
   /** 她回他的那句的逐字片段 */
   reply_quote: string;
@@ -1892,7 +1892,7 @@ export interface SettleReport {
   side_effects?: SideEffectStats | null;
 }
 
-/** 一类线索卡这一场推了几张、她点名用上几张 */
+/** 一类记忆线索这一场推了几张、她点名用上几张 */
 export interface CardKindStat {
   pushed: number;
   used: number;
@@ -1913,7 +1913,7 @@ export interface SideEffectStats {
   unprompted_per_hour: number;
   /** 任意 30 分钟里被点名 3 次及以上的条目数 */
   circling_items: number;
-  /** 线索卡按卡类推了几张、用上几张 */
+  /** 记忆线索按卡类推了几张、用上几张 */
   cards: Record<string, CardKindStat>;
   /** 只由她自己的台词触发的卡数 */
   self_triggered_cards: number;

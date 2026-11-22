@@ -40,7 +40,7 @@ def render_commitment_number(commitment_id: int) -> str:
 
 
 def render_archive_number(archive_line_id: int) -> str:
-    """档案行编号的写法（档#41）：简报与线索卡里标着，Planner 用它点名。"""
+    """档案行编号的写法（档#41）：记忆摘要与记忆线索里标着，Planner 用它点名。"""
     return render_number(ARCHIVE, archive_line_id)
 
 
@@ -142,7 +142,7 @@ def parse_commitment_ref(raw: Any) -> Optional[int]:
     return int(text) if text.isdigit() else None
 
 
-# 台词洗编号：编号（[档#N]、档#N、约#N）是房管在简报里点名用的记号，观众听不懂。
+# 台词洗编号：编号（[档#N]、档#N、约#N）是房管在记忆摘要里点名用的记号，观众听不懂。
 # 带方括号的连同括号里跟着的注记（如“·上一场”）一起去掉；没括号的只去编号本身
 _BRACKETED_NUMBER = re.compile(r"[\[【]\s*[档约]\s*[#＃]\s*\d+[^\]】\n]{0,12}[\]】]")
 _BARE_NUMBER = re.compile(r"[档约]\s*[#＃]\s*\d+")
@@ -153,7 +153,7 @@ _EMPTY_PARENS = re.compile(r"[（(]\s*[）)]")
 def strip_numbers(text: str) -> Tuple[str, int]:
     """去掉文本里的记忆编号，返回（去掉后的文本，去掉了几处）；没有编号时原样返回、计数为 0。
 
-    交给说话侧之前先洗一遍交接稿，说话侧生成台词后再洗一遍：编号念出来是“档井号四十一”，
+    交给说话侧之前先洗一遍发言要点，说话侧生成台词后再洗一遍：编号念出来是“档井号四十一”，
     观众听不懂，也暴露了后台的记账方式。
     """
     cleaned, bracketed = _BRACKETED_NUMBER.subn("", text)

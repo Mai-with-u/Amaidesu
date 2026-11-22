@@ -1,18 +1,18 @@
-"""游戏里的人落库器：公屏聊天、她在公屏说的话、玩家互动 → 玩家表、互动表、公屏聊天表。
+"""游戏里的人落库器：游戏公屏、她在游戏公屏说的话、玩家互动 → 玩家表、互动表、游戏公屏表。
 
 订阅三条只落库的游戏事件，按游戏给的 UUID 认人：
 
-- ``game.chat.received``：只记公屏上玩家说的话。私聊只给她一个人看，不进直播、不进记忆，不落库；
+- ``game.chat.received``：只记游戏公屏上玩家说的话。私聊只给她一个人看，不进直播、不进记忆，不落库；
   系统消息不是谁说的话，不落库。带 UUID、游戏核对过此刻在线的发言人才建玩家、挂上他那句；
   没有 UUID 或没核对过的（控制台、命令方块借名发的，没签名服务器转来的整行）只占一行位置、
   不存原话、不建玩家——判断"她这句之前有没有别人插话"要知道有人说过话。
-- ``game.self.chatted``：她在公屏打出去的一句，记成"她说的"。
+- ``game.self.chatted``：她在游戏公屏打出去的一句，记成"她说的"。
 - ``game.player.interacted``：打招呼（同一位玩家一场合并计数）、送东西、切磋。只有名字没有 UUID 的
   （旧版 Mod 的切磋，只知道下令时按名字点的对手）按"本场见过的、叫这个名字的只有一位"去对，对不上不记。
 
 没归属到场次的事件（没开播时）不落库：玩家记忆只记直播里她亲身经历、画面里看得到的事。
 UUID 在不记录名单里的玩家（被运营者删过、或连同观众一起删过）再出现也不记：他的话只占一行位置。
-玩家在公屏发"忘了我"、撤回短语，和观众同一套口令与宽限期，由隐私服务受理；命令那一句本身不存原话。
+玩家在游戏公屏发"忘了我"、撤回短语，和观众同一套口令与宽限期，由隐私服务受理；命令那一句本身不存原话。
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ logger = get_logger("GamePlayerLedger")
 
 
 class GamePlayerLedger:
-    """游戏里的人落库器（订阅公屏聊天、她的公屏说话与玩家互动三条事件）。"""
+    """游戏里的人落库器（订阅游戏公屏、她的游戏公屏说话与玩家互动三条事件）。"""
 
     def __init__(
         self, event_bus: "EventBus", player_repo: GamePlayerRepo, privacy: Optional["PrivacyService"] = None
@@ -76,7 +76,7 @@ class GamePlayerLedger:
         self._subscriptions.clear()
 
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
-        """公屏上玩家说的话：核对过的玩家建档并挂上他那句，认不出是谁的只占位；私聊、系统消息不落。"""
+        """游戏公屏上玩家说的话：核对过的玩家建档并挂上他那句，认不出是谁的只占位；私聊、系统消息不落。"""
         del event_name, source
         if payload.live_session_id <= 0 or payload.kind != "player" or payload.private:
             return
@@ -119,10 +119,10 @@ class GamePlayerLedger:
                 message_id=payload.message_id,
             )
         except Exception as exc:  # noqa: BLE001 - 落库失败不挡聊天流
-            logger.error(f"公屏聊天落库失败（场次 {payload.live_session_id}）: {exc}", exc=exc)
+            logger.error(f"游戏公屏落库失败（场次 {payload.live_session_id}）: {exc}", exc=exc)
 
     async def _on_self_chatted(self, event_name: str, payload: GameSelfChattedPayload, source: str) -> None:
-        """她在公屏打出去的一句：记成"她说的"，落库前和台词一样遮掉不记录名单里的名字。"""
+        """她在游戏公屏打出去的一句：记成"她说的"，落库前和台词一样遮掉不记录名单里的名字。"""
         del event_name, source
         if payload.live_session_id <= 0:
             return
@@ -139,7 +139,7 @@ class GamePlayerLedger:
                 at_ms=payload.timestamp_ms,
             )
         except Exception as exc:  # noqa: BLE001 - 落库失败不挡游戏 Agent
-            logger.error(f"她的公屏说话落库失败（场次 {payload.live_session_id}）: {exc}", exc=exc)
+            logger.error(f"她的游戏公屏说话落库失败（场次 {payload.live_session_id}）: {exc}", exc=exc)
 
     async def _on_interacted(self, event_name: str, payload: GamePlayerInteractedPayload, source: str) -> None:
         """一次互动：按 UUID 建档或更新；只有名字的按本场见过的同名玩家去对，对不上不记。"""
@@ -209,7 +209,7 @@ class GamePlayerLedger:
                 at_ms=payload.timestamp_ms,
             )
         except Exception as exc:  # noqa: BLE001 - 名单查不了不挡落库
-            logger.warning(f"玩家公屏消息的隐私处理失败，按正常处理: {exc}", exc=exc)
+            logger.warning(f"玩家游戏公屏消息的隐私处理失败，按正常处理: {exc}", exc=exc)
             return "normal"
 
     async def _forgotten(self, game: str, uuid: str) -> bool:

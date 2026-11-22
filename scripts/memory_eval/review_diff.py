@@ -47,7 +47,7 @@ def _ratio(part: int, whole: int) -> Optional[float]:
 
 
 def session_diff(conn: sqlite3.Connection, session_id: int, *, show_text: bool = False) -> Dict[str, Any]:
-    """一场的改动统计。整理写的行 = 现存的非观众来源行 + 被人删掉的行，再去掉人新增的那些。"""
+    """一场的改动统计。整理写的行 = 现存的非观众定下的事行 + 被人删掉的行，再去掉人新增的那些。"""
     edits = conn.execute(
         "SELECT archive_line_id, action, before_text, after_text FROM memory_edits"
         " WHERE live_session_id=? ORDER BY at_ms, id",

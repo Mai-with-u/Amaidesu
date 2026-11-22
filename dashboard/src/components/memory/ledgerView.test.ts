@@ -175,11 +175,11 @@ describe('观众候选', () => {
   it('类型、状态、批准提示与未登记条目各有中文标签', () => {
     expect(candidateKindLabel('viewer_defined')).toBe('观众定下的');
     expect(candidateKindLabel('claimed_missing')).toBe('她说欠着的');
-    expect(candidateKindLabel('viewer_self')).toBe('熟客近况');
+    expect(candidateKindLabel('viewer_self')).toBe('老观众近况');
     expect(candidateApproveWarning('viewer_self', 'ta 养了一只橘猫', '阿杰')).toContain(
-      '只记在 阿杰 的熟客卡上',
+      '只记在 阿杰 的老观众线索上',
     );
-    expect(candidateApproveWarning('viewer_self', 'ta 喜欢喝美式')).toContain('不进开播简报');
+    expect(candidateApproveWarning('viewer_self', 'ta 喜欢喝美式')).toContain('不进开播记忆摘要');
     expect(candidateStatusLabel('pending')).toBe('待审');
     expect(candidateStatusLabel('rejected')).toBe('已驳回');
     expect(unregisteredKindLabel('candidate')).toBe('观众候选');
@@ -190,7 +190,7 @@ describe('观众候选', () => {
       '列进待审区：观众定下的 2 条；含个人信息丢掉 1 条',
     );
     expect(candidateReportText({ viewer_self: 2, claimed_missing: 1, player_self: 2 }, 0)).toBe(
-      '列进待审区：熟客近况 2 条、她说欠着的 1 条、玩家自述 2 条',
+      '列进待审区：老观众近况 2 条、她说欠着的 1 条、玩家自述 2 条',
     );
     expect(candidateReportText({ viewer_defined: 1, claimed_missing: 1 }, 0)).toBe(
       '列进待审区：观众定下的 1 条、她说欠着的 1 条',
@@ -214,7 +214,7 @@ describe('观众候选', () => {
       max_cards_per_player: 0,
     };
     expect(sideEffectText(stats)).toBe(
-      '点名旧事 22 次、14 条，同一条最多 2 次；没人问时主动提 22 次（每小时 11.25 次）（偏多）；线索卡推了 10 张、用上 4 张',
+      '点名旧事 22 次、14 条，同一条最多 2 次；没人问时主动提 22 次（每小时 11.25 次）（偏多）；记忆线索推了 10 张、用上 4 张',
     );
     expect(
       sideEffectText({
@@ -224,7 +224,7 @@ describe('观众候选', () => {
         max_cards_per_player: 3,
         self_triggered_cards: 0,
       }),
-    ).toBe('同一位玩家被推卡 3 张（偏多）');
+    ).toBe('同一位玩家被推线索 3 条（偏多）');
     expect(sideEffectText(null)).toBeNull();
     expect(sideEffectText({ ...stats, mentions: 0, cards: {} })).toBeNull();
   });

@@ -1,4 +1,4 @@
-"""MinecraftAgent 折叠原话保留、短期语义回捞与被动线索卡接线测试（假时钟、零真实 sleep）。"""
+"""MinecraftAgent 折叠原话保留、短期语义回捞与被动记忆线索接线测试（假时钟、零真实 sleep）。"""
 
 from __future__ import annotations
 
@@ -35,16 +35,16 @@ from tests.modules.llm.fakes import FakeEmbeddingServer
 
 def test_extract_preserved_human_lines_strips_ref_enforces_limits() -> None:
     """机械提取人类原话：剥 [mNNNN] 与只读尾注，单条限 120 字、单块最多 6 条且总长 ≤500 字。"""
-    long_line = "超长公屏内容" + "字" * 150
+    long_line = "超长游戏公屏内容" + "字" * 150
     originals: List[Dict[str, Any]] = [
         {"role": "user", "content": "[m0001] [系统] 这是宿主系统提示，不应保留"},
         {"role": "user", "content": "[m0002] [开局资料] 宿主持有的开局资料，不应保留"},
         {
             "role": "user",
             "content": (
-                "[m0003] [公屏合批] 收到 2 条玩家消息\n"
-                "- [公屏·点名你] 同伴甲：麦麦别拆红石钟\n"
-                f"- [公屏·身边5格] 同伴乙：{long_line}\n\n"
+                "[m0003] [游戏公屏合批] 收到 2 条玩家消息\n"
+                "- [游戏公屏·点名你] 同伴甲：麦麦别拆红石钟\n"
+                f"- [游戏公屏·身边5格] 同伴乙：{long_line}\n\n"
                 "[脑中闪过]（只读联想线索）\n- 这段闪过不能当原话"
             ),
         },
@@ -61,7 +61,10 @@ def test_extract_preserved_human_lines_strips_ref_enforces_limits() -> None:
     ]
     for idx in range(6, 12):
         originals.append(
-            {"role": "user", "content": f"[m00{idx:02d}] [公屏·身边3格] 同伴{idx}：第 {idx} 句叮嘱 " + "啊" * 70}
+            {
+                "role": "user",
+                "content": f"[m00{idx:02d}] [游戏公屏·身边3格] 同伴{idx}：第 {idx} 句叮嘱 " + "啊" * 70,
+            }
         )
 
     preserved = _extract_preserved_human_lines(originals)
@@ -79,15 +82,15 @@ def test_extract_preserved_human_lines_strips_ref_enforces_limits() -> None:
     assert any("[直播间建议] 观众建议先补火把" in line for line in small)
     assert any("记得留一组煤炭" in line and "交付提醒" not in line for line in small)
 
-    # 独立 [公屏旁听] 绝不抽入原话保留（避免挤掉真实建议与身边公屏）；非主控多行 [公屏] 保留全部行
+    # 独立 [游戏公屏旁听] 绝不抽入原话保留（避免挤掉真实建议与身边游戏公屏）；非主控多行 [游戏公屏] 保留全部行
     multiline_and_eavesdrop: List[Dict[str, Any]] = [
         {
             "role": "user",
-            "content": "[m0020] [公屏] 玩家 同伴甲：第一行提醒\n第二行记得关闸门\n\n[脑中闪过]\n- 附尾闪过不保留",
+            "content": "[m0020] [游戏公屏] 玩家 同伴甲：第一行提醒\n第二行记得关闸门\n\n[脑中闪过]\n- 附尾闪过不保留",
         },
         {
             "role": "user",
-            "content": "[m0021] [公屏旁听]（以下为远处公屏闲聊）\n- [公屏·远处] 路人A：主城卖甘蔗啦\n- [公屏·远处] 路人B：收木头",
+            "content": "[m0021] [游戏公屏旁听]（以下为远处游戏公屏闲聊）\n- [游戏公屏·远处] 路人A：主城卖甘蔗啦\n- [游戏公屏·远处] 路人B：收木头",
         },
     ]
     extracted = _extract_preserved_human_lines(multiline_and_eavesdrop)
@@ -144,7 +147,7 @@ async def test_fold_preserves_human_lines_and_context_recall_falls_back_to_seman
         step["n"] += 1
         joined = _texts(messages)
         if "记得给那只猫留条鱼干" not in joined:
-            # 等公屏先入历史再开始连续观察触发折叠，保证公屏落在 b1 被折区间内
+            # 等游戏公屏先入历史再开始连续观察触发折叠，保证游戏公屏落在 b1 被折区间内
             return _resp("先等一下同伴开口")
         if "[已折叠 b1" in joined and not recalled_semantic:
             recalled_semantic.append({"triggered": True})
@@ -179,7 +182,7 @@ async def test_fold_preserves_human_lines_and_context_recall_falls_back_to_seman
             == "minecraft"
         )
         await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
-        # 在折叠发生前送入一条含“小猫”的人类原话公屏，确保它进入被折区间
+        # 在折叠发生前送入一条含“小猫”的人类原话游戏公屏，确保它进入被折区间
         await bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -195,7 +198,7 @@ async def test_fold_preserves_human_lines_and_context_recall_falls_back_to_seman
         await bus.wait_until_drained()
         await _wait_until(lambda: bool(recalled_semantic) and not agent.batch_active)
 
-        # 1) 折叠替身包含 [本段人类原话保留] 且原样保留了公屏人话
+        # 1) 折叠替身包含 [本段人类原话保留] 且原样保留了游戏公屏人话
         all_seen = "\n".join(_texts(seen) for seen in llm.seen)
         assert "[已折叠 b1" in all_seen
         assert "[本段人类原话保留]" in all_seen
@@ -325,7 +328,7 @@ async def test_landmark_arrival_attaches_passive_flash_at_tail_without_rewriting
 async def test_private_chat_never_sent_to_passive_cues_or_embedding_and_marks_folded_block_private(
     chars_as_tokens: None,
 ) -> None:
-    """私聊正文绝不发往跨场被动检索与外部嵌入服务（保留 sender_id 走玩家卡），且含私聊的折叠块标 private=True。"""
+    """私聊正文绝不发往跨场被动检索与外部嵌入服务（保留 sender_id 走玩家线索），且含私聊的折叠块标 private=True。"""
     del chars_as_tokens
     clock = FakeClock()
     emb_server = FakeEmbeddingServer()
@@ -433,7 +436,7 @@ async def test_private_chat_never_sent_to_passive_cues_or_embedding_and_marks_fo
         assert "藏宝库密码" not in all_embedded
         assert "刚才收到一条私下提醒" not in all_embedded
 
-        # 3) query_short_term_memory 返回的折叠块与公屏命中均带 private=True
+        # 3) query_short_term_memory 返回的折叠块与游戏公屏命中均带 private=True
         fold_hits = await agent.query_short_term_memory("私下提醒 藏宝库密码", scope="this_stream", limit=6)
         assert fold_hits
         assert any(item["kind"] == "fold_block" and item["private"] is True for item in fold_hits)
@@ -570,7 +573,7 @@ async def test_self_chat_synced_to_gate_and_short_term_memory_without_self_wakeu
     manager.register(agent)
     try:
         assert (
-            await coord.request_game_lead(LeadHandoverContext(segment_title="公屏记忆测试"), target="minecraft")
+            await coord.request_game_lead(LeadHandoverContext(segment_title="游戏公屏记忆测试"), target="minecraft")
             == "minecraft"
         )
         await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
@@ -627,7 +630,7 @@ async def test_self_chat_synced_to_gate_and_short_term_memory_without_self_wakeu
         stm_hits = await agent.query_short_term_memory("羊肉收下啦")
         assert any("你回过：羊肉收下啦" in item["text"] for item in stm_hits)
 
-        # 4) 推进 2 分钟后再发一条关于猪排的公屏：97+2 分钟前的旧猪排依然绝不闪回；
+        # 4) 推进 2 分钟后再发一条关于猪排的游戏公屏：97+2 分钟前的旧猪排依然绝不闪回；
         #    而如果切出续做，近期双向对话包含 [你回过·2分钟前] 羊肉收下啦
         clock.tick(2 * 60_000)
         turns_before_pork = len(llm.seen)
@@ -653,7 +656,7 @@ async def test_self_chat_synced_to_gate_and_short_term_memory_without_self_wakeu
 
 
 async def test_clock_domain_isolation_unix_payloads_decay_and_skill_wall_clock(db_path: Path) -> None:
-    """单调时钟域与 wall-clock 严格分离：Unix epoch 事件不破坏短期衰减与近期公屏窗，技能入库写 epoch 毫秒。"""
+    """单调时钟域与 wall-clock 严格分离：Unix epoch 事件不破坏短期衰减与近期游戏公屏窗，技能入库写 epoch 毫秒。"""
     mono_clock = FakeClock(1_000_000)
     wall_clock = FakeClock(1_795_000_000_000)
     db = SQLiteDatabase(db_path)
@@ -688,7 +691,7 @@ async def test_clock_domain_isolation_unix_payloads_decay_and_skill_wall_clock(d
             )
             await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
 
-            # 1) T=0 收到带真实 Unix epoch timestamp_ms 的玩家旧闲聊 + 外部替说公屏事件
+            # 1) T=0 收到带真实 Unix epoch timestamp_ms 的玩家旧闲聊 + 外部替说游戏公屏事件
             await bus.emit(
                 CoreEvents.GAME_CHAT_RECEIVED,
                 GameChatPayload(
@@ -713,7 +716,7 @@ async def test_clock_domain_isolation_unix_payloads_decay_and_skill_wall_clock(d
             await bus.wait_until_drained()
             await _wait_until(lambda: len(llm.seen) >= 2 and not agent.batch_active)
 
-            # 2) 外部 GAME_SELF_CHATTED 不得用 Unix epoch 毫秒把单调时钟下的近期公屏窗整窗洗空
+            # 2) 外部 GAME_SELF_CHATTED 不得用 Unix epoch 毫秒把单调时钟下的近期游戏公屏窗整窗洗空
             mono_clock.tick(2 * 60_000)
             wall_clock.tick(2 * 60_000)
             stm_recent = await agent.query_short_term_memory("猪排")
@@ -778,7 +781,7 @@ async def test_clock_domain_isolation_unix_payloads_decay_and_skill_wall_clock(d
 
 
 async def test_streamer_chat_send_does_not_double_record_when_player_chat_interleaves() -> None:
-    """活跃委派任务期间主播直发 minecraft_chat_send 且中途穿插玩家公屏时，GAME_SELF_CHATTED 不得二次写入重复 [你回过]。"""
+    """活跃委派任务期间主播直发 minecraft_chat_send 且中途穿插玩家游戏公屏时，GAME_SELF_CHATTED 不得二次写入重复 [你回过]。"""
     clock = FakeClock(5_000_000)
     bus = EventBus(enable_stats=False)
     registry = ToolRegistry(event_bus=bus)
@@ -793,7 +796,7 @@ async def test_streamer_chat_send_does_not_double_record_when_player_chat_interl
         if interleaved["fired"]:
             return
         interleaved["fired"] = True
-        # 在 _on_self_chatted 之前先写入一条玩家公屏，打破单纯“相邻去重”的假设
+        # 在 _on_self_chatted 之前先写入一条玩家游戏公屏，打破单纯“相邻去重”的假设
         await bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -807,7 +810,7 @@ async def test_streamer_chat_send_does_not_double_record_when_player_chat_interl
             source="test",
         )
 
-    # 先于 agent.start() 订阅，确保穿插玩家公屏发生在 _send_self_chat 之后、_on_self_chatted 之前
+    # 先于 agent.start() 订阅，确保穿插玩家游戏公屏发生在 _send_self_chat 之后、_on_self_chatted 之前
     bus.on(CoreEvents.GAME_SELF_CHATTED, _interleave_player_chat, GameSelfChattedPayload)
 
     started_goal = {"sent": False}
@@ -834,7 +837,7 @@ async def test_streamer_chat_send_does_not_double_record_when_player_chat_interl
     )
     manager.register(agent)
     try:
-        # 委派一个后台长任务（非主控态且任务活跃：_task_finished=False），主播可通过 minecraft_chat_send 代发公屏
+        # 委派一个后台长任务（非主控态且任务活跃：_task_finished=False），主播可通过 minecraft_chat_send 代发游戏公屏
         agent.receive_delegation(instruction="去营地西边砍一点木头", task_id="d-chat-send")
         await _wait_until(lambda: len(agent.tracked_goal_ids) == 1 and not agent.batch_active)
 
@@ -858,10 +861,12 @@ async def test_streamer_chat_send_does_not_double_record_when_player_chat_interl
 
         # 随后切入游戏主控态，核对 [继续原游戏任务] / 近期双向对话窗口中仅出现 1 次 [你回过]
         assert (
-            await coord.request_game_lead(LeadHandoverContext(segment_title="复核双向公屏"), target="minecraft")
+            await coord.request_game_lead(LeadHandoverContext(segment_title="复核双向游戏公屏"), target="minecraft")
             == "minecraft"
         )
-        await _wait_until(lambda: not agent.batch_active and any("复核双向公屏" in _texts(seen) for seen in llm.seen))
+        await _wait_until(
+            lambda: not agent.batch_active and any("复核双向游戏公屏" in _texts(seen) for seen in llm.seen)
+        )
         lead_msgs = [str(m.get("content") or "") for m in llm.seen[-1] if "[你回过" in str(m.get("content") or "")]
         assert sum(msg.count("大家晚上好呀") for msg in lead_msgs) <= 1
     finally:
@@ -870,7 +875,7 @@ async def test_streamer_chat_send_does_not_double_record_when_player_chat_interl
 
 
 async def test_commitment_ledger_injected_at_tail_only_omitted_when_empty_and_keeps_msg0_prefix() -> None:
-    """权威承诺账本仅挂在尾部任务状态，空时省略键，绝不修改 msg[0] 前缀，且透传视野与近期公屏在线玩家 UUID。"""
+    """权威承诺账本仅挂在尾部任务状态，空时省略键，绝不修改 msg[0] 前缀，且透传视野与近期游戏公屏在线玩家 UUID。"""
     clock = FakeClock(6_000_000)
     bus = EventBus(enable_stats=False)
     registry = ToolRegistry(event_bus=bus)
@@ -941,7 +946,7 @@ async def test_commitment_ledger_injected_at_tail_only_omitted_when_empty_and_ke
         assert ledger_calls[-1]["save_id"] == "save_ledger_1"
         assert "uuid-player-a" in ledger_calls[-1]["player_uuids"]
 
-        # 2) 账本变为非空且 PlayerB 在公屏发言唤醒：尾部任务状态出现 commitment_ledger，同时携带视野 PlayerA 与公屏 PlayerB UUID，msg[0] 纹丝不动
+        # 2) 账本变为非空且 PlayerB 在游戏公屏发言唤醒：尾部任务状态出现 commitment_ledger，同时携带视野 PlayerA 与游戏公屏 PlayerB UUID，msg[0] 纹丝不动
         ledger_state["value"] = {
             "open": [{"id": "约#43", "target": "PlayerA", "what": "补还 3 颗钻石"}],
             "closed_this_session": [],

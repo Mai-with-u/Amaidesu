@@ -93,7 +93,7 @@ async def _seed_prev_and_current_sessions(db: SQLiteDatabase) -> Dict[str, int]:
 
 @pytest.mark.asyncio
 async def test_memory_correct_tool_rejects_viewer_danmaku_and_applies_valid_evidence(tmp_path: Path) -> None:
-    """观众弹幕作证一律打回；游戏回执与玩家公屏核对通过后当场改简报/关承诺，且支持人工撤回。"""
+    """观众弹幕作证一律打回；游戏回执与玩家游戏公屏核对通过后当场改简报/关承诺，且支持人工撤回。"""
     db = SQLiteDatabase(tmp_path / "corr.db")
     await db.initialize()
     try:
@@ -225,7 +225,7 @@ async def test_memory_correct_tool_rejects_viewer_danmaku_and_applies_valid_evid
         assert refreshed_count == 1
         assert "（本场更正：做完了——东门已封顶完工）" in brief.text
 
-        # 4. 凭玩家公屏更正承诺 → 承诺当场标 closed 且 close_source='correction'，退出【还惦记的事】
+        # 4. 凭玩家游戏公屏更正承诺 → 承诺当场标 closed 且 close_source='correction'，退出【还惦记的事】
         r_comm = await provider.invoke(
             ToolInvocation(
                 tool_name="streamer_memory_correct",
@@ -274,7 +274,7 @@ async def test_memory_correct_tool_rejects_viewer_danmaku_and_applies_valid_evid
 
 @pytest.mark.asyncio
 async def test_operator_prompt_persists_in_session_brief_across_multiple_windows(tmp_path: Path) -> None:
-    """运营递话（source=operator）落成本场常驻更正提醒，跨多个决策窗不消失；跨 Agent 递话不混入。"""
+    """运营递话（source=operator）落成本场常驻更正提醒，跨多个决策回合不消失；跨 Agent 递话不混入。"""
     db = SQLiteDatabase(tmp_path / "op_note.db")
     await db.initialize()
     bus = EventBus()
@@ -323,7 +323,7 @@ async def test_operator_prompt_persists_in_session_brief_across_multiple_windows
             assert "已经换了新世界，旧墓碑不用再找了" in first_brief
             assert "内部状态同步消息" not in first_brief
 
-            # 第二窗没有任何新递话，常驻简报顶部依然保留运营提醒
+            # 第二窗没有任何新递话，记忆摘要顶部依然保留运营提醒
             await agent.refresh_memory_brief()
             second_brief = agent.memory_brief_text
             assert "【运营本场提醒过】" in second_brief
@@ -941,7 +941,7 @@ async def test_commitment_ledger_filters_forgotten_players_with_real_privacy_ser
 
 
 async def test_brief_closed_commitments_isolates_viewer_other_save_and_forgotten_player(tmp_path: Path) -> None:
-    """常驻简报的本场已了结承诺严格隔离观众私向、他档与遗忘玩家，保留当前存档公开与未遗忘玩家承诺。"""
+    """记忆摘要的本场已了结承诺严格隔离观众私向、他档与遗忘玩家，保留当前存档公开与未遗忘玩家承诺。"""
     db = SQLiteDatabase(tmp_path / "data" / "brief_isolation.db")
     await db.initialize()
     privacy = PrivacyService(db.manager, db_path=db.db_path, key_path=tmp_path / "secrets" / "forget.key")

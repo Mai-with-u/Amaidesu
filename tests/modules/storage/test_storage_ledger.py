@@ -197,7 +197,7 @@ async def test_streamer_speech_persists_reply_link_and_replied_stat(
 
 
 async def test_streamer_speech_records_which_player_it_answers(event_bus: EventBus, store: SQLiteDatabase) -> None:
-    """发言事件带着本窗唯一开口的玩家 UUID：落库时按玩家表记成在回应他；玩家表里没有的不记。"""
+    """发言事件带着本回合唯一开口的玩家 UUID：落库时按玩家表记成在回应他；玩家表里没有的不记。"""
     session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     alex = await store.game_players.meet_player(
         game="minecraft", uuid="uuid-a", name="Alex", live_session_id=session_id, at_ms=1_100

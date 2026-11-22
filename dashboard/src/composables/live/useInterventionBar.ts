@@ -117,7 +117,7 @@ export function useInterventionBar(options: { settle: () => Promise<void> }) {
         // 幕后提醒 → 运营递话通道：必达（进下个决策参考块 + 顺带敲门催醒）；
         // 纯催话/限流测试走 API（trigger-proactive），界面不再默认暴露
         await agentsApi.promptAgent(STREAMER_AGENT_NAME, text);
-        ElMessage.success('已递到主播手里——下个决策窗她一定看到，并已顺带敲了敲门');
+        ElMessage.success('已递到主播手里——下个决策回合她一定看到，并已顺带敲了敲门');
       }
       await settle();
     } catch (error) {

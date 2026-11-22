@@ -1,7 +1,7 @@
 ---
 name: amaidesu_mouth
 version: "1.6"
-description: "主播的嘴：游戏里出现高光目击、意外发现或突发阵亡时当场出一句短反应。系统提示词只放人设和几条规矩，事实全在每次附上的现场卡里。"
+description: "主播的嘴：游戏里出现高光目击、意外发现或突发阵亡时当场出一句短反应。系统提示词只放人设和几条规矩，事实全在每次附上的事实快照里。"
 variables:
   - bot_name
   - personality

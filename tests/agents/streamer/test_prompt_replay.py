@@ -3,7 +3,7 @@
 事件全量落盘事实源是诊断事件流文件（``logs/events/<日期>/<小时>.jsonl``）；
 本文件手工构造该版式的样本目录驱动重放读取，不经真实落盘链路。续播经公开事件面驱动：
 真实的 ``core.startup`` 载荷划出本进程启动时刻，``live.started(resumed=True)`` 触发重放，
-从接回那一轮决策窗取到的【运营提醒】看补回了哪些递话。
+从接回那一轮决策回合取到的【运营提醒】看补回了哪些递话。
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ async def resume_bus() -> AsyncIterator[EventBus]:
 async def _resume_and_collect_reminders(
     bus: EventBus, events_dir: Path, *, startup: Optional[CoreStartupPayload] = None
 ) -> str:
-    """真实启动事件 → 断线续播：返回续播后各决策窗取到的全部【运营提醒】文本。"""
+    """真实启动事件 → 断线续播：返回续播后各决策回合取到的全部【运营提醒】文本。"""
     executor = FakeRoundExecutor()
     executor.drain_reminders = True  # 与真实执行器一样，开窗即取空提醒队列
     agent: StreamerAgent = make_streamer_agent(
@@ -116,7 +116,7 @@ async def test_receive_prompt_emits_full_text_event(event_bus: EventBus) -> None
 
 
 async def test_drain_emits_delivered_event_with_all_contents(event_bus: EventBus) -> None:
-    """决策窗取空提醒队列即发 streamer.prompt_delivered，载荷按入队先后列出这一窗取走的递话。"""
+    """决策回合取空提醒队列即发 streamer.prompt_delivered，载荷按入队先后列出这一窗取走的递话。"""
     delivered: list[StreamerPromptDeliveredPayload] = []
 
     async def _on_delivered(event_name: str, payload: StreamerPromptDeliveredPayload, source: str) -> None:
@@ -152,7 +152,7 @@ async def test_resume_replays_only_undelivered_recent_prompts(resume_bus: EventB
     _write_record(events_dir, event_name=CoreEvents.CORE_STARTUP, ts_ms=t_now - 120 * _MINUTE_MS, data={})
     _received(events_dir, t_now - 100 * _MINUTE_MS, "更早进程的递话")
     _write_record(events_dir, event_name=CoreEvents.CORE_STARTUP, ts_ms=t_prev_startup, data={})
-    # 上一进程里：早先收到并已送进决策窗的、收到太久没送出的、临崩溃前收到还没送出的
+    # 上一进程里：早先收到并已送进决策回合的、收到太久没送出的、临崩溃前收到还没送出的
     _received(events_dir, t_prev_end - 30 * _MINUTE_MS, "已送达的旧递话")
     _delivered(events_dir, t_prev_end - 29 * _MINUTE_MS, "已送达的旧递话")
     _received(events_dir, t_prev_end - 15 * _MINUTE_MS, "太旧没送出的递话")
@@ -167,7 +167,7 @@ async def test_resume_replays_only_undelivered_recent_prompts(resume_bus: EventB
 
     text = await _resume_and_collect_reminders(resume_bus, events_dir, startup=own_startup)
 
-    assert "临崩溃前没送出的递话" in text, "收到了还没送进决策窗的递话补回来"
+    assert "临崩溃前没送出的递话" in text, "收到了还没送进决策回合的递话补回来"
     assert "已送达的旧递话" not in text and "最近已送达的递话" not in text, "已经送达的不重放"
     assert "太旧没送出的递话" not in text, "上一进程结束前 10 分钟以外收到的不重放"
     assert "更早进程的递话" not in text, "更早进程的递话不重放"

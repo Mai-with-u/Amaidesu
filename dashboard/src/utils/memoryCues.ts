@@ -1,7 +1,7 @@
 /**
- * 复盘页「本场线索卡」的展示文案（纯函数）
+ * 复盘页「本场记忆线索」的展示文案（纯函数）
  *
- * 线索卡是代码每批推给决策层的旧事：对象开口、游戏开着两种承诺卡，加被动想起的
+ * 记忆线索是代码每批推给规划器的旧事：对象开口、游戏开着两种承诺线索，加被动想起的
  * 走到地点、触发词、意思相近三路与老梗。这里把卡类、命中来源翻成运营者看得懂的
  * 叫法，并把分数明细压成一行说明；来源筛选也在这里做。
  */
@@ -49,7 +49,7 @@ export function cueScoreText(item: ReviewCueItem): string {
   return '';
 }
 
-/** 指向的条目还在不在：档案行与承诺卡标题为空即条目已被删掉；老梗卡没有条目 */
+/** 指向的条目还在不在：档案行与承诺线索标题为空即条目已被删掉；老梗线索没有条目 */
 export function cueItemGone(item: ReviewCueItem): boolean {
   return (item.archive_line_id !== null || item.commitment_id !== null) && !item.title;
 }

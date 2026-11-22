@@ -60,9 +60,9 @@ def render_cards(cards: Sequence[TalkCard]) -> str:
 
 
 class TopicDeck:
-    """话题匣：按场挑未用卡、缓存本窗预摆的卡、选用后标已用。
+    """话题匣：按场挑未用卡、缓存本回合预摆的卡、选用后标已用。
 
-    ``refresh`` 在决策窗开头异步调用（读卡池），``render`` 同步读缓存——Planner
+    ``refresh`` 在决策回合开头异步调用（读卡池），``render`` 同步读缓存——Planner
     拼参考段是同步的，不能在那里等数据库。
     """
 
@@ -90,7 +90,7 @@ class TopicDeck:
         return fresh if limit is None else fresh[: max(0, int(limit))]
 
     async def refresh(self, *, should_preset: bool) -> List[TalkCard]:
-        """决策窗开头刷新预摆卡：该摆时挑出 N 张未用卡缓存起来，不该摆时清空。
+        """决策回合开头刷新预摆卡：该摆时挑出 N 张未用卡缓存起来，不该摆时清空。
 
         读卡池失败只记日志并清空预摆——没卡可摆不影响她照常说话。
         """
@@ -100,22 +100,22 @@ class TopicDeck:
         try:
             self._preset = await self.available_cards(limit=self._preset_count)
         except Exception as exc:
-            self._logger.warning("读取话题卡池失败，本窗不预摆话题卡", exc=exc)
+            self._logger.warning("读取话题卡池失败，本回合不预摆话题卡", exc=exc)
             self._preset = []
         return list(self._preset)
 
     def render(self) -> str:
-        """本窗预摆卡的参考段文本（未预摆时为空串）。"""
+        """本回合预摆卡的参考段文本（未预摆时为空串）。"""
         return render_cards(self._preset)
 
     def preset_cards(self) -> List[TalkCard]:
-        """本窗预摆卡副本。"""
+        """本回合预摆卡副本。"""
         return list(self._preset)
 
     async def use_card(self, card_id: Any) -> Optional[TalkCard]:
         """她选用一张卡开话头：校验卡存在且启用，标为本场已用，返回该卡；无效 id 返回 None。
 
-        选用后从本窗预摆里拿掉，免得同一窗里再被看到。
+        选用后从本回合预摆里拿掉，免得同一窗里再被看到。
         """
         try:
             cid = int(card_id)

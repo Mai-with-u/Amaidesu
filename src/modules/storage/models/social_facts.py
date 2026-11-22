@@ -84,7 +84,7 @@ def is_social_fact_resident(fact: SocialFact) -> bool:
     """判定一条社交事实能否进入每轮常驻参考段【游戏社交事实】。
 
     运营者锁定的行始终常驻；非人工锁定的行若没有逐字原话依据（模型归纳行），或仅挂在观众弹幕上
-    未经人工批准，只保留在库里供按需回想检索，不每轮常驻注入。
+    未经人工批准，只保留在库里供按需回忆检索，不每轮常驻注入。
     """
     if fact.status != "active":
         return False
@@ -125,16 +125,16 @@ def is_works_downgraded(
 
 
 class EvidenceHit(BaseModel):
-    """按"本场 + 消息号"查到的一条依据行：弹幕观众行（chat）或公屏非她本人的行（game_chat）。"""
+    """按"本场 + 消息号"查到的一条依据行：弹幕观众行（chat）或游戏公屏非她本人的行（game_chat）。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    source: str = Field(..., description="chat = 弹幕观众行（live_chat）/ game_chat = 公屏玩家行或占位行")
+    source: str = Field(..., description="chat = 弹幕观众行（live_chat）/ game_chat = 游戏公屏玩家行或占位行")
     row_id: int = Field(..., description="命中行的行号")
-    content: str = Field(default="", description="命中行原文；公屏占位行为空串（没有存原话）")
-    game: str = Field(default="", description="公屏行所在游戏；弹幕为空串")
-    save_id: str = Field(default="", description="公屏行所在存档；弹幕为空串")
-    save_name: str = Field(default="", description="公屏行所在存档显示名；弹幕为空串")
+    content: str = Field(default="", description="命中行原文；游戏公屏占位行为空串（没有存原话）")
+    game: str = Field(default="", description="游戏公屏行所在游戏；弹幕为空串")
+    save_id: str = Field(default="", description="游戏公屏行所在存档；弹幕为空串")
+    save_name: str = Field(default="", description="游戏公屏行所在存档显示名；弹幕为空串")
 
 
 class NewSocialFact(BaseModel):

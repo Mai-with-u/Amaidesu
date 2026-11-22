@@ -25,7 +25,7 @@ const INTERACTION_TEXT: ReadonlyArray<readonly [PlayerInteractionKind, (n: numbe
 
 /**
  * 互动条数一行字："打招呼 3 场 · 送东西 1 次"。
- * 按固定顺序排，条数为 0 或没出现的种类不写；一条都没有时说明还没有互动记录（只在公屏说过话也算这种）。
+ * 按固定顺序排，条数为 0 或没出现的种类不写；一条都没有时说明还没有互动记录（只在游戏公屏说过话也算这种）。
  */
 export function interactionsText(counts: PlayerItem['interactions']): string {
   const parts = INTERACTION_TEXT.filter(([kind]) => (counts[kind] ?? 0) > 0).map(([kind, text]) =>
@@ -113,13 +113,13 @@ export function linkedPlayersDeleteNote(
 /** 删玩家前的确认文案：删什么、换成什么、关联的观众不动 */
 export function deletePlayerWarning(item: PlayerItem): string {
   return (
-    `删除玩家「${item.name}」？他的互动、公屏聊天和对他的承诺一起删除，` +
+    `删除玩家「${item.name}」？他的互动、游戏公屏和对他的承诺一起删除，` +
     '她的台词、档案和游戏记录里他的名字（含以前的名字）换成“一位玩家”；' +
     'UUID 进不记录名单，之后他再出现也不再记。关联的观众不动。此操作不可恢复。'
   );
 }
 
-/** 玩家自述里她回他的那句在哪儿说的："公屏"或"直播里" */
+/** 玩家自述里她回他的那句在哪儿说的："游戏公屏"或"直播里" */
 export function playerReplyWhere(item: Pick<PlayerCandidateItem, 'reply_in'>): string {
-  return item.reply_in === 'game_chat' ? '公屏' : '直播里';
+  return item.reply_in === 'game_chat' ? '游戏公屏' : '直播里';
 }

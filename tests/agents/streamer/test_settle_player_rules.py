@@ -1,4 +1,4 @@
-"""对游戏玩家承诺的核对规则：她在公屏打的每一句能对上谁，给模型看的玩家代号与公屏段。"""
+"""对游戏玩家承诺的核对规则：她在游戏公屏打的每一句能对上谁，给模型看的玩家代号与游戏公屏段。"""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def test_short_names_need_a_whole_word_match() -> None:
 
 
 def test_player_chat_codes_numbers_and_lookup() -> None:
-    """代号先给台词里回应过的；公屏只给模型看她打的字和前面 3 句；编号与代号都能换回原行。"""
+    """代号先给台词里回应过的；游戏公屏只给模型看她打的字和前面 3 句；编号与代号都能换回原行。"""
     players = {1: _player(1, "Alex", "Steve"), 2: _player(2, "Bob")}
     lines = [
         _line(1, "player", "很早以前的话", 2),
@@ -96,18 +96,22 @@ def test_player_chat_codes_numbers_and_lookup() -> None:
     assert chat.codes == {1: "玩家1", 2: "玩家2"}
     assert "玩家1 = Alex（以前叫 Steve）；玩家2 = Bob" in chat.text
     assert "很早以前的话" not in chat.text, "她那句之前 3 句以外的不给"
-    assert "公屏#1 20:00 你：Alex 我在" in chat.text and "（认不出是谁的一句）" in chat.text
+    assert "游戏公屏#1 20:00 你：Alex 我在" in chat.text and "（认不出是谁的一句）" in chat.text
     assert chat.player_of("玩家2") == 2 and chat.player_of("2") == 2 and chat.player_of("玩家9") is None
-    assert chat.chat_line("公屏#1") is lines[5] and chat.chat_line(1) is lines[5] and chat.chat_line("公屏#2") is None
+    assert (
+        chat.chat_line("游戏公屏#1") is lines[5]
+        and chat.chat_line(1) is lines[5]
+        and chat.chat_line("游戏公屏#2") is None
+    )
     assert chat.targets[6] == frozenset({1}), "隔着认不出是谁的一句不算接着谁，点了名的算"
     empty = build_player_chat(
         speech_player_ids=[], lines=[_line(1, "player", "hi", 2)], players=players, clock_text=str
     )
-    assert (empty.codes, empty.text) == ({}, ""), "她没回应玩家、也没在公屏打字：这一段不出现"
+    assert (empty.codes, empty.text) == ({}, ""), "她没回应玩家、也没在游戏公屏打字：这一段不出现"
 
 
 def test_line_she_answered_on_stream_is_shown_and_found_by_quote() -> None:
-    """她没在公屏打字、只在直播里回应了他：他在那之前 3 分钟内的最后一句也给模型看，能按引文找回。"""
+    """她没在游戏公屏打字、只在直播里回应了他：他在那之前 3 分钟内的最后一句也给模型看，能按引文找回。"""
     players = {1: _player(1, "Alex")}
     lines = [
         GameChatLine(

@@ -1,7 +1,7 @@
 """v31 → v32 迁移：游戏里的人五张表、承诺与台词的玩家引用列，以及删除时的级联口径。
 
-玩家表一行被删时，他的互动、公屏聊天、待审自述、观众关联、对他的承诺随外键一起删；她回应他的台词
-留着，只把"在回应哪位玩家"置空。场次被删时这一场的互动、公屏聊天、待审自述随之删，玩家留着。
+玩家表一行被删时，他的互动、游戏公屏、待审自述、观众关联、对他的承诺随外键一起删；她回应他的台词
+留着，只把"在回应哪位玩家"置空。场次被删时这一场的互动、游戏公屏、待审自述随之删，玩家留着。
 删观众只撤掉关联这一行（连带删玩家由隐私服务按关联做，不靠外键）。
 """
 
@@ -89,7 +89,7 @@ async def store(tmp_path: Path) -> AsyncIterator[SQLiteDatabase]:
 
 
 def _seed(conn: sqlite3.Connection) -> dict[str, int]:
-    """造一场：玩家 Alex 打了招呼、在公屏说了一句，她播出一句回应他并答应了一件事，另有一条待审自述。"""
+    """造一场：玩家 Alex 打了招呼、在游戏公屏说了一句，她播出一句回应他并答应了一件事，另有一条待审自述。"""
     session = int(
         conn.execute(
             "INSERT INTO live_sessions(started_at_ms, kind, updated_at_ms) VALUES (1000, 'live', 1000)"
@@ -188,7 +188,7 @@ async def test_deleting_the_viewer_only_drops_the_link(store: SQLiteDatabase) ->
 
 
 async def test_game_chat_direction_is_a_closed_set(store: SQLiteDatabase) -> None:
-    """公屏聊天只有玩家说的、她说的、认不出是谁三种；私聊这类方向写不进来。"""
+    """游戏公屏只有玩家说的、她说的、认不出是谁三种；私聊这类方向写不进来。"""
     with store.manager.transaction() as conn:
         ids = _seed(conn)
     with store.manager.transaction() as conn, pytest.raises(sqlite3.IntegrityError, match="CHECK"):

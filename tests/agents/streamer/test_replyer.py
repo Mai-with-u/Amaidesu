@@ -271,8 +271,8 @@ async def test_recent_speeches_keep_a_floor_when_people_notes_squeeze_the_budget
     """玩家条目把"更早说过的话"的预算挤光时，她的原话保底留两句：防逐字复读的原料在最忙的窗口也不能归零。"""
     replyer, _, prompt = _replyer()
     notes = (
-        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：那你有皮革吗"),
-        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：要做书"),
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 游戏公屏] 玩家 玩家甲：那你有皮革吗"),
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 游戏公屏] 玩家 玩家甲：要做书"),
         PlayerNote(who="玩家乙", said=False, line="[22:44 minecraft 动作] 玩家 玩家乙 看着我蹲起 2 下"),
     )
     turn = await _turn_kwargs(
@@ -347,7 +347,7 @@ async def test_word_filter_inside_the_replyer_drops_the_whole_line_or_keeps_the_
 
 
 async def test_memory_numbers_in_speech_are_removed_with_a_warning(loguru_capture: Any) -> None:
-    """交接稿洗过以后她仍写出 档#N、约#N：台词里去掉再出声，并记一条警告方便追查漏口。"""
+    """发言要点洗过以后她仍写出 档#N、约#N：台词里去掉再出声，并记一条警告方便追查漏口。"""
     replyer, _, _ = _replyer("上次说好的倒立洗头[档#12]，还有约#3那个猫窝")
     result = await replyer.generate(_plan(), [])
     assert result["speech"] == "上次说好的倒立洗头，还有那个猫窝"

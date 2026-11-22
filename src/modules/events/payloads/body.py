@@ -82,7 +82,7 @@ class BodyEventPayload(BasePayload):
         resolved: 该次遭遇是否已结束（供主播措辞滞后：已结束就不说"正在被攻击"）
         occurred_at_ms: 上游事实发生时刻（Unix 毫秒；0 = 未提供或无法解析）
         player_uuid: 事件说到的那位玩家的 UUID：player_body_language 是冲 AI 玩家做动作的人（主播据此推他的
-          玩家卡），follow_status 是它跟着的人（只透传，不推卡）；其余遭遇、认不出时为空串
+          玩家线索），follow_status 是它跟着的人（只透传，不推卡）；其余遭遇、认不出时为空串
         player_name: 同一位玩家的名字（和 ``player_uuid`` 一起有或一起空）
         save_id: 事件发生时角色所在的存档编号；空串表示不分存档或存档不明
         save_name: 同一存档的显示名；空串表示未提供

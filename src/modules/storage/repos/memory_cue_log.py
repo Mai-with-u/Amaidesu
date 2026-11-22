@@ -1,6 +1,6 @@
-"""MemoryCueLogRepo —— 线索卡记录（memory_cue_log）的读写。
+"""MemoryCueLogRepo —— 记忆线索记录（memory_cue_log）的读写。
 
-每张推给 Planner 的线索卡记一行：哪一场、什么时刻、什么卡（对象开口 / 游戏开着 / 地点 / 规则 /
+每张推给 Planner 的记忆线索记一行：哪一场、什么时刻、什么卡（对象开口 / 游戏开着 / 地点 / 规则 /
 向量 / 老梗）、指向哪条档案行或承诺、命中它的全部来源、分数明细、是不是只由她自己的台词触发，
 以及她什么时候用上了（"用上即停"检测到时回填）。复盘面板与副作用指标都从这里读。
 
@@ -30,7 +30,7 @@ def _json_list(raw: Any, entry_id: Any) -> List[str]:
     try:
         parsed = json.loads(raw) if isinstance(raw, str) and raw else []
     except json.JSONDecodeError as exc:
-        logger.warning(f"线索卡记录 {entry_id} 的来源不是合法 JSON（当没有来源）：{exc}")
+        logger.warning(f"记忆线索记录 {entry_id} 的来源不是合法 JSON（当没有来源）：{exc}")
         return []
     return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
@@ -40,7 +40,7 @@ def _json_dict(raw: Any, entry_id: Any) -> Dict[str, Any]:
     try:
         parsed = json.loads(raw) if isinstance(raw, str) and raw else {}
     except json.JSONDecodeError as exc:
-        logger.warning(f"线索卡记录 {entry_id} 的分数明细不是合法 JSON（当没有明细）：{exc}")
+        logger.warning(f"记忆线索记录 {entry_id} 的分数明细不是合法 JSON（当没有明细）：{exc}")
         return {}
     return dict(parsed) if isinstance(parsed, dict) else {}
 
@@ -54,7 +54,7 @@ def _entry_of(row: Any) -> CueLogEntry:
 
 
 class MemoryCueLogRepo(BaseRepo):
-    """线索卡记录：推出去时写一批，检测到用上时回填，复盘按场读。"""
+    """记忆线索记录：推出去时写一批，检测到用上时回填，复盘按场读。"""
 
     async def insert_entries(self, *, entries: Sequence[NewCueLogEntry]) -> int:
         """一批推出去的卡一次写进去，返回写了几行。"""
@@ -95,7 +95,7 @@ class MemoryCueLogRepo(BaseRepo):
     ) -> int:
         """本场推过、还没记用上时刻的卡，指向的条目已经被她点名用上：回填用上的时刻，返回回填几行。
 
-        只回填推送早于这一刻的记录：同一场里还没推就被她从简报里点名用上的条目，不算卡片的功劳。
+        只回填推送早于这一刻的记录：同一场里还没推就被她从记忆摘要里点名用上的条目，不算卡片的功劳。
         """
         archive = sorted({int(item) for item in archive_line_ids})
         commitments = sorted({int(item) for item in commitment_ids})
@@ -120,7 +120,7 @@ class MemoryCueLogRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_session_entries(self, *, live_session_id: int) -> List[CueLogEntry]:
-        """某一场推过的全部线索卡（按推送时刻先后）。"""
+        """某一场推过的全部记忆线索（按推送时刻先后）。"""
 
         def _exec() -> List[CueLogEntry]:
             with self._manager.transaction() as conn:

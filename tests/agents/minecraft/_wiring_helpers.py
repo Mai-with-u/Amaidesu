@@ -1,4 +1,4 @@
-"""MinecraftAgent 记忆与公屏门控接线测试共用轻量辅助件。"""
+"""MinecraftAgent 记忆与游戏公屏门控接线测试共用轻量辅助件。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class StreamerPlaceholder(BaseAgent):
 
 
 async def no_real_sleep(_delay_ms: int) -> None:
-    """注入给公屏合批定时器的零真实 sleep 等待器，由假时钟推进 + flush_pending_chat 精确驱动。"""
+    """注入给游戏公屏合批定时器的零真实 sleep 等待器，由假时钟推进 + flush_pending_chat 精确驱动。"""
     return None
 
 

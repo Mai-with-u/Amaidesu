@@ -1,7 +1,7 @@
 <!--
   SessionReview - 场次复盘页（只读聚合）
 
-  布局：场次档案（archive_lines，可删单行）→ 本场台词（逐句可删）→ 本场线索卡（按来源筛）→
+  布局：场次档案（archive_lines，可删单行）→ 本场台词（逐句可删）→ 本场记忆线索（按来源筛）→
   信息 chips → 指标卡（超阈仅染色，沉默/最慢时延卡带"跳转时刻"深链进控制台回看）→
   流程单执行（单场）→ 观众构成 + 游戏明细（单场，明细逐条锚定跳转）→
   水位图 + LLM 用量表 → 深入入口（事件回看 / LLM 历史 · 本场预过滤）。全部数字来自后端结构化聚合
@@ -64,11 +64,11 @@
     />
 
     <template v-if="review">
-      <!-- 场次档案（本场整理出的标题 + 原话；删单行只影响下一场开播的"上一场"回想） -->
+      <!-- 场次档案（本场整理出的标题 + 原话；删单行只影响下一场开播的"上一场"回忆） -->
       <section v-if="archiveSessionId !== null" class="panel archive-panel" aria-label="场次档案">
         <div class="panel-title archive-panel-title">
           <span>场次档案</span>
-          <span class="archive-hint">整理自本场台词，下一场开播回想“上一场”时用</span>
+          <span class="archive-hint">整理自本场台词，下一场开播回忆“上一场”时用</span>
         </div>
         <p v-if="archiveError" class="archive-error">{{ archiveError }}</p>
         <template v-else>
@@ -120,11 +120,11 @@
         </template>
       </section>
 
-      <!-- 本场线索卡（代码每批推给决策层的旧事：承诺卡与被动想起；用上 = 她点名说了这件事） -->
-      <section v-if="archiveSessionId !== null" class="panel cue-panel" aria-label="本场线索卡">
+      <!-- 本场记忆线索（代码每批推给规划器的旧事：承诺线索与被动想起；用上 = 她点名说了这件事） -->
+      <section v-if="archiveSessionId !== null" class="panel cue-panel" aria-label="本场记忆线索">
         <div class="panel-title cue-panel-title">
-          <span>本场线索卡</span>
-          <span class="speech-hint">代码按线索推给决策层的旧事；"用上"是她点名说了这件事</span>
+          <span>本场记忆线索</span>
+          <span class="speech-hint">代码按线索推给规划器的旧事；"用上"是她点名说了这件事</span>
         </div>
         <el-radio-group
           v-if="cueSourceOptions.length > 1"
@@ -168,7 +168,7 @@
             </li>
           </ul>
           <p v-else class="speech-empty">
-            {{ cues.length > 0 ? '这个来源没有推过卡' : '这一场没有推过线索卡' }}
+            {{ cues.length > 0 ? '这个来源没有推过卡' : '这一场没有推过记忆线索' }}
           </p>
         </div>
       </section>
@@ -496,7 +496,7 @@ const {
   remove: deleteSpeech,
 } = useReviewSpeech();
 
-/** 本场线索卡：只读，按来源本地筛选（切场复位为全部） */
+/** 本场记忆线索：只读，按来源本地筛选（切场复位为全部） */
 const {
   items: cues,
   visible: visibleCues,
@@ -586,7 +586,7 @@ async function loadRundown(): Promise<void> {
 async function removeArchiveLine(line: ArchiveLineItem): Promise<void> {
   if (
     !(await confirmAction(
-      `删除档案行「${line.text}」？删掉后这一行不会再出现在下一场开播的回想里，也不影响承诺账本。`,
+      `删除档案行「${line.text}」？删掉后这一行不会再出现在下一场开播的回忆里，也不影响承诺账本。`,
       '删除档案行',
     ))
   ) {

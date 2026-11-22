@@ -181,7 +181,7 @@ export function createDefaultActions(): CommandAction[] {
         });
         if (!text) return;
         await agentsApi.promptAgent(STREAMER_AGENT_NAME, text);
-        ElMessage.success('已递到主播手里——下个决策窗她一定看到');
+        ElMessage.success('已递到主播手里——下个决策回合她一定看到');
       },
     },
     // —— 流程单组 ——

@@ -1,4 +1,4 @@
-"""常驻简报分区定义与名额规则（D2-1）：四个分区各自计额，并留出新增分区的扩展槽位。
+"""记忆摘要分区定义与名额规则（D2-1）：四个分区各自计额，并留出新增分区的扩展槽位。
 
 四个默认分区（区与区之间互不挤占）：
 - 【这个世界里】：当前游戏存档里的稳定事实（名字压进 1～2 行名字表，其余每条一行、不带原话，共 ≤12 行）
@@ -115,7 +115,7 @@ def is_naming_title(title: str) -> bool:
 
 
 def name_table_row_count(name_count: int) -> int:
-    """名字表会占几行展示名额（0～2 行）：快照取舍与简报渲染共用同一换算，两边名额严丝合缝。"""
+    """名字表会占几行展示名额（0～2 行）：快照取舍与记忆摘要渲染共用同一换算，两边名额严丝合缝。"""
     capped = max(0, min(int(name_count), MAX_WORLD_NAMES))
     return 0 if capped == 0 else math.ceil(capped / WORLD_NAMES_PER_ROW)
 
@@ -123,7 +123,7 @@ def name_table_row_count(name_count: int) -> int:
 def world_other_quota(naming_count: int) -> int:
     """【这个世界里】名字类之外的稳定事实名额：总行名额减去名字表占掉的行数。
 
-    快照取舍（rolling）与简报渲染（本模块）共读这一份算式，两边给"其余稳定"留的位置不会互相挤占。
+    快照取舍（rolling）与记忆摘要渲染（本模块）共读这一份算式，两边给"其余稳定"留的位置不会互相挤占。
     """
     return max(0, MAX_WORLD_LINES - name_table_row_count(naming_count))
 
@@ -153,7 +153,7 @@ def is_from_session(line: ArchiveLine, archive_session: Optional[int]) -> bool:
 
 @dataclass(frozen=True)
 class BriefZoneOutput:
-    """一个常驻简报分区的渲染结果：区正文各行与其中标了编号、可供点名的档案行主键。"""
+    """一个记忆摘要分区的渲染结果：区正文各行与其中标了编号、可供点名的档案行主键。"""
 
     lines: Tuple[str, ...] = ()
     archive_ids: Tuple[int, ...] = ()
@@ -161,7 +161,7 @@ class BriefZoneOutput:
 
 @dataclass(frozen=True)
 class BriefRenderContext:
-    """常驻简报各分区共享的只读上下文：去重并归一化后的一次快照数据。"""
+    """记忆摘要各分区共享的只读上下文：去重并归一化后的一次快照数据。"""
 
     snapshot_lines: Tuple[SnapshotLine, ...]
     commitments: Tuple[Commitment, ...]
@@ -182,7 +182,7 @@ class BriefRenderContext:
 
 @dataclass(frozen=True)
 class BriefZoneSpec:
-    """常驻简报分区槽位：新增分区只需往 ``BRIEF_ZONES`` 追加一项，渲染与点名收集骨架无需改动。"""
+    """记忆摘要分区槽位：新增分区只需往 ``BRIEF_ZONES`` 追加一项，渲染与点名收集骨架无需改动。"""
 
     key: str
     header: str

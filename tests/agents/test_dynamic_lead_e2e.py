@@ -10,7 +10,7 @@
    -> 真实 Replyer（70 字预算）-> 真实 SpeechDispatcher -> streamer.speech -> spoken echo 零唤醒回传并在下步拼入 [直播间刚说过]；
 3. 真实 StreamerAgent 收到含精确坐标的观众弹幕 -> Planner 调 framework_suggest -> 到达真实 MinecraftAgent 的
    [直播间建议] 包含原弹幕坐标来源原话且不取消在跑目标；同时验证游戏主控态下 framework_delegate 与 minecraft_chat_send 隔离/拒收；
-4. 游戏主控态下玩家公屏（game.chat.received, kind="player"）直接唤醒真实 MinecraftAgent 且不触发 StreamerAgent Planner；
+4. 游戏主控态下玩家游戏公屏（game.chat.received, kind="player"）直接唤醒真实 MinecraftAgent 且不触发 StreamerAgent Planner；
 5. 流程单切回 mode="talk" 与 live.ended 两种收权路径：真实 MinecraftAgent.yield_lead 取消在跑目标并返回客观摘要，
    StreamerAgent 收权落账并恢复主播主控。
 """
@@ -500,7 +500,7 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
         assert len(rig.minecraft_llm.seen) == 2
         assert rig.minecraft.observation()["spoken_echo_count"] == 1
 
-        # 3) 等下一次真实外部事件（身边同伴玩家公屏）唤醒 MinecraftAgent 时，Step 3 推理消息中自动拼入 [直播间刚说过]
+        # 3) 等下一次真实外部事件（身边同伴玩家游戏公屏）唤醒 MinecraftAgent 时，Step 3 推理消息中自动拼入 [直播间刚说过]
         await rig.bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -535,7 +535,7 @@ async def test_e2e_viewer_danmaku_suggest_preserves_coords_and_blocks_delegation
     prompts: Any,
     fake_clock: Any,
 ) -> None:
-    """观众弹幕经真实 Streamer Planner 调 framework_suggest 透传原话坐标到真实 MinecraftAgent，不打断在跑目标并屏蔽委派/公屏工具。"""
+    """观众弹幕经真实 Streamer Planner 调 framework_suggest 透传原话坐标到真实 MinecraftAgent，不打断在跑目标并屏蔽委派/游戏公屏工具。"""
     goal_started = [False]
 
     def _mc_script(messages: List[Dict[str, Any]]) -> Response:
@@ -644,7 +644,7 @@ async def test_e2e_viewer_danmaku_suggest_preserves_coords_and_blocks_delegation
         blocked_chat = await rig.registry.invoke(
             ToolInvocation(
                 tool_name="minecraft_chat_send",
-                arguments={"text": "主播替你在公屏说话"},
+                arguments={"text": "主播替你在游戏公屏说话"},
                 source="planner-react",
                 invoking_agent="streamer",
             )
@@ -657,7 +657,7 @@ async def test_e2e_viewer_danmaku_suggest_preserves_coords_and_blocks_delegation
 
 
 # ---------------------------------------------------------------------------
-# 链路 4：游戏内玩家公屏直接唤醒真实 MinecraftAgent 且不触发 StreamerAgent Planner
+# 链路 4：游戏内玩家游戏公屏直接唤醒真实 MinecraftAgent 且不触发 StreamerAgent Planner
 # ---------------------------------------------------------------------------
 
 
@@ -665,7 +665,7 @@ async def test_e2e_game_player_chat_wakes_minecraft_without_waking_streamer_plan
     prompts: Any,
     fake_clock: Any,
 ) -> None:
-    """游戏主控态下玩家公屏（kind='player'）直接唤醒真实 MinecraftAgent 回应，不触发 StreamerAgent Planner。"""
+    """游戏主控态下玩家游戏公屏（kind='player'）直接唤醒真实 MinecraftAgent 回应，不触发 StreamerAgent Planner。"""
     replied_in_game = [False]
 
     def _mc_script(messages: List[Dict[str, Any]]) -> Response:
@@ -673,7 +673,7 @@ async def test_e2e_game_player_chat_wakes_minecraft_without_waking_streamer_plan
         if "红石门修好了吗" in joined and not replied_in_game[0]:
             replied_in_game[0] = True
             return _resp(
-                "在公屏直接回复同伴",
+                "在游戏公屏直接回复同伴",
                 calls=[
                     _call(
                         "maicraft_execute",
@@ -700,7 +700,7 @@ async def test_e2e_game_player_chat_wakes_minecraft_without_waking_streamer_plan
         await _wait_until(lambda: len(rig.minecraft_llm.seen) == 1 and not rig.minecraft.batch_active)
         assert rig.coordinator.mode == "game"
 
-        # 游戏内身边同伴玩家公屏消息到达
+        # 游戏内身边同伴玩家游戏公屏消息到达
         await rig.bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -719,10 +719,10 @@ async def test_e2e_game_player_chat_wakes_minecraft_without_waking_streamer_plan
         await _wait_until(lambda: replied_in_game[0] and not rig.minecraft.batch_active)
         await _settle_loop(rig.bus)
 
-        # MinecraftAgent 直接经公屏合批读取并公屏回话；StreamerAgent Planner 零触发
+        # MinecraftAgent 直接经游戏公屏合批读取并游戏公屏回话；StreamerAgent Planner 零触发
         mc_step2 = _texts(rig.minecraft_llm.seen[1])
-        assert "[公屏合批]" in mc_step2
-        assert "[公屏·身边8格] 同伴乙：红石门修好了吗" in mc_step2
+        assert "[游戏公屏合批]" in mc_step2
+        assert "[游戏公屏·身边8格] 同伴乙：红石门修好了吗" in mc_step2
         chat_execs = [
             args for args in rig.server.calls_to("execute") if (args.get("goal") or {}).get("ability") == "chat"
         ]
@@ -818,7 +818,7 @@ async def test_e2e_reclaim_on_rundown_talk_and_live_ended(prompts: Any, fake_clo
         assert "整理营地工具箱" in reclaim_talk_event.handover_summary
         assert "砍橡木搭屋顶" in reclaim_talk_event.handover_summary
 
-        # 触发一次主播决策验证：收权摘要已落账进主播上下文，且委派与公屏工具恢复可用
+        # 触发一次主播决策验证：收权摘要已落账进主播上下文，且委派与游戏公屏工具恢复可用
         debug_res = await rig.streamer.debug_test_decision(batch=[{"nickname": "小星", "text": "刚才游戏里忙到哪啦？"}])
         assert debug_res["success"] is True
         assert len(rig.streamer_llm.planner_calls) >= 1
@@ -1025,7 +1025,7 @@ async def test_e2e_game_lead_passive_flash_surfaces_cross_session_and_short_term
     fake_clock: Any,
     tmp_path: Any,
 ) -> None:
-    """真实双代理 + SQLite + FakeEmbedding：主控态公屏合批自动附尾 [脑中闪过]（跨场 + 本场同义），主播 Planner 0 唤醒。"""
+    """真实双代理 + SQLite + FakeEmbedding：主控态游戏公屏合批自动附尾 [脑中闪过]（跨场 + 本场同义），主播 Planner 0 唤醒。"""
     from src.modules.llm.embedding import EmbeddingSetup
     from src.modules.storage.database import SQLiteDatabase
     from tests.modules.llm.fakes import FakeEmbeddingServer
@@ -1057,7 +1057,7 @@ async def test_e2e_game_lead_passive_flash_surfaces_cross_session_and_short_term
         def _mc_script(messages: List[Dict[str, Any]]) -> Response:
             if not rule_added[0]:
                 rule_added[0] = True
-                # 本场钉住一条关于“小猫”的临时规矩（同义测试：后续公屏提“橘猫”，字面不重叠、靠嵌入余弦命中）
+                # 本场钉住一条关于“小猫”的临时规矩（同义测试：后续游戏公屏提“橘猫”，字面不重叠、靠嵌入余弦命中）
                 return _resp(
                     "先把本场小猫约定钉住",
                     calls=[
@@ -1110,7 +1110,7 @@ async def test_e2e_game_lead_passive_flash_surfaces_cross_session_and_short_term
             fixed_sys_before = dict(rig.minecraft_llm.seen[-1][0])
             fixed_brief_before = dict(rig.minecraft_llm.seen[-1][1])
 
-            # 2) 身边同伴发公屏同时提到“主齿轮”（跨场规则触发）与“橘猫”（本场“猫窝”同义向量命中）；
+            # 2) 身边同伴发游戏公屏同时提到“主齿轮”（跨场规则触发）与“橘猫”（本场“猫窝”同义向量命中）；
             # 2 秒合批窗口期间后台预取查询向量完成，窗口到期后 wait_vector_ms=0 即时融合余弦返回
             await rig.bus.emit(
                 CoreEvents.GAME_CHAT_RECEIVED,
@@ -1138,7 +1138,7 @@ async def test_e2e_game_lead_passive_flash_surfaces_cross_session_and_short_term
             assert latest_messages[0] == fixed_sys_before
             assert latest_messages[1] == fixed_brief_before
             tail_text = str(latest_messages[-1].get("content") or "")
-            assert "[公屏合批]" in tail_text
+            assert "[游戏公屏合批]" in tail_text
             assert "[脑中闪过]" in tail_text
             assert "北岸水车房主齿轮不能拆" in tail_text
             assert "仓库门口的猫窝绝对不能挡路" in tail_text
@@ -1159,7 +1159,7 @@ async def test_e2e_memory_recall_finds_pinned_rules_and_short_term_memory_while_
     fake_clock: Any,
     tmp_path: Any,
 ) -> None:
-    """真实双代理装配：memory_recall 检索到持久 pinned_rules 与游戏侧本场公屏/临时规矩，且私聊在 scope=all 不外泄。"""
+    """真实双代理装配：memory_recall 检索到持久 pinned_rules 与游戏侧本场游戏公屏/临时规矩，且私聊在 scope=all 不外泄。"""
     from src.modules.storage.database import SQLiteDatabase
 
     db = SQLiteDatabase(tmp_path / "e2e_recall.db")
@@ -1202,7 +1202,7 @@ async def test_e2e_memory_recall_finds_pinned_rules_and_short_term_memory_while_
             await rig.bus.wait_until_drained()
             await _wait_until(lambda: len(rig.minecraft_llm.seen) >= 1 and not rig.minecraft.batch_active)
 
-            # 游戏内分别收到一条公开公屏与一条私聊（均收录进 MinecraftAgent 本场短期记忆）
+            # 游戏内分别收到一条公开游戏公屏与一条私聊（均收录进 MinecraftAgent 本场短期记忆）
             await rig.bus.emit(
                 CoreEvents.GAME_CHAT_RECEIVED,
                 GameChatPayload(
@@ -1254,7 +1254,7 @@ async def test_e2e_memory_recall_finds_pinned_rules_and_short_term_memory_while_
             assert "当前存档长期规矩" in (res_rule.content or "")
             assert "严禁在公共仓库用连锁镐挖地板" in (res_rule.content or "")
 
-            # 2) 查本场游戏公屏短期记忆（scope=this_stream 与 scope=all 均可见公开公屏）
+            # 2) 查本场游戏公屏短期记忆（scope=this_stream 与 scope=all 均可见公开游戏公屏）
             res_chat = await rig.registry.invoke(
                 ToolInvocation(
                     tool_name="memory_recall",
@@ -1762,7 +1762,7 @@ async def test_e2e_live_commitment_ledger_delivery_progress_and_done_closure(
             assert "剩余 1 颗钻石已存进对方木桶还清" in done_tail
             assert '"open"' not in done_tail
 
-            # 5) 主播常驻简报立刻显示「本场已了结」，回答观众弹幕时一眼可见
+            # 5) 主播记忆摘要立刻显示「本场已了结」，回答观众弹幕时一眼可见
             debug_res = await rig.streamer.debug_test_decision(
                 batch=[{"nickname": "小星", "text": "欠 PlayerA 的钻石还清了吗？"}]
             )
@@ -1772,7 +1772,7 @@ async def test_e2e_live_commitment_ledger_delivery_progress_and_done_closure(
             planner_full = str(latest_planner.get("system") or "") + "\n" + _texts(latest_planner["messages"])
             assert f"[{ref}] 本场已了结：剩余 1 颗钻石已存进对方木桶还清" in planner_full
 
-            # 6) 拨过 10 分钟玩家卡冷却，PlayerA 再次开口时不再推送旧 约#N 卡片
+            # 6) 拨过 10 分钟玩家线索冷却，PlayerA 再次开口时不再推送旧 约#N 卡片
             fake_clock.tick(11 * 60 * 1000)
             player_cues_after_done = await rig.coordinator.fetch_passive_cues(
                 game="minecraft",

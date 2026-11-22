@@ -54,7 +54,7 @@ _MASK_MARK = "***"
 _USER_ID_EXPR = "COALESCE(account_id, open_id, '')"
 _SELECT_VIEWER = f"SELECT *, {_USER_ID_EXPR} AS user_id FROM viewers"
 _MATCH_EXTERNAL = "platform=? AND (account_id=? OR open_id=?)"
-# 展示曾用名时最多带几个（最近用过的在前）；在场认人与老观众卡最多带 2 个且过滤单字昵称
+# 展示曾用名时最多带几个（最近用过的在前）；在场认人与老观众线索最多带 2 个且过滤单字昵称
 _FORMER_NAMES_LIMIT = 2
 _MIN_FORMER_NAME_LEN = 2
 
@@ -170,7 +170,7 @@ class ViewerRepo(BaseRepo):
     async def list_known_names(self) -> List[str]:
         """全部已知观众昵称（当前昵称与曾用名去重，按名字排序）。
 
-        回想工具用它做两件事：把跨场结果里出现的昵称替换成"某位观众"、认出
+        回忆工具用它做两件事：把跨场结果里出现的昵称替换成"某位观众"、认出
         "关键词本身就是某位观众的名字"。占位昵称（采集器拿不到昵称时填的值、
         打码昵称）不代表任何人，不返回；2 字以上的长度门槛由调用方按遮名规则过滤。
         """
@@ -373,7 +373,7 @@ class ViewerRepo(BaseRepo):
     ) -> Dict[str, int]:
         """批量按"平台 + ID 种类 + 外部 ID"查观众 ID；只查不建，未命中的不出现在结果里。
 
-        一次查询覆盖整批弹幕（每条消息一次查询会拖慢决策窗），账号 ID 查
+        一次查询覆盖整批弹幕（每条消息一次查询会拖慢决策回合），账号 ID 查
         account_id、开放平台 ID 查 open_id——两种 ID 不混着比。
         """
         ids = [str(x) for x in external_ids if str(x)]
@@ -574,7 +574,7 @@ class ViewerRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def approved_viewer_notes(self, *, viewer_ids: Sequence[int], limit: int = 2) -> List[ViewerSelfNote]:
-        """场内老观众卡用：读取同人簇内已批准的老观众近况（最近批准的在前；待审与已驳回绝不返回）。"""
+        """场内老观众线索用：读取同人簇内已批准的老观众近况（最近批准的在前；待审与已驳回绝不返回）。"""
         ids = sorted({int(vid) for vid in viewer_ids})
         if not ids or limit <= 0:
             return []

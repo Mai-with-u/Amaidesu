@@ -4,7 +4,7 @@
 - 写入用生产的 ``SessionRepo.insert_live_session`` / ``ChatRepo.insert_live_chat``
   / ``ArchiveRepo.insert_line``；
 - 索引用生产的 ``MemoryIndexer``（循环补算至 ``pending_total == 0``，不漏大库后半截）；
-- 检索用生产的 ``MemorySearch`` 与 ``MemoryRecallService.recall_detailed``（直接核对回想工具
+- 检索用生产的 ``MemorySearch`` 与 ``MemoryRecallService.recall_detailed``（直接核对回忆工具
   真实选出的前 8 条，不从外部猜候选池）。
 
 库建在临时目录，跑完即弃，不碰任何真实库。
@@ -184,7 +184,7 @@ async def _drain_index(db: SQLiteDatabase, embedding: Optional[EmbeddingClient],
 
 
 def _entry_covered_chat_ids(entry: Any, archive_to_chat: Mapping[int, int]) -> Set[int]:
-    """还原单条回想结果实际承载的台词主键集合（兼容升级前无 covered_chat_ids 与升级后带邻句拼合两种形态）。"""
+    """还原单条回忆结果实际承载的台词主键集合（兼容升级前无 covered_chat_ids 与升级后带邻句拼合两种形态）。"""
     covered: Set[int] = {int(cid) for cid in (getattr(entry, "covered_chat_ids", None) or ()) if cid is not None}
     if entry.source == "speech":
         covered.add(int(entry.source_id))
@@ -690,7 +690,7 @@ async def run(
             "语义一路": f"已装配（{raw_embedding.model_key}）" if raw_embedding else "未装配（只走关键词一路）",
             "召回路数": "生产的 MemorySearch（关键词 BM25 + 可选语义，两路 RRF 融合）",
             "工具": "生产的 MemoryRecallService.recall_detailed（含同源台词与档案合并）",
-            "命中判定": "按回想工具真实入选条目的主键判（台词主键；档案行按证据台词主键换算）",
+            "命中判定": "按回忆工具真实入选条目的主键判（台词主键；档案行按证据台词主键换算）",
         },
         "正向召回（仅计有答案轮的题）": {
             "A_前8条含答案轮": round(overall["in_top8"] / answerable, 4) if answerable else None,

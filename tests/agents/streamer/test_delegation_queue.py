@@ -130,7 +130,7 @@ async def test_session65_2158_close_planting_promotes_iron_farm_and_keeps_plot_u
     assert "[待办2]" in backlog_block and "在营地旁开一块菜地种小麦" in backlog_block and "还没开工" in backlog_block
     assert "给刷铁机加压锭工序" not in backlog_block
     assert "deleg_" not in after_ref
-    # 即时反应的现场卡与规划器读同一份：手上的目标是刷铁机，不是旧栽树苗，也不含待办菜地
+    # 即时反应的事实快照与规划器读同一份：手上的目标是刷铁机，不是旧栽树苗，也不含待办菜地
     goals = wb.current_goals()
     assert [(g.instruction, g.status) for g in goals] == [("给刷铁机加压锭工序", "进行中")]
     assert ("minecraft", "给刷铁机加压锭工序") in recorded
@@ -140,7 +140,7 @@ async def test_session65_2158_close_planting_promotes_iron_farm_and_keeps_plot_u
 async def test_session63_2328_drop_dandelion_delivers_next_and_clears_mouth_stale_goal() -> None:
     """第 63 场 23:28 & 23:53 时间线核验：
     蒲公英单在做，补种树苗排在待办1 -> 按短编号'在做'撤掉作废的蒲公英单（outcome='drop'）->
-    不需要内部任务号即可撤掉，补种树苗立即自动送达成为【在做】，即时反应的现场卡再也不会出现蒲公英。"""
+    不需要内部任务号即可撤掉，补种树苗立即自动送达成为【在做】，即时反应的事实快照再也不会出现蒲公英。"""
     planner, ledger, bus, game, references, _recorded = _build_streamer_delegation_rig()
     wb = planner.workbench
 

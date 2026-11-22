@@ -709,14 +709,14 @@ def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
     finally:
         reset_prompt_manager()
     assert "游戏聊天条目是游戏里的人在说话" in prompt and "主播开口说话他们听不到" in prompt
-    # 玩家直接搭话就在游戏里回；回话用 minecraft_chat_send 直发公屏，不占游戏里的决策流
+    # 玩家直接搭话就在游戏里回；回话用 minecraft_chat_send 直发游戏公屏，不占游戏里的决策流
     assert "就在游戏里回一句" in prompt and "minecraft_chat_send" in prompt
     assert "不带额外授权" in prompt and "【私密游戏聊天】" in prompt
 
 
 @pytest.mark.asyncio
 async def test_planner_reference_shows_private_game_chat_block() -> None:
-    """私聊随本窗批次单独成段进参考块（不进对话历史），主动窗情境说明不再只写冷场/定时。"""
+    """私聊随本回合批次单独成段进参考块（不进对话历史），主动窗情境说明不再只写冷场/定时。"""
     llm = MagicMock()
     planner = _planner(llm=llm)
     references = _capture_references(planner, llm)
@@ -735,14 +735,14 @@ async def test_planner_reference_shows_private_game_chat_block() -> None:
 
 @pytest.mark.asyncio
 async def test_planner_reference_names_players_waiting_for_an_in_game_reply() -> None:
-    """本窗有玩家在公屏跟她说话：参考段点出是谁、提醒在游戏里回（第 58 场玩家问"你有皮革吗"，她只在直播里说）。
+    """本回合有玩家在游戏公屏跟她说话：参考段点出是谁、提醒在游戏里回（第 58 场玩家问"你有皮革吗"，她只在直播里说）。
     只冲她做动作、没开口的玩家不算；同一位玩家说了几句只点一次名。"""
     llm = MagicMock()
     planner = _planner(llm=llm)
     references = _capture_references(planner, llm)
     notes = (
-        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：那你有皮革吗"),
-        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：要做书"),
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 游戏公屏] 玩家 玩家甲：那你有皮革吗"),
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 游戏公屏] 玩家 玩家甲：要做书"),
         PlayerNote(who="玩家乙", said=False, line="[22:44 minecraft 动作] 玩家 玩家乙 看着我蹲起 2 下"),
     )
 
@@ -879,7 +879,7 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
     # 起名环节退役：桥段示例与人设标签都不再点名
     assert all(word not in planner for word in ("起名", "磨蹭"))
     assert "房间安静时不发起要人接话的互动" in planner
-    # 交接稿不转述任务系统内部的东西，免得被原样念给观众
+    # 发言要点不转述任务系统内部的东西，免得被原样念给观众
     assert "不转述任务系统内部的东西" in planner
 
 
@@ -923,7 +923,7 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
         bot_name="麦麦",
         length_rule="整句不超过 40 字。",
         game_heading="\\n\\n## 游戏里刚有人说的话\\n\\n",
-        game_turn_rules="游戏里有人搭话时，按游戏聊天和交接稿说，别当成观众弹幕或冷场。\\n台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\\n",
+        game_turn_rules="游戏里有人搭话时，按游戏聊天和发言要点说，别当成观众弹幕或冷场。\\n台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\\n",
         pace_rule="多数话一两句，有事才多说两句，",
     )
     # 主动发言先有自己的内容、反应和态度讲出来（不向空气求助的禁令已撤）
@@ -935,7 +935,7 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
     # 说话的形状是开放的：一句话可以只是反应本身、说一半、没有结论；长度预算写在提示里
     assert "一句话可以只是对这件事的反应本身，可以说一半，可以没有结论" in turn
     assert "不分段" in turn and "整句不超过 40 字。" in turn
-    # 交接稿是她此刻的想法，不是上级任务书；腔调词（自嘲、得意这类）不出现在指引契约里
+    # 发言要点是她此刻的想法，不是上级任务书；腔调词（自嘲、得意这类）不出现在指引契约里
     assert "你此刻的想法" in turn and "不是别人交给你的任务" in turn
 
 
@@ -972,7 +972,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
     assert "不像写稿" in system and "一次只说一件事，一句话说完就停" in system
     assert "从零创作" not in system
 
-    # 写稿与说话的对照、"交接稿是任务书"写在每轮回复要求里（系统提示词只留规矩精华，让人设占大头）
+    # 写稿与说话的对照、"发言要点是任务书"写在每轮回复要求里（系统提示词只留规矩精华，让人设占大头）
     turn = prompts.render(
         "amaidesu_replyer",
         plan="",
@@ -987,7 +987,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         bot_name="麦麦",
         length_rule="",
         game_heading="\\n\\n## 游戏里刚有人说的话\\n\\n",
-        game_turn_rules="游戏里有人搭话时，按游戏聊天和交接稿说，别当成观众弹幕或冷场。\\n台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\\n",
+        game_turn_rules="游戏里有人搭话时，按游戏聊天和发言要点说，别当成观众弹幕或冷场。\\n台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\\n",
         pace_rule="多数话一两句，有事才多说两句，",
     )
     assert "✗ 写稿" in turn and "✓ 说话" in turn and "不分段" in turn

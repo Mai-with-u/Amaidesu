@@ -20,14 +20,14 @@ def test_empty_dialogue_and_reference_falls_back_to_placeholder_user_message() -
     messages: list[Dict[str, Any]] = assemble_request_messages("系统提示词", [], "")
     assert messages == [
         {"role": "system", "content": "系统提示词"},
-        {"role": "user", "content": "（本窗无对话与参考内容）"},
+        {"role": "user", "content": "（本回合无对话与参考内容）"},
     ]
 
 
 def test_reference_appended_after_dialogue_without_fallback() -> None:
     dialogue = [{"role": "assistant", "content": "台词"}]
     messages = assemble_request_messages("系统提示词", dialogue, "参考段")
-    assert messages[-1] == {"role": "user", "content": "参考段"} and "（本窗无对话与参考内容）" not in str(messages)
+    assert messages[-1] == {"role": "user", "content": "参考段"} and "（本回合无对话与参考内容）" not in str(messages)
 
 
 def test_frame_tail_only_on_first_step_and_tail_after_it() -> None:

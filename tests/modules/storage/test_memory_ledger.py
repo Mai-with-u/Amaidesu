@@ -517,7 +517,7 @@ async def _settle_once(
 
 
 async def test_commitment_to_a_player_from_game_chat_keeps_number_on_rerun(store: SQLiteDatabase) -> None:
-    """对玩家的承诺：证据是她打在游戏公屏上的那句，按公屏行对齐编号；不再认定才删。"""
+    """对玩家的承诺：证据是她打在游戏公屏上的那句，按游戏公屏行对齐编号；不再认定才删。"""
     session_id = await _ended_session(store)
     alex = await store.game_players.meet_player(
         game="minecraft", uuid="uuid-a", name="Alex", live_session_id=session_id, at_ms=1100

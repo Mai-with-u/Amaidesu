@@ -1,19 +1,19 @@
-"""Minecraft 公屏门控（纯逻辑，构造注入单调毫秒时钟，零真实 sleep）。
+"""Minecraft 游戏公屏门控（纯逻辑，构造注入单调毫秒时钟，零真实 sleep）。
 
-将高噪声的游戏公屏聊天分级节流，既不漏掉身边同伴、点名与私聊，又避免全服刷屏把游戏 Agent
+将高噪声的游戏公屏分级节流，既不漏掉身边同伴、点名与私聊，又避免全服刷屏把游戏 Agent
 唤醒空转或塞满上下文：
 
-- **事实标签格式化**：按客观信号贴上 ``[公屏·私聊]``、``[公屏·点名你]``、``[公屏·身边{d}格]``
-  （无距离数据时按 ``nearby_players`` 降级为 ``[公屏·身边]``）或 ``[公屏·远处]``，原样保留采集器
+- **事实标签格式化**：按客观信号贴上 ``[游戏公屏·私聊]``、``[游戏公屏·点名你]``、``[游戏公屏·身边{d}格]``
+  （无距离数据时按 ``nearby_players`` 降级为 ``[游戏公屏·身边]``）或 ``[游戏公屏·远处]``，原样保留采集器
   附带的未核验 ``note`` 说明；
 - **2 秒短合并窗与优先级截留**：单窗默认上限 8 条，按「私聊 > 点名 ``type="self"`` > 距离 ≤24 格
   或近 2 分钟互动同伴 > 其余抽样」排序截留；同人同内容与单人高频连发自动折叠计数；
 - **持续刷屏唤醒最小冷却**：连续频繁唤醒或窗内出现高频折叠/超限时启用最小冷却（默认 6000ms），
   把持续刷屏期间的新消息继续并入同一待发窗；
-- **分级唤醒判定**：私聊 / 点名 / 身边 / 近期互动同伴到窗产出 ``should_wake=True`` 的 ``[公屏合批]``；
-  独立到达的远处非点名公屏进入有界旁听滑窗（``should_wake=False``），仅在行动步调用
+- **分级唤醒判定**：私聊 / 点名 / 身边 / 近期互动同伴到窗产出 ``should_wake=True`` 的 ``[游戏公屏合批]``；
+  独立到达的远处非点名游戏公屏进入有界旁听滑窗（``should_wake=False``），仅在行动步调用
   ``drain_eavesdrop()`` 时顺带取出，绝不主动唤醒；
-- **近期人类原话滚动窗**：同步维护最近 8 条公屏原话与最近 4 条主播建议，供集中整理与重开上下文复用。
+- **近期人类原话滚动窗**：同步维护最近 8 条游戏公屏原话与最近 4 条主播建议，供集中整理与重开上下文复用。
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ DEFAULT_WAKE_COOLDOWN_MS = 6_000
 DEFAULT_MAX_EAVESDROP_ITEMS = 16
 DEFAULT_MAX_RECENT_CHATS = 8
 DEFAULT_MAX_RECENT_SUGGESTIONS = 4
-# 近期人类原话滚动窗中公屏对话的默认存活时长（10 分钟）：超过此时间的陈旧聊天自动过期淘汰
+# 近期人类原话滚动窗中游戏公屏对话的默认存活时长（10 分钟）：超过此时间的陈旧聊天自动过期淘汰
 DEFAULT_RECENT_CHAT_TTL_MS = 600_000
 # 单窗内同一发言人最多保留几条不同内容，超出部分折叠为计数以防单人刷屏占满窗口
 _MAX_DISTINCT_PER_SENDER = 3
@@ -89,7 +89,7 @@ def _format_relative_age(delta_ms: int) -> str:
 
 @dataclass
 class _RecentChatEntry:
-    """近期公屏滚动窗中的单条双向对话记录（玩家公屏或己方回复，附带注入时钟时间戳）。"""
+    """近期游戏公屏滚动窗中的单条双向对话记录（玩家游戏公屏或己方回复，附带注入时钟时间戳）。"""
 
     formatted_line: str
     sender: str
@@ -98,14 +98,14 @@ class _RecentChatEntry:
     is_self: bool = False
 
     def render_with_age(self, now_ms: int) -> str:
-        """附带相对时间前缀渲染双向公屏行，帮助模型分辨刚刚发生与较早发生的对话。"""
+        """附带相对时间前缀渲染双向游戏公屏行，帮助模型分辨刚刚发生与较早发生的对话。"""
         age = _format_relative_age(now_ms - self.timestamp_ms)
         if self.is_self:
             return f"[你回过·{age}] {self.raw_content}"
         if self.formatted_line.startswith("[") and "]" in self.formatted_line:
             bracket_end = self.formatted_line.index("]")
             return f"{self.formatted_line[:bracket_end]}·{age}{self.formatted_line[bracket_end:]}"
-        return f"[公屏·{age}] {self.formatted_line}"
+        return f"[游戏公屏·{age}] {self.formatted_line}"
 
 
 def _sender_key(sender: str) -> str:
@@ -143,21 +143,21 @@ def _format_fact_tag(
     nearby_distance: float,
     in_nearby_set: bool,
 ) -> str:
-    """按客观事实生成公屏标签：私聊 > 点名 > 身边距离（或降级身边） > 远处。"""
+    """按客观事实生成游戏公屏标签：私聊 > 点名 > 身边距离（或降级身边） > 远处。"""
     if private:
-        return "[公屏·私聊]"
+        return "[游戏公屏·私聊]"
     if mentioned_self:
-        return "[公屏·点名你]"
+        return "[游戏公屏·点名你]"
     if distance is not None and distance <= nearby_distance:
-        return f"[公屏·身边{int(round(distance))}格]"
+        return f"[游戏公屏·身边{int(round(distance))}格]"
     if distance is None and in_nearby_set:
-        return "[公屏·身边]"
-    return "[公屏·远处]"
+        return "[游戏公屏·身边]"
+    return "[游戏公屏·远处]"
 
 
 @dataclass(frozen=True)
 class ChatIngestResult:
-    """单条公屏进入门控后的即时分类回执（供接线层决定是否挂起刷出定时器）。"""
+    """单条游戏公屏进入门控后的即时分类回执（供接线层决定是否挂起刷出定时器）。"""
 
     accepted: bool
     should_schedule_flush: bool
@@ -169,10 +169,10 @@ class ChatIngestResult:
 
 @dataclass(frozen=True)
 class ChatBatch:
-    """到窗产出或行动步顺带取出的公屏批次。
+    """到窗产出或行动步顺带取出的游戏公屏批次。
 
-    ``should_wake=True`` 为 ``[公屏合批]``，触发唤醒推理；
-    ``should_wake=False`` 为 ``[公屏旁听]``，仅在下次行动步顺带附入，绝不主动唤醒。
+    ``should_wake=True`` 为 ``[游戏公屏合批]``，触发唤醒推理；
+    ``should_wake=False`` 为 ``[游戏公屏旁听]``，仅在下次行动步顺带附入，绝不主动唤醒。
     """
 
     should_wake: bool
@@ -205,7 +205,7 @@ class _PendingChatItem:
     upstream_suppressed: int = 0
 
     def render(self) -> str:
-        """渲染成带事实标签、未核验说明与折叠计数的单行公屏文本。"""
+        """渲染成带事实标签、未核验说明与折叠计数的单行游戏公屏文本。"""
         speaker = self.sender or "未知发言人"
         if self.note:
             speaker = f"{speaker}（{self.note}）"
@@ -223,7 +223,7 @@ class _PendingChatItem:
 
 
 class MinecraftChatGate:
-    """玩家公屏分级门控：2 秒短合并窗、优先级截留、刷屏冷却、远处旁听与近期原话滚动窗。"""
+    """玩家游戏公屏分级门控：2 秒短合并窗、优先级截留、刷屏冷却、远处旁听与近期原话滚动窗。"""
 
     def __init__(
         self,
@@ -256,7 +256,7 @@ class MinecraftChatGate:
         # 活跃唤醒合并窗与到期时刻（None 表示当前没有打开唤醒窗）
         self._wake_window: List[_PendingChatItem] = []
         self._window_due_ms: Optional[int] = None
-        # 独立到达的远处非点名公屏进入有界旁听滑窗，绝不主动唤醒
+        # 独立到达的远处非点名游戏公屏进入有界旁听滑窗，绝不主动唤醒
         self._eavesdrop: List[_PendingChatItem] = []
         self._eavesdrop_dropped = 0
         # 近期 2 分钟互动同伴记录：sender_norm -> 最近互动时刻（毫秒）
@@ -265,7 +265,7 @@ class MinecraftChatGate:
         self._recent_wake_times: Deque[int] = deque()
         self._last_wake_ms: Optional[int] = None
         self._spam_cooldown_active = False
-        # 近期公屏双向对话滚动窗（玩家公屏 + 己方回复，带时间戳与 TTL 自动过期）与最近 4 条主播建议
+        # 近期游戏公屏双向对话滚动窗（玩家游戏公屏 + 己方回复，带时间戳与 TTL 自动过期）与最近 4 条主播建议
         self._recent_chats: Deque[_RecentChatEntry] = deque(maxlen=self._max_recent_chats)
         self._recent_suggestions: Deque[str] = deque(maxlen=self._max_recent_suggestions)
 
@@ -290,7 +290,7 @@ class MinecraftChatGate:
         self._recent_suggestions.clear()
 
     def note_partner_interaction(self, sender: str) -> None:
-        """登记近期与某位玩家发生了对话或互动：接下来 2 分钟内其公屏视为可唤醒同伴消息。"""
+        """登记近期与某位玩家发生了对话或互动：接下来 2 分钟内其游戏公屏视为可唤醒同伴消息。"""
         key = _sender_key(sender)
         if not key:
             return
@@ -345,7 +345,7 @@ class MinecraftChatGate:
         is_nearby = (distance <= self._nearby_distance) if distance is not None else in_nearby_set
         is_partner = self.is_recent_partner(sender, now_ms=now)
 
-        # 分级优先级：私聊(0) > 点名(1) > 身边≤24格或近2分钟互动同伴(2) > 其余远处非点名公屏(3)
+        # 分级优先级：私聊(0) > 点名(1) > 身边≤24格或近2分钟互动同伴(2) > 其余远处非点名游戏公屏(3)
         if private:
             priority = PRIORITY_PRIVATE
         elif mentioned_self:
@@ -381,7 +381,7 @@ class MinecraftChatGate:
         formatted_line = item.render()
         self._remember_recent_chat(formatted_line, sender, cleaned_content, timestamp_ms=now)
 
-        # 独立到达的远处非点名公屏：若当前没有活跃唤醒窗，直接进入旁听滑窗，绝不主动唤醒；
+        # 独立到达的远处非点名游戏公屏：若当前没有活跃唤醒窗，直接进入旁听滑窗，绝不主动唤醒；
         # 若当前已有唤醒窗正在攒批，可作为最低优先级抽样候补随窗参与截留（不挤掉任何高优先级消息）。
         if priority == PRIORITY_EAVESDROP and self._window_due_ms is None:
             self._append_eavesdrop(item)
@@ -416,7 +416,7 @@ class MinecraftChatGate:
         return max(0, self._window_due_ms - int(self._clock()))
 
     def flush_due(self, *, force: bool = False) -> Optional[ChatBatch]:
-        """到窗（或强制）刷出 ``[公屏合批]``，按优先级截留至最多 8 条并更新刷屏冷却状态。"""
+        """到窗（或强制）刷出 ``[游戏公屏合批]``，按优先级截留至最多 8 条并更新刷屏冷却状态。"""
         if not self._wake_window or self._window_due_ms is None:
             return None
         now = int(self._clock())
@@ -437,7 +437,7 @@ class MinecraftChatGate:
         self._record_wake_event(now, had_burst=had_burst)
 
         rendered_lines = tuple(entry.render() for entry in selected)
-        header = f"[公屏合批] 收到 {len(rendered_lines)} 条玩家消息"
+        header = f"[游戏公屏合批] 收到 {len(rendered_lines)} 条玩家消息"
         if dropped_count > 0:
             header += f"（另有 {dropped_count} 条低优先级消息已省略）"
         text = "\n".join([header, *(f"- {line}" for line in rendered_lines)])
@@ -452,7 +452,7 @@ class MinecraftChatGate:
         )
 
     def drain_eavesdrop(self) -> Optional[ChatBatch]:
-        """在行动步顺带取出有界旁听滑窗中的远处非点名公屏（``should_wake=False``，绝不主动唤醒）。"""
+        """在行动步顺带取出有界旁听滑窗中的远处非点名游戏公屏（``should_wake=False``，绝不主动唤醒）。"""
         if not self._eavesdrop:
             return None
         items = self._eavesdrop
@@ -461,7 +461,7 @@ class MinecraftChatGate:
         self._eavesdrop_dropped = 0
 
         rendered_lines = tuple(entry.render() for entry in items)
-        header = f"[公屏旁听] 远处非点名公屏 {len(rendered_lines)} 条（顺带知悉，无需刻意回复）"
+        header = f"[游戏公屏旁听] 远处非点名游戏公屏 {len(rendered_lines)} 条（顺带知悉，无需刻意回复）"
         if dropped > 0:
             header += f"（较早 {dropped} 条已滑出）"
         text = "\n".join([header, *(f"- {line}" for line in rendered_lines)])
@@ -476,7 +476,7 @@ class MinecraftChatGate:
         )
 
     def record_self_chat(self, text: str, now_ms: Optional[int] = None) -> None:
-        """记入己方发出的游戏公屏句，与玩家公屏配对构成双向近期对话（避免折叠/状态恢复后忘掉自己回过话）。"""
+        """记入己方发出的游戏公屏句，与玩家游戏公屏配对构成双向近期对话（避免折叠/状态恢复后忘掉自己回过话）。"""
         cleaned = " ".join((text or "").split())
         if not cleaned:
             return
@@ -506,13 +506,13 @@ class MinecraftChatGate:
         self._recent_suggestions.append(cleaned)
 
     def recent_player_chats(self, *, now_ms: Optional[int] = None) -> Tuple[str, ...]:
-        """返回尚未过期的近期格式化玩家公屏原话（旧 → 新，不含己方回复）。"""
+        """返回尚未过期的近期格式化玩家游戏公屏原话（旧 → 新，不含己方回复）。"""
         now = int(self._clock()) if now_ms is None else int(now_ms)
         self._prune_recent_chats(now)
         return tuple(entry.formatted_line for entry in self._recent_chats if not entry.is_self)
 
     def recent_chat_dialogues(self, *, now_ms: Optional[int] = None) -> Tuple[str, ...]:
-        """返回尚未过期的近期双向公屏对话（玩家公屏 + 己方回复，每条附带相对时间前缀，旧 → 新）。"""
+        """返回尚未过期的近期双向游戏公屏对话（玩家游戏公屏 + 己方回复，每条附带相对时间前缀，旧 → 新）。"""
         now = int(self._clock()) if now_ms is None else int(now_ms)
         self._prune_recent_chats(now)
         return tuple(entry.render_with_age(now) for entry in self._recent_chats)
@@ -522,9 +522,9 @@ class MinecraftChatGate:
         return tuple(self._recent_suggestions)
 
     def recent_human_texts(self, *, now_ms: Optional[int] = None) -> Tuple[str, ...]:
-        """返回未过期公屏双向正文与主播建议原文元组，供短期记忆检索做近端原文去重。
+        """返回未过期游戏公屏双向正文与主播建议原文元组，供短期记忆检索做近端原文去重。
 
-        带未核验 ``note`` 的短公屏额外附入 ``发言人：正文`` 形态，确保与短期记忆条目精确对上号。
+        带未核验 ``note`` 的短游戏公屏额外附入 ``发言人：正文`` 形态，确保与短期记忆条目精确对上号。
         """
         now = int(self._clock()) if now_ms is None else int(now_ms)
         self._prune_recent_chats(now)
@@ -540,7 +540,7 @@ class MinecraftChatGate:
         return tuple(texts)
 
     def format_recent_human_lines(self, *, now_ms: Optional[int] = None) -> str:
-        """把未过期的近期公屏双向对话与主播建议渲染成紧凑文本块，供任务状态与集中整理保真。"""
+        """把未过期的近期游戏公屏双向对话与主播建议渲染成紧凑文本块，供任务状态与集中整理保真。"""
         now = int(self._clock()) if now_ms is None else int(now_ms)
         dialogues = self.recent_chat_dialogues(now_ms=now)
         suggestions = self.recent_streamer_suggestions()
@@ -551,7 +551,7 @@ class MinecraftChatGate:
             lines.append("近期主播建议：")
             lines.extend(f"- {item}" for item in suggestions)
         if dialogues:
-            lines.append("近期玩家公屏：")
+            lines.append("近期玩家游戏公屏：")
             lines.extend(f"- {item}" for item in dialogues)
         return "\n".join(lines)
 
@@ -592,7 +592,7 @@ class MinecraftChatGate:
             self._partner_interactions.pop(key, None)
 
     def _prune_recent_chats(self, now_ms: int) -> None:
-        """淘汰超过存活窗口（默认 10 分钟）的陈旧公屏记录，防止几十分钟前的旧话长期挂在任务状态里。"""
+        """淘汰超过存活窗口（默认 10 分钟）的陈旧游戏公屏记录，防止几十分钟前的旧话长期挂在任务状态里。"""
         if self._recent_chat_ttl_ms <= 0 or not self._recent_chats:
             return
         cutoff = now_ms - self._recent_chat_ttl_ms
@@ -609,7 +609,7 @@ class MinecraftChatGate:
         *,
         timestamp_ms: int,
     ) -> None:
-        """维护近期公屏滚动窗，淘汰过期记录并对紧邻相同文本刷新时间戳不重复占坑。"""
+        """维护近期游戏公屏滚动窗，淘汰过期记录并对紧邻相同文本刷新时间戳不重复占坑。"""
         self._prune_recent_chats(timestamp_ms)
         if (
             self._recent_chats
@@ -640,7 +640,7 @@ class MinecraftChatGate:
         """合并同人同内容或单人高频连发消息，防止同人刷屏挤爆窗口配额。
 
         高优先级消息（特别是私聊与点名）绝不被前序公开刷屏吞并丢弃，也绝不把公开条目
-        错改标为 ``[公屏·私聊]``；超限时仅淘汰并折叠同人优先级最低的条目。
+        错改标为 ``[游戏公屏·私聊]``；超限时仅淘汰并折叠同人优先级最低的条目。
         """
         same_sender_items: List[_PendingChatItem] = []
         for existing in bucket:

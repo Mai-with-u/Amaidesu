@@ -4,8 +4,8 @@
 - 到期的"忘了我"宽限删除请求（始终检查，不受保留期为 0 影响）
 - ``raw_days > 0`` 时（从场次结束时刻算起）：
   1. 删除 ``live_chat`` 到期的观众行（保留主播台词行；人批准进记忆的观众候选或老观众近况挂着的那条弹幕也保留，
-     删了它档案行或已批近况会随外键级联消失——保留期只清工作数据，不清记忆）；公屏游戏聊天同一口径，删到期场次里
-     玩家说的与认不出是谁的占位行，她自己在公屏说的留着
+     删了它档案行或已批近况会随外键级联消失——保留期只清工作数据，不清记忆）；游戏公屏游戏聊天同一口径，删到期场次里
+     玩家说的与认不出是谁的占位行，她自己在游戏公屏说的留着
   2. 清空付费三表（``gifts`` / ``super_chats`` / ``guards``）到期行的观众身份、昵称、留言与原始消息，保留金额、类型、时刻
   3. 删除到期场次的话题与时间线摘要（``topics`` / ``timeline_summary``），以及委派账（``game_events`` 里
      ``delegation_*`` 类型的行：她的原话与终态摘要，只给下播核对与续播认领用）
@@ -62,7 +62,7 @@ _COUNTER_LLM = "llm_bodies_scrubbed"
 _EXPIRED_SESSIONS_SQL = "SELECT id FROM live_sessions WHERE ended_at_ms IS NOT NULL AND ended_at_ms <= ?"
 _ORPHAN_SESSIONS_SQL = "SELECT id FROM live_sessions"
 
-# 保留期清理的逐表声明：删到期观众弹幕与公屏玩家聊天（批准进记忆/玩家卡挂着的行除外）、
+# 保留期清理的逐表声明：删到期观众弹幕与游戏公屏玩家聊天（批准进记忆/玩家线索挂着的行除外）、
 # 清空付费三表身份与留言、删到期话题与时间线摘要、删到期委派账、清空到期请求正文。
 # 各条的范围与豁免条件和逐条手写时期保持一致
 _CLEANUP_RULES: Tuple[_CleanupRule, ...] = (
@@ -89,7 +89,7 @@ _CLEANUP_RULES: Tuple[_CleanupRule, ...] = (
             "DELETE FROM game_chat WHERE direction <> 'streamer'"
             " AND (live_session_id IN ({expired_sessions})"
             "      OR (live_session_id NOT IN ({orphan_sessions}) AND at_ms <= ?))"
-            # 批准进玩家卡的自述挂着的他那句留着：删了它，那条自述会被外键级联删掉
+            # 批准进玩家线索的自述挂着的他那句留着：删了它，那条自述会被外键级联删掉
             " AND id NOT IN (SELECT player_chat_id FROM player_candidates WHERE status = 'approved')"
         ),
         cutoff_slots=2,

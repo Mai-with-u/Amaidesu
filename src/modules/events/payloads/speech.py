@@ -137,13 +137,13 @@ class StreamerSpeechPayload(BasePayload):
     reply_player_game: str = Field(
         default="",
         description=(
-            "这条发言在回应的游戏玩家是哪个游戏的（本窗公屏聊天只来自一位核对过的玩家、且这句不是在回弹幕时才有）"
+            "这条发言在回应的游戏玩家是哪个游戏的（本回合游戏公屏只来自一位核对过的玩家、且这句不是在回弹幕时才有）"
         ),
     )
     reply_player_uuid: str = Field(
         default="",
         description=(
-            "这条发言在回应的游戏玩家的 UUID；本窗没人开口、两位以上开口、有认不出的人插话，或这句在回一条弹幕时为空"
+            "这条发言在回应的游戏玩家的 UUID；本回合没人开口、两位以上开口、有认不出的人插话，或这句在回一条弹幕时为空"
         ),
     )
     priority: int = Field(

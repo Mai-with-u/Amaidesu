@@ -175,7 +175,7 @@ async def test_min_cosine_drops_low_similarity_vectors_from_rrf_fusion(store: SQ
     unfiltered = await search.search("小猫", sources=("archive",), wait_vector_ms=5_000)
     assert {hit.source_id for hit in unfiltered} == {strong_id, weak_id}
 
-    # 回想传入 min_cosine=0.50 时，余弦 0.25 的弱向量被直接拦下
+    # 回忆传入 min_cosine=0.50 时，余弦 0.25 的弱向量被直接拦下
     filtered = await search.search("小猫", sources=("archive",), wait_vector_ms=5_000, min_cosine=0.50)
     assert [hit.source_id for hit in filtered] == [strong_id]
 

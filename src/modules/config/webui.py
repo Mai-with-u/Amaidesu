@@ -371,9 +371,9 @@ _FIELD_ROW_LAYOUT: dict[str, tuple[str, str]] = {
     "agents.agents.streamer.mouth.same_kind_cooldown_ms": ("mouth-rhythm", "触发节奏"),
     "agents.agents.streamer.mouth.min_gap_ms": ("mouth-rhythm", "触发节奏"),
     "agents.agents.streamer.mouth.quiet_ms": ("mouth-rhythm", "触发节奏"),
-    "agents.agents.streamer.mouth.history_items": ("mouth-card", "现场卡"),
-    "agents.agents.streamer.mouth.card_max_chars": ("mouth-card", "现场卡"),
-    "agents.agents.streamer.mouth.scene_refresh_ms": ("mouth-card", "现场卡"),
+    "agents.agents.streamer.mouth.history_items": ("mouth-card", "事实快照"),
+    "agents.agents.streamer.mouth.card_max_chars": ("mouth-card", "事实快照"),
+    "agents.agents.streamer.mouth.scene_refresh_ms": ("mouth-card", "事实快照"),
     # 主播 Agent：思考流与发言过滤
     "agents.agents.streamer.thinking_stream.flush_interval_ms": ("thinking-buffer", "推送与缓冲"),
     "agents.agents.streamer.thinking_stream.buffer_max": ("thinking-buffer", "推送与缓冲"),

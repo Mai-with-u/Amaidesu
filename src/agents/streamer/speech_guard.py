@@ -7,7 +7,7 @@
 - Replyer：长度预算先走 LLM 重说（表达策略，留在 Replyer 内部），
   截短兜底用 :func:`fit_to_budget`；出口只做敏感词净化。
 - Mouth：按"截短 → 净化"顺序全跑，不过关整句丢弃。
-- 记忆编号（档#N、约#N）：reply 工具交接前洗交接稿，Replyer 生成后洗台词。
+- 记忆编号（档#N、约#N）：reply 工具交接前洗发言要点，Replyer 生成后洗台词。
 
 各检既可整体取用（:func:`guard`），也可单独取用（:func:`apply_word_filter`）。
 """
@@ -107,7 +107,7 @@ def normalize_spoken_punctuation(text: str) -> str:
 def strip_memory_numbers(text: str) -> Tuple[str, int]:
     """去掉文本里的记忆编号，返回（去掉后的文本，去掉了几处）；没有编号时原样返回、计数为 0。
 
-    交给说话侧之前先洗一遍交接稿，说话侧生成台词后再洗一遍：编号念出来是"档井号四十一"，
+    交给说话侧之前先洗一遍发言要点，说话侧生成台词后再洗一遍：编号念出来是"档井号四十一"，
     观众听不懂，也暴露了后台的记账方式。写法与清洗规则统一定义在 memory.refs。
     """
     return refs.strip_numbers(text)

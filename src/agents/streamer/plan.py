@@ -51,28 +51,28 @@ class DecisionPlan(BaseModel):
 
 @dataclass(slots=True)
 class ReplyRoundAttachment(ToolCallAttachment):
-    """reply 调用的本窗交接稿（``ToolCallAttachment`` 的 streamer 域子类）。
+    """reply 调用的本回合发言要点（``ToolCallAttachment`` 的 streamer 域子类）。
 
     Planner（宿主代码）在每次 reply 调用前构造、随 ``ToolInvocation.attachment``
     传入 reply 工具；生命周期 = 单次调用，不经 LLM、模型不可伪造。
     与本文件 ``DecisionPlan`` 的分工：DecisionPlan 是 LLM 决策产物的契约形态，
     本类是宿主随调用单附带的材料，两者在 reply_tool ↔ Replyer 边界汇合。
-    字段沿用原槽位语义，全部带默认值 = "无本窗材料"。
+    字段沿用原槽位语义，全部带默认值 = "无本回合材料"。
 
     Attributes:
         thinking_callback: 本轮 replyer 阶段的思考流回调（LLM 层形态 ``on_delta``）
         round_batch: 本轮弹幕批——回复器据此看到观众原话，回应弹幕时不会被
             当成"本批无弹幕"的主动发言
-        game_chat: 本窗新到的游戏聊天原话——玩家在游戏里搭话促发的一轮弹幕批
+        game_chat: 本回合新到的游戏聊天原话——玩家在游戏里搭话促发的一轮弹幕批
             是空的，没有它回复器只能看到转述
-        state_facts: 本窗状态跃迁事实块——回复器的客观事实底稿
-        speech_history: 本窗开始前主播已说过的台词（旧→新，未截窗口）——回复器
+        state_facts: 本回合状态跃迁事实块——回复器的客观事实底稿
+        speech_history: 本回合开始前主播已说过的台词（旧→新，未截窗口）——回复器
             据此看见自己刚说过什么，聊天记录里看不到的那几句单列成"更早一点你说过的话"；
-            与本窗批材料同源同生命周期。``None`` = 调用方未随单携带（裸调用，工具内
-            兜底现读）；空列表 = 确认本窗前无台词（刚开播）
-        game_people: 最近几分钟游戏里玩家找她的条目（谁在公屏说了什么、谁冲她做了
+            与本回合批材料同源同生命周期。``None`` = 调用方未随单携带（裸调用，工具内
+            兜底现读）；空列表 = 确认本回合前无台词（刚开播）
+        game_people: 最近几分钟游戏里玩家找她的条目（谁在游戏公屏说了什么、谁冲她做了
             什么，旧→新）——回复器据此把话和举动归到对的人头上
-        reply_to: 回应对象的玩家名——不在回弹幕、本窗只有一位玩家在公屏开口时是他；
+        reply_to: 回应对象的玩家名——不在回弹幕、本回合只有一位玩家在游戏公屏开口时是他；
             空串 = 没有特定玩家
     """
 
@@ -94,7 +94,7 @@ class ReplyRoundAttachment(ToolCallAttachment):
 def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:
     """历史里主播已说过的台词原文（旧→新）——回复器"她刚说过什么"的语料。
 
-    历史里自己说过的话才是观众听过的内容。决策窗起点由 Planner 从本窗
+    历史里自己说过的话才是观众听过的内容。决策回合起点由 Planner 从本回合
     历史算一次，随 attachment 交 reply 工具（见 ``ReplyRoundAttachment.speech_history``）。
     canonical 行带的通道标注前缀在这里剥掉：这份语料与实时口头流水同在原始
     文本域，复读比对与"更早说过的话"去重都按原文比对。

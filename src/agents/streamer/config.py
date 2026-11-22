@@ -511,7 +511,7 @@ class StreamerLiveFrameConfig(BaseConfig):
     """[agents.streamer.live_frame] 段
 
     决策时看一眼直播画面（画面来自 collectors.toml 的 ``live_frame`` 采集器）。
-    只在 planner 档位的主模型能看图时生效；每个决策窗的第一次请求尾部必挂
+    只在 planner 档位的主模型能看图时生效；每个决策回合的第一次请求尾部必挂
     最新一帧（查询式取自图像暂存的 latest 槽位，静止画面重复看是设计内行为）；
     同窗后续 ReAct 步不重复挂。
     """
@@ -558,7 +558,7 @@ class StreamerMouthConfig(BaseConfig):
         title="同类目击冷却",
         default=15000,
         ge=0,
-        description="同一细类由头（如强敌目击、稀有资源目击、稀罕宝物、意外阵亡）多久之内只反应一次；之后的只记进现场卡",
+        description="同一细类由头（如强敌目击、稀有资源目击、稀罕宝物、意外阵亡）多久之内只反应一次；之后的只记进事实快照",
         json_schema_extra={"x-ui-advanced": True},
     )
     min_gap_ms: int = Field(
@@ -583,10 +583,10 @@ class StreamerMouthConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     card_max_chars: int = Field(
-        title="现场卡上限",
+        title="事实快照上限",
         default=800,
         ge=200,
-        description="现场卡的字数上限；超出时先减条数，再丢次要段落",
+        description="事实快照的字数上限；超出时先减条数，再丢次要段落",
         json_schema_extra={"x-ui-advanced": True},
     )
     scene_refresh_ms: int = Field(
@@ -637,7 +637,7 @@ class StreamerConfig(BaseConfig):
         title="决策最大步数",
         default=8,
         ge=1,
-        description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
+        description="Planner 单决策回合 ReAct 循环最大步数（超出静默收场，防失控）",
         json_schema_extra={"x-ui-advanced": True},
     )
     planner_recent_intents_max: int = Field(
@@ -685,29 +685,29 @@ class StreamerConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     # 回复器只看最近几条：Replyer 背着整场历史开口，后半场历史挤掉人设、说话像换了个人；
-    # 改为最近 N 条原文 + 她刚说过的几句 + 交接稿。设 0 是回退开关：带回整份历史，
+    # 改为最近 N 条原文 + 她刚说过的几句 + 发言要点。设 0 是回退开关：带回整份历史，
     # 时间线预算也改回按 Planner 与 Replyer 两个模型中较小的窗口算
     replyer_history_items: int = Field(
         title="回复器带几条最近记录",
         default=14,
         ge=0,
-        description="Replyer 每次看到的最近记录条数（弹幕、她说过的话、游戏条目），另附她刚说过的几句与交接稿；"
+        description="Replyer 每次看到的最近记录条数（弹幕、她说过的话、游戏条目），另附她刚说过的几句与发言要点；"
         "0 = 带整份对话历史，时间线预算也改回按决策、表达两个模型中较小的窗口算",
         json_schema_extra={"x-ui-advanced": True},
     )
-    # 开错后马上重开的那一小段（播了一两分钟就结束、紧接着重开）照样整理得出档案行；常驻简报
+    # 开错后马上重开的那一小段（播了一两分钟就结束、紧接着重开）照样整理得出档案行；记忆摘要
     # 按"最近一场有档案的"取上一场时，它会顶掉真正的上一场，她整场只记得那一两句
     memory_brief_min_session_ms: int = Field(
         title="上一场最短时长",
         default=300_000,
         ge=0,
-        description="常驻简报取「上一场」时，跳过时长不到这么久的场次，往前找（毫秒；默认 5 分钟，0 = 不跳过）。"
-        "被跳过的场次档案仍可用回想工具查到，它登记的承诺照常进简报",
+        description="记忆摘要取「上一场」时，跳过时长不到这么久的场次，往前找（毫秒；默认 5 分钟，0 = 不跳过）。"
+        "被跳过的场次档案仍可用回忆工具查到，它登记的承诺照常进记忆摘要",
         json_schema_extra={"x-ui-advanced": True},
     )
 
-    # 被动想起：每批决策前按观众弹幕、她最近的台词、走到记住的地点，把该想起的档案行与老梗推成线索卡，
-    # 不用等规划器自己想到去查；关掉后线索只剩对象开口与游戏开着两种承诺卡
+    # 被动想起：每批决策前按观众弹幕、她最近的台词、走到记住的地点，把该想起的档案行与老梗推成记忆线索，
+    # 不用等规划器自己想到去查；关掉后线索只剩对象开口与游戏开着两种承诺线索
     memory_passive_recall_enabled: bool = Field(
         title="被动想起",
         default=True,
