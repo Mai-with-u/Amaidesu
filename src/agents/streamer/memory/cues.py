@@ -60,7 +60,9 @@ from .passive import (
     PlaceArrivals,
     RulePool,
     SituationQuery,
+    intent_content_tokens,
     query_worthy,
+    score_intent_keyword_match,
     vector_hits,
     vector_top3_summary,
 )
@@ -76,13 +78,16 @@ from .render import (
     render_presence_line,
     render_recalled_commitment_card,
     render_retract_notice,
+    render_social_fact_card,
     render_viewer_card,
 )
 from .saves import SavePlace, place_note, place_of
 
 if TYPE_CHECKING:
     from src.modules.storage.models.memory import ArchiveLine, Commitment
+    from src.modules.storage.models.social_facts import SocialFact
     from src.modules.storage.privacy import PrivacyService
+    from src.modules.storage.repos.memory_index import IndexSource
 
     from .search import MemorySearch
     from src.modules.storage.repos import (
@@ -92,6 +97,7 @@ if TYPE_CHECKING:
         GamePlayerRepo,
         MemoryCorrectionRepo,
         MemoryCueLogRepo,
+        SocialFactRepo,
         ViewerRepo,
     )
 
@@ -102,6 +108,7 @@ __all__ = [
     "MIN_SESSIONS_FOR_PRESENCE",
     "MemoryCueProvider",
     "MemoryCues",
+    "is_social_fact_safe_for_game_lead",
 ]
 
 logger = get_logger("MemoryCueProvider")
@@ -127,6 +134,82 @@ _MAX_NOTES_PER_FAMILIAR_VIEWER = 2
 _MAX_AUTHORED_PER_FAMILIAR_VIEWER = 2
 # 规则一路看她最近几句播出的台词
 RECENT_SPEECH_LINES = 3
+# 游戏主控按意图联想允许放行的社交事实类别（仅限对行动有价值的四类，排除 her_role 与 open_question）
+_GAME_LEAD_SOCIAL_FACT_KINDS: frozenset[str] = frozenset({"works", "sharing", "setting", "members"})
+# 意图关键词兜底查询上限（社交事实池、单次 FTS 召回条数、无 FTS 兜底回扫场次数）
+_INTENT_SOCIAL_FACT_LIMIT = 100
+_INTENT_FTS_LIMIT = 8
+_INTENT_RECENT_ARCHIVE_SESSIONS = 5
+# 截断带省略号的排除规矩前缀最小长度与类别前缀长度上限（防止极短前缀误杀无关事实）
+_EXCLUDED_TRUNCATED_PREFIX_MIN_CHARS = 12
+_EXCLUDED_CATEGORY_PREFIX_MAX_CHARS = 12
+
+
+def _compact_text(text: str) -> str:
+    """去除所有空白字符，供排除列表与候选正文做等值或包含判重。"""
+    return "".join(str(text or "").split())
+
+
+def _strip_exclude_category_prefix(compact_item: str) -> str:
+    """剥离排除项首段类别前缀（如「共享惯例：」「记着的事：」），便于对照截断后的长规矩。"""
+    for sep in ("：", ":"):
+        idx = compact_item.find(sep)
+        if 0 < idx <= _EXCLUDED_CATEGORY_PREFIX_MAX_CHARS and idx + 1 < len(compact_item):
+            return compact_item[idx + 1 :]
+    return compact_item
+
+
+def _is_excluded_text(text: str, excluded_compact: Sequence[str]) -> bool:
+    """候选正文去空白后若与任一排除文本相等、被包含或命中其截断前缀，跳过不重复推送。"""
+    compact = _compact_text(text)
+    if not compact or not excluded_compact:
+        return False
+    for item in excluded_compact:
+        if compact == item or compact in item:
+            return True
+        stripped = _strip_exclude_category_prefix(item)
+        if compact == stripped or compact in stripped:
+            return True
+        # 常驻规矩超过长度上限时会被截断并附「…」或「...」，前缀足够长且吻合即视为已常驻
+        for ellipsis in ("…", "..."):
+            if stripped.endswith(ellipsis):
+                prefix = stripped[: -len(ellipsis)]
+                if len(prefix) >= _EXCLUDED_TRUNCATED_PREFIX_MIN_CHARS and compact.startswith(prefix):
+                    return True
+    return False
+
+
+def is_social_fact_safe_for_game_lead(
+    fact: "SocialFact",
+    *,
+    game: str,
+    current_saves: Mapping[str, GameSave],
+) -> bool:
+    """判定一条游戏社交事实能否放行进游戏主控按意图联想通道（严格防弹幕投毒与存档隔离）。
+
+    触发条件：游戏主控态拉取跨场被动线索并对社交事实候选做安全校验时调用；
+    执行顺序：校验 active 状态 -> 校验同游戏与允许类别 -> 校验严格存档隔离 -> 校验防弹幕投毒依据。
+    """
+    normalized_game = (game or "").strip()
+    if not normalized_game or fact.status != "active":
+        return False
+    if (fact.game or "").strip() != normalized_game:
+        return False
+    if fact.kind not in _GAME_LEAD_SOCIAL_FACT_KINDS:
+        return False
+    # 当前存档未知或未上报时 current_save_id 视为空串，仅放行整游戏通用事实（save_id == ""），
+    # 严防任一带有明确 save_id 的他档事实跨档泄露
+    now_save = current_saves.get(normalized_game)
+    current_save_id = (now_save.id if now_save is not None and now_save.known else "").strip()
+    fact_save_id = (fact.save_id or "").strip()
+    if fact_save_id and fact_save_id != current_save_id:
+        return False
+    if not (fact.text or "").strip():
+        return False
+    # 运营者人工锁定的事实直接放行；未锁定事实必须具备非空引文且纯来自游戏公屏，绝不放行弹幕来源
+    if int(fact.human_locked or 0) == 1:
+        return True
+    return bool((fact.quote or "").strip()) and fact.evidence_game_chat_id is not None and fact.evidence_chat_id is None
 
 
 @dataclass(frozen=True)
@@ -233,12 +316,14 @@ class _Round:
 
 
 def _label(key: ItemKey) -> str:
-    """日志里认条目用的写法：约#7 / 档#41 / 老观众#3 / 玩家#2 / 老梗「倒立洗头」。"""
+    """日志里认条目用的写法：约#7 / 档#41 / 事实#5 / 老观众#3 / 玩家#2 / 老梗「倒立洗头」。"""
     kind, value = key
     if kind == "commitment":
         return render_commitment_number(int(value))
     if kind == "archive":
         return render_archive_number(int(value))
+    if kind == "social_fact":
+        return f"事实#{int(value)}"
     if kind == "viewer_familiar":
         # 只记观众编号，不写昵称（日志与线索卡记录同口径）
         return f"老观众#{int(value)}"
@@ -269,6 +354,7 @@ class MemoryCueProvider:
         vector_enabled: bool = True,
         game_player_repo: Optional["GamePlayerRepo"] = None,
         correction_repo: Optional["MemoryCorrectionRepo"] = None,
+        social_fact_repo: Optional["SocialFactRepo"] = None,
         min_session_ms: int = 0,
     ) -> None:
         """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
@@ -277,7 +363,8 @@ class MemoryCueProvider:
         一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有档案卡；
         ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时被动想起三路都不跑；``search`` 缺失、
         没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。``game_player_repo`` 缺失时没有玩家卡；
-        ``correction_repo`` 缺失时不附本场进展注记（优雅降级）。
+        ``correction_repo`` 缺失时不附本场进展注记；``social_fact_repo`` 缺失时游戏主控意图联想
+        优雅降级，不推社交事实卡。
         """
         self._commitments = commitments_repo
         self._chat = chat_repo
@@ -293,6 +380,7 @@ class MemoryCueProvider:
         self._vector_enabled = vector_enabled
         self._players = game_player_repo
         self._corrections = correction_repo
+        self._social_facts = social_fact_repo
         self._min_session_ms = max(0, int(min_session_ms))
         self._pool = RulePool(archive_repo=archive_repo, inside_jokes=inside_jokes, clock=clock)
         self._arrivals = PlaceArrivals()
@@ -457,6 +545,7 @@ class MemoryCueProvider:
         players: Sequence[Tuple[str, str]] = (),
         situation: Optional[Any] = None,
         arrived_places: Sequence[str] = (),
+        exclude_texts: Sequence[str] = (),
         current_saves: Optional[Mapping[str, GameSave]] = None,
         brief_archive_ids: Sequence[int] = (),
         brief_commitment_ids: Sequence[int] = (),
@@ -466,8 +555,9 @@ class MemoryCueProvider:
 
         复用路径：游戏玩家往来卡（``_player_cards``）-> 到达记住地点卡（``_place_cards`` 与显式
         ``arrived_places``）-> 档案触发词规则卡（``_rule_cards``，不含观众老梗）-> 非阻塞向量联想
-        （不阻塞等慢嵌入）。严格共享本场每地点只推一次、10 分钟限频、已用编号去重、遗忘名单过滤
-        与最多 1–2 条上限。
+        （不阻塞等慢嵌入）-> 轻量意图关键词/FTS 兜底（浮出被前 6 条上限截断的现行游戏社交事实与
+        相关跨场档案）。严格共享本场每地点只推一次、10 分钟限频、已用编号去重、遗忘名单过滤、
+        ``exclude_texts`` 去重与最多 1–2 条上限。
         """
         normalized_game = (game or "").strip()
         effective_limit = min(MAX_CARDS_PER_BATCH, max(0, int(limit)))
@@ -497,6 +587,7 @@ class MemoryCueProvider:
             max_cards=effective_limit,
         )
         self._round_labels = {}
+        excluded_compact = tuple(c for raw in (exclude_texts or ()) if (c := _compact_text(raw)))
 
         # 游戏内往来玩家卡：过滤遗忘名单上的玩家，绝不触碰直播间观众表
         valid_players = await self._filter_game_players(normalized_game, players)
@@ -523,7 +614,12 @@ class MemoryCueProvider:
                 )
             if clean_texts and not state.full:
                 cue_texts = [CueText(source=SOURCE_PLAYER, text=item) for item in clean_texts]
-                self._rule_cards(self._pool.match(cue_texts), sid=sid, state=state)
+                self._rule_cards(
+                    self._pool.match(cue_texts),
+                    sid=sid,
+                    state=state,
+                    excluded_compact=excluded_compact,
+                )
 
         # 非阻塞向量联想：已算好的查询向量立即参与匹配，未算好的仅后台起算不等待
         if self._vector_on() and not state.full:
@@ -532,6 +628,17 @@ class MemoryCueProvider:
                 game=normalized_game,
                 texts=clean_texts,
                 situation=game_situation,
+                excluded_compact=excluded_compact,
+                state=state,
+            )
+
+        # 轻量非阻塞意图关键词/FTS 兜底：不依赖慢嵌入，按实质实词精准浮出社交事实（尤其 works）与跨场档案
+        if self._passive_enabled and clean_texts and not state.full:
+            await self._intent_keyword_cards_for_game_lead(
+                sid=sid,
+                game=normalized_game,
+                texts=clean_texts,
+                excluded_compact=excluded_compact,
                 state=state,
             )
 
@@ -585,6 +692,7 @@ class MemoryCueProvider:
         game: str,
         texts: Sequence[str],
         situation: Optional[GameSituation],
+        excluded_compact: Sequence[str],
         state: _Round,
     ) -> None:
         """游戏主控态非阻塞向量联想：只消费已就绪的查询向量，未就绪的后台起算、本次不等待。"""
@@ -601,6 +709,9 @@ class MemoryCueProvider:
             if self._situation.pending:
                 queries.append((SOURCE_SITUATION, "", self._situation.pending))
 
+        sources: Tuple["IndexSource", ...] = (
+            ("archive", "commitment", "social_fact") if self._social_facts is not None else ("archive", "commitment")
+        )
         results = []
         for source, message_id, query_text in queries:
             if not search.vector_ready(query_text, start=True):
@@ -608,7 +719,7 @@ class MemoryCueProvider:
                     self._situation.missed()
                 continue
             try:
-                result = await search.search_detailed(query_text, sources=("archive", "commitment"), limit=VECTOR_TOP)
+                result = await search.search_detailed(query_text, sources=sources, limit=VECTOR_TOP)
             except Exception as exc:  # noqa: BLE001 - 这一条查不了就跳过，不挡其余线索
                 logger.warning(f"游戏主控被动线索语义查询失败（跳过）: {exc}", exc=exc)
                 continue
@@ -616,15 +727,42 @@ class MemoryCueProvider:
                 self._situation.done()
             results.append((source, message_id, result))
 
-        for hit in vector_hits(results):
+        for hit in vector_hits(results, allowed_sources=sources):
             if state.full:
                 return
             if self._skip(hit.key, state, self._passive_blocked(hit.key, state)):
                 continue
-            text = await self._vector_card_text(hit, state)
+            if hit.key[0] == "social_fact":
+                fact = await self._safe_social_fact_for_game_lead(
+                    int(hit.key[1]), game=game, excluded_compact=excluded_compact, state=state
+                )
+                if fact is None:
+                    continue
+                text = render_social_fact_card(fact)
+                if not text:
+                    continue
+                detail: Dict[str, Any] = {
+                    "social_fact_id": int(fact.id),
+                    "fact_kind": fact.kind,
+                    "cosine": round(hit.cosine or 0.0, 4),
+                    "rank": hit.vector_rank,
+                    "fused": round(hit.fused or 0.0, 5),
+                }
+                self._push(
+                    state,
+                    _Card(
+                        key=hit.key,
+                        text=text,
+                        kind="social_fact",
+                        sources=tuple(sorted(hit.sources)),
+                        detail=detail,
+                    ),
+                )
+                continue
+            text = await self._vector_card_text(hit, state, excluded_compact=excluded_compact, game=game)
             if not text:
                 continue
-            detail: Dict[str, Any] = {
+            detail = {
                 "cosine": round(hit.cosine or 0.0, 4),
                 "rank": hit.vector_rank,
                 "fused": round(hit.fused or 0.0, 5),
@@ -636,6 +774,290 @@ class MemoryCueProvider:
                 _Card(key=hit.key, text=text, kind="vector", sources=tuple(sorted(hit.sources)), detail=detail),
             )
         del sid
+
+    async def _safe_social_fact_for_game_lead(
+        self,
+        fact_id: int,
+        *,
+        game: str,
+        excluded_compact: Sequence[str],
+        state: _Round,
+    ) -> Optional["SocialFact"]:
+        """按主键核实一条社交事实是否通过游戏主控防火墙与排除名单；读不到或不合规返回 None。"""
+        if self._social_facts is None:
+            return None
+        try:
+            fact = await self._social_facts.get_fact(fact_id=fact_id)
+        except Exception as exc:  # noqa: BLE001 - 读不到就不推，不阻断其余线索
+            logger.warning(f"读社交事实 {fact_id} 失败（不推）: {exc}", exc=exc)
+            return None
+        if fact is None:
+            return None
+        if not is_social_fact_safe_for_game_lead(fact, game=game, current_saves=state.saves):
+            self._skip(("social_fact", fact_id), state, "未过防火墙")
+            return None
+        if _is_excluded_text(fact.text, excluded_compact):
+            self._skip(("social_fact", fact_id), state, "已在常驻规矩")
+            return None
+        return fact
+
+    async def _intent_keyword_cards_for_game_lead(
+        self,
+        *,
+        sid: int,
+        game: str,
+        texts: Sequence[str],
+        excluded_compact: Sequence[str],
+        state: _Round,
+    ) -> None:
+        """轻量非阻塞意图关键词/FTS 兜底：按任务/计划/玩家托付文本精准浮出社交事实与跨场档案。
+
+        触发条件：游戏主控态拉取线索且当前仍未凑满上限时调用；
+        执行顺序：提取高纯度意图实词（全泛词立即返回 0 噪声）-> 并行/依次收集社交事实与跨场档案候选
+        -> 严格执行防投毒、存档隔离、exclude_texts 去重与实质词重合门槛 -> 按相关性与优先级推满上限。
+        """
+        intent_queries: List[str] = []
+        for raw_text in texts[-VECTOR_MAX_QUERIES:]:
+            masked = mask_names_in_text(raw_text, self._known_names, "玩家")
+            if intent_content_tokens(masked):
+                intent_queries.append(masked)
+        if not intent_queries:
+            return
+
+        # 候选元组：(综合分, 类型优先级, 条目新近 ID, 卡片)
+        candidates: List[Tuple[float, int, int, _Card]] = []
+        if self._social_facts is not None:
+            candidates.extend(
+                await self._intent_social_fact_candidates(
+                    game=game,
+                    intent_queries=intent_queries,
+                    excluded_compact=excluded_compact,
+                    state=state,
+                )
+            )
+        if self._archive is not None:
+            candidates.extend(
+                await self._intent_archive_candidates(
+                    sid=sid,
+                    game=game,
+                    intent_queries=intent_queries,
+                    excluded_compact=excluded_compact,
+                    state=state,
+                )
+            )
+        if not candidates:
+            return
+
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        for _score, _priority, _item_id, card in candidates:
+            if state.full:
+                return
+            if self._skip(card.key, state, self._passive_blocked(card.key, state)):
+                continue
+            self._push(state, card)
+
+    async def _intent_social_fact_candidates(
+        self,
+        *,
+        game: str,
+        intent_queries: Sequence[str],
+        excluded_compact: Sequence[str],
+        state: _Round,
+    ) -> List[Tuple[float, int, int, _Card]]:
+        """召回并评估当前存档下的现行游戏社交事实候选（含 FTS 加权与实时仓储兜底）。"""
+        repo = self._social_facts
+        if repo is None:
+            return []
+        save = state.saves.get(game)
+        # 仅在明确认出当前存档时按 save.id 筛选；存档未上报或未知时固定传 ""（只取整游戏通用行，不扫他档）
+        query_save_id = (save.id if save is not None and save.known else "").strip()
+        try:
+            facts = await repo.list_active_facts(game=game, save_id=query_save_id, limit=_INTENT_SOCIAL_FACT_LIMIT)
+        except Exception as exc:  # noqa: BLE001 - 社交事实读失败不挡档案线索
+            logger.warning(f"意图联想读游戏社交事实失败（跳过）: {exc}", exc=exc)
+            return []
+        if not facts:
+            return []
+
+        fts_hit_ids: Set[int] = set()
+        if self._search is not None:
+            for query_text in intent_queries:
+                try:
+                    found = await self._search.search_detailed(
+                        query_text, sources=("social_fact",), limit=_INTENT_FTS_LIMIT, wait_vector_ms=0
+                    )
+                    for hit in found.hits:
+                        if hit.source == "social_fact":
+                            fts_hit_ids.add(int(hit.source_id))
+                except Exception as exc:  # noqa: BLE001 - FTS 失败不影响本地实质词匹配兜底
+                    logger.debug(f"社交事实 FTS 辅助召回失败（改走仓储实词匹配）: {exc}", exc=exc)
+
+        scored: List[Tuple[float, int, int, _Card]] = []
+        for fact in facts:
+            key: ItemKey = ("social_fact", int(fact.id))
+            if not is_social_fact_safe_for_game_lead(fact, game=game, current_saves=state.saves):
+                continue
+            if _is_excluded_text(fact.text, excluded_compact):
+                self._skip(key, state, "已在常驻规矩")
+                continue
+            if self._passive_blocked(key, state) is not None:
+                continue
+
+            best_score = 0.0
+            best_phrases: Tuple[str, ...] = ()
+            quote_text = (fact.quote or "").strip()
+            for query_text in intent_queries:
+                s_text, p_text = score_intent_keyword_match(query_text, fact.text)
+                if s_text > best_score:
+                    best_score, best_phrases = s_text, p_text
+                if quote_text:
+                    s_full, p_full = score_intent_keyword_match(query_text, f"{fact.text} {quote_text}")
+                    weighted = s_full * 0.85
+                    if weighted > best_score:
+                        best_score, best_phrases = weighted, p_full
+            if best_score <= 0.0:
+                continue
+
+            card_text = render_social_fact_card(fact)
+            if not card_text:
+                continue
+            # 同等重合度下优先 works（工程现状最直接防重复施工），已命中 FTS 给微幅加分
+            priority = 2 if fact.kind == "works" else 1
+            total_score = best_score + (0.2 if int(fact.id) in fts_hit_ids else 0.0)
+            card = _Card(
+                key=key,
+                text=card_text,
+                kind="social_fact",
+                sources=(SOURCE_PLAYER,),
+                detail={
+                    "social_fact_id": int(fact.id),
+                    "fact_kind": fact.kind,
+                    "match_score": round(best_score, 3),
+                    "matched_count": len(best_phrases),
+                },
+            )
+            scored.append((total_score, priority, int(fact.id), card))
+        return scored
+
+    async def _intent_archive_candidates(
+        self,
+        *,
+        sid: int,
+        game: str,
+        intent_queries: Sequence[str],
+        excluded_compact: Sequence[str],
+        state: _Round,
+    ) -> List[Tuple[float, int, int, _Card]]:
+        """召回并评估跨场档案行候选（优先走 FTS 索引，缺失时轻量兜底近期正式场档案）。"""
+        lines, fts_hit_ids = await self._load_intent_archive_pool(sid=sid, intent_queries=intent_queries)
+        if not lines:
+            return []
+
+        scored: List[Tuple[float, int, int, _Card]] = []
+        for line in lines:
+            if int(line.live_session_id) == sid:
+                continue
+            line_game = (line.game or "").strip()
+            if line_game and line_game != game:
+                continue
+            key: ItemKey = ("archive", int(line.id))
+            if self._skip(key, state, self._other_save(line.game, line.save_id, state)):
+                continue
+            if _is_excluded_text(line.text, excluded_compact):
+                self._skip(key, state, "已在常驻规矩")
+                continue
+            if self._passive_blocked(key, state) is not None:
+                continue
+
+            # 观众来源行的原话先遮掉观众名再匹配，杜绝观众昵称命中或泄露隐私
+            safe_quote = (line.quote or "").strip()
+            if line.source == "viewer" and line.source_viewer_names and safe_quote:
+                safe_quote = mask_names_in_text(safe_quote, line.source_viewer_names, "那位观众")
+
+            best_score = 0.0
+            best_phrases: Tuple[str, ...] = ()
+            for query_text in intent_queries:
+                s_text, p_text = score_intent_keyword_match(query_text, line.text)
+                if s_text > best_score:
+                    best_score, best_phrases = s_text, p_text
+                if safe_quote:
+                    s_full, p_full = score_intent_keyword_match(query_text, f"{line.text} {safe_quote}")
+                    weighted = s_full * 0.85
+                    if weighted > best_score:
+                        best_score, best_phrases = weighted, p_full
+            if best_score <= 0.0:
+                continue
+
+            why_phrase = best_phrases[0] if best_phrases else ""
+            why = f"眼下计划提到了「{why_phrase}」" if why_phrase else "眼下计划和这件事有关"
+            card_text = render_archive_card(
+                line,
+                why=why,
+                is_previous=self._line_in_previous_session(line.live_session_id, state),
+                note=place_note(line.game, line.save_id, line.save_name, state.saves),
+            )
+            if not card_text:
+                continue
+            total_score = best_score + (0.2 if int(line.id) in fts_hit_ids else 0.0)
+            card = _Card(
+                key=key,
+                text=card_text,
+                kind="intent",
+                sources=(SOURCE_PLAYER,),
+                detail={
+                    "match_score": round(best_score, 3),
+                    "matched_count": len(best_phrases),
+                },
+            )
+            scored.append((total_score, 0, int(line.id), card))
+        return scored
+
+    async def _load_intent_archive_pool(
+        self, *, sid: int, intent_queries: Sequence[str]
+    ) -> Tuple[List["ArchiveLine"], Set[int]]:
+        """加载意图联想待评估的正式场档案行：优先查 FTS 索引，未建索引时轻量回扫最近几场正式场。"""
+        archive = self._archive
+        if archive is None:
+            return [], set()
+
+        fts_hit_ids: Set[int] = set()
+        if self._search is not None:
+            for query_text in intent_queries:
+                try:
+                    found = await self._search.search_detailed(
+                        query_text, sources=("archive",), limit=_INTENT_FTS_LIMIT, wait_vector_ms=0
+                    )
+                    for hit in found.hits:
+                        if hit.source == "archive":
+                            fts_hit_ids.add(int(hit.source_id))
+                except Exception as exc:  # noqa: BLE001 - FTS 异常退回近期档案兜底
+                    logger.debug(f"档案 FTS 意图召回失败（退回近期档案兜底）: {exc}", exc=exc)
+
+        candidate_ids: List[int] = list(fts_hit_ids)
+        # 无 FTS 命中或未配置检索索引时，回扫最近数场已归档场次以兼容未预热索引场景
+        if not candidate_ids:
+            bounds_fn = getattr(archive, "list_archived_session_bounds", None)
+            list_lines_fn = getattr(archive, "list_lines", None)
+            if callable(bounds_fn) and callable(list_lines_fn):
+                try:
+                    bounds = await bounds_fn(limit=_INTENT_RECENT_ARCHIVE_SESSIONS + 1)
+                    for session_id, _started_ms in bounds:
+                        if int(session_id) == sid:
+                            continue
+                        session_lines = await list_lines_fn(live_session_id=int(session_id))
+                        candidate_ids.extend(int(item.id) for item in session_lines)
+                except Exception as exc:  # noqa: BLE001 - 近期档案回扫失败不阻断其余线索
+                    logger.warning(f"意图联想读取近期跨场档案失败（跳过）: {exc}", exc=exc)
+
+        if not candidate_ids:
+            return [], fts_hit_ids
+        try:
+            # 经 list_cue_lines 统一核实正式场身份并带上观众来源遮名信息
+            verified = await archive.list_cue_lines(line_ids=candidate_ids)
+        except Exception as exc:  # noqa: BLE001 - 核实失败不推该批档案
+            logger.warning(f"意图联想核对跨场档案行失败（跳过）: {exc}", exc=exc)
+            return [], fts_hit_ids
+        return verified, fts_hit_ids
 
     def _vector_on(self) -> bool:
         return (
@@ -1186,7 +1608,14 @@ class MemoryCueProvider:
                     _Card(key=key, text=text, kind="place", sources=(SOURCE_PLACE,), detail={"distance": distance}),
                 )
 
-    def _rule_cards(self, hits: Sequence[PassiveHit], *, sid: int, state: _Round) -> None:
+    def _rule_cards(
+        self,
+        hits: Sequence[PassiveHit],
+        *,
+        sid: int,
+        state: _Round,
+        excluded_compact: Sequence[str] = (),
+    ) -> None:
         """规则：弹幕或她最近的台词提到了触发词；自触发须不在简报、来自两场以前，且每条每场只推一次。"""
         for hit in hits:
             limit = MAX_SELF_PUSHES_PER_CARD if hit.self_only else MAX_PUSHES_PER_CARD
@@ -1195,7 +1624,7 @@ class MemoryCueProvider:
             if hit.self_only and hit.key[0] == "archive":
                 if self._skip(hit.key, state, self._self_trigger_age_blocked(int(hit.key[1]), sid=sid, state=state)):
                     continue
-            text = self._rule_card_text(hit, state)
+            text = self._rule_card_text(hit, state, excluded_compact=excluded_compact)
             if not text:
                 continue
             kind = "joke" if hit.key[0] == "joke" else "rule"
@@ -1232,8 +1661,14 @@ class MemoryCueProvider:
             return "近两场内"
         return None
 
-    def _rule_card_text(self, hit: PassiveHit, state: _Round) -> str:
-        """规则命中的卡面；条目不在了、或是别的存档里的事（不催她提起）时返回空串。"""
+    def _rule_card_text(
+        self,
+        hit: PassiveHit,
+        state: _Round,
+        *,
+        excluded_compact: Sequence[str] = (),
+    ) -> str:
+        """规则命中的卡面；条目不在了、已在常驻排除名单、或是别的存档里的事时返回空串。"""
         kind, value = hit.key
         if kind == "joke":
             return render_joke_card(str(value), message_id=hit.message_id)
@@ -1247,6 +1682,9 @@ class MemoryCueProvider:
             why = f"你刚说到「{keyword}」"
         line = self._pool.archive_line(int(value))
         if line is None or self._skip(hit.key, state, self._other_save(line.game, line.save_id, state)):
+            return ""
+        if excluded_compact and _is_excluded_text(line.text, excluded_compact):
+            self._skip(hit.key, state, "已在常驻规矩")
             return ""
         return render_archive_card(
             line,
@@ -1326,8 +1764,15 @@ class MemoryCueProvider:
                 )
             )
 
-    async def _vector_card_text(self, hit: PassiveHit, state: _Round) -> str:
-        """向量命中的卡面；不是正式场的档案行、不能推的承诺、别的存档里的事返回空串。"""
+    async def _vector_card_text(
+        self,
+        hit: PassiveHit,
+        state: _Round,
+        *,
+        excluded_compact: Sequence[str] = (),
+        game: str = "",
+    ) -> str:
+        """向量命中的卡面；不是正式场的档案行、不能推的承诺、别的存档或排除名单里的事返回空串。"""
         if SOURCE_DANMAKU in hit.sources:
             why = f"弹幕 {hit.message_id} 说的像这件事" if hit.message_id else "观众说的像这件事"
         elif SOURCE_PLAYER in hit.sources:
@@ -1340,7 +1785,13 @@ class MemoryCueProvider:
             if line is None:
                 self._skip(hit.key, state, "不是正式场的行")
                 return ""
+            if game and line.game and (line.game or "").strip() != game:
+                self._skip(hit.key, state, "别的游戏")
+                return ""
             if self._skip(hit.key, state, self._other_save(line.game, line.save_id, state)):
+                return ""
+            if excluded_compact and _is_excluded_text(line.text, excluded_compact):
+                self._skip(hit.key, state, "已在常驻规矩")
                 return ""
             return render_archive_card(
                 line,
@@ -1351,6 +1802,9 @@ class MemoryCueProvider:
         commitment = await self._recallable_commitment(int(value))
         if commitment is None:
             self._skip(hit.key, state, "不是未了结的公开承诺")
+            return ""
+        if game and commitment.game and (commitment.game or "").strip() != game:
+            self._skip(hit.key, state, "别的游戏")
             return ""
         if self._skip(hit.key, state, "搁了很久" if self._dormant_commitment(commitment, state) else None):
             return ""

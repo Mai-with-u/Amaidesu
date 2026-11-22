@@ -825,6 +825,7 @@ class StreamerAgent(BaseAgent):
                 cue_log_repo=memory_cue_log_repo,
                 game_player_repo=game_player_repo,
                 correction_repo=self._memory_correction_repo,
+                social_fact_repo=social_fact_repo,
                 inside_jokes=config.persona.inside_jokes,
                 passive_enabled=self.typed_config.memory_passive_recall_enabled,
                 search=self._memory_search,
@@ -2702,6 +2703,7 @@ class StreamerAgent(BaseAgent):
         players: Sequence[Tuple[str, str]] = (),
         situation: Optional[Any] = None,
         arrived_places: Sequence[str] = (),
+        exclude_texts: Sequence[str] = (),
         limit: int = 2,
     ) -> List[str]:
         """供主控游戏 Agent 按需拉取跨场被动记忆线索卡（复用 MemoryCueProvider，绝不泄露观众隐私）。"""
@@ -2716,6 +2718,7 @@ class StreamerAgent(BaseAgent):
             players=players,
             situation=situation if isinstance(situation, GameSituation) else None,
             arrived_places=arrived_places,
+            exclude_texts=exclude_texts,
             current_saves=self._current_saves,
             limit=limit,
         )
