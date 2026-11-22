@@ -34,6 +34,7 @@ __all__ = [
     "DEFAULT_MAX_RECENT_SUGGESTIONS",
     "DEFAULT_NEARBY_DISTANCE",
     "DEFAULT_PARTNER_WINDOW_MS",
+    "DEFAULT_RECENT_CHAT_TTL_MS",
     "DEFAULT_WAKE_COOLDOWN_MS",
     "PRIORITY_EAVESDROP",
     "PRIORITY_NEARBY_OR_PARTNER",
@@ -52,6 +53,8 @@ DEFAULT_WAKE_COOLDOWN_MS = 6_000
 DEFAULT_MAX_EAVESDROP_ITEMS = 16
 DEFAULT_MAX_RECENT_CHATS = 8
 DEFAULT_MAX_RECENT_SUGGESTIONS = 4
+# 近期人类原话滚动窗中公屏对话的默认存活时长（10 分钟）：超过此时间的陈旧聊天自动过期淘汰
+DEFAULT_RECENT_CHAT_TTL_MS = 600_000
 # 单窗内同一发言人最多保留几条不同内容，超出部分折叠为计数以防单人刷屏占满窗口
 _MAX_DISTINCT_PER_SENDER = 3
 # 持续刷屏判定窗口与连续唤醒门槛：30 秒内已连续唤醒满 3 次即开启最小唤醒冷却
@@ -68,6 +71,41 @@ PRIORITY_EAVESDROP = 3
 def _monotonic_ms() -> int:
     """缺省单调毫秒时钟。"""
     return int(time.monotonic() * 1000)
+
+
+def _format_relative_age(delta_ms: int) -> str:
+    """把毫秒时间差渲染为紧凑中文相对时长（如“刚刚”“3分钟前”“1小时前”）。"""
+    safe_ms = max(0, int(delta_ms))
+    if safe_ms < 60_000:
+        return "刚刚"
+    total_minutes = safe_ms // 60_000
+    if total_minutes < 60:
+        return f"{total_minutes}分钟前"
+    hours, rem_minutes = divmod(total_minutes, 60)
+    if rem_minutes > 0:
+        return f"{hours}小时{rem_minutes}分钟前"
+    return f"{hours}小时前"
+
+
+@dataclass
+class _RecentChatEntry:
+    """近期公屏滚动窗中的单条双向对话记录（玩家公屏或己方回复，附带注入时钟时间戳）。"""
+
+    formatted_line: str
+    sender: str
+    raw_content: str
+    timestamp_ms: int
+    is_self: bool = False
+
+    def render_with_age(self, now_ms: int) -> str:
+        """附带相对时间前缀渲染双向公屏行，帮助模型分辨刚刚发生与较早发生的对话。"""
+        age = _format_relative_age(now_ms - self.timestamp_ms)
+        if self.is_self:
+            return f"[你回过·{age}] {self.raw_content}"
+        if self.formatted_line.startswith("[") and "]" in self.formatted_line:
+            bracket_end = self.formatted_line.index("]")
+            return f"{self.formatted_line[:bracket_end]}·{age}{self.formatted_line[bracket_end:]}"
+        return f"[公屏·{age}] {self.formatted_line}"
 
 
 def _sender_key(sender: str) -> str:
@@ -200,6 +238,7 @@ class MinecraftChatGate:
         max_eavesdrop_items: int = DEFAULT_MAX_EAVESDROP_ITEMS,
         max_recent_chats: int = DEFAULT_MAX_RECENT_CHATS,
         max_recent_suggestions: int = DEFAULT_MAX_RECENT_SUGGESTIONS,
+        recent_chat_ttl_ms: int = DEFAULT_RECENT_CHAT_TTL_MS,
     ) -> None:
         self._clock = clock if clock is not None else _monotonic_ms
         self._batch_window_ms = max(0, int(batch_window_ms))
@@ -211,6 +250,7 @@ class MinecraftChatGate:
         self._max_eavesdrop_items = max(1, int(max_eavesdrop_items))
         self._max_recent_chats = max(1, int(max_recent_chats))
         self._max_recent_suggestions = max(1, int(max_recent_suggestions))
+        self._recent_chat_ttl_ms = max(0, int(recent_chat_ttl_ms))
 
         self._seq = 0
         # 活跃唤醒合并窗与到期时刻（None 表示当前没有打开唤醒窗）
@@ -225,8 +265,8 @@ class MinecraftChatGate:
         self._recent_wake_times: Deque[int] = deque()
         self._last_wake_ms: Optional[int] = None
         self._spam_cooldown_active = False
-        # 近期人类原话滚动窗（最近 8 条公屏 + 最近 4 条主播建议），供集中整理与重开上下文使用
-        self._recent_chats: Deque[Tuple[str, str, str]] = deque(maxlen=self._max_recent_chats)
+        # 近期公屏双向对话滚动窗（玩家公屏 + 己方回复，带时间戳与 TTL 自动过期）与最近 4 条主播建议
+        self._recent_chats: Deque[_RecentChatEntry] = deque(maxlen=self._max_recent_chats)
         self._recent_suggestions: Deque[str] = deque(maxlen=self._max_recent_suggestions)
 
     def clear_pending_windows(self) -> None:
@@ -339,7 +379,7 @@ class MinecraftChatGate:
             upstream_suppressed=max(0, int(payload.suppressed or 0)),
         )
         formatted_line = item.render()
-        self._remember_recent_chat(formatted_line, sender, cleaned_content)
+        self._remember_recent_chat(formatted_line, sender, cleaned_content, timestamp_ms=now)
 
         # 独立到达的远处非点名公屏：若当前没有活跃唤醒窗，直接进入旁听滑窗，绝不主动唤醒；
         # 若当前已有唤醒窗正在攒批，可作为最低优先级抽样候补随窗参与截留（不挤掉任何高优先级消息）。
@@ -435,6 +475,26 @@ class MinecraftChatGate:
             has_self_mention=False,
         )
 
+    def record_self_chat(self, text: str, now_ms: Optional[int] = None) -> None:
+        """记入己方发出的游戏公屏句，与玩家公屏配对构成双向近期对话（避免折叠/状态恢复后忘掉自己回过话）。"""
+        cleaned = " ".join((text or "").split())
+        if not cleaned:
+            return
+        ts = int(self._clock()) if now_ms is None else int(now_ms)
+        self._prune_recent_chats(ts)
+        if self._recent_chats and self._recent_chats[-1].is_self and self._recent_chats[-1].raw_content == cleaned:
+            self._recent_chats[-1].timestamp_ms = ts
+            return
+        self._recent_chats.append(
+            _RecentChatEntry(
+                formatted_line=f"[你回过] {cleaned}",
+                sender="",
+                raw_content=cleaned,
+                timestamp_ms=ts,
+                is_self=True,
+            )
+        )
+
     def record_streamer_suggestion(self, text: str, *, timestamp_ms: Optional[int] = None) -> None:
         """记入近期主播建议滚动窗（默认保留最近 4 条，去空与相邻重复）。"""
         _ = timestamp_ms
@@ -445,41 +505,54 @@ class MinecraftChatGate:
             return
         self._recent_suggestions.append(cleaned)
 
-    def recent_player_chats(self) -> Tuple[str, ...]:
-        """返回最近至多 8 条格式化公屏原话（旧 → 新）。"""
-        return tuple(formatted for formatted, _sender, _raw in self._recent_chats)
+    def recent_player_chats(self, *, now_ms: Optional[int] = None) -> Tuple[str, ...]:
+        """返回尚未过期的近期格式化玩家公屏原话（旧 → 新，不含己方回复）。"""
+        now = int(self._clock()) if now_ms is None else int(now_ms)
+        self._prune_recent_chats(now)
+        return tuple(entry.formatted_line for entry in self._recent_chats if not entry.is_self)
+
+    def recent_chat_dialogues(self, *, now_ms: Optional[int] = None) -> Tuple[str, ...]:
+        """返回尚未过期的近期双向公屏对话（玩家公屏 + 己方回复，每条附带相对时间前缀，旧 → 新）。"""
+        now = int(self._clock()) if now_ms is None else int(now_ms)
+        self._prune_recent_chats(now)
+        return tuple(entry.render_with_age(now) for entry in self._recent_chats)
 
     def recent_streamer_suggestions(self) -> Tuple[str, ...]:
         """返回最近至多 4 条主播建议原话（旧 → 新）。"""
         return tuple(self._recent_suggestions)
 
-    def recent_human_texts(self) -> Tuple[str, ...]:
-        """返回近期公屏正文与主播建议原文元组，供短期记忆检索做近端原文去重。
+    def recent_human_texts(self, *, now_ms: Optional[int] = None) -> Tuple[str, ...]:
+        """返回未过期公屏双向正文与主播建议原文元组，供短期记忆检索做近端原文去重。
 
         带未核验 ``note`` 的短公屏额外附入 ``发言人：正文`` 形态，确保与短期记忆条目精确对上号。
         """
+        now = int(self._clock()) if now_ms is None else int(now_ms)
+        self._prune_recent_chats(now)
         texts: List[str] = []
-        for formatted, sender, raw in self._recent_chats:
-            texts.append(raw)
-            texts.append(formatted)
-            if sender:
-                texts.append(f"{sender}：{raw}")
+        for entry in self._recent_chats:
+            texts.append(entry.raw_content)
+            texts.append(entry.formatted_line)
+            if entry.is_self:
+                texts.append(f"你回过：{entry.raw_content}")
+            elif entry.sender:
+                texts.append(f"{entry.sender}：{entry.raw_content}")
         texts.extend(self._recent_suggestions)
         return tuple(texts)
 
-    def format_recent_human_lines(self) -> str:
-        """把近期人类原话滚动窗渲染成紧凑文本块，供集中整理与重开上下文保留人类原话。"""
-        chats = self.recent_player_chats()
+    def format_recent_human_lines(self, *, now_ms: Optional[int] = None) -> str:
+        """把未过期的近期公屏双向对话与主播建议渲染成紧凑文本块，供任务状态与集中整理保真。"""
+        now = int(self._clock()) if now_ms is None else int(now_ms)
+        dialogues = self.recent_chat_dialogues(now_ms=now)
         suggestions = self.recent_streamer_suggestions()
-        if not chats and not suggestions:
+        if not dialogues and not suggestions:
             return ""
         lines: List[str] = ["[近期人类原话]"]
         if suggestions:
             lines.append("近期主播建议：")
             lines.extend(f"- {item}" for item in suggestions)
-        if chats:
+        if dialogues:
             lines.append("近期玩家公屏：")
-            lines.extend(f"- {item}" for item in chats)
+            lines.extend(f"- {item}" for item in dialogues)
         return "\n".join(lines)
 
     @property
@@ -518,11 +591,42 @@ class MinecraftChatGate:
         for key in expired:
             self._partner_interactions.pop(key, None)
 
-    def _remember_recent_chat(self, formatted_line: str, sender: str, raw_content: str) -> None:
-        """维护最近 8 条公屏滚动窗，紧邻相同文本不重复占坑。"""
-        if self._recent_chats and self._recent_chats[-1][0] == formatted_line:
+    def _prune_recent_chats(self, now_ms: int) -> None:
+        """淘汰超过存活窗口（默认 10 分钟）的陈旧公屏记录，防止几十分钟前的旧话长期挂在任务状态里。"""
+        if self._recent_chat_ttl_ms <= 0 or not self._recent_chats:
             return
-        self._recent_chats.append((formatted_line, sender, raw_content))
+        cutoff = now_ms - self._recent_chat_ttl_ms
+        if all(entry.timestamp_ms >= cutoff for entry in self._recent_chats):
+            return
+        fresh = [entry for entry in self._recent_chats if entry.timestamp_ms >= cutoff]
+        self._recent_chats = deque(fresh, maxlen=self._max_recent_chats)
+
+    def _remember_recent_chat(
+        self,
+        formatted_line: str,
+        sender: str,
+        raw_content: str,
+        *,
+        timestamp_ms: int,
+    ) -> None:
+        """维护近期公屏滚动窗，淘汰过期记录并对紧邻相同文本刷新时间戳不重复占坑。"""
+        self._prune_recent_chats(timestamp_ms)
+        if (
+            self._recent_chats
+            and not self._recent_chats[-1].is_self
+            and self._recent_chats[-1].formatted_line == formatted_line
+        ):
+            self._recent_chats[-1].timestamp_ms = timestamp_ms
+            return
+        self._recent_chats.append(
+            _RecentChatEntry(
+                formatted_line=formatted_line,
+                sender=sender,
+                raw_content=raw_content,
+                timestamp_ms=timestamp_ms,
+                is_self=False,
+            )
+        )
 
     def _append_eavesdrop(self, item: _PendingChatItem) -> None:
         """写入远处旁听滑窗：同人同内容折叠计数，超有界上限时滑出最老条并计数。"""

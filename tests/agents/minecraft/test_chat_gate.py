@@ -295,3 +295,38 @@ async def test_recent_human_texts_dedups_short_chat_with_unverified_note_in_shor
     assert "同伴甲：别碰" in gate.recent_human_texts()
     hits = await memory.search_entries("别碰", exclude_texts=set(gate.recent_human_texts()), wait_vector_ms=0)
     assert hits == []
+
+
+def test_recent_chats_render_bidirectional_dialogue_with_relative_age_and_expire_by_ttl() -> None:
+    """近期公屏记录玩家与己方双向对话对并附带相对时间，超过 TTL（默认 10 分钟）自动过期淘汰。"""
+    clock = FakeClock(1_000_000)
+    gate = MinecraftChatGate(clock=clock.now_ms, recent_chat_ttl_ms=600_000)
+
+    # 玩家送羊肉 -> 10 秒后己方回话
+    gate.ingest(_chat("PlayerA", "给你羊肉", distance=5.0))
+    clock.tick(10_000)
+    gate.record_self_chat("羊肉收下啦")
+    # 相同己方回复紧邻不重复占两条
+    gate.record_self_chat("羊肉收下啦")
+
+    # 3 分钟后渲染：双向对话均带相对时间，且保留原事实标签
+    clock.tick(180_000)
+    rendered = gate.format_recent_human_lines()
+    assert "[公屏·身边5格·3分钟前] PlayerA：给你羊肉" in rendered
+    assert "[你回过·3分钟前] 羊肉收下啦" in rendered
+    assert "你回过：羊肉收下啦" in gate.recent_human_texts()
+    assert len(gate.recent_chat_dialogues()) == 2
+    assert len(gate.recent_player_chats()) == 1
+
+    # 推进至总计 25 分钟（超过 10 分钟 TTL）：陈旧双向对话彻底淘汰，不再挂在任务状态里
+    clock.tick(22 * 60_000)
+    assert gate.recent_chat_dialogues() == ()
+    assert gate.recent_player_chats() == ()
+    assert gate.format_recent_human_lines() == ""
+    assert "羊肉收下啦" not in gate.recent_human_texts()
+
+    # 再来新对话正常记入且只含新对话
+    gate.ingest(_chat("PlayerA", "现在去下矿吗", distance=4.0))
+    fresh_rendered = gate.format_recent_human_lines()
+    assert "[公屏·身边4格·刚刚] PlayerA：现在去下矿吗" in fresh_rendered
+    assert "给你羊肉" not in fresh_rendered

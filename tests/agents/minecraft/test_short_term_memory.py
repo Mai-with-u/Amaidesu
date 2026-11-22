@@ -206,3 +206,47 @@ async def test_wait_vector_zero_returns_keyword_hits_immediately_under_slow_embe
         hit.block_id == "b20" and hit.vector_score is not None and hit.vector_score >= 0.99 for hit in cached_hits
     )
     assert sum(1 for batch in embed_calls if batch == ["小猫"]) == 1, "查询向量只算一次并复用缓存"
+
+
+async def test_self_chat_indexed_relative_age_prefix_and_time_decay_blocks_stale_flashback() -> None:
+    """己方公屏正常收录检索、闪回带相对时间前缀、20 分钟半衰期与 45 分钟降权彻底阻止 97 分钟陈旧闪回。"""
+    clock = FakeClock(1_000_000)
+    server = FakeEmbeddingServer()
+    memory = SessionShortTermMemory(embedding_client=server.client(clock=clock.now_ms), clock=clock.now_ms)
+
+    # T=0：97 分钟前的旧闲聊（模拟同伴 97 分钟前问过猪排）与一条长期规矩
+    memory.record_player_chat("PlayerA", "你要猪排吗", timestamp_ms=clock.now_ms())
+    memory.sync_work_docs("", ["营地公共高炉不要乱拆"], [], timestamp_ms=clock.now_ms())
+
+    # T=+85 分钟（距查询 12 分钟前）：玩家送羊肉 + 己方回话
+    clock.tick(85 * 60_000)
+    memory.record_player_chat("PlayerA", "给你羊肉放脚边了", timestamp_ms=clock.now_ms())
+    self_id = memory.record_self_chat("羊肉收下啦，谢谢", timestamp_ms=clock.now_ms())
+    assert self_id is not None
+
+    # T=+97 分钟：执行查询
+    clock.tick(12 * 60_000)
+    await memory.flush_embeddings()
+
+    # 1) 己方公屏可正常命中、标记 is_self=True，且闪回渲染强制带 [12分钟前] 前缀
+    mutton_hits = await memory.search_entries("羊肉", limit=5)
+    assert any(hit.is_self and "你回过：羊肉收下啦" in hit.text for hit in mutton_hits)
+    rendered_self = memory.format_hit_for_flash(next(h for h in mutton_hits if h.is_self))
+    assert rendered_self.startswith("[12分钟前] 你回过：羊肉收下啦")
+
+    # 2) 97 分钟前的短闲聊即使查询词完全命中发信人+内容，经半衰期与超 45 分钟降权后彻底过滤不闪回
+    stale_hits = await memory.search_entries("PlayerA 猪排", kinds={KIND_PLAYER_CHAT}, limit=5)
+    assert all("你要猪排吗" not in hit.text for hit in stale_hits)
+
+    # 3) 工作文档/规矩不受时间衰减影响：97 分钟后依然稳健命中并附带相对时间前缀
+    rule_hits = await memory.search_entries("公共高炉", kinds={KIND_WORK_DOC}, limit=3)
+    assert len(rule_hits) == 1
+    assert memory.format_hit_for_flash(rule_hits[0]).startswith("[1小时37分钟前] [长期规矩]")
+
+    # 4) 同主题新旧公屏对比：1 分钟前得分显著高于 30 分钟前
+    clock.tick(30 * 60_000)
+    memory.record_player_chat("同伴乙", "红石中继器调成三档", timestamp_ms=clock.now_ms() - 30 * 60_000)
+    memory.record_player_chat("同伴乙", "红石中继器改成四档", timestamp_ms=clock.now_ms() - 60_000)
+    comp_hits = await memory.search_entries("红石中继器", kinds={KIND_PLAYER_CHAT}, limit=2)
+    assert len(comp_hits) == 2
+    assert "四档" in comp_hits[0].text and comp_hits[0].score > comp_hits[1].score * 2.0

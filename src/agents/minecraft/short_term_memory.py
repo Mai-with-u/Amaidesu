@@ -39,9 +39,13 @@ from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
 __all__ = [
+    "DEFAULT_CHAT_HALF_LIFE_MS",
+    "DEFAULT_CHAT_STALE_PENALTY",
+    "DEFAULT_CHAT_STALE_THRESHOLD_MS",
     "DEFAULT_MAX_FOLD_BLOCKS",
     "DEFAULT_MAX_PLAYER_CHATS",
     "DEFAULT_MIN_COSINE",
+    "DEFAULT_STALE_CHAT_MIN_SCORE",
     "DEFAULT_WAIT_VECTOR_MS",
     "KIND_FOLD_BLOCK",
     "KIND_PLAYER_CHAT",
@@ -49,6 +53,8 @@ __all__ = [
     "SessionShortTermMemory",
     "ShortTermHit",
     "ShortTermKind",
+    "format_relative_age_ms",
+    "format_short_term_hit",
 ]
 
 logger = get_logger("SessionShortTermMemory")
@@ -63,6 +69,13 @@ DEFAULT_MAX_PLAYER_CHATS = 200
 DEFAULT_MAX_FOLD_BLOCKS = 80
 DEFAULT_MIN_COSINE = 0.48
 DEFAULT_WAIT_VECTOR_MS = 1_200
+# 公屏记忆时间衰减：半衰期 20 分钟；超过 45 分钟的孤立短闲聊大幅降权并低于门槛直接过滤，防止陈旧闪回
+DEFAULT_CHAT_HALF_LIFE_MS = 20 * 60 * 1_000
+DEFAULT_CHAT_STALE_THRESHOLD_MS = 45 * 60 * 1_000
+DEFAULT_CHAT_STALE_PENALTY = 0.25
+DEFAULT_STALE_CHAT_MIN_SCORE = 0.15
+_STALE_SHORT_CHAT_MAX_CHARS = 24
+_FOLD_DECAY_FLOOR = 0.35
 _QUERY_VECTOR_CACHE_SIZE = 64
 _TEXT_VECTOR_CACHE_SIZE = 512
 _MAX_CHAT_CONTENT_CHARS = 400
@@ -193,6 +206,30 @@ def _unit_vector(vector: Sequence[float]) -> Optional[np.ndarray]:
     return unit
 
 
+def format_relative_age_ms(age_ms: int) -> str:
+    """将毫秒时间差渲染为中文相对时长标签（如“刚刚”“12分钟前”“1小时37分钟前”）。"""
+    safe_ms = max(0, int(age_ms))
+    if safe_ms < 60_000:
+        return "刚刚"
+    total_minutes = safe_ms // 60_000
+    if total_minutes < 60:
+        return f"{total_minutes}分钟前"
+    hours, rem_minutes = divmod(total_minutes, 60)
+    if rem_minutes > 0:
+        return f"{hours}小时{rem_minutes}分钟前"
+    return f"{hours}小时前"
+
+
+def format_short_term_hit(hit: "ShortTermHit", *, now_ms: Optional[int] = None) -> str:
+    """为短期记忆命中结果强制附带相对时间前缀，供 ``[脑中闪过]`` 清晰标明记忆新旧。"""
+    ref_ms = int(now_ms) if now_ms is not None else 0
+    if hit.timestamp_ms > 0 and ref_ms >= hit.timestamp_ms:
+        age = format_relative_age_ms(ref_ms - hit.timestamp_ms)
+    else:
+        age = "刚刚"
+    return f"[{age}] {hit.text}"
+
+
 @dataclass(frozen=True)
 class ShortTermHit:
     """本场短期动态记忆的一条召回命中结果。"""
@@ -204,6 +241,7 @@ class ShortTermHit:
     timestamp_ms: int
     sender: str = ""
     private: bool = False
+    is_self: bool = False
     block_id: str = ""
     span_label: str = ""
     doc_section: str = ""
@@ -224,6 +262,8 @@ class _ShortTermEntry:
     timestamp_ms: int
     sender: str = ""
     private: bool = False
+    is_self: bool = False
+    raw_content_len: int = 0
     block_id: str = ""
     span_label: str = ""
     summary: str = ""
@@ -244,6 +284,10 @@ class SessionShortTermMemory:
         max_fold_blocks: int = DEFAULT_MAX_FOLD_BLOCKS,
         min_cosine: float = DEFAULT_MIN_COSINE,
         wait_vector_ms: int = DEFAULT_WAIT_VECTOR_MS,
+        chat_half_life_ms: int = DEFAULT_CHAT_HALF_LIFE_MS,
+        chat_stale_threshold_ms: int = DEFAULT_CHAT_STALE_THRESHOLD_MS,
+        chat_stale_penalty: float = DEFAULT_CHAT_STALE_PENALTY,
+        stale_chat_min_score: float = DEFAULT_STALE_CHAT_MIN_SCORE,
     ) -> None:
         self._embedding = embedding_client
         self._clock = clock
@@ -251,6 +295,10 @@ class SessionShortTermMemory:
         self._max_fold_blocks = max(1, int(max_fold_blocks))
         self._min_cosine = float(min_cosine)
         self._wait_vector_ms = max(0, int(wait_vector_ms))
+        self._chat_half_life_ms = max(0, int(chat_half_life_ms))
+        self._chat_stale_threshold_ms = max(0, int(chat_stale_threshold_ms))
+        self._chat_stale_penalty = max(0.0, min(1.0, float(chat_stale_penalty)))
+        self._stale_chat_min_score = max(0.0, float(stale_chat_min_score))
 
         # 场次代际号：开播/下播 clear_session 时递增，防止上一场在途异步嵌入任务回写污染新场次
         self._epoch = 0
@@ -325,10 +373,47 @@ class SessionShortTermMemory:
             timestamp_ms=ts,
             sender=speaker,
             private=private,
+            is_self=False,
+            raw_content_len=len(cleaned),
         )
         self._player_chats.append(entry)
         self._schedule_entry_embedding(entry)
         return entry_id
+
+    def record_self_chat(self, text: str, timestamp_ms: int = 0) -> Optional[str]:
+        """收录一条己方发出的游戏公屏句（不涉及隐私，正常走短期索引与向量嵌入，构成完整双向对话记忆）。"""
+        cleaned = " ".join((text or "").split())
+        if not cleaned or _looks_like_raw_json_blob(cleaned):
+            return None
+        if len(cleaned) > _MAX_CHAT_CONTENT_CHARS:
+            cleaned = f"{cleaned[: _MAX_CHAT_CONTENT_CHARS - 1]}…"
+        ts = int(timestamp_ms) if timestamp_ms > 0 else int(self._clock())
+        display = f"你回过：{cleaned}"
+
+        if self._player_chats and self._player_chats[-1].text == display and self._player_chats[-1].is_self:
+            self._player_chats[-1].timestamp_ms = ts
+            return self._player_chats[-1].entry_id
+
+        entry_id = self._take_id("self_chat")
+        entry = self._build_entry(
+            entry_id=entry_id,
+            kind=KIND_PLAYER_CHAT,
+            text=display,
+            search_text=display,
+            timestamp_ms=ts,
+            sender="你",
+            private=False,
+            is_self=True,
+            raw_content_len=len(cleaned),
+        )
+        self._player_chats.append(entry)
+        self._schedule_entry_embedding(entry)
+        return entry_id
+
+    def format_hit_for_flash(self, hit: ShortTermHit, *, now_ms: Optional[int] = None) -> str:
+        """把短期记忆命中项格式化为带相对时间前缀的 ``[脑中闪过]`` 单行文本。"""
+        ref_ms = int(self._clock()) if now_ms is None else int(now_ms)
+        return format_short_term_hit(hit, now_ms=ref_ms)
 
     def record_fold_block(
         self,
@@ -487,8 +572,10 @@ class SessionShortTermMemory:
         exclude_texts: AbstractSet[str] = frozenset(),
         limit: int = 6,
         wait_vector_ms: Optional[int] = None,
+        now_ms: Optional[int] = None,
+        min_score: float = 0.0,
     ) -> List[ShortTermHit]:
-        """结合中文两字切分关键词与可选向量余弦检索本场短期记忆，支持按类别筛选与近端原文去重。
+        """结合中文两字切分关键词、可选向量余弦与时间衰减检索本场短期记忆，支持按类别筛选与近端原文去重。
 
         ``wait_vector_ms=0`` 用于被动快路（如 ``[脑中闪过]``）：查询向量已缓存时立即融合余弦；
         未就绪则在后台非阻塞起算留给下一次，本次毫秒级直接返回关键词命中，不被慢嵌入拖死或取消。
@@ -538,6 +625,7 @@ class SessionShortTermMemory:
                     if cos >= self._min_cosine:
                         vector_scores[entry_idx] = cos
 
+        ref_ms = int(self._clock()) if now_ms is None else int(now_ms)
         scored: List[Tuple[float, int, ShortTermHit]] = []
         max_ts = max((entry.timestamp_ms for entry in candidates), default=0)
         for idx, entry in enumerate(candidates):
@@ -547,9 +635,25 @@ class SessionShortTermMemory:
             vec_score = vector_scores.get(idx)
             if kw_score <= 0.0 and vec_score is None:
                 continue
-            # 双路并存时叠加得分；加极微幅新近度偏置打破同分平手（不跨档反超高相关记录）
+            raw_score = kw_score + (vec_score or 0.0)
+            age_ms = (
+                max(0, ref_ms - entry.timestamp_ms) if entry.timestamp_ms > 0 and ref_ms >= entry.timestamp_ms else 0
+            )
+            decay = self._time_decay_factor(entry, age_ms)
+            decayed_score = raw_score * decay
+            # 超过陈旧门槛（默认 45 分钟）的旧公屏若衰减后仍低于门槛，直接过滤杜绝远古闲聊闪回
+            if (
+                entry.kind == KIND_PLAYER_CHAT
+                and self._chat_stale_threshold_ms > 0
+                and age_ms >= self._chat_stale_threshold_ms
+                and decayed_score < self._stale_chat_min_score
+            ):
+                continue
+            if min_score > 0.0 and decayed_score < min_score:
+                continue
+            # 加极微幅新近度偏置打破同分平手（不跨档反超高相关记录）
             recency_tie = 1e-4 * (entry.timestamp_ms / max_ts) if max_ts > 0 and entry.timestamp_ms > 0 else 0.0
-            total = kw_score + (vec_score or 0.0) + recency_tie
+            total = decayed_score + recency_tie
             scored.append(
                 (
                     total,
@@ -562,6 +666,7 @@ class SessionShortTermMemory:
                         timestamp_ms=entry.timestamp_ms,
                         sender=entry.sender,
                         private=entry.private,
+                        is_self=entry.is_self,
                         block_id=entry.block_id,
                         span_label=entry.span_label,
                         doc_section=entry.doc_section,
@@ -573,6 +678,25 @@ class SessionShortTermMemory:
 
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [item[2] for item in scored[:limit]]
+
+    def _time_decay_factor(self, entry: _ShortTermEntry, age_ms: int) -> float:
+        """按条目类型与距今时长计算时间衰减因子：
+        - 工作笔记与规矩（work_doc）：持续生效不衰减（1.0）；
+        - 折叠块（fold_block）：温和指数衰减（半衰期 60 分钟，保底 0.35），兼顾近段优先与长场次主动回捞；
+        - 玩家与己方公屏（player_chat）：指数衰减（默认半衰期 20 分钟），超过 45 分钟的孤立短闲聊叠加大幅降权。
+        """
+        if entry.kind == KIND_WORK_DOC or age_ms <= 0 or self._chat_half_life_ms <= 0:
+            return 1.0
+        if entry.kind == KIND_FOLD_BLOCK:
+            fold_half_life = self._chat_half_life_ms * 3
+            return max(_FOLD_DECAY_FLOOR, 0.5 ** (age_ms / fold_half_life))
+        # 公屏对话：按 20 分钟半衰期指数衰减
+        decay = 0.5 ** (age_ms / self._chat_half_life_ms)
+        if self._chat_stale_threshold_ms > 0 and age_ms >= self._chat_stale_threshold_ms:
+            # 超过 45 分钟的孤立短闲聊额外降权，彻底避免仅凭发信人名字高分满血闪回
+            if entry.raw_content_len <= _STALE_SHORT_CHAT_MAX_CHARS:
+                decay *= self._chat_stale_penalty
+        return decay
 
     def _take_id(self, prefix: str) -> str:
         seq = self._next_seq
@@ -589,6 +713,8 @@ class SessionShortTermMemory:
         timestamp_ms: int,
         sender: str = "",
         private: bool = False,
+        is_self: bool = False,
+        raw_content_len: int = 0,
         block_id: str = "",
         span_label: str = "",
         summary: str = "",
@@ -606,6 +732,8 @@ class SessionShortTermMemory:
             timestamp_ms=timestamp_ms,
             sender=sender,
             private=private,
+            is_self=is_self,
+            raw_content_len=raw_content_len if raw_content_len > 0 else len(search_text),
             block_id=block_id,
             span_label=span_label,
             summary=summary,
