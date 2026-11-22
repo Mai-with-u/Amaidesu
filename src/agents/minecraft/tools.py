@@ -37,9 +37,10 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional, Union
 
 from src.modules.agents.game_tools import GameToolProvider, business_fail_result, run_dict_tool
+from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.logging import get_logger
 from src.modules.mcp.provider import McpToolProvider
-from src.modules.skills import build_skill_spec
+from src.modules.skills import SKILL_TOOL_NAME
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolSpec,
@@ -48,6 +49,11 @@ from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
 
 from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
+from .skill_support import (
+    LEARNED_SKILL_MAX_CONTENT_CHARS,
+    LEARNED_SKILL_MAX_PER_SCOPE,
+    LEARNED_SKILL_MAX_TRIGGER_CHARS,
+)
 from .state import MAX_NOTEBOOK_CHARS, MAX_PINNED_RULES, MAX_RULE_CHARS, MinecraftAgentState
 from .work_log_snapshot import unavailable_snapshot
 
@@ -502,6 +508,65 @@ def build_context_recall_spec() -> ToolSpec:
     )
 
 
+def build_skill_tool_spec() -> ToolSpec:
+    """``minecraft_skill`` 工具规格——读取内置/远端/自建技能，以及增删改自建技能卡。"""
+    return ToolSpec(
+        name=SKILL_TOOL_NAME,
+        provider=PROVIDER_NAME,
+        kind="sync",
+        result_section=SECTION_SKILLS,
+        description=(
+            "技能手册工具：按名读取内置、Mod 远端或自建技能正文，并支持沉淀与修订自建技能卡。"
+            "仅传 name 时默认按 action='read' 读取；同一篇技能在近 10 轮刚读过且正文仍在上下文中时请直接复用。"
+            f"自建技能卡单篇上限 {LEARNED_SKILL_MAX_CONTENT_CHARS} 字、单域上限 {LEARNED_SKILL_MAX_PER_SCOPE} 条，"
+            "按 scope 区分 world（本服专属设施流程）与 global（跨存档通用模组玩法）；"
+            "不允许覆盖或删除只读的内置或 Mod 远端技能。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["read", "upsert", "patch", "remove", "list"],
+                    "default": "read",
+                    "description": "操作类型：read=读正文（默认）；upsert=新建或覆盖自建技能；patch=修订自建技能；remove=删除自建技能；list=列目录",
+                },
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "技能名称（read/upsert/patch/remove 时必填）",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["world", "global"],
+                    "description": "自建技能作用域：world=本服设施与流程（默认）；global=跨存档通用模组玩法",
+                },
+                "trigger": {
+                    "type": "string",
+                    "description": f"一句话触发条件（说明何时阅读与使用该技能，≤{LEARNED_SKILL_MAX_TRIGGER_CHARS} 字）",
+                },
+                "content": {
+                    "type": "string",
+                    "description": f"技能操作步骤正文（≤{LEARNED_SKILL_MAX_CONTENT_CHARS} 字）",
+                },
+                "old_text": {
+                    "type": "string",
+                    "description": "patch 局部替换时原正文中的待替换片段（与 new_text 配合）",
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "patch 局部替换时替换后的新片段（与 old_text 配合）",
+                },
+                "append": {
+                    "type": "string",
+                    "description": "patch 时追加到原正文末尾的新步骤",
+                },
+            },
+            "additionalProperties": False,
+        },
+    )
+
+
 def build_drawing_spec() -> ToolSpec:
     """``minecraft_drawing`` 工具规格——委派后台生成建筑图纸（异步，完成/失败都有 [系统] 通知）"""
     return ToolSpec(
@@ -603,9 +668,9 @@ class MinecraftToolProvider(GameToolProvider):
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
     # 主播直发公屏：由 Agent 复用自己的 chat 能力执行器并确认交出去（未注入时不提供该工具）
     chat_sender: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
-    # 按名读技能正文：由 Agent 按自己的受众名筛本地策略，远端玩法技能按地址去 MaiCraft 读（未注入技能库时不提供该工具）；
-    # 远端技能要经 MCP 的 resources/read 取正文，所以读取器是异步的。
+    # 按名读技能正文（旧只读回调，兼容保留）与完整读写修订技能处理器（优先使用）
     skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
+    skill_handler: Optional[Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None
     # 角色眼下在哪个存档里：由 Agent 从 MaiCraft 报的世界身份读（未注入时按不分存档）
     save_reader: Optional[Callable[[], Optional[GameSave]]] = None
     # 角色眼下离哪些记住的地点多远：由 Agent 从速览已有的缓存现算（未注入时不报情境）
@@ -652,8 +717,8 @@ class MinecraftToolProvider(GameToolProvider):
             specs.append(build_glance_spec())
         if self.chat_sender is not None:
             specs.append(build_chat_send_spec())
-        if self.skill_reader is not None:
-            specs.append(build_skill_spec(PROVIDER_NAME))
+        if self.skill_handler is not None or self.skill_reader is not None:
+            specs.append(build_skill_tool_spec())
         if self.context_recall is not None:
             specs.extend([build_context_fold_spec(), build_context_recall_spec()])
         if self.drawing_starter is not None:
@@ -692,8 +757,8 @@ class MinecraftToolProvider(GameToolProvider):
         if self.chat_sender is not None:
             chat_send_spec = build_chat_send_spec()
             handlers[chat_send_spec.full_name] = self._handle_chat_send
-        if self.skill_reader is not None:
-            skill_spec = build_skill_spec(PROVIDER_NAME)
+        if self.skill_handler is not None or self.skill_reader is not None:
+            skill_spec = build_skill_tool_spec()
             handlers[skill_spec.full_name] = self._dict_handler(skill_spec, self._invoke_skill)
         if self.context_recall is not None:
             fold_spec, recall_spec = build_context_fold_spec(), build_context_recall_spec()
@@ -754,7 +819,9 @@ class MinecraftToolProvider(GameToolProvider):
         return await self.chat_sender(str(args.get("text", "")))
 
     async def _invoke_skill(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        assert self.skill_reader is not None  # 处理器表按读取器在册建表
+        if self.skill_handler is not None:
+            return await self.skill_handler(dict(args))
+        assert self.skill_reader is not None  # 处理器表按回调在册建表
         return await self.skill_reader(str(args.get("name", "")))
 
     async def _invoke_context_fold(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -883,6 +950,7 @@ __all__ = [
     "build_get_work_log_spec",
     "build_glance_spec",
     "build_chat_send_spec",
+    "build_skill_tool_spec",
     "build_report_spec",
     "PROVIDER_NAME",
     "ReportCallback",
