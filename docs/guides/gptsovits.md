@@ -1,12 +1,15 @@
 # GPT-SoVITS 语音服务部署
 
-Amaidesu 的 `gptsovits` TTS 引擎对接本机运行的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 服务：Amaidesu 把待合成文本通过 HTTP 发给它，收回流式音频播出。本文说明如何下载、启动该服务，以及 Amaidesu 侧的对应配置。
+Amaidesu 的 `gptsovits` TTS 引擎对接本机运行的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 服务：Amaidesu 把待合成文本通过 HTTP 发给它，收回流式音频播出。
+
+本文说明如何下载、启动该服务，以及 Amaidesu 侧的对应配置。
 
 > 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤。TTS 基础设施的整体位置见 [ADR-007：TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md)。
 
 ## 一、下载服务
 
-1. 从 [GPT-SoVITS 官方仓库 Releases](https://github.com/RVC-Boss/GPT-SoVITS/releases) 下载 Windows 整合包（自带内嵌 Python 运行时与预训练底模，免装环境）。以 `GPT-SoVITS-v5-20261006` 版整合包为例，解压到任意目录（下文记作 `<GSV 根目录>`）。
+1. 从 [GPT-SoVITS 官方仓库 Releases](https://github.com/RVC-Boss/GPT-SoVITS/releases) 下载 Windows 整合包（自带内嵌 Python 运行时与预训练底模，免装环境）。
+   以 `GPT-SoVITS-v5-20261006` 版整合包为例，解压到任意目录（下文记作 `<GSV 根目录>`）。
 2. 确认关键内容就位（v5 整合包默认自带）：
    - `api_v2.py`（HTTP 服务入口，本文使用 v2 接口而非旧版 `api.py`）
    - `GPT_SoVITS/pretrained_models/` 下的底模：v5 系 `gsv-v5-pretrained/s2Gv5dev.pth`、v2Pro 系 `v2Pro/s2Gv2ProPlus.pth`，两者共用 `s1v3.ckpt`
@@ -24,7 +27,10 @@ custom:
   vits_weights_path: GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2Gv5dev.pth
 ```
 
-v5 整合包的 `custom` 段默认是 v2ProPlus + CUDA（零改动可用）；要使用 v5 底模（音色更贴合参考音频、48k 输出），把 `version` 改为 `v5dev` 并将 `vits_weights_path` 指向 `gsv-v5-pretrained/s2Gv5dev.pth`。两个取舍：
+v5 整合包的 `custom` 段默认是 v2ProPlus + CUDA（零改动可用）。
+要使用 v5 底模（音色更贴合参考音频、48k 输出），把 `version` 改为 `v5dev` 并将 `vits_weights_path` 指向 `gsv-v5-pretrained/s2Gv5dev.pth`。
+
+两个取舍：
 
 - **v5 系（v5dev/v5turbo）**：音色好、原生 48k，但**不支持 token 级流式**（外挂 vocoder 架构限制，服务端自动回退为按句返回）
 - **v2ProPlus**：支持 token 级流式（streaming_mode=2/3），32k 输出
@@ -89,7 +95,10 @@ streaming_mode = 1
 
 `top_k` / `top_p` / `temperature` / `speed_factor` / `repetition_penalty` 在 api_v2 下真实生效，可按直播风格调整。
 
-流式能力与底模绑定：**v5 系底模（v5dev/v5turbo）因外挂 vocoder 架构不支持 token 级流式**，`streaming_mode` 传 2/3 会被服务端静默回退为按句返回（v2ProPlus 底模则支持 2/3 档，实测首包约 1.2s/0.7s vs 按句 5.8s）。v5dev 单句合成在正常 GPU 上不到 1 秒，按句返回的实际延迟已经很小。
+流式能力与底模绑定：**v5 系底模（v5dev/v5turbo）因外挂 vocoder 架构不支持 token 级流式**，`streaming_mode` 传 2/3 会被服务端静默回退为按句返回。
+（v2ProPlus 底模则支持 2/3 档，实测首包约 1.2s/0.7s vs 按句 5.8s。）
+
+v5dev 单句合成在正常 GPU 上不到 1 秒，按句返回的实际延迟已经很小。
 
 ## 五、启动顺序与验证
 
@@ -105,7 +114,12 @@ streaming_mode = 1
 - 命令行直连（服务自检）：
 
 ```
-curl -G "http://127.0.0.1:9880/tts" --data-urlencode "text=测试" --data-urlencode "text_lang=zh" --data-urlencode "ref_audio_path=referenceAudio\maimai_ref_generated.wav" --data-urlencode "prompt_lang=zh" -o test.wav
+curl -G "http://127.0.0.1:9880/tts" \
+  --data-urlencode "text=测试" \
+  --data-urlencode "text_lang=zh" \
+  --data-urlencode "ref_audio_path=referenceAudio\maimai_ref_generated.wav" \
+  --data-urlencode "prompt_lang=zh" \
+  -o test.wav
 ```
 
 `ref_audio_path` 换成你的实际参考音频路径；相对路径由服务端按 `<GSV 根目录>` 解释，与 curl 的执行目录无关。生成的 `test.wav` 能正常出声即服务就绪。

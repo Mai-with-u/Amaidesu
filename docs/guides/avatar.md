@@ -1,6 +1,8 @@
 # 虚拟形象接入：VTS、Warudo、VRChat 与表情差分立绘
 
-本文说明怎样让 Amaidesu 驱动各虚拟形象平台：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，身体跟着情绪换站姿，来礼物时挥手，AI 还能点名做动作。各平台在系统里的角色与跨平台机制，见[虚拟形象架构](../architecture/avatar-platform.md)。
+本文说明怎样让 Amaidesu 驱动各虚拟形象平台：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，身体跟着情绪换站姿，来礼物时挥手，AI 还能点名做动作。
+
+各平台在系统里的角色与跨平台机制，见[虚拟形象架构](../architecture/avatar-platform.md)。
 
 > 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤，`config/` 下的配置文件已经生成。下文的 `config/avatar.toml` 指项目里的虚拟形象配置文件。
 
@@ -10,7 +12,9 @@ VTS 是默认平台：装好 VTube Studio、加载好模型，Amaidesu 这边启
 
 ### 它是怎么连起来的
 
-一条 WebSocket 通道（默认本机 8001 端口，与 VTS 插件 API 默认一致）：Amaidesu 作为插件连入 VTS，逐帧写捕捉输入与自建输入；平台上做好的动作（热键）与风格化标记（表情文件或自建输入）由 Amaidesu 登记后按名字触发。首次连接时 VTS 会弹窗请求插件授权，同意后 token 保存在 `data/vts_token.txt`，之后断线自动重连、不再弹窗。
+一条 WebSocket 通道（默认本机 8001 端口，与 VTS 插件 API 默认一致）：Amaidesu 作为插件连入 VTS，逐帧写捕捉输入与自建输入；平台上做好的动作（热键）与风格化标记（表情文件或自建输入）由 Amaidesu 登记后按名字触发。
+
+首次连接时 VTS 会弹窗请求插件授权，同意后 token 保存在 `data/vts_token.txt`，之后断线自动重连、不再弹窗。
 
 ### 一、在 Amaidesu 里启用
 
@@ -25,13 +29,16 @@ enabled = ["vts"]
 
 一般不需要：
 
-- VTS 自带的捕捉输入（头部角度、眼睛开合、眉、嘴角、张嘴等）与 VBridger 那组自建输入（`JawOpen`、`MouthFunnel`、`MouthPucker`、`MouthPressLipOpen`、`MouthShrug`、`BrowInnerUp`、`EyeSquintL/R`、`BodyAngleX/Y/Z`、`BodyPositionX/Y/Z`）全部由 Amaidesu 逐帧写入；VTS 里没有的输入由程序按同样的名字与范围自动补建。约稿里"支持 VBridger"的模型认的就是这些名字。
+- VTS 自带的捕捉输入（头部角度、眼睛开合、眉、嘴角、张嘴等）与 VBridger 那组自建输入（`JawOpen`、`MouthFunnel`、`MouthPucker`、`MouthPressLipOpen`、`MouthShrug`、`BrowInnerUp`、`EyeSquintL/R`、`BodyAngleX/Y/Z`、`BodyPositionX/Y/Z`）全部由 Amaidesu 逐帧写入。
+  VTS 里没有的输入由程序按同样的名字与范围自动补建。约稿里"支持 VBridger"的模型认的就是这些名字。
 - 模型作者做模型时已经把这些输入映射到模型参数上，接了哪些就动哪些。在 VTS 界面里换模型后，程序检测到模型变化，会自动重新读取新模型的热键清单与输入范围。
 - "输入写入成功"和"模型上看得出效果"是两回事：模型作者把哪些输入接到了哪个部位，VTS 的接口查不到，没接的输入写了也没效果。
 
 ### 三、按观感校准
 
-三个校准项（`[platform.vts]` 的 `eye_open_rest` / `mouth_smile_neutral` / `brow_neutral`）：同一个输入值在不同模型上的含义不一样。比如实测桃濑日和的"眼睛开合"输入 1.0 已是瞪到最大，正常睁眼约 0.53。眼睛显得瞪着就把 `eye_open_rest` 调小，显得困就调大。三项都可以在[形象调校页](../architecture/avatar-platform.md#形象调校页)上看着模型实时调。
+三个校准项（`[platform.vts]` 的 `eye_open_rest` / `mouth_smile_neutral` / `brow_neutral`）：同一个输入值在不同模型上的含义不一样。比如实测桃濑日和的"眼睛开合"输入 1.0 已是瞪到最大，正常睁眼约 0.53。
+
+眼睛显得瞪着就把 `eye_open_rest` 调小，显得困就调大。三项都可以在[形象调校页](../architecture/avatar-platform.md#形象调校页)上看着模型实时调。
 
 VTS 的眼球左右输入与头部左右转输入方向相反（两者同为正时，模型头转向画面右边、眼球转向左边），Amaidesu 的驱动换算时已把视线左右取反，"看向某处"时头和眼朝同一边，不需要配置。
 
@@ -41,7 +48,9 @@ VTS 的眼球左右输入与头部左右转输入方向相反（两者同为正�
 
 ### 五、风格化标记（漫符）
 
-动漫模型常画好一些漫符：脸红、眼泪、汗滴、黑线、生气符号、惊吓符号、爱心眼、星星眼、阴影脸。面捕捕捉不到它们，ARKit 里也没有，由 Amaidesu 自己定名并按动漫惯例挂默认配方：害羞脸红、哭有泪、生气冒青筋、无语出黑线，强弱乘情绪强度。模型上有哪些、对应什么，在 `[platform.vts.markers]` 登记，没登记的不发：
+动漫模型常画好一些漫符：脸红、眼泪、汗滴、黑线、生气符号、惊吓符号、爱心眼、星星眼、阴影脸。面捕捕捉不到它们，ARKit 里也没有，由 Amaidesu 自己定名并按动漫惯例挂默认配方：害羞脸红、哭有泪、生气冒青筋、无语出黑线，强弱乘情绪强度。
+
+模型上有哪些、对应什么，在 `[platform.vts.markers]` 登记，没登记的不发：
 
 ```toml
 [platform.vts.markers]
@@ -70,8 +79,12 @@ VTS 自带的 akari 模型就带着眼泪（`EyesCry`）、爱心眼（`EyesLove
 
 两条通道：
 
-- **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器按配置帧率逐帧推进，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数、头部转角与位置、眼球转角。Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来；身体前倾、后缩（开心时往前凑、受惊时往后缩）写在头部位置里，和真人身子一动头就跟着平移一样，Warudo 按头部动作自己带动身体。
-- **蓝图通道**（WebSocket，默认 19190 端口）：Amaidesu 发一条条"动作名 + 数值"，比如 `body_stance_hands_front = 1`、`marker_tears = 0.8`。Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去播一段动画或改一个形状。只用来做身体动作（换站姿、摇一下身体、挥手这类面捕数据装不下的全身动作）、抛鱼和风格化标记（脸红、眼泪这类漫符）。
+- **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器按配置帧率逐帧推进，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数、头部转角与位置、眼球转角。
+  Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来。
+  身体前倾、后缩（开心时往前凑、受惊时往后缩）写在头部位置里，和真人身子一动头就跟着平移一样，Warudo 按头部动作自己带动身体。
+- **蓝图通道**（WebSocket，默认 19190 端口）：Amaidesu 发一条条"动作名 + 数值"，比如 `body_stance_hands_front = 1`、`marker_tears = 0.8`。
+  Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去播一段动画或改一个形状。
+  只用来做身体动作（换站姿、摇一下身体、挥手这类面捕数据装不下的全身动作）、抛鱼和风格化标记（脸红、眼泪这类漫符）。
 
 模型怎么把 ARKit 系数落到自己的形状上，在 Warudo 的面捕设置里调，和真人用 iPhone 面捕时一样。
 
@@ -84,10 +97,12 @@ VTS 自带的 akari 模型就带着眼泪（`EyesCry`）、爱心眼（`EyesLove
 ### 二、在 Warudo 里接上面捕
 
 1. 在角色的动作捕捉设置里，面部捕捉选 **iFacialMocap**，Warudo 会在场景里加一个 iFacialMocap Receiver（接收器）。接收器配置页里的输入端口默认是 49983，与 Amaidesu 一致。
-2. 面部捕捉设置里的形状映射（Configure BlendShapes Mapping）按模型选：模型带 ARKit 的 52 个形状（"完美同步"）选 ARKit；只有 VRM 标准表情的选 VRM。表情做在自定义形状上的模型（例如麦麦），给模型补上 ARKit 形状最省事，或者在这里逐项把 ARKit 系数接到模型的形状上。
+2. 面部捕捉设置里的形状映射（Configure BlendShapes Mapping）按模型选：模型带 ARKit 的 52 个形状（"完美同步"）选 ARKit；只有 VRM 标准表情的选 VRM。
+   表情做在自定义形状上的模型（例如麦麦），给模型补上 ARKit 形状最省事，或者在这里逐项把 ARKit 系数接到模型的形状上。
 3. 关掉 Warudo 自带的音频口型（用麦克风声音驱动嘴的功能）：嘴的开合已经在面捕数据里，两边会抢着控制嘴。
 4. 面部捕捉设置里的"启用头部和身体运动"（Enable Head and Body Movements）选是；自动眨眼、自动眼动、自动头部动作（Idle Head Animation）关掉——这些 Amaidesu 已经在做，两边叠在一起会乱。
-5. 姿态捕捉（身体追踪）选无：Amaidesu 不发身体追踪数据。身体跟着头转、前倾后缩由 Warudo 按头部动作带出，幅度在接收器的 Body Movement Intensity、Body Rotation Type 里调；手臂和整体的姿势由身体动作蓝图播 Warudo 自带的动画（见第四步），呼吸和站着时的轻晃也在这些待机动画里。
+5. 姿态捕捉（身体追踪）选无：Amaidesu 不发身体追踪数据。身体跟着头转、前倾后缩由 Warudo 按头部动作带出，幅度在接收器的 Body Movement Intensity、Body Rotation Type 里调。
+   手臂和整体的姿势由身体动作蓝图播 Warudo 自带的动画（见第四步），呼吸和站着时的轻晃也在这些待机动画里。
 6. Amaidesu 启动后（见第五步）在接收器上点一次校准（Calibrate），校准时形象正看镜头。
 
 头和眼的左右如果反了（Amaidesu 让她往弹幕区看，她看向另一边），勾上接收器的镜像（Mirrored Tracking）。
@@ -145,7 +160,15 @@ uv run python scripts/warudo_blueprints.py --probe ws://localhost:19190
 
 脚本把站姿、叠加动作、手势、风格化标记各发一遍，每项停顿一下（`--hold` 可整体放慢一倍），最后回到普通站姿；终端里会打印正在发哪一项、播的是哪段动画，对着画面看就行。
 
-然后启动 Amaidesu：面捕数据一发出，形象就开始眨眼、看来看去，说话时嘴跟着语音动、表情跟着情绪变；蓝图通道 Warudo 后开也没关系，Amaidesu 每隔几秒重连。站姿跟着情绪自己换，说话时偶尔摇一下身体或仰头笑，来礼物时挥手；主播用 `avatar_act` 做的动作里会多出挥手、指一下这类手势和抛鱼。觉得某个动作和模型不搭，在 `[platform.warudo.body_animations]` 里换成 Warudo 自带的别的动画（写 AGIA 下的相对路径即可，如 `hands_front = "01_Idles/AGIA_Idle_energetic_02_right_hand_piece"`），改完重新生成并导入蓝图；想换的是"哪个情绪摆哪个站姿"，改 `[tracking].body_stances`，不用重新生成。想让她用自己做的蓝图动作，在 `[platform.warudo.action_catalog]` 里登记"动作名 = 说明"，蓝图里用"收到 WebSocket 动作"节点按这个名字接收（数据类型选整数）。
+然后启动 Amaidesu：面捕数据一发出，形象就开始眨眼、看来看去，说话时嘴跟着语音动、表情跟着情绪变；蓝图通道 Warudo 后开也没关系，Amaidesu 每隔几秒重连。
+
+站姿跟着情绪自己换，说话时偶尔摇一下身体或仰头笑，来礼物时挥手；主播用 `avatar_act` 做的动作里会多出挥手、指一下这类手势和抛鱼。
+
+后续想调整时：
+
+- 觉得某个动作和模型不搭，在 `[platform.warudo.body_animations]` 里换成 Warudo 自带的别的动画（写 AGIA 下的相对路径即可，如 `hands_front = "01_Idles/AGIA_Idle_energetic_02_right_hand_piece"`），改完重新生成并导入蓝图。
+- 想换的是"哪个情绪摆哪个站姿"，改 `[tracking].body_stances`，不用重新生成。
+- 想让她用自己做的蓝图动作，在 `[platform.warudo.action_catalog]` 里登记"动作名 = 说明"，蓝图里用"收到 WebSocket 动作"节点按这个名字接收（数据类型选整数）。
 
 ### 常见问题
 
@@ -185,13 +208,21 @@ enabled = ["vrchat"]
 
 ### 三、头顶聊天框
 
-默认开启：主播说的每句话会同步显示在形象头顶的聊天框里，和字幕显示的是同一句。VRChat 限制单条 144 字（平台硬限制），超出会截断；两条之间有最小发送间隔（`chatbox_min_interval_ms`），说得太快时只显示最新的一句。不想要的话，在 `[platform.vrchat]` 里设 `chatbox_enabled = false`。
+默认开启：主播说的每句话会同步显示在形象头顶的聊天框里，和字幕显示的是同一句。
+
+VRChat 限制单条 144 字（平台硬限制，外部协议事实），超出会截断；两条之间有最小发送间隔（`chatbox_min_interval_ms`），说得太快时只显示最新的一句。
+
+不想要的话，在 `[platform.vrchat]` 里设 `chatbox_enabled = false`。
 
 ### 四、动作
 
-默认动作表对应 VRChat SDK 默认模板里的 `VRCEmote` 参数：挥手、鼓掌、指向、欢呼、跳舞、后空翻、悲伤、倒地。其中第 7、8 项（悲伤、倒地）的取值是按菜单顺序推定的，用的时候请对照一下。触发后过一小段时间把参数写回 0，鼓掌、跳舞这类会循环的动作靠这一步停下。
+默认动作表对应 VRChat SDK 默认模板里的 `VRCEmote` 参数：挥手、鼓掌、指向、欢呼、跳舞、后空翻、悲伤、倒地。其中第 7、8 项（悲伤、倒地）的取值是按菜单顺序推定的，用的时候请对照一下。
 
-来礼物挥手、主播点名"指一下"这类手势也走动作表：`body_emotes` 默认把挥手、双手挥对到 Wave，指一下对到 Point，举拳庆祝对到 Cheer。改了动作表的，对不上的手势在 VRChat 上跳过（启动日志里有警告），按需改 `body_emotes`。换站姿 VRChat 没有对应的做法，不做。
+触发后过一小段时间把参数写回 0，鼓掌、跳舞这类会循环的动作靠这一步停下。
+
+来礼物挥手、主播点名"指一下"这类手势也走动作表：`body_emotes` 默认把挥手、双手挥对到 Wave，指一下对到 Point，举拳庆祝对到 Cheer。
+
+改了动作表的，对不上的手势在 VRChat 上跳过（启动日志里有警告），按需改 `body_emotes`。换站姿 VRChat 没有对应的做法，不做。
 
 如果你的形象没有 `VRCEmote`，或者动作做在别的参数上：
 
@@ -211,7 +242,8 @@ VRChat 会按麦克风收到的声音自己算口型，任何形象都适用，A
 ### 六、眼睛与表情
 
 - **眼睛**：任何形象都会跟着 Amaidesu 眨眼、看镜头、瞥弹幕区。VRChat 超过 10 秒收不到眼动数据会交还自带的自动眨眼，Amaidesu 关掉后形象照常。
-- **表情**：只有做了面捕参数的形象会动。VRChat 圈里给形象接面捕的通行做法是 VRCFaceTracking，参数名形如 `FT/v2/JawOpen`、`FT/v2/MouthSmileLeft`；用这类模板做的形象，主播说话时表情跟着情绪变、嘴角和眉毛都会动。参数名前缀不是 `FT/` 的，在 `[platform.vrchat]` 里改 `face_tracking_prefix`；不想写脸就设 `face_tracking_enabled = false`。
+- **表情**：只有做了面捕参数的形象会动。VRChat 圈里给形象接面捕的通行做法是 VRCFaceTracking，参数名形如 `FT/v2/JawOpen`、`FT/v2/MouthSmileLeft`；用这类模板做的形象，主播说话时表情跟着情绪变、嘴角和眉毛都会动。
+  参数名前缀不是 `FT/` 的，在 `[platform.vrchat]` 里改 `face_tracking_prefix`；不想写脸就设 `face_tracking_enabled = false`。
 - **风格化标记**：形象作者另做了脸红、眼泪这类参数的，在 `[platform.vrchat.markers]` 登记，比如 `tears = "Tears"`（标记名 = 参数名，参数类型用浮点）。
 
 想核对形象有哪些参数，看第四步说的参数清单文件。
@@ -223,7 +255,8 @@ VRChat 会按麦克风收到的声音自己算口型，任何形象都适用，A
 ### 一、准备差分图
 
 - 一个目录放一套图，每个情绪一张，**文件名就是情绪名**：`neutral.png`、`happy.png`、`angry.png`、`speechless.png`……
-- 全部情绪名（小写英文）：`neutral`、`happy`、`sad`、`angry`、`surprised`、`scared`、`disgusted`、`shy`、`embarrassed`、`confused`、`love`、`excited`、`smug`、`serious`、`tired`、`crying`、`speechless`。
+- 全部情绪名（小写英文）：`neutral`、`happy`、`sad`、`angry`、`surprised`、`scared`、`disgusted`、
+  `shy`、`embarrassed`、`confused`、`love`、`excited`、`smug`、`serious`、`tired`、`crying`、`speechless`。
 - 支持 `png` / `jpg` / `jpeg` / `webp`；某张缺了自动回退到 `neutral` 那张，所以至少要准备 `neutral`。
 - 建议所有图同一画布尺寸、同一构图，换图时才不跳。
 

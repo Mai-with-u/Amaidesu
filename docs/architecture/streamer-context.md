@@ -1,6 +1,14 @@
 # 主播 Agent 决策回合上下文
 
-本文档描述 StreamerAgent 每次 Planner 决策回合喂给 LLM 的完整输入构成：消息形态、参考段、缓存要求、历史时间线与预算，以及历史读取的单一事实源。实现入口：`src/agents/streamer/planner.py`（消息序列组装）、`src/agents/streamer/canonical.py`（canonical 映射）、`src/agents/streamer/planner_context.py`(参考段组装）、`src/agents/streamer/timeline.py`（历史时间线）、`src/agents/streamer/streamer_agent.py`（历史读取链）。分层布局与预算原语见 `src/modules/context/`。
+本文档描述 StreamerAgent 每次 Planner 决策回合喂给 LLM 的完整输入构成：消息形态、参考段、缓存要求、历史时间线与预算，以及历史读取的单一事实源。实现入口：
+
+- `src/agents/streamer/planner.py`：消息序列组装
+- `src/agents/streamer/canonical.py`：canonical 映射
+- `src/agents/streamer/planner_context.py`：参考段组装
+- `src/agents/streamer/timeline.py`：历史时间线
+- `src/agents/streamer/streamer_agent.py`：历史读取链
+
+分层布局与预算原语见 `src/modules/context/`。
 
 ## 消息形态
 
@@ -13,8 +21,11 @@
 [user]    参考段（元数据参考内容，固定在序列尾部）
 ```
 
-- **系统提示词末尾的记忆摘要**：上一场档案行加不针对具体观众、不挂游戏的未了结承诺，接在模板渲染结果之后。**每个决策回合按表快照重渲**：表没变时输出逐字节相同（与人设一起吃前缀缓存，缓存不失效），表变了（直播中判误记、了结、删一行，或上一场整理刚写完）下一窗就反映出来。开播先按当前表快照拼第一份记忆摘要，待整理场次排进后台（不同步等待），后台整理写完档案后下一窗生效；直播中断线重开也按同一规则重拼。见[主播记忆](memory/README.md)。
-- **canonical 单一映射**：直播对话进入 LLM 消息数组只有一条序列化路径（`canonical.py`）。live_chat 历史行、历史 turn、弹幕批成员三种输入经同一组纯函数产出 `{role, content}` dict——两条链路（批 vs 历史）逐字同构，不存在"批格式 vs 历史格式"双轨。
+- **系统提示词末尾的记忆摘要**：上一场档案行加不针对具体观众、不挂游戏的未了结承诺，接在模板渲染结果之后。见[主播记忆](memory/README.md)。
+- **每个决策回合按表快照重渲**：表没变时输出逐字节相同（与人设一起吃前缀缓存，缓存不失效）；表变了（直播中判误记、了结、删一行，或上一场整理刚写完）下一窗就反映出来。
+- **开局与断线重开**：开播先按当前表快照拼第一份记忆摘要，待整理场次排进后台（不同步等待），后台整理写完档案后下一窗生效；直播中断线重开也按同一规则重拼。
+- **canonical 单一映射**：直播对话进入 LLM 消息数组只有一条序列化路径（`canonical.py`）。
+  live_chat 历史行、历史 turn、弹幕批成员三种输入经同一组纯函数产出 `{role, content}` dict——两条链路（批 vs 历史）逐字同构，不存在"批格式 vs 历史格式"双轨。
 - **内容格式**：观众行为 ``[类型前缀] 昵称: 内容 [id:消息ID]``（类型前缀由消息类型登记表的 prompt 模板承载；`[id:…]` 目标机制保留在 content 内）；主播行为原样内容（发言即正文，不加昵称前缀）。
 - **批与历史同形**：本批弹幕与历史消息经同一函数序列化，跨窗追加时形态一致——这是缓存稳定的前提。
 - **ReAct 循环的 assistant/tool 消息**追加在参考段之后（append-only），绝不插进既有前缀中间。
@@ -29,13 +40,21 @@
 | 环节描述 | 流程单环节说明 |
 | 直播间快照 | 时刻（分钟桶）/ 已开播时长 / 当前环节 / 未读摘要 / 关键变化 |
 | 记忆线索 | 承诺线索（对象开口 / 她正在玩的游戏）、老观众在场一行、遗忘回执；由线索推送每批计算（见[主播记忆 - 线索推送](memory/cues.md)） |
-| 游戏那边此刻 | 手上那件事的状态（与委派进展同一句，委派原话不重复）、此刻那一步（任务账本里游戏 Agent 自己发起、还在跑的最近一步的目的）、最近几步结果（委派快照里游戏侧的进展备注，脱敏成中文结果）、游戏那边的判断（游戏 Agent 中间步骤说的最近一句，它记在任务账本里那件委派的快照旁注上，主播每回合决策前读，不订阅回复事件；标明不一定对）、她近 5 分钟在游戏公屏说过的话，最后是现场速览（决策前自动读的参考工具结果）。除现场速览外各项截短，合计约 600 token 以内；坐标换成"那里"或去掉，编号、工具名去掉 |
+| 游戏那边此刻 | 手上那件事的状态（与委派进展同一句，委派原话不重复）、此刻那一步（任务账本里游戏 Agent 自己发起、还在跑的最近一步的目的）、最近几步结果（委派快照里游戏侧的进展备注，脱敏成中文结果）、游戏那边的判断（游戏 Agent 中间步骤说的最近一句，它记在任务账本里那件委派的快照旁注上，主播每回合决策前读，不订阅回复事件；标明不一定对）、她近 5 分钟在游戏公屏说过的话，最后是现场速览（决策前自动读的参考工具结果）。除现场速览外各项截短，合计有预算上限（各项字数与整块封顶见 `src/agents/streamer/game_now.py` 顶部的常量）；坐标换成"那里"或去掉，编号、工具名去掉 |
 
-组装顺序固定：情境标注（房间活跃度、冷场提示、私密游戏聊天、状态事实、委派进展、已聊话题、运营提醒）→ 环节描述 → 直播间快照 → 记忆线索 → 游戏那边此刻。游戏那边此刻每回合重建、整块放在最后：新读的现场离决策最近，不被前面已聊话题里的旧说法盖住；它只给 Planner，回复器不看。已聊话题每行只写她当时说的那句，不写当时游戏里的状态。记忆摘要不在参考段，在系统提示词末尾。**空段规则：有数据才渲染段**（无占位文本）。参考段只追加在尾部、不在中间插入——后续 ReAct 循环的 assistant/tool 消息继续 append-only 追加其后，保持整个消息序列的前缀稳定。
+组装顺序固定：情境标注（房间活跃度、冷场提示、私密游戏聊天、状态事实、委派进展、已聊话题、运营提醒）→ 环节描述 → 直播间快照 → 记忆线索 → 游戏那边此刻。
+
+- 游戏那边此刻每回合重建、整块放在最后：新读的现场离决策最近，不被前面已聊话题里的旧说法盖住；它只给 Planner，回复器不看。
+- 已聊话题每行只写她当时说的那句，不写当时游戏里的状态。
+- 记忆摘要不在参考段，在系统提示词末尾。
+- **空段规则：有数据才渲染段**（无占位文本）。
+- 参考段只追加在尾部、不在中间插入——后续 ReAct 循环的 assistant/tool 消息继续 append-only 追加其后，保持整个消息序列的前缀稳定。
 
 ## 直播画面
 
-`[agents.streamer.live_frame]` 启用、collectors.toml 启用 `live_frame` 采集器、且 planner 主模型支持视觉时，决策回合第一次请求的末尾多挂一条 user 消息：【直播画面】说明 + 最新一帧画面（图像暂存 `VisionImageStore` 的句柄，查询式取自 latest 槽位）。规则：
+`[agents.streamer.live_frame]` 启用、collectors.toml 启用 `live_frame` 采集器、且 planner 主模型支持视觉时，决策回合第一次请求的末尾多挂一条 user 消息：【直播画面】说明 + 最新一帧画面。
+
+图像以 `VisionImageStore` 的句柄暂存，查询式取自 latest 槽位。规则：
 
 - 只挂第一次请求，同窗后续 ReAct 步骤不带；不写进消息序列，前缀不受影响；
 - 画面超过 `max_age_ms` 视为过时不看；看过的那一帧不再看；两次之间至少隔 `min_interval_ms`；
@@ -51,15 +70,22 @@
 
 ## 历史时间线与预算
 
-Planner 读历史投影（`StreamerTimeline`）；Replyer 默认不读它，只拿最近 `replyer_history_items` 条原文（默认 14，章节不进）和滑出这段窗口的她自己说过的话，回复器看到的是"刚才聊到哪了"而不是整场摘要。`replyer_history_items = 0` 是回退开关：Replyer 改回与 Planner 共用时间线。
+Planner 读历史投影（`StreamerTimeline`）；Replyer 默认不读它，只拿最近 `replyer_history_items` 条原文（条数默认值见 `src/agents/streamer/config.py`，章节不进）和滑出这段窗口的她自己说过的话，回复器看到的是"刚才聊到哪了"而不是整场摘要。
+
+`replyer_history_items = 0` 是回退开关：Replyer 改回与 Planner 共用时间线。
 
 - **只追加**：记录按主播第一次看到的先后进入时间线，进去后不挪位置、不改写；相邻两个决策回合的历史前缀逐字一致。
-- **预算**：`[agents.streamer.context]` 的 `window_ratio` / `max_tokens` 按 planner 档位的模型窗口换算（回退开关打开时取 planner、replyer 里较小的那个；窗口未配置按 128k 计）。前情提要这一层最多占预算的 30%，超出时从最老的章节开始移出，每移出一章留一行前情目录（取该章第一句，不超过 30 字），细节记不清时让她坦白或问弹幕。
-- **按章压缩**：历史越过提前整理线（`prepare_ratio`）时，后台用 summary 档位把最老的一段写成一章前情提要，写好后的下一窗换上，压回到回落线（`target_ratio`）；最近 20 条始终保持原文。章节只追加，两次换章之间前缀不变。
+- **预算**：`[agents.streamer.context]` 的 `window_ratio` / `max_tokens` 按 planner 档位的模型窗口换算（回退开关打开时取 planner、replyer 里较小的那个；窗口未配置时的默认窗口大小见 `src/modules/context/budget.py`）。
+- **章节层上限**：前情提要这一层最多占预算的固定比例（`src/agents/streamer/timeline.py` 的 `_CHAPTER_LAYER_RATIO`），超出时从最老的章节开始移出，每移出一章留一行前情目录（取该章第一句，行长上限见 `timeline.py` 的 `_CATALOG_GIST_CHARS`），细节记不清时让她坦白或问弹幕。
+- **按章压缩**：历史越过提前整理线（`prepare_ratio`）时，后台用 summary 档位把最老的一段写成一章前情提要，写好后的下一窗换上，压回到回落线（`target_ratio`）；最近若干条始终保持原文（条数见 `src/agents/streamer/timeline.py` 的 `_PROTECTED_RECENT`）。章节只追加，两次换章之间前缀不变。
 - **兜底**：摘要迟迟出不来、历史涨到预算两倍时，同步把最老一段换成占位说明，避免撞上模型窗口。
 - **场次边界**：开播、下播、读到的场次变化时时间线清空重来。
 
-时间线里除了对话，还有两类游戏记录（`message_type = "game"` 的 user 条目，行首是发生时刻的钟点）：游戏里程碑（`game.*` 的进展、上报、需要注意、异常）与"我在哪个游戏里开始做什么"（委派受理时记下主播自己的原话）。参考段的【游戏叙事】只回放最近一阵并标"新"，时间线留下整场的先后，换章时一起写进前情提要。前情提要是 `message_type = "chapter"` 的 user 条目。两类条目 canonical 都原样渲染。时间线内置前缀自检：两次换章之外稳定层被改写时记告警。
+时间线里除了对话，还有两类游戏记录（`message_type = "game"` 的 user 条目，行首是发生时刻的钟点）：游戏里程碑（`game.*` 的进展、上报、需要注意、异常）与"我在哪个游戏里开始做什么"（委派受理时记下主播自己的原话）。
+
+- 参考段的【游戏叙事】只回放最近一阵并标"新"，时间线留下整场的先后，换章时一起写进前情提要。
+- 前情提要是 `message_type = "chapter"` 的 user 条目。两类条目 canonical 都原样渲染。
+- 时间线内置前缀自检：两次换章之外稳定层被改写时记告警。
 
 ## 输入完整性
 
@@ -73,9 +99,13 @@ LLM 请求完整发送消息与工具声明，宿主不设置生成 token 上限
 
 历史读取只有一条链，无内存副本、无二次写入：
 
-- **表**：SQLite `live_chat`（全量直播消息流，含 `sender_role` / `sender_name` / `content` / `message_type` / `message_id` / `simulated` 等列），由 `StorageLedger` 订阅 `room.message.#` + `streamer.speech` 唯一写入。
+- **表**：SQLite `live_chat`（全量直播消息流，含 `sender_role` / `sender_name` / `content` / `message_type` / `message_id` / `simulated` 等列）。
+- **写入**：由 `StorageLedger` 订阅 `room.message.#` + `streamer.speech` 唯一写入。
 - **索引**：`idx_live_chat_session_ts (live_session_id, timestamp_ms)`——按场次取最近窗口的组合索引。
-- **读取链**：Planner 决策回合 / reply 工具均经 `StreamerAgent._read_history()` → `LiveSessionManager.resolve_pk()` 解析当前场次主键（与写路径 `StorageLedger` 落库同源）→ `ChatRepo.list_recent_live_chat(live_session_id, limit=None)` 按时间正序返回当前场次完整对话 → 时间线投影（见上节）。
+- **读取链**：Planner 决策回合 / reply 工具均经 `StreamerAgent._read_history()`，依次过三步：
+  1. `LiveSessionManager.resolve_pk()` 解析当前场次主键（与写路径 `StorageLedger` 落库同源）；
+  2. `ChatRepo.list_recent_live_chat(live_session_id, limit=None)` 按时间正序返回当前场次完整对话；
+  3. 时间线投影（见上节）。
 - **空读语义**：无显式场次（首场/未开播）或存储缺失时返回空列表，**不抛错**——首场首决定窗的空读是常态而非异常；读取异常记录 warning 并走各消费方自身的失败路径。
 
 ## 相关文档

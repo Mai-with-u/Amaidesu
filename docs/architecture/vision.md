@@ -4,7 +4,12 @@
 
 ## 图像仓（VisionImageStore）
 
-`src/modules/vision/image_store.py`：进程内 LRU（默认 16 张、15 分钟过期），图片本体不落盘不入库。消息里只携带句柄（`ImageRefPart`，形如 `img_xxx` 的引用），LLM 引擎发请求前把"新鲜"的句柄换回真图（代码里叫注水 `_hydrate_image_refs`）：引用所属消息之后新增的 assistant 消息数不超过 `visible_turns`（默认 1）才算新鲜；过期或被逐出的引用降级为"截图已过期，需要时重新截图"的文字提示。另有"最新帧"槽位（`put_latest` / `latest`），供直播画面流反复覆盖写、消费方随时取当前帧。
+`src/modules/vision/image_store.py`：进程内 LRU（容量与过期时长取包内默认常量 `DEFAULT_CAPACITY` / `DEFAULT_TTL_MS`），图片本体不落盘不入库。
+
+消息里只携带句柄（`ImageRefPart`，形如 `img_xxx` 的引用），LLM 引擎发请求前把"新鲜"的句柄换回真图（代码里叫注水 `_hydrate_image_refs`）：引用所属消息之后新增的 assistant 消息数不超过 `visible_turns` 才算新鲜（默认值见 `image_store.py` 的 `DEFAULT_VISIBLE_TURNS`）。
+过期或被逐出的引用降级为"截图已过期，需要时重新截图"的文字提示。
+
+另有"最新帧"槽位（`put_latest` / `latest`），供直播画面流反复覆盖写、消费方随时取当前帧。
 
 ## 三个入口
 
@@ -14,15 +19,23 @@
 
 ### 2. 视觉直连
 
-工具回执与 Planner 可以把截图以句柄形式挂进对话观察，让主模型直接看图而不是读转述（设计见 [ADR-037：视觉直连：工具图像进对话观察](../decisions/037-vision-direct-tool-image-observation.md)）。硬约束：请求消息里禁止内联 base64 图片（引擎期硬错），图必须走图像仓 + 句柄。另有一道内联载荷守卫：文本承载字段合计超 20 万字符拒发（防大载荷意外泄漏，与按模型窗口换算的 token 预算是两道独立的闸）。
+工具回执与 Planner 可以把截图以句柄形式挂进对话观察，让主模型直接看图而不是读转述（设计见 [ADR-037：视觉直连：工具图像进对话观察](../decisions/037-vision-direct-tool-image-observation.md)）。
+
+硬约束：请求消息里禁止内联 base64 图片（引擎期硬错），图必须走图像仓 + 句柄。
+
+另有一道内联载荷守卫：文本承载字段合计超上限拒发（上限见 `src/modules/llm/engine.py` 的 `_MAX_INLINE_TEXT_CHARS`，防大载荷意外泄漏，与按模型窗口换算的 token 预算是两道独立的闸）。
 
 ### 3. 直播画面流
 
-`live_frame` 采集器常驻采样节目画面（OBS WebSocket 截指定源，OBS 不可用自动回退桌面截屏），每次采样覆盖写图像仓的"最新帧"槽位——**不发事件**，规划器查询式取用：Planner 在每个决策回合的第一次请求尾部挂一张最新帧（同一决策回合的后续步骤不重复挂），主播每次决策都看得到直播间此刻的样子；帧龄过旧会限频告警（设计见 [ADR-041：直播画面做成采集流](../decisions/041-live-frame-stream.md)）。
+`live_frame` 采集器常驻采样节目画面（OBS WebSocket 截指定源，OBS 不可用自动回退桌面截屏），每次采样覆盖写图像仓的"最新帧"槽位——**不发事件**，规划器查询式取用。
+
+Planner 在每个决策回合的第一次请求尾部挂一张最新帧（同一决策回合的后续步骤不重复挂），主播每次决策都看得到直播间此刻的样子；帧龄过旧会限频告警（设计见 [ADR-041：直播画面做成采集流](../decisions/041-live-frame-stream.md)）。
 
 ## 能力协商
 
-`LLMManager.is_profile_visual(profile)` 按模型注册表里的 `visual` 声明判定调用方能不能看图：非 visual 模型的决策回合不带图，引擎注水时非 visual 或越窗的引用一律降级为文字。判定宁可保守——判错的代价只是多一次 VLM 转述，不会让请求失败。
+`LLMManager.is_profile_visual(profile)` 按模型注册表里的 `visual` 声明判定调用方能不能看图：非 visual 模型的决策回合不带图，引擎注水时非 visual 或越窗的引用一律降级为文字。
+
+判定宁可保守——判错的代价只是多一次 VLM 转述，不会让请求失败。
 
 ## 配置面
 

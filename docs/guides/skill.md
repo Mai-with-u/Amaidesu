@@ -1,6 +1,8 @@
 # Skill 编写与接入
 
-Skill 是写给模型的玩法/操作经验文档：回答"一类目标该怎么做成"。它与能力契约（某个能力怎么调）、外部知识库（世界里的事实是什么）分工，定位与取舍见 [ADR-036：Skill 系统](../decisions/036-skill-system.md) 与 [ADR-044：玩法技能随 Mod 发布，直播策略留宿主](../decisions/044-skills-over-mcp.md)。
+Skill 是写给模型的玩法/操作经验文档：回答"一类目标该怎么做成"。它与能力契约（某个能力怎么调）、外部知识库（世界里的事实是什么）分工。
+
+定位与取舍见 [ADR-036：Skill 系统](../decisions/036-skill-system.md) 与 [ADR-044：玩法技能随 Mod 发布，直播策略留宿主](../decisions/044-skills-over-mcp.md)。
 
 技能分两处：
 
@@ -47,14 +49,17 @@ metadata: {"requires-mods": "create"}
 - `name`：小写字母、数字、连字符，1–64 字，必须等于目录名。
 - `description`：1–1024 字，先说是什么、再说什么时候读；它是目录里唯一的信息。
 - `metadata`：一行 JSON，值只能是字符串；`requires-mods` 是逗号分隔的模组 ID，本局这些联动都接上了才发布。没有前提时整段省略。
-- 正文必须宿主中立：不出现"主播""直播""观众""上报主播"，不出现 `maicraft_lookup`、`minecraft_report` 这类宿主工具名；引用工具用服务器的短名（`lookup`、`execute`、`goal`、`events`、`observe`），引用能力用 ID（`maicraft:obtain`），引用事实用知识地址（`maicraft://knowledge/...`）。
+- 正文必须宿主中立：不出现"主播""直播""观众""上报主播"，不出现 `maicraft_lookup`、`minecraft_report` 这类宿主工具名。
+  引用工具用服务器的短名（`lookup`、`execute`、`goal`、`events`、`observe`），引用能力用 ID（`maicraft:obtain`），引用事实用知识地址（`maicraft://knowledge/...`）。
 - 数值类事实（配方比例、掉率、应力数值）不写死，指向知识库或配方查询。
 
 格式不合规、正文为空、名字与目录不一致、地址重复，MaiCraft 启动时就失败，不会把坏技能发给客户端。
 
 ## 本地直播策略（Amaidesu）
 
-文件在 `src/agents/minecraft/skills/<分类>/<名字>.md`，由 [`SkillLibrary`](../../src/modules/skills/library.py) 按 `src/**/skills/**/*.md` 自动发现。现有 `streaming/streaming_policy.md` 是唯一一篇，写上报、节奏、观众体验与宿主工具。
+文件在 `src/agents/minecraft/skills/<分类>/<名字>.md`，由 [`SkillLibrary`](../../src/modules/skills/library.py) 按 `src/**/skills/**/*.md` 自动发现。
+
+现有 `streaming/streaming_policy.md` 是唯一一篇，写上报、节奏、观众体验与宿主工具。
 
 ```markdown
 ---
@@ -79,7 +84,8 @@ tags: [直播, 上报]
 2. 用 `SkillLibrary.replace_remote("MaiCraft", entries)` 登记，目录里标"来自 MaiCraft"。
 3. 模型按名读时，本地技能直接读；远端技能按 `uri` 走 `resources/read`，去掉 frontmatter 后交给模型，结果里带 `source: "MaiCraft"`。
 4. 连接断开时 `clear_remote("MaiCraft")`，远端技能消失，本地策略照常可用；重连后重新登记。
-5. 技能段里说明：正文里的 `lookup`、`execute`、`goal`、`events`、`observe` 对应本机的 `maicraft_lookup`、`maicraft_execute`、`maicraft_goal`、`maicraft_events`、`maicraft_observe`。
+5. 技能段里说明正文工具短名与本机工具名的对应：`lookup`→`maicraft_lookup`、`execute`→`maicraft_execute`、
+   `goal`→`maicraft_goal`、`events`→`maicraft_events`、`observe`→`maicraft_observe`。
 
 ## 让新 Agent 接入
 
