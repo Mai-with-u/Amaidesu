@@ -247,6 +247,7 @@ class FakeMaicraft(BaseToolProvider):
                 {
                     "places": list(self.world_memory_view.get("places") or []),
                     "regions": list(self.world_memory_view.get("regions") or []),
+                    "stations": list(self.world_memory_view.get("stations") or []),
                     "record_counts": {},
                 }
             )

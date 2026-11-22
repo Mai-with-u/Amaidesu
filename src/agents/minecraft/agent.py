@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 import time
@@ -78,6 +79,7 @@ from src.agents.minecraft.glance import (
 )
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
+from src.agents.minecraft.known_places import KNOWN_PLACES_KEY, build_known_places_catalog, short_dimension_name
 from src.agents.minecraft.lead_mode import (
     LEAD_MODE_PROMPT_SECTION,
     SpokenEchoBuffer,
@@ -396,6 +398,32 @@ def _places_view_unknown_to_mod(reply: MaicraftReply) -> bool:
     return "what" in raw_text or "places" in raw_text
 
 
+# 成功后会变更世界设施短目录的能力短名：直接改写地点/建筑/机器档案，及显式带 save_archive 的设计/勘察能力
+_KNOWN_PLACES_DIRECT_MUTATE_ABILITIES = frozenset({"remember", "build", "machine_build"})
+_KNOWN_PLACES_ARCHIVE_MUTATE_ABILITIES = frozenset({"design", "machine_inspect"})
+
+
+def _ability_short_name(ability: str) -> str:
+    """提取去掉命名空间前缀的能力短名（如 ``maicraft:remember`` → ``remember``）。"""
+    return str(ability or "").strip().rsplit(":", 1)[-1].lower()
+
+
+def _mutates_known_places(ability: str, arguments: Optional[Mapping[str, Any]] = None) -> bool:
+    """判断一次能力调用成功后是否可能变更世界设施短目录（需作废缓存并触发重读）。"""
+    short = _ability_short_name(ability)
+    if short in _KNOWN_PLACES_DIRECT_MUTATE_ABILITIES:
+        return True
+    if short not in _KNOWN_PLACES_ARCHIVE_MUTATE_ABILITIES:
+        return False
+    if not isinstance(arguments, Mapping):
+        return False
+    goal = arguments.get("goal")
+    params = goal.get("parameters") if isinstance(goal, Mapping) else None
+    if not isinstance(params, Mapping):
+        return False
+    return bool(params.get("save_archive"))
+
+
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 
@@ -588,6 +616,15 @@ class MinecraftAgent(BaseAgent):
         self._commitment_ledger_cache: Dict[str, Any] = {}
         self._shown_commitment_ledger: Dict[str, Any] = {}
         self._commitment_ledger_dirty: bool = False
+        # 世界设施短目录（known_places）的尾部状态缓存：绝不写入 msg[0] 系统提示词前缀，
+        # 仅在尾部 [当前任务状态]/[继续原游戏任务] 非空且变化时动态挂出，稳态 0 额外消息
+        self._known_places_cache: Dict[str, Any] = {}
+        self._shown_known_places: Dict[str, Any] = {}
+        self._known_places_dirty: bool = False
+        # 异步在跑且完成后会改写世界设施档案的目标号集合（如带 save_archive 的 design / machine_inspect）
+        self._known_places_mutating_goals: set[int] = set()
+        # 最近一次 observe(self) 观测到的维度（用于识别跨维度切换并按新维度重排目录）
+        self._last_dimension: str = ""
         # 地点动静（记住、忘掉、走近、离开一个记住的地点）：只发给存储给下播整理认地点，不改怎么做事。
         # 记地点成功是在同步的回执处理里认出来的，先连同当时的存档与时刻排进待发队列，回到异步处再发
         self._near_places = NearPlaceTracker(self._clock)
@@ -689,6 +726,8 @@ class MinecraftAgent(BaseAgent):
         self._last_chat_reply_candidates: List[str] = []
         # 主控态刚走近记住地标时暂存的只读 [脑中闪过] 线索（下步附尾，绝不改写头部固定层）
         self._pending_place_flash: Optional[str] = None
+        # 主控态流程单切段产生的新意图待联想文本（下步附尾拉取 [脑中闪过]，不命中 0 字节）
+        self._pending_intent_texts: List[str] = []
 
         # 后台折叠：历史过了折叠线，另发一次与行动步同前缀的请求，请模型把用完的区间折成摘要，
         # 原文进块库可取回；身体照常行动，写好的折叠在下一步开始前换上。开关关掉时不编号、不折叠
@@ -874,6 +913,8 @@ class MinecraftAgent(BaseAgent):
         self._interaction_throttle.clear()
         self._wait_progress.reset()
         self._last_self_coords = None
+        self._last_position = None
+        self._last_dimension = ""
         self._pending_handover_summary = ""
         self._own_emitted_chats.clear()
         self._recorded_self_chats.clear()
@@ -944,8 +985,11 @@ class MinecraftAgent(BaseAgent):
         断开也刷新登记：provider 清单在断开路径已置空，refresh 把降级前的
         工具从注册表整体摘除，避免 Agent 调到必然失败的陈旧条目。
         """
-        # 断开或重连都可能换了一个 Mod 进程、进了另一个存档：记住的地点清单整份丢掉，连上后的速览重读
+        # 断开或重连都可能换了一个 Mod 进程、进了另一个存档：记住的地点清单、上次位置与设施短目录整份丢掉，连上后重读
         self._remembered_places.forget()
+        self._clear_known_places_state()
+        self._last_position = None
+        self._last_dimension = ""
         if not connected:
             try:
                 self._tool_registry.refresh_provider_tools(self._mcp_provider)
@@ -1199,9 +1243,11 @@ class MinecraftAgent(BaseAgent):
         self._pending_chat_players.clear()
         self._pending_chat_senders.clear()
         self._pending_place_flash = None
+        self._pending_intent_texts.clear()
         self._commitment_ledger_cache.clear()
         self._shown_commitment_ledger.clear()
         self._commitment_ledger_dirty = False
+        self._clear_known_places_state()
         self._release_epoch += 1
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
@@ -1249,9 +1295,11 @@ class MinecraftAgent(BaseAgent):
         self._pending_chat_players.clear()
         self._pending_chat_senders.clear()
         self._pending_place_flash = None
+        self._pending_intent_texts.clear()
         self._commitment_ledger_cache.clear()
         self._shown_commitment_ledger.clear()
         self._commitment_ledger_dirty = False
+        self._clear_known_places_state()
         self._wait_progress.resume()
         self._furnace_waits.clear()
         self._set_open_question("")
@@ -1371,8 +1419,11 @@ class MinecraftAgent(BaseAgent):
         if refreshed_fixed:
             self._prefix_guard.expect_rewrite("流程单切段刷新交接简报")
 
-        # 初始简报已进入对话历史后，再追加一条紧凑 [流程单切换] 通知提醒模型转向最新环节目标
+        # 初始简报已进入对话历史后，再追加一条紧凑 [流程单切换] 通知提醒模型转向最新环节目标，并记录新意图文本供下步按需联想
         if not replaced_in_queue:
+            intent_parts = [part for part in (title, goal) if part]
+            if intent_parts:
+                self._pending_intent_texts = intent_parts
             notice = format_rundown_update_notice(
                 segment_title=title,
                 segment_goal=goal,
@@ -1559,6 +1610,55 @@ class MinecraftAgent(BaseAgent):
         self._pending_place_flash = None
         self._append_tail_readonly_note(messages, flash, step_start_len=step_start_len)
 
+    def _opening_intent_texts(self) -> List[str]:
+        """提取新任务开局或切入主控时的意图文本（主控交接仅取结构化环节标题/目标/运营提醒，全空时返回空列表避免回落模板原文）。"""
+        texts: List[str] = []
+        latest_instr = self._task_instructions[-1].strip() if self._task_instructions else ""
+        if latest_instr and not latest_instr.startswith("[主控交接简报]"):
+            texts.append(latest_instr)
+            return texts
+        ctx = self._lead_handover_context
+        if ctx is not None:
+            for part in (ctx.segment_title, ctx.segment_goal, *ctx.operator_notes):
+                cleaned = " ".join(str(part or "").split())
+                if cleaned and cleaned not in texts:
+                    texts.append(cleaned)
+        return texts
+
+    async def _append_opening_intent_flash(self, messages: List[Dict[str, Any]], *, current_save_id: str) -> None:
+        """新任务开局时按意图文本拉取 1–2 条只读 [脑中闪过] 挂到尾部（排除已展示公共规矩；未命中 0 字节）。"""
+        if not self._in_lead_mode:
+            return
+        intent_texts = self._opening_intent_texts()
+        if not intent_texts:
+            return
+        flash = await self._build_passive_flash_notice(
+            texts=intent_texts,
+            players=(),
+            situation=self._current_situation(),
+            exclude_texts=self._social_rules.view(current_save_id),
+            max_items=2,
+        )
+        if flash:
+            messages.append({"role": "user", "content": flash})
+
+    async def _append_pending_intent_flash(self, messages: List[Dict[str, Any]], *, step_start_len: int) -> None:
+        """流程单切换产生新环节意图时，按需在尾部附 1–2 条只读 [脑中闪过]（不命中 0 字节，不改写前缀）。"""
+        if not self._in_lead_mode or not self._pending_intent_texts:
+            return
+        pending = list(self._pending_intent_texts)
+        self._pending_intent_texts.clear()
+        current_save_id = self._world.save_fields()[0]
+        flash = await self._build_passive_flash_notice(
+            texts=pending,
+            players=(),
+            situation=self._current_situation(),
+            exclude_texts=self._social_rules.view(current_save_id),
+            max_items=2,
+        )
+        if flash:
+            self._append_tail_readonly_note(messages, flash, step_start_len=step_start_len)
+
     @staticmethod
     def _append_tail_readonly_note(
         messages: List[Dict[str, Any]],
@@ -1566,7 +1666,7 @@ class MinecraftAgent(BaseAgent):
         *,
         step_start_len: int,
     ) -> None:
-        """把只读附注拼入本步刚追加的普通 user 尾消息（或新追加一条 user 尾消息），绝不触碰历史前缀或固定层。"""
+        """把只读附注拼入本步刚追加的普通 user 尾消息（或新追加一条 user 尾消息），绝不触碰历史前缀、固定层或任务状态 JSON。"""
         if len(messages) > step_start_len:
             last = messages[-1]
             if (
@@ -1574,6 +1674,7 @@ class MinecraftAgent(BaseAgent):
                 and isinstance(last.get("content"), str)
                 and not last.get(INSTRUCTION_KEY)
                 and not last.get(FACTS_KEY)
+                and not last.get(STATE_KEY)
             ):
                 last["content"] = f"{last['content']}\n\n{note}"
                 return
@@ -1946,9 +2047,11 @@ class MinecraftAgent(BaseAgent):
         messages = self._messages
         close_interrupted_calls(messages)
         if not self._interaction_only and not self._task_finished and self._task_instructions:
-            # 主控态续做前刷新权威承诺账本（仅放尾部任务状态，绝不改写 msg[0] 前缀）
+            # 主控态续做前刷新权威承诺账本与世界设施短目录（仅放尾部任务状态，绝不改写 msg[0] 前缀）
             if self._in_lead_mode:
                 await self._refresh_commitment_ledger()
+                if self._known_places_dirty or not self._known_places_cache:
+                    await self._refresh_known_places()
             # 后台目标有了结果先恢复原目标、待办与目标状态，再让模型解释这次通知。
             # 这条是任务状态、不算固定层：每次叫醒都插一条，当成固定层会把可折区间切碎（见 STATE_KEY）
             messages.append(
@@ -2060,18 +2163,21 @@ class MinecraftAgent(BaseAgent):
                                 SOCIAL_RULES_MSG_KEY: True,
                             }
                         )
-                # 开局代读已让出事件循环并认出存档：同步重读工具定义（确保主控切换后新放行的
-                # streamer_memory_correct / rundown_control 立即可见），并在主控态把非空权威承诺账本挂进尾部状态
+                # 开局代读已让出事件循环并认出存档与维度：同步重读工具定义（确保主控切换后新放行的
+                # streamer_memory_correct / rundown_control 立即可见），并在主控态把非空权威承诺账本与
+                # 紧凑世界设施短目录合入尾部状态，再按本轮任务/环节意图附 1–2 条只读 [脑中闪过]（未命中 0 字节）
                 tool_defs = self._tool_definitions()
                 if self._in_lead_mode:
                     await self._refresh_commitment_ledger()
-                    self._append_commitment_ledger_state_if_changed(messages)
+                    await self._refresh_known_places()
+                    self._append_lead_tail_state_if_changed(messages)
+                    await self._append_opening_intent_flash(messages, current_save_id=current_save_id)
             if not self._interaction_only:
                 # 只回应互动的一批不碰委派账：等主播定夺的委派要一直显示在等定夺，不能被一次蹲起改回进行中
                 self._delegations.mark_running()
             # 推理前确保抗折叠钉住规矩固定层与当前状态同步（无规矩时不占槽位，有规矩时紧跟固定前缀）
             self._sync_pinned_rules_message(messages, expect_rewrite=False)
-            # 主控态正常推理步前拼入未读的 [直播间刚说过] 回执、远处 [公屏旁听] 与地标 [脑中闪过]（均只附尾、保前缀缓存）；
+            # 主控态正常推理步前拼入未读的 [直播间刚说过] 回执、远处 [公屏旁听]、地标与环节切换 [脑中闪过]（均只附尾、保前缀缓存）；
             # 若上一步刚成功触发 framework_commentary 并出声，紧邻步先剔除异步稍晚落入的自产 game_commentary 回声，
             # 同时照常放行并发到达的外部主播弹幕回声（零误吞、防自产回声续轮风暴）
             if suppress_next_commentary_echo:
@@ -2080,10 +2186,14 @@ class MinecraftAgent(BaseAgent):
             self._append_unread_spoken_echoes(messages, step_start_len=step_start_len)
             self._append_eavesdrop_chats(messages, step_start_len=step_start_len)
             self._append_pending_place_flash(messages, step_start_len=step_start_len)
-            # 主控态若本步前发生过承诺更正、交付事实、新交互玩家或认档变化，按需刷新权威承诺账本并仅在变化且非空时挂入尾部状态
-            if self._in_lead_mode and self._commitment_ledger_dirty:
-                await self._refresh_commitment_ledger()
-                self._append_commitment_ledger_state_if_changed(messages)
+            await self._append_pending_intent_flash(messages, step_start_len=step_start_len)
+            # 主控态若本步前发生过承诺更正、交付事实、设施档案变更、新交互玩家、换档或跨维度，按需刷新并仅在变化且非空时挂入尾部状态
+            if self._in_lead_mode and (self._commitment_ledger_dirty or self._known_places_dirty):
+                if self._commitment_ledger_dirty:
+                    await self._refresh_commitment_ledger()
+                if self._known_places_dirty:
+                    await self._refresh_known_places()
+                self._append_lead_tail_state_if_changed(messages)
             # 每步重算一次按名称排序的工具定义，确保运行中动态放行/收回的跨 Agent 工具即时生效且未变时零破坏
             tool_defs = self._tool_definitions()
             steps += 1
@@ -2374,6 +2484,9 @@ class MinecraftAgent(BaseAgent):
         ]
         self._sync_pinned_rules_message(messages, expect_rewrite=False)
         self._shown_context = deepcopy(facts)
+        if self._in_lead_mode:
+            self._shown_commitment_ledger = deepcopy(self._commitment_ledger_cache)
+            self._shown_known_places = deepcopy(self._known_places_cache)
         # 丢掉的那段对话里看过的截图也一并作废；在写的折叠提议与集中整理对应的历史已经没了，
         # 当场作废：集中整理写完会就地改写历史，晚一步就把旧摘要写进重开后的对话
         self._transient_images.drain()
@@ -2405,6 +2518,8 @@ class MinecraftAgent(BaseAgent):
         self._commitment_ledger_cache.clear()
         self._shown_commitment_ledger.clear()
         self._commitment_ledger_dirty = False
+        self._clear_known_places_state()
+        self._pending_intent_texts.clear()
         if not self._in_lead_mode:
             # 委派模式开新任务清空上一单的阶段待办；自主主控开局保留当前存档已有待办，便于承接跨场进度
             self._mc_state.clear_todos_for_new_task()
@@ -2762,6 +2877,17 @@ class MinecraftAgent(BaseAgent):
             pos = self_position(MaicraftReply(ok=True, data=data))
             if pos is not None:
                 self._last_position = (pos, self._clock())
+            pos_raw = data.get("position") if isinstance(data.get("position"), dict) else {}
+            dim = str(pos_raw.get("dimension") or "").strip()
+            if dim:
+                if self._last_dimension:
+                    if short_dimension_name(dim) != short_dimension_name(self._last_dimension):
+                        # 角色跨维度切换（如主世界 <-> 下界）：失效旧缓存并标记下一步按新维度重排 known_places
+                        self._mark_known_places_dirty()
+                elif self._in_lead_mode:
+                    # 首次认出当前或新切换存档的维度（"" -> dim）：不作废原始地点缓存，仅标记按新维度刷新 known_places
+                    self._known_places_dirty = True
+                self._last_dimension = dim
             return
         if name == OBSERVE and arguments.get("what", "scene") == "scene":
             # 顺手同步身边玩家名单，供旧版 Mod 未报 sender_distance 时公屏门控降级判定 [公屏·身边]；
@@ -2779,16 +2905,21 @@ class MinecraftAgent(BaseAgent):
             return
         run = goal_run_of(data)
         if run is None:
+            # 某些瞬发档案写入（如带 save_archive 的 design 同步返回无 goal_id 回执）也须失效设施短目录缓存
+            if name == EXECUTE:
+                goal_arg = arguments.get("goal") if isinstance(arguments.get("goal"), Mapping) else {}
+                if _mutates_known_places(str(goal_arg.get("ability") or ""), arguments):
+                    self._mark_known_places_dirty()
             return
         if name == EXECUTE:
             if run.ability == "chat" or run.ability.endswith(":chat"):
                 # 角色发游戏内 chat 时把目标玩家或刚回应的公屏对话人记入近 2 分钟互动同伴窗
                 self._note_chat_partner_from_execute(arguments)
             if run.finished:
+                if run.result_status == "done" and _mutates_known_places(run.ability, arguments):
+                    # 记地点、忘掉地点、施工建档或带 save_archive 的设计/勘察成功：作废地点缓存并标记刷新 known_places
+                    self._mark_known_places_dirty()
                 if run.ability == REMEMBER and run.result_status == "done":
-                    # 记地点、忘掉地点、圈地盘成功：世界记忆刚改过，下一次速览重读记住的地点，
-                    # 主播被问到"某处在哪"时才看得到刚记下的名字
-                    self._remembered_places.invalidate()
                     # 记住或忘掉的是哪个地点：排进待发队列，下播整理据此知道本场记住了哪些地点
                     change = place_change_of(arguments)
                     if change is not None:
@@ -2811,11 +2942,22 @@ class MinecraftAgent(BaseAgent):
                 if message:
                     self._pending_self_chats.append(message)
                 return
+            if _mutates_known_places(run.ability, arguments):
+                # 后台异步执行且成功后可能改写建筑/机器档案的目标记下编号，完工时失效设施短目录缓存
+                self._known_places_mutating_goals.add(run.goal_id)
             # 切磋下令时记下点名的对手：旧版 Mod 的结果不带对手，收手时按这个名字给存储记一笔互动
             self._spar_opponents.note(run.goal_id, arguments)
             self._track_goal(run)
             return
         if arguments.get("operation") in ("cancel",) or run.finished:
+            tracked_mutating = run.goal_id in self._known_places_mutating_goals
+            self._known_places_mutating_goals.discard(run.goal_id)
+            if (
+                run.finished
+                and run.result_status == "done"
+                and (tracked_mutating or _mutates_known_places(run.ability))
+            ):
+                self._mark_known_places_dirty()
             self._goals.untrack(run.goal_id)
             self._goal_ledger.forget(run.goal_id)
             self._goal_ledger.remember_finished(run)
@@ -2895,6 +3037,11 @@ class MinecraftAgent(BaseAgent):
             self._wait_progress.note_progress()
         before = self._goal_ledger.note_of(run.goal_id)
         if run.finished:
+            # 后台施工/建机/存盘勘察目标成功完工时失效设施短目录缓存，下一步尾部状态自动反映新设施
+            tracked_mutating = run.goal_id in self._known_places_mutating_goals
+            self._known_places_mutating_goals.discard(run.goal_id)
+            if run.result_status == "done" and (tracked_mutating or _mutates_known_places(run.ability)):
+                self._mark_known_places_dirty()
             # 目标结束时角色可能已走远，旧坐标不再给后续新目标充当站桩基线
             self._last_self_coords = None
             self._goal_ledger.settle_finished(run)
@@ -3271,13 +3418,18 @@ class MinecraftAgent(BaseAgent):
         if change.switched and change.before is not None and self._mc_state.dirty:
             await self._save_work_docs_for(change.before.id, change.before.name)
         if change.switched:
-            # 检测到角色切换到另一个存档时，先立即清空旧存档公共规矩与承诺账本缓存，防止旧世界惯例与欠账串进新世界
+            # 检测到角色切换到另一个存档时，先立即清空旧存档公共规矩、承诺账本、上次位置与世界设施短目录缓存，防止旧世界维度与状态串进新世界
             self._social_rules.clear()
             self._commitment_ledger_cache.clear()
             self._shown_commitment_ledger.clear()
+            self._clear_known_places_state()
+            self._last_position = None
+            self._last_dimension = ""
+            self._pending_intent_texts.clear()
             self._nearby_player_uuids = ()
             self._recent_player_uuids.clear()
         self._commitment_ledger_dirty = True
+        self._known_places_dirty = True
         self._mc_state.switch_world(change.after.id)
         await self._ensure_world_work_docs_loaded(change.after.id, change.after.name)
         await self._refresh_world_social_rules(change.after.id)
@@ -3508,6 +3660,9 @@ class MinecraftAgent(BaseAgent):
         # 主控态权威承诺账本（仅在 open 或 closed_this_session 非空时挂出，两者都空省略该键，零多余 token）
         if self._in_lead_mode and self._commitment_ledger_cache:
             context["commitment_ledger"] = deepcopy(self._commitment_ledger_cache)
+        # 主控态世界设施短目录（仅非空时挂出，空时省略该键，零多余 token）
+        if self._in_lead_mode and self._known_places_cache:
+            context[KNOWN_PLACES_KEY] = deepcopy(self._known_places_cache)
         return context
 
     def _continue_task_context(self) -> Dict[str, Any]:
@@ -3517,6 +3672,7 @@ class MinecraftAgent(BaseAgent):
         self._shown_context = deepcopy(current)
         if self._in_lead_mode:
             self._shown_commitment_ledger = deepcopy(self._commitment_ledger_cache)
+            self._shown_known_places = deepcopy(self._known_places_cache)
         if not shown:
             return current
         delta = {key: value for key, value in current.items() if shown.get(key) != value}
@@ -3623,23 +3779,79 @@ class MinecraftAgent(BaseAgent):
         self._commitment_ledger_cache = normalized
         return deepcopy(normalized)
 
-    def _append_commitment_ledger_state_if_changed(self, messages: List[Dict[str, Any]]) -> None:
-        """权威承诺账本非空且较上次展示发生变化时，在消息尾部追加 ``[当前任务状态]``（绝不改写 msg[0] 前缀）。"""
-        if not self._in_lead_mode or not self._commitment_ledger_cache:
+    def _clear_known_places_state(self) -> None:
+        """清空世界设施短目录缓存、已展示快照、脏标记与在跑写档目标集合（换档/下播/退出主控/断连共用）。"""
+        self._known_places_cache.clear()
+        self._shown_known_places.clear()
+        self._known_places_dirty = False
+        self._known_places_mutating_goals.clear()
+
+    def _mark_known_places_dirty(self) -> None:
+        """世界设施档案发生变化或发生跨维度切换时，作废原始地点缓存并标记下一步重读设施短目录。"""
+        self._remembered_places.invalidate()
+        self._known_places_dirty = True
+
+    def _current_dimension(self) -> str:
+        """返回角色最近一次观测到的所在维度；尚未观测到时返回空串。"""
+        if self._last_dimension:
+            return self._last_dimension
+        if self._last_position is not None:
+            return str(self._last_position[0][0] or "").strip()
+        return ""
+
+    async def _refresh_known_places(self) -> Dict[str, Any]:
+        """主控活跃态按当前维度刷新紧凑世界设施短目录（复用 remembered_places 缓存，异常降级）。"""
+        self._known_places_dirty = False
+        if not (self._in_lead_mode and self._live_active and self._maicraft_ready()):
+            self._known_places_cache.clear()
+            return {}
+        current_dim = self._current_dimension()
+        if not current_dim:
+            self._known_places_cache.clear()
+            return {}
+        try:
+            reply = await self._read_remembered_places()
+        except Exception as exc:  # noqa: BLE001 - 设施短目录属只读增强，读取异常不阻断行动步
+            self._logger.warning(f"刷新世界设施短目录失败（本次跳过）: {exc}", exc=True)
+            return deepcopy(self._known_places_cache)
+        if not reply.ok:
+            return deepcopy(self._known_places_cache)
+        catalog = build_known_places_catalog(reply.data, current_dimension=current_dim)
+        self._known_places_cache = catalog
+        if not catalog:
+            self._shown_known_places.clear()
+        return deepcopy(catalog)
+
+    def _append_lead_tail_state_if_changed(self, messages: List[Dict[str, Any]]) -> None:
+        """权威承诺账本或世界设施短目录非空且较上次展示发生变化时，合入一条尾部 ``[当前任务状态]``（绝不改写 msg[0] 前缀）。"""
+        if not self._in_lead_mode:
             return
-        if self._commitment_ledger_cache == self._shown_commitment_ledger:
+        payload: Dict[str, Any] = {}
+        ledger_updated: Optional[Dict[str, Any]] = None
+        if self._commitment_ledger_cache and self._commitment_ledger_cache != self._shown_commitment_ledger:
+            ledger_updated = deepcopy(self._commitment_ledger_cache)
+            payload["commitment_ledger"] = ledger_updated
+        places_updated: Optional[Dict[str, Any]] = None
+        if self._known_places_cache and self._known_places_cache != self._shown_known_places:
+            places_updated = deepcopy(self._known_places_cache)
+            payload[KNOWN_PLACES_KEY] = places_updated
+        if not payload:
             return
-        ledger_copy = deepcopy(self._commitment_ledger_cache)
         messages.append(
             {
                 "role": "user",
-                "content": "[当前任务状态]\n" + json_text({"commitment_ledger": ledger_copy}),
+                "content": "[当前任务状态]\n" + json_text(payload),
                 STATE_KEY: True,
             }
         )
-        self._shown_commitment_ledger = deepcopy(ledger_copy)
-        if self._shown_context:
-            self._shown_context["commitment_ledger"] = deepcopy(ledger_copy)
+        if ledger_updated is not None:
+            self._shown_commitment_ledger = deepcopy(ledger_updated)
+            if self._shown_context:
+                self._shown_context["commitment_ledger"] = deepcopy(ledger_updated)
+        if places_updated is not None:
+            self._shown_known_places = deepcopy(places_updated)
+            if self._shown_context:
+                self._shown_context[KNOWN_PLACES_KEY] = deepcopy(places_updated)
 
     def _schedule_idle_compaction(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
         """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。
@@ -4049,33 +4261,37 @@ class MinecraftAgent(BaseAgent):
         return GameSituation(places=nearest_places(places, where), age_ms=age_ms, players=self._nearby_players)
 
     async def _read_remembered_places(self) -> MaicraftReply:
-        """速览用的记住的地点清单：缓存没到期就用缓存，否则真读一次 ``observe(what="places")`` 紧凑视图。
+        """速览与设施短目录共用的记住地点快照：缓存新鲜时直接复用，否则真读一次 ``observe(what="places")``。
 
-        顺序：缓存还新鲜 -> 直接用；否则首选读 ``observe(what="places")`` -> 旧版 Mod 不认识该视图退回
-        ``observe(what="world_memory")`` -> 成功就记进缓存（回复里没有地点清单按一个都没记过）；
-        读失败时有这个存档的旧清单就接着用旧的（记个警告，并把清单的岁数交给渲染层标陈旧度），
-        连旧的都没有才把失败原样交给速览照实写。返回值统一成 ``{"places": [...]}`` 形状的回复。
+        顺序：缓存还新鲜 -> 直接用（保留 ``places`` / ``regions`` / ``stations``）；否则首选读
+        ``observe(what="places")`` -> 旧版 Mod 不认识该视图退回 ``observe(what="world_memory")`` ->
+        成功就记进缓存（缺失的节按空列表）；读失败时有这个存档的旧快照就接着用旧的（记个警告，
+        并把清单的岁数交给渲染层标陈旧度），连旧的都没有才把失败原样返回。
         """
-        cached = self._remembered_places.fresh()
+        cached = self._remembered_places.fresh_snapshot()
         if cached is not None:
-            return MaicraftReply(ok=True, data={"places": cached})
-        # 读之前记下作废次数：读的途中刚记了地点或换了存档，这次读回的只给这一次速览用，不进缓存
+            return MaicraftReply(ok=True, data=cached)
+        # 读之前记下作废次数：读的途中刚记了地点或换了存档，这次读回的只给这一次用，不进缓存
         generation = self._remembered_places.generation
-        # 首选 Mod 的紧凑 places 视图：只给命名地点与档案名，不拉整份随游玩无界增长的容器与产地记录
+        # 首选 Mod 的紧凑 places 视图：只给命名地点、建筑/机器档案、地盘与加工站，不拉整份无界容器记录
         reply = await self._call_maicraft(OBSERVE, {"what": "places"})
         if not reply.ok and _places_view_unknown_to_mod(reply):
             # 旧版 Mod 把 what="places" 当未知视图拒收：退回整份 world_memory 的旧问法
             reply = await self._call_maicraft(OBSERVE, {"what": "world_memory"})
         if reply.ok:
-            raw = reply.data.get("places")
-            places = raw if isinstance(raw, list) else []
-            self._remembered_places.store(places, generation)
-            return MaicraftReply(ok=True, data={"places": places})
-        previous = self._remembered_places.last_known()
+            raw_places = reply.data.get("places")
+            places = raw_places if isinstance(raw_places, list) else []
+            raw_regions = reply.data.get("regions")
+            regions = raw_regions if isinstance(raw_regions, list) else []
+            raw_stations = reply.data.get("stations")
+            stations = raw_stations if isinstance(raw_stations, list) else []
+            self._remembered_places.store(places, generation, regions=regions, stations=stations)
+            return MaicraftReply(ok=True, data={"places": places, "regions": regions, "stations": stations})
+        previous = self._remembered_places.last_known_snapshot()
         if previous is None:
             return reply
         self._logger.warning(f"读记住的地点失败，速览先用上次读到的清单：{reply.error_message or reply.error_code}")
-        return MaicraftReply(ok=True, data={"places": previous, "places_age_s": self._remembered_places.read_age_s()})
+        return MaicraftReply(ok=True, data={**previous, "places_age_s": self._remembered_places.read_age_s()})
 
     def _has_active_delegation_task(self) -> bool:
         """当前是否处于正在执行委派/游戏任务的活跃态（空闲时恒为 False，保证空闲零消耗）。"""
@@ -4212,11 +4428,13 @@ class MinecraftAgent(BaseAgent):
         self._pending_chat_senders.clear()
         self._last_chat_reply_candidates.clear()
         self._pending_place_flash = None
+        self._pending_intent_texts.clear()
         self._nearby_player_uuids = ()
         self._recent_player_uuids.clear()
         self._commitment_ledger_cache.clear()
         self._shown_commitment_ledger.clear()
         self._commitment_ledger_dirty = False
+        self._clear_known_places_state()
 
     def _note_chat_partner_from_execute(self, arguments: Dict[str, Any]) -> None:
         """角色发游戏内 chat 时把目标玩家或刚回应的公屏对话人记入近 2 分钟互动同伴窗。"""
@@ -4288,10 +4506,12 @@ class MinecraftAgent(BaseAgent):
             self._last_chat_reply_candidates = batch_senders[-4:]
 
         notice = batch.text
+        current_save_id = self._world.save_fields()[0]
         flash = await self._build_passive_flash_notice(
             texts=batch_texts,
             players=batch_players,
             situation=self._current_situation(),
+            exclude_texts=self._social_rules.view(current_save_id),
             max_items=2,
         )
         # 跨 await 拉取线索期间可能已退出主控或下播，复核运行态防止向已停止主控队列脏投递
@@ -4325,11 +4545,13 @@ class MinecraftAgent(BaseAgent):
         near_places = [mark.place for mark in marks if mark.kind == "near" and mark.place]
         if not near_places:
             return
+        current_save_id = self._world.save_fields()[0]
         flash = await self._build_passive_flash_notice(
             texts=near_places,
             players=(),
             situation=self._current_situation(),
             arrived_places=near_places,
+            exclude_texts=self._social_rules.view(current_save_id),
             max_items=2,
         )
         if not (self._in_lead_mode and self._live_active):
@@ -4344,6 +4566,7 @@ class MinecraftAgent(BaseAgent):
         players: Sequence[Tuple[str, str]] = (),
         situation: Optional[GameSituation] = None,
         arrived_places: Sequence[str] = (),
+        exclude_texts: Sequence[str] = (),
         max_items: int = 2,
     ) -> str:
         """游戏主控态快速拉取最多 1–2 条被动线索（跨场 + 本场短期语义），整体带短超时保护且不阻塞慢嵌入。"""
@@ -4351,6 +4574,9 @@ class MinecraftAgent(BaseAgent):
             return ""
         clean_texts = [" ".join(str(t or "").split()) for t in texts if str(t or "").strip()]
         clean_arrived_places = [p for raw in arrived_places if (p := " ".join(str(raw or "").split()))]
+        clean_excludes = tuple(
+            dict.fromkeys(e for raw in (exclude_texts or ()) if (e := " ".join(str(raw or "").split())))
+        )
         if not clean_texts and not players and situation is None and not clean_arrived_places:
             return ""
 
@@ -4360,26 +4586,37 @@ class MinecraftAgent(BaseAgent):
         async def _load_cross_session() -> List[str]:
             if self._lead_coordinator is None:
                 return []
-            return await asyncio.wait_for(
-                self._lead_coordinator.fetch_passive_cues(
-                    game=_GAME,
-                    texts=clean_texts,
-                    players=players,
-                    situation=situation,
-                    arrived_places=clean_arrived_places,
-                    limit=max_items,
-                ),
-                timeout=timeout_s,
-            )
+            fetcher = self._lead_coordinator.fetch_passive_cues
+            kwargs: Dict[str, Any] = {
+                "game": _GAME,
+                "texts": clean_texts,
+                "players": players,
+                "situation": situation,
+                "arrived_places": clean_arrived_places,
+                "limit": max_items,
+            }
+            if clean_excludes:
+                # 兼容尚未扩展 exclude_texts 签名的协调器或测试替身：签名支持时才透传去重列表
+                try:
+                    params = inspect.signature(fetcher).parameters
+                    accepts_exclude = "exclude_texts" in params or any(
+                        param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+                    )
+                except (TypeError, ValueError):
+                    accepts_exclude = False
+                if accepts_exclude:
+                    kwargs["exclude_texts"] = clean_excludes
+            return await asyncio.wait_for(fetcher(**kwargs), timeout=timeout_s)
 
         async def _load_short_term() -> List[str]:
             query_text = "\n".join(clean_texts).strip()
             if not query_text:
                 return []
-            # 排除近期尾部已见原话及本批触发文本自身，只闪出早先记住的规矩、折叠摘要或更早公屏；
+            # 排除近期尾部已见原话、已展示公共规矩及本批触发文本自身，只闪出早先记住的规矩、折叠摘要或更早公屏；
             # 传 wait_vector_ms=0：命中缓存即时融合余弦，未就绪仅后台预取并毫秒级返回关键词命中，不被慢嵌入取消
             excludes = set(self._chat_gate.recent_human_texts())
             excludes.update(clean_texts)
+            excludes.update(clean_excludes)
             hits = await asyncio.wait_for(
                 self._short_term_memory.search_entries(
                     query_text,
@@ -4411,9 +4648,9 @@ class MinecraftAgent(BaseAgent):
         else:
             local_lines = [line.strip() for line in local_res if str(line or "").strip()]
 
-        # 跨场与本场都命中时优先各留 1 条（总计 ≤ max_items），单路命中时可补满上限，并去重
+        # 跨场与本场都命中时优先各留 1 条（总计 ≤ max_items），单路命中时可补满上限，并排除已展示原句与重复项
         picked: List[str] = []
-        seen: set[str] = set()
+        seen: set[str] = set(clean_excludes)
 
         def _take(pool: Sequence[str], quota: int) -> None:
             added = 0

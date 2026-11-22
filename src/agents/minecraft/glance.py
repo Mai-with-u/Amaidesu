@@ -1010,8 +1010,9 @@ class RememberedPlacesCache:
     def __init__(self, clock: Callable[[], float], ttl_s: float = REMEMBERED_PLACES_TTL_S) -> None:
         self._clock = clock
         self._ttl_s = ttl_s
-        # 最后一次读到的地点清单；None = 这个存档还没读到过
+        # 最后一次读到的地点清单与完整紧凑视图快照（含 regions / stations）；None = 这个存档还没读到过
         self._places: Optional[List[Any]] = None
+        self._snapshot: Optional[Dict[str, Any]] = None
         self._read_at = 0.0
         self._stale = True
         # 作废了几次：读世界记忆是异步的，读的途中作废过（刚记了地点、换了存档），读回来的可能是作废前的样子
@@ -1028,9 +1029,25 @@ class RememberedPlacesCache:
             return None
         return self._places
 
+    def fresh_snapshot(self) -> Optional[Dict[str, Any]]:
+        """没到期、没被作废的完整紧凑视图（含 ``places`` / ``regions`` / ``stations``）；到期返回 None。"""
+        if self._places is None or self._stale or self._clock() - self._read_at >= self._ttl_s:
+            return None
+        if self._snapshot is not None:
+            return dict(self._snapshot)
+        return {"places": list(self._places), "regions": [], "stations": []}
+
     def last_known(self) -> Optional[List[Any]]:
         """最后一次读到的清单，到期、作废了也给（读失败时顶上）；丢掉过或从没读到过为 None。"""
         return self._places
+
+    def last_known_snapshot(self) -> Optional[Dict[str, Any]]:
+        """最后一次读到的完整紧凑视图（含 ``places`` / ``regions`` / ``stations``）；丢掉或未读过返回 None。"""
+        if self._places is None:
+            return None
+        if self._snapshot is not None:
+            return dict(self._snapshot)
+        return {"places": list(self._places), "regions": [], "stations": []}
 
     def read_age_s(self) -> Optional[float]:
         """此刻距最后一次真读过去了几秒；从没读到过（或已整份丢掉）为 None。
@@ -1041,15 +1058,30 @@ class RememberedPlacesCache:
             return None
         return max(0.0, self._clock() - self._read_at)
 
-    def store(self, places: List[Any], generation: int) -> None:
-        """真读成功：记下清单与读的时刻，从此刻起算到期。
+    def store(
+        self,
+        places: List[Any],
+        generation: int,
+        *,
+        regions: Optional[List[Any]] = None,
+        stations: Optional[List[Any]] = None,
+    ) -> None:
+        """真读成功：记下清单（及可选地盘、加工站）与读的时刻，从此刻起算到期。
 
         ``generation`` 是开始读之前的 ``generation``；读的途中作废过就不记——这份可能是记地点之前、
         或上一个存档的样子，记下来会让主播五分钟里都看不到刚记的地点，甚至看到别的存档的。
         """
         if generation != self._generation:
             return
-        self._places, self._read_at, self._stale = list(places), self._clock(), False
+        places_copy = list(places)
+        self._places = places_copy
+        self._snapshot = {
+            "places": places_copy,
+            "regions": list(regions) if isinstance(regions, list) else [],
+            "stations": list(stations) if isinstance(stations, list) else [],
+        }
+        self._read_at = self._clock()
+        self._stale = False
 
     def invalidate(self) -> None:
         """清单旧了：下一次速览重读，读失败时仍可用这份旧的。"""
@@ -1058,7 +1090,7 @@ class RememberedPlacesCache:
 
     def forget(self) -> None:
         """清单可能不是眼下这个存档的：整份丢掉，下一次速览重读，读失败也不拿它顶。"""
-        self._places, self._stale = None, True
+        self._places, self._snapshot, self._stale = None, None, True
         self._generation += 1
 
 
