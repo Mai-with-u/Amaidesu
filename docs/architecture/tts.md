@@ -58,7 +58,12 @@ Replyer 产出 speech
 
 - 队列满丢最旧；单句有渲染超时；中途取消时引擎截断声卡流防止残留声音。
 - `wait_playback` 开启时"发言等播放"：等当前句播完再推进思考，防止台词积压；带超时上限，超时放行不丢话。
-- 生命周期三事件 `tts.utterance.started / finished / failed` 由引擎自己发布（`utterance_id` 全链关联），是**终点广播**——消费者不得据此触发新决策（防环）。
+- 生命周期事件由 TTS 域自己发布（`utterance_id` 全链关联），是**终点广播**——消费者不得据此触发新决策（防环）：
+  - `tts.utterance.started`（发声开始；流式引擎在合成前发布）/ `finished`（播完）/ `failed`（合成或播放失败）
+  - `tts.utterance.playback_started`（首个音频块写进声卡，真正出声；播放路径分接发布，分接未挂时缺席——消费方自带兜底）
+  - `tts.utterance.sentence_boundary`（播放音频中检出的静音间隙，字幕切段的优先信号）
+  - `tts.utterance.dropped`（这句确知没送到观众面前——关停清队、停机拒收、段落插断、过期作废，且未出过字幕）
+- 字幕跟随 `tts.utterance.*` 生命周期事件分段上屏（出声前不出字），见[字幕](subtitle.md)。
 
 ## 口型分接
 
