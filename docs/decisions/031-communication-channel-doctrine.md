@@ -63,4 +63,4 @@
 ## 关联
 
 - [ADR-012：工具可见名单机制](012-tool-visibility-list.md)——局部工具单一路径的机制载体
-- [数据流规则](../architecture/data-flow.md)——通信机制选型表的权威承载（已防腐对齐）
+- [数据流规则](../conventions/data-flow.md)——通信机制选型表的权威承载（已防腐对齐）

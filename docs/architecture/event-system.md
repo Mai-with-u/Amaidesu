@@ -2,7 +2,7 @@
 
 Amaidesu 采用**发布-订阅（Pub/Sub）模式**构建事件驱动架构，EventBus 是组件间松耦合通信的唯一通道，内部分为两条职责清晰的通道：**拦截管道**（有序、可改可拦）与**订阅广播**（并发、互不影响）。
 
-> **架构版本**：本文档对应 v2 **语义域事件**（无三阶段 Input/Decision/Output 概念）。命名规范详见 [事件命名](event-naming.md)。
+> **架构版本**：本文档对应 v2 **语义域事件**（无三阶段 Input/Decision/Output 概念）。命名规范详见 [事件命名](../conventions/event-naming.md)。
 
 ## 目录
 
@@ -54,7 +54,7 @@ flowchart LR
     AG -->|emit planner.decision/verdict<br/>streamer.stage/speech| PIPE
 ```
 
-组件间数据流与边界硬约束（采集器不订阅下游结果、Agent 内部件不注册为工具等）见 [数据流与边界规则](data-flow.md)。
+组件间数据流与边界硬约束（采集器不订阅下游结果、Agent 内部件不注册为工具等）见 [数据流与边界规则](../conventions/data-flow.md)。
 
 ---
 
@@ -414,7 +414,7 @@ await event_bus.emit(
 ## 相关文档
 
 - [v2 架构叙事](v2-architecture.md)
-- [数据流规则](data-flow.md)
-- [事件命名](event-naming.md)
+- [数据流规则](../conventions/data-flow.md)
+- [事件命名](../conventions/event-naming.md)
 - [三范式开发指南](../guides/component.md)
 - [架构决策记录](../decisions/README.md)

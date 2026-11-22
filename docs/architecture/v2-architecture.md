@@ -229,7 +229,7 @@ sequenceDiagram
 ## 相关文档
 
 - 组件清单、目录结构、启动时序以代码为唯一事实源（`src/`、`ToolRegistry`）
-- [数据流与边界规则](data-flow.md) - 三条约束层面的精确表述
+- [数据流与边界规则](../conventions/data-flow.md) - 三条约束层面的精确表述
 - [事件系统](event-system.md) - 事件全表、通配语义、拦截器开发
 - [组件开发指南](../guides/component.md) - 采集器/工具/Agent 三范式实操
 - [ADR-005：Agent + 工具架构总决策](../decisions/005-v2-agent-tool-architecture.md) - 本决策的正式决策记录

@@ -225,6 +225,6 @@ enabled = ["vts"]        # 启用哪些平台，合法值：vts / warudo / vrcha
 
 - [虚拟形象接入指南](../guides/avatar.md) — 各平台接入步骤、模型准备与常见问题
 - [事件系统](event-system.md) — 主播发言、TTS 播放事件的语义
-- [数据流与边界规则](data-flow.md) — 情绪如何到达虚拟形象、口型音频从哪里来
+- [数据流与边界规则](../conventions/data-flow.md) — 情绪如何到达虚拟形象、口型音频从哪里来
 - [v2 架构叙事](v2-architecture.md) — 工具类组件的判据
 - 事件名常量、配置 Schema、目录结构以代码为唯一事实源（`src/modules/events/names.py`、`src/modules/config/avatar_schemas.py`、`src/modules/avatar/`）

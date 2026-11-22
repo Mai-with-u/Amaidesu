@@ -8,7 +8,7 @@
 
 v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编排的分层（ADR-005）。但发言管线的最后一公里——reply 文本到语音播放——长期存在三层遗漏：
 
-1. **reply → TTS 断链为 v2 设计遗漏**。`reply` 工具通过 ToolRegistry 返回 `ToolExecutionResult`（含 `success`），StreamerAgent 原本只读 `result.success` 推进决策；`result.content`（`{speech, emotion, action}` 三元组 JSON）从未被下游消费。[数据流规则 - 端到端链路示例](../architecture/data-flow.md) 节曾写"回复文本就绪 → 如需 TTS 渲染，需另行 await edge_tts_synthesize 工具"——但"另行"的调用方从未定案，是文档描述了一个不存在的接线。
+1. **reply → TTS 断链为 v2 设计遗漏**。`reply` 工具通过 ToolRegistry 返回 `ToolExecutionResult`（含 `success`），StreamerAgent 原本只读 `result.success` 推进决策；`result.content`（`{speech, emotion, action}` 三元组 JSON）从未被下游消费。[数据流规则 - 端到端链路示例](../conventions/data-flow.md) 节曾写"回复文本就绪 → 如需 TTS 渲染，需另行 await edge_tts_synthesize 工具"——但"另行"的调用方从未定案，是文档描述了一个不存在的接线。
 2. **四引擎注册但零调用**。`src/modules/tools/output/tts/` 下四个 Provider（EdgeTTS / GPTSoVITS / Voicebox / OmniTTS）已实现并暴露 `register_*_tools(registry, config)`，但组合根 `main.py` 没有任何调用点（架构总览"已知缺口"第 1 条），导致 ToolRegistry 中查无 TTS 工具；OmniTTS 历史 bug：HTTP 流式响应解码后从未 `play_audio`，即注册了也不出声。
 3. **`emotion` / `action` 三元组死字段**。`replyer.py` 生成 `{speech, emotion, action}` 三元组后，emotion 与 action 两字段没有任何下游消费者，沦为日志条目。
 
@@ -43,11 +43,11 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
    - **帧级耦合**（未来）虚拟形象口型精准同步 → 工具 invoke 参数流式接口（**暂不实现**，YAGNI，待真需求；后经 ADR-024 以播放器分接形态兑现）
    - **起止对齐**（字幕、耗时统计）→ 订阅 `tts.utterance.{started,finished,failed}` 三事件
    - **无耦合**（emotion 表情）→ StreamerAgent 直接 invoke `vts_set_expression`，不经事件、不入队列
-   三分法依据详见 [数据流规则 - 通信机制选型](../architecture/data-flow.md) 节中的"TTS 消费者的通道三分法"。
-6. **`UtteranceQueue` 位于主播 Agent 包内**（`src/agents/streamer/utterance_queue.py`），不抽到框架层。这条决策引用 ADR-005 的『主体性判据为最高约束』决策——UtteranceQueue 是 StreamerAgent 的内部器官（"谁的发言谁管播放节奏"），不是跨 Agent 的基础设施；抽到 `src/modules/` 会引入 `agents/` 反向依赖（违反 [数据流规则 - 三条约束层面 / 分层规则](../architecture/data-flow.md)）。队列对外只持有 `SpeakCallable` 与可选的 EventBus 引用，**完全不知道底层是 EdgeTTS 还是 GPTSoVITS**——引擎切换 / 测试 mock 均不需要改队列代码。
+   三分法依据详见 [数据流规则 - 通信机制选型](../conventions/data-flow.md) 节中的"TTS 消费者的通道三分法"。
+6. **`UtteranceQueue` 位于主播 Agent 包内**（`src/agents/streamer/utterance_queue.py`），不抽到框架层。这条决策引用 ADR-005 的『主体性判据为最高约束』决策——UtteranceQueue 是 StreamerAgent 的内部器官（"谁的发言谁管播放节奏"），不是跨 Agent 的基础设施；抽到 `src/modules/` 会引入 `agents/` 反向依赖（违反 [数据流规则 - 三条约束层面 / 分层规则](../conventions/data-flow.md)）。队列对外只持有 `SpeakCallable` 与可选的 EventBus 引用，**完全不知道底层是 EdgeTTS 还是 GPTSoVITS**——引擎切换 / 测试 mock 均不需要改队列代码。
 7. **`tts.utterance.*` 三事件是终点广播**。消费者不得基于这些事件触发新一轮决策（防环约束）；可做的耗时统计 / 释放锁 / 字幕对齐不构成新决策。三事件 Payload 类（`UtteranceStartedPayload` / `UtteranceFinishedPayload` / `UtteranceFailedPayload`）分开定义（形状不同：`started` 含 `speech_text` + `duration_ms` Optional；`finished` 强调播放时长 int；`failed` 强调 `error_message`）——分开定义比统一形状加判别字段更不易误填。**发布者**：TTS 引擎自身（基础模块，非工具）；仅在收到非空 `utterance_id` 入参时发布；流式引擎 = 合成开始前发 started（首块 PCM 尚未在手，真正出声时刻由 `tts.utterance.playback_started` 承载）；全量引擎 = `play_audio` 调用时发 started。
 8. **队列策略：FIFO 串行 + 丢最旧**。单 worker 保证播放顺序（避免叠加/打断），队列满时丢最旧（保证新鲜度，丢弃项不进入 TTS 引擎，自然不触发 utterance 事件——丢消息由队列全权负责）；单 utterance 由 `render_timeout_ms` 看门狗保护（防合成/播放卡死拖垮队列）。默认 `max_queue=3` / `render_timeout_ms=60000`（60s 覆盖合成+播放全周期）。
-9. **TTS 引擎是 publish-only 角色**：只发 utterance 事件、不订阅任何事件；事件总线单向数据流约束（[数据流规则 - 事件流向图](../architecture/data-flow.md)）不破。
+9. **TTS 引擎是 publish-only 角色**：只发 utterance 事件、不订阅任何事件；事件总线单向数据流约束（[数据流规则 - 事件流向图](../conventions/data-flow.md)）不破。
 10. **OmniTTS 修复**。原 HTTP 流式响应解码后从未 `play_audio`（`AudioDeviceManager.start_stream` / `write_chunk` / `stop_stream` 流式三步漏调）；本次同步补齐，流式与全量两类引擎共用 `common.py` 函数级共享（不放基类——`ToolProvider` 协议鸭子类型已不适用，强抽基类会抽象泄漏；现以引擎类各自实现 `handle_speech` 即可）。
 
 ## 替代方案（Alternatives）
@@ -68,7 +68,7 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
 
 恢复 AudioStreamChannel（pub-sub 推 PCM 流给多个订阅者）。
 
-**拒绝**。理由见 [数据流规则 - 通信机制选型](../architecture/data-flow.md)：v2 是 pull-style 工具编排，音频数据走 ToolRegistry 调用的返回值（`ToolExecutionResult`）即可；push 通道无人是消费者。`tts.utterance.*` 三事件已足够覆盖帧级以外的元数据订阅需求（字幕 / 耗时统计）。
+**拒绝**。理由见 [数据流规则 - 通信机制选型](../conventions/data-flow.md)：v2 是 pull-style 工具编排，音频数据走 ToolRegistry 调用的返回值（`ToolExecutionResult`）即可；push 通道无人是消费者。`tts.utterance.*` 三事件已足够覆盖帧级以外的元数据订阅需求（字幕 / 耗时统计）。
 
 ### 立刻为流式 PCM 建立 AudioSink 抽象
 

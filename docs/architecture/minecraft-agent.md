@@ -153,7 +153,7 @@ max_validation_retries = 3         # 图纸被 Mod 校验拒绝后的重画上�
 - 组件图与目录结构以代码为唯一事实源（`src/`、`ToolRegistry`）
 - [架构叙事](v2-architecture.md) — Agent/Tool 判据推导
 - [事件系统](event-system.md) — game.* 事件语义单一事实源
-- [数据流规则](data-flow.md) — 事件流约束
+- [数据流规则](../conventions/data-flow.md) — 事件流约束
 - [组件开发指南](../guides/component.md) — 游戏 Agent 范式
 - [ADR-034：Agent 干预原语（递话/硬取消/运营直派）](../decisions/034-agent-intervention-primitives.md)
 - [ADR-035：escalation 状态语义与断连恢复续跑](../decisions/035-escalation-ledger-semantics.md)

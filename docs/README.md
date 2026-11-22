@@ -27,9 +27,9 @@
 ## 架构与设计
 
 - [架构总览](architecture/v2-architecture.md)（先读这篇）
-- [数据流边界规则](architecture/data-flow.md)
+- [数据流边界规则](conventions/data-flow.md)
 - [事件系统](architecture/event-system.md)
-- [事件命名](architecture/event-naming.md)
+- [事件命名](conventions/event-naming.md)
 - [流程单机制](architecture/rundown.md)
 - [存储](architecture/storage.md)
 - [语音合成（TTS）](architecture/tts.md)

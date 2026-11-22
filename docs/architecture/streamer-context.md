@@ -82,4 +82,4 @@ LLM 请求完整发送消息与工具声明，宿主不设置生成 token 上限
 
 - [提示词管理](../guides/prompt.md) - PromptManager 与 strict-only 渲染契约
 - [v2 架构叙事](../architecture/v2-architecture.md) - StreamerAgent 在系统中的位置
-- [数据流规则](../architecture/data-flow.md) - 采集器→存储→Agent 的数据流约束
+- [数据流规则](../conventions/data-flow.md) - 采集器→存储→Agent 的数据流约束

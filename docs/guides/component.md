@@ -945,5 +945,5 @@ class MyToolProvider(ToolProvider):
 - [测试指南](testing.md) — 测试规范与技巧
 - [架构总览](../architecture/v2-architecture.md) — 顶层架构
 - [事件系统](../architecture/event-system.md) — EventBus 与事件拦截器
-- [事件命名](../architecture/event-naming.md) — 事件名动词链
-- [数据流规则](../architecture/data-flow.md) — 单向数据流约束
+- [事件命名](../conventions/event-naming.md) — 事件名动词链
+- [数据流规则](../conventions/data-flow.md) — 单向数据流约束
