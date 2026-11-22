@@ -459,10 +459,9 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
         assert 30 < len(commentary_text) <= 70
         assert "北边山坡插满火把" not in commentary_text
 
-        # 解说在 Step 1 工具执行期内同步播报并写入回声，紧接着的 Step 2 推理已直接看到 [直播间刚说过]
+        # 自产解说回声在紧邻 Step 2 已被剥离，避免模型收到自己刚发出的解说回声诱发二连发风暴
         step2_text = _texts(rig.minecraft_llm.seen[1])
-        assert "[直播间刚说过]" in step2_text
-        assert commentary_text in step2_text
+        assert commentary_text not in step2_text
         assert rig.minecraft.observation()["spoken_echo_count"] == 0
 
         # 2) 游戏侧回到空闲挂起后，主播回应一条观众弹幕发声 -> publish_spoken_echo 写入真实 MinecraftAgent 且严格零额外唤醒
@@ -477,6 +476,8 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
             ),
             source="e2e_test",
         )
+        await rig.bus.wait_until_drained()
+        fake_clock.tick(150)
         await _wait_until(lambda: len(rig.speech_events) == 2)
         await _settle_loop(rig.bus)
         viewer_reply_text = rig.speech_events[1].text
@@ -586,6 +587,8 @@ async def test_e2e_viewer_danmaku_suggest_preserves_coords_and_blocks_delegation
             ),
             source="e2e_test",
         )
+        await rig.bus.wait_until_drained()
+        fake_clock.tick(150)
         await _wait_until(lambda: len(rig.minecraft_llm.seen) > mc_turns_before and not rig.minecraft.batch_active)
 
         # 1) 验证游戏主控态下主播 Planner 工具列表隐藏 framework_delegate / minecraft_chat_send，保留 framework_suggest
@@ -1084,7 +1087,8 @@ async def test_e2e_game_lead_passive_flash_surfaces_cross_session_and_short_term
             )
             await rig.bus.wait_until_drained()
             await _wait_until(lambda: rule_added[0] and not rig.minecraft.batch_active)
-            # 让后台非阻塞短期嵌入任务完成（纯进程内假嵌入，仅需让出事件循环拍）
+            # 等后台非阻塞短期嵌入任务真正收到并写回向量（避免冷机赌固定事件循环拍数）
+            await _wait_until(lambda: any("猫窝" in text for batch in emb_server.requests for text in batch))
             await _settle_loop(rig.bus, turns=12)
 
             turns_before = len(rig.minecraft_llm.seen)
@@ -1107,6 +1111,7 @@ async def test_e2e_game_lead_passive_flash_surfaces_cross_session_and_short_term
                 ),
                 source="e2e_test",
             )
+            await _wait_until(lambda: any("橘猫" in text for batch in emb_server.requests for text in batch))
             await _settle_loop(rig.bus, turns=12)
             fake_clock.tick(2_000)
             assert await rig.minecraft.flush_pending_chat() is True
@@ -1376,3 +1381,71 @@ async def test_e2e_game_lead_landmark_arrival_triggers_real_memory_cue_provider_
             await rig.stop()
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# 链路 11：双真 Agent 流程单超时提醒闭环（StreamerAgent 超期 -> LeadCoordinator -> MinecraftAgent）
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_game_lead_rundown_overdue_nudges_real_minecraft_agent(
+    prompts: Any,
+    fake_clock: Any,
+) -> None:
+    """真实 StreamerAgent 超期 -> 真实 LeadCoordinator 节流推送 -> 真实 MinecraftAgent 收到 [流程单超时提醒]，主播零唤醒。"""
+
+    def _mc_script(_messages: List[Dict[str, Any]]) -> Response:
+        return _resp("收到进度，继续按节奏推进")
+
+    rig = await _start_dual_agent_rig(
+        prompts=prompts,
+        fake_clock=fake_clock,
+        mc_script=_mc_script,
+        streamer_sections={
+            "game_lead_silence_nudge_ms": 0,
+            "proactive": {
+                "enabled": True,
+                "rundown_overdue_interval_ms": 300_000,
+            },
+        },
+    )
+    try:
+        await rig.bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=911, kind="live", started_at_ms=fake_clock.now_ms()),
+            source="e2e_test",
+        )
+        await rig.bus.wait_until_drained()
+        await _wait_until(lambda: rig.coordinator.is_agent_leading("minecraft") and len(rig.minecraft_llm.seen) >= 1)
+        await _wait_until(lambda: not rig.minecraft.batch_active)
+        turns_before = len(rig.minecraft_llm.seen)
+        assert len(rig.streamer_llm.planner_calls) == 0
+
+        # 拨动时钟刚好到 seg_play 预计时长（1_800_000ms），尚未超期 -> 不推送
+        fake_clock.tick(1_800_000)
+        await rig.streamer._maybe_flush()
+        await _settle_loop(rig.bus)
+        assert len(rig.minecraft_llm.seen) == turns_before
+        assert len(rig.streamer_llm.planner_calls) == 0
+
+        # 拨动时钟超期（+1_000ms）-> 真实 StreamerAgent 经 LeadCoordinator 推送给真实 MinecraftAgent
+        fake_clock.tick(1_000)
+        await rig.streamer._maybe_flush()
+        await _wait_until(lambda: len(rig.minecraft_llm.seen) > turns_before and not rig.minecraft.batch_active)
+
+        nudge_turn_text = _texts(rig.minecraft_llm.seen[-1])
+        assert "[流程单超时提醒]" in nudge_turn_text
+        assert "主线林地建家" in nudge_turn_text
+        assert "收尾闲聊复盘" in nudge_turn_text
+        assert "rundown_control" in nudge_turn_text
+        assert len(rig.streamer_llm.planner_calls) == 0
+
+        # 5 分钟节流期内再次 flush 不重复唤醒 MinecraftAgent
+        turns_after_first = len(rig.minecraft_llm.seen)
+        fake_clock.tick(299_000)
+        await rig.streamer._maybe_flush()
+        await _settle_loop(rig.bus)
+        assert len(rig.minecraft_llm.seen) == turns_after_first
+        assert len(rig.streamer_llm.planner_calls) == 0
+    finally:
+        await rig.stop()

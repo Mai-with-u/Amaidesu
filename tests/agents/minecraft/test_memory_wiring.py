@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from pathlib import Path
 from typing import Any, Dict, List
 
 from src.agents.minecraft.agent import _extract_preserved_human_lines
@@ -11,9 +12,10 @@ from src.agents.minecraft.config import MinecraftContextConfig
 from src.modules.agents import AgentManager, LeadCoordinator, LeadHandoverContext
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
 from src.modules.llm.embedding import EmbeddingSetup
 from src.modules.llm.payload import Response
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.minecraft._wiring_helpers import StreamerPlaceholder, settle
@@ -92,6 +94,16 @@ def test_extract_preserved_human_lines_strips_ref_enforces_limits() -> None:
     assert "第一行提醒 第二行记得关闸门" in extracted[0]
     assert "附尾闪过不保留" not in extracted[0]
     assert all("主城卖甘蔗啦" not in line and "收木头" not in line for line in extracted)
+
+    # 严格白名单：拦截 [装备]、[流程单超时提醒] 及任意未知宿主通知，绝不误收进人类原话保留区
+    host_notifications: List[Dict[str, Any]] = [
+        {"role": "user", "content": "[m0030] [装备] 你的石镐用坏了。这是观察不是命令"},
+        {"role": "user", "content": "[m0031] [流程单超时提醒] 当前环节已超时 5 分钟"},
+        {"role": "user", "content": "[m0032] [未知系统事件] 区块重新加载完成"},
+        {"role": "user", "content": "[m0033] [运营原话]\n今晚记得修完水车"},
+    ]
+    whitelist_only = _extract_preserved_human_lines(host_notifications)
+    assert whitelist_only == ["[运营原话] 今晚记得修完水车"]
 
 
 async def test_fold_preserves_human_lines_and_context_recall_falls_back_to_semantic_blocks(
@@ -188,9 +200,10 @@ async def test_fold_preserves_human_lines_and_context_recall_falls_back_to_seman
         assert "[本段人类原话保留]" in all_seen
         assert "记得给那只猫留条鱼干" in all_seen
 
-        # 2) 等待嵌入补完后直接经工具面调用 minecraft_context_recall：字面“橘猫”0 命中 -> 自动返回 semantic_blocks 含 b1
-        # （先确保后台嵌入完成，然后验证回捞结果）
-        await settle(bus, turns=10)
+        # 2) 等待后台嵌入任务真实处理完含折叠摘要的请求后，经工具面调用 minecraft_context_recall：
+        #    字面“橘猫”0 命中 -> 自动返回 semantic_blocks 含 b1
+        await _wait_until(lambda: any("河边" in text for batch in emb_server.requests for text in batch))
+        await settle(bus, turns=5)
         res = await registry.invoke(
             ToolInvocation(
                 tool_name="minecraft_context_recall",
@@ -507,8 +520,349 @@ async def test_passive_flash_returns_keyword_hit_under_slow_embedding() -> None:
 
         tail_text = str(llm.seen[-1][-1].get("content") or "")
         assert "[脑中闪过]" in tail_text
-        assert "仓库地下的红石机关拉杆绝对不能乱拉" in tail_text
+        assert "[刚刚] [本场规矩] 仓库地下的红石机关拉杆绝对不能乱拉" in tail_text
     finally:
         slow_gate.set()
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_self_chat_synced_to_gate_and_short_term_memory_without_self_wakeup_and_stale_flash_blocked() -> None:
+    """己方 maicraft:chat 确认后同步记入 chat_gate 与短期记忆且不自唤醒；97 分钟前旧话绝不闪回。"""
+    clock = FakeClock(2_000_000)
+    server = FakeMaicraft()
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    replied = {"done": False}
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        joined = _texts(messages)
+        if "给你羊肉" in joined and not replied["done"]:
+            replied["done"] = True
+            return _resp(
+                "回同伴收下羊肉",
+                calls=[
+                    _call(
+                        "maicraft_execute",
+                        {"goal": {"ability": "chat", "parameters": {"message": "羊肉收下啦"}}},
+                        "c_self_chat",
+                    )
+                ],
+            )
+        return _resp("继续观察")
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        script,
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=0,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="公屏记忆测试"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
+
+        # 1) 97 分钟前玩家发过一条短闲聊“你要猪排吗”
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerA",
+                sender_distance=5.0,
+                content="你要猪排吗",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await _wait_until(lambda: len(llm.seen) == 2 and not agent.batch_active)
+
+        # 2) 推进 97 分钟后，玩家说“给你羊肉”，模型用 chat 回复“羊肉收下啦”
+        clock.tick(97 * 60_000)
+        turns_before_mutton = len(llm.seen)
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerA",
+                sender_distance=5.0,
+                content="给你羊肉",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await _wait_until(lambda: replied["done"] and not agent.batch_active)
+        turns_after_reply = len(llm.seen)
+
+        # 排空总线后验证：己方发出的 GAME_SELF_CHATTED 被 _own_emitted_chats 过滤，绝不再次自唤醒
+        await settle(bus)
+        assert len(llm.seen) == turns_after_reply
+        # 97 分钟前的“猪排”未在“给你羊肉”这轮尾部 [脑中闪过] 里闪回，也不再挂在任务状态 recent_human_lines 里
+        mutton_tail = str(llm.seen[turns_before_mutton][-1].get("content") or "")
+        assert "你要猪排吗" not in mutton_tail
+        state_msgs = [
+            str(m.get("content") or "")
+            for m in llm.seen[turns_before_mutton]
+            if str(m.get("content") or "").startswith("[继续原游戏任务]")
+        ]
+        assert all("你要猪排吗" not in msg for msg in state_msgs)
+
+        # 3) 短期记忆已收录己方回复“你回过：羊肉收下啦”
+        stm_hits = await agent.query_short_term_memory("羊肉收下啦")
+        assert any("你回过：羊肉收下啦" in item["text"] for item in stm_hits)
+
+        # 4) 推进 2 分钟后再发一条关于猪排的公屏：97+2 分钟前的旧猪排依然绝不闪回；
+        #    而如果切出续做，近期双向对话包含 [你回过·2分钟前] 羊肉收下啦
+        clock.tick(2 * 60_000)
+        turns_before_pork = len(llm.seen)
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerA",
+                sender_distance=5.0,
+                content="猪排还有吗",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await _wait_until(lambda: len(llm.seen) > turns_before_pork and not agent.batch_active)
+        pork_tail = str(llm.seen[-1][-1].get("content") or "")
+        assert "你要猪排吗" not in pork_tail
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_clock_domain_isolation_unix_payloads_decay_and_skill_wall_clock(db_path: Path) -> None:
+    """单调时钟域与 wall-clock 严格分离：Unix epoch 事件不破坏短期衰减与近期公屏窗，技能入库写 epoch 毫秒。"""
+    mono_clock = FakeClock(1_000_000)
+    wall_clock = FakeClock(1_795_000_000_000)
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=mono_clock.now_ms)
+    server = FakeMaicraft()
+    server.enter_world("save-clock", "时钟域测试档")
+
+    try:
+        agent, llm, _ = await make_minecraft_agent(
+            server,
+            lambda _msgs: _resp("收到"),
+            registry=registry,
+            bus=bus,
+            live=True,
+            work_docs_repo=db.game_work_docs,
+            lead_coordinator=coord,
+            lead_idle_wakeup_s=0.0,
+            chat_batch_window_ms=0,
+            clock=lambda: mono_clock.now_ms() / 1000.0,
+            wall_clock_ms=wall_clock.now_ms,
+        )
+        manager.register(agent)
+        try:
+            assert (
+                await coord.request_game_lead(LeadHandoverContext(segment_title="时钟测试"), target="minecraft")
+                == "minecraft"
+            )
+            await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
+
+            # 1) T=0 收到带真实 Unix epoch timestamp_ms 的玩家旧闲聊 + 外部替说公屏事件
+            await bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender="PlayerA",
+                    sender_distance=5.0,
+                    content="你要猪排吗",
+                    timestamp_ms=wall_clock.now_ms(),
+                ),
+                source="test",
+            )
+            await bus.emit(
+                CoreEvents.GAME_SELF_CHATTED,
+                GameSelfChattedPayload(
+                    game="minecraft",
+                    message="先去整理仓库啦",
+                    timestamp_ms=wall_clock.now_ms(),
+                ),
+                source="external_streamer",
+            )
+            await bus.wait_until_drained()
+            await _wait_until(lambda: len(llm.seen) >= 2 and not agent.batch_active)
+
+            # 2) 外部 GAME_SELF_CHATTED 不得用 Unix epoch 毫秒把单调时钟下的近期公屏窗整窗洗空
+            mono_clock.tick(2 * 60_000)
+            wall_clock.tick(2 * 60_000)
+            stm_recent = await agent.query_short_term_memory("猪排")
+            assert any("你要猪排吗" in item["text"] for item in stm_recent)
+            # 切出后通过只读公开查询确认短期记忆随单调时钟正常推进，不是恒为 [刚刚]
+            mono_clock.tick(10 * 60_000)
+            wall_clock.tick(10 * 60_000)
+            await bus.emit(
+                CoreEvents.GAME_CHAT_RECEIVED,
+                GameChatPayload(
+                    game="minecraft",
+                    kind="player",
+                    sender="PlayerA",
+                    sender_distance=5.0,
+                    content="仓库整理好了吗",
+                    timestamp_ms=wall_clock.now_ms(),
+                ),
+                source="test",
+            )
+            await bus.wait_until_drained()
+            await _wait_until(lambda: len(llm.seen) >= 3 and not agent.batch_active)
+            flash_12m_tail = str(llm.seen[-1][-1].get("content") or "")
+            assert "[12分钟前]" in flash_12m_tail
+            assert "先去整理仓库啦" in flash_12m_tail
+
+            # 3) 推进至 97 分钟后，旧闲聊“你要猪排吗”被单调时钟衰减彻底淘汰，不再闪回
+            mono_clock.tick(85 * 60_000)
+            wall_clock.tick(85 * 60_000)
+            stm_after_97m = await agent.query_short_term_memory("PlayerA 猪排")
+            assert all("你要猪排吗" not in item["text"] for item in stm_after_97m)
+
+            # 4) 自建技能入库写的是 wall_clock_ms（Unix epoch 毫秒），而非单调时钟毫秒
+            skill_res = await registry.invoke(
+                ToolInvocation(
+                    tool_name="minecraft_skill",
+                    arguments={
+                        "action": "upsert",
+                        "name": "clock_verified_skill",
+                        "scope": "world",
+                        "trigger": "校验落库时间戳",
+                        "content": "测试步骤",
+                    },
+                    source="minecraft-react",
+                    invoking_agent="minecraft",
+                )
+            )
+            assert skill_res.success is True
+            persisted = await db.learned_skills.get_skill(
+                game="minecraft",
+                scope="world",
+                save_id="save-clock",
+                name="clock_verified_skill",
+            )
+            assert persisted is not None
+            assert persisted.updated_at_ms == wall_clock.now_ms()
+            assert persisted.updated_at_ms >= 1_795_000_000_000
+        finally:
+            await agent.stop()
+    finally:
+        await bus.cleanup()
+        await db.close()
+
+
+async def test_streamer_chat_send_does_not_double_record_when_player_chat_interleaves() -> None:
+    """活跃委派任务期间主播直发 minecraft_chat_send 且中途穿插玩家公屏时，GAME_SELF_CHATTED 不得二次写入重复 [你回过]。"""
+    clock = FakeClock(5_000_000)
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+    server = FakeMaicraft()
+
+    interleaved = {"fired": False}
+
+    async def _interleave_player_chat(_event: str, _payload: GameSelfChattedPayload, _source: str) -> None:
+        if interleaved["fired"]:
+            return
+        interleaved["fired"] = True
+        # 在 _on_self_chatted 之前先写入一条玩家公屏，打破单纯“相邻去重”的假设
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerB",
+                sender_distance=4.0,
+                content="晚上好",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+
+    # 先于 agent.start() 订阅，确保穿插玩家公屏发生在 _send_self_chat 之后、_on_self_chatted 之前
+    bus.on(CoreEvents.GAME_SELF_CHATTED, _interleave_player_chat, GameSelfChattedPayload)
+
+    started_goal = {"sent": False}
+
+    def script(_msgs: List[Dict[str, Any]]) -> Response:
+        if not started_goal["sent"]:
+            started_goal["sent"] = True
+            return _resp(
+                "先去砍木头",
+                calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍木头"}}, "c_g1")],
+            )
+        return _resp("继续等后台砍木头")
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        script,
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=0,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        # 委派一个后台长任务（非主控态且任务活跃：_task_finished=False），主播可通过 minecraft_chat_send 代发公屏
+        agent.receive_delegation(instruction="去营地西边砍一点木头", task_id="d-chat-send")
+        await _wait_until(lambda: len(agent.tracked_goal_ids) == 1 and not agent.batch_active)
+
+        send_res = await registry.invoke(
+            ToolInvocation(
+                tool_name="minecraft_chat_send",
+                arguments={"text": "大家晚上好呀"},
+                source="streamer",
+                invoking_agent="streamer",
+            )
+        )
+        assert send_res.success is True
+        await bus.wait_until_drained()
+        await _wait_until(lambda: not agent.batch_active)
+        assert interleaved["fired"] is True
+
+        # 短期记忆中只存在 1 条己方回复记录（未被 _on_self_chatted 二次写入）
+        hits = await agent.query_short_term_memory("大家晚上好呀", limit=5)
+        self_hits = [item for item in hits if "你回过：大家晚上好呀" in item["text"]]
+        assert len(self_hits) == 1
+
+        # 随后切入游戏主控态，核对 [继续原游戏任务] / 近期双向对话窗口中仅出现 1 次 [你回过]
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="复核双向公屏"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: not agent.batch_active and any("复核双向公屏" in _texts(seen) for seen in llm.seen))
+        lead_msgs = [str(m.get("content") or "") for m in llm.seen[-1] if "[你回过" in str(m.get("content") or "")]
+        assert sum(msg.count("大家晚上好呀") for msg in lead_msgs) <= 1
+    finally:
         await agent.stop()
         await bus.cleanup()
