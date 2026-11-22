@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { PlayerItem } from '@/types';
 import {
   deletePlayerWarning,
+  formatAliasesInput,
+  formatPlayerDisplayName,
   formerNamesText,
   interactionsText,
   linkedPlayersDeleteNote,
@@ -9,8 +11,9 @@ import {
   linkViewerWarning,
   matchesPlayerQuery,
   offlineSavesNote,
-  savesText,
+  parseAliasesInput,
   playerReplyWhere,
+  savesText,
 } from './playersView';
 
 function player(overrides: Partial<PlayerItem> = {}): PlayerItem {
@@ -20,6 +23,7 @@ function player(overrides: Partial<PlayerItem> = {}): PlayerItem {
     uuid: 'uuid-a',
     name: 'Alex',
     former_names: ['Steve'],
+    aliases: [],
     saves: [],
     first_seen_ms: 1_000,
     last_seen_ms: 2_000,
@@ -73,12 +77,32 @@ describe('名字与关联观众', () => {
     expect(linkedViewerLabel({ viewer_id: 7, user_name: '', confirmed_at_ms: 1 })).toBe('#7');
   });
 
-  it('按现名或曾用名搜，不分大小写；关键字为空全留', () => {
-    const alex = player();
-    expect(matchesPlayerQuery(alex, 'steve')).toBe(true);
-    expect(matchesPlayerQuery(alex, ' ALE ')).toBe(true);
-    expect(matchesPlayerQuery(alex, 'bob')).toBe(false);
-    expect(matchesPlayerQuery(alex, '  ')).toBe(true);
+  it('按现名、曾用名或常用称呼搜，不分大小写；关键字为空全留', () => {
+    const alpha = player({
+      name: 'AlphaPlayer',
+      former_names: ['OldAlpha'],
+      aliases: ['小阿尔', '阿法'],
+    });
+    expect(matchesPlayerQuery(alpha, 'oldalpha')).toBe(true);
+    expect(matchesPlayerQuery(alpha, ' ALPHA ')).toBe(true);
+    expect(matchesPlayerQuery(alpha, '小阿尔')).toBe(true);
+    expect(matchesPlayerQuery(alpha, 'beta')).toBe(false);
+    expect(matchesPlayerQuery(alpha, '  ')).toBe(true);
+  });
+
+  it('常用称呼格式化与输入解析：去空白、去重、保序、忽略与现名相同项', () => {
+    expect(formatPlayerDisplayName('AlphaPlayer', [])).toBe('AlphaPlayer');
+    expect(formatPlayerDisplayName('AlphaPlayer', ['AlphaPlayer', '  '])).toBe('AlphaPlayer');
+    expect(formatPlayerDisplayName('AlphaPlayer', [' 小阿尔 ', '阿法', '小阿尔'])).toBe(
+      'AlphaPlayer（常叫：小阿尔、阿法）',
+    );
+    expect(parseAliasesInput(' 小阿尔，阿法、AlphaPlayer, 小阿尔；小贝 ', 'AlphaPlayer')).toEqual([
+      '小阿尔',
+      '阿法',
+      '小贝',
+    ]);
+    expect(parseAliasesInput('   ', 'AlphaPlayer')).toEqual([]);
+    expect(formatAliasesInput([' 小阿尔 ', '阿法', '小阿尔'])).toBe('小阿尔、阿法');
   });
 });
 

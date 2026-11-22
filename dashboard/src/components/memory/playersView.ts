@@ -39,6 +39,41 @@ export function formerNamesText(names: readonly string[]): string {
   return names.length > 0 ? `以前叫 ${names.join('、')}` : '';
 }
 
+/** 清洗玩家常用称呼：折叠空白、保序去重、忽略空串与与现名完全相同的项 */
+export function normalizePlayerAliases(aliases: readonly string[], displayName = ''): string[] {
+  const base = displayName.trim().replace(/\s+/g, ' ');
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of aliases) {
+    const cleaned = String(raw ?? '')
+      .trim()
+      .replace(/\s+/g, ' ');
+    if (!cleaned || (base && cleaned === base) || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+/** 玩家抬头显示名：无常用称呼返回现名，有则返回「Name（常叫：Alias1、Alias2）」 */
+export function formatPlayerDisplayName(name: string, aliases: readonly string[] = []): string {
+  const base = name.trim().replace(/\s+/g, ' ');
+  if (!base) return '';
+  const cleaned = normalizePlayerAliases(aliases, base);
+  return cleaned.length > 0 ? `${base}（常叫：${cleaned.join('、')}）` : base;
+}
+
+/** 解析运营者输入的常用称呼文本（支持顿号、逗号、分号、换行分隔）并按规则清洗 */
+export function parseAliasesInput(raw: string, displayName = ''): string[] {
+  if (!raw.trim()) return [];
+  return normalizePlayerAliases(raw.split(/[、,，;；\r\n]+/), displayName);
+}
+
+/** 把常用称呼列表格式化为输入框初始文本（中文顿号分隔） */
+export function formatAliasesInput(aliases: readonly string[]): string {
+  return normalizePlayerAliases(aliases).join('、');
+}
+
 /** 离线模式（服务器不验正版账号）的后果：UUID 由名字算出，认人只认得名字 */
 export const OFFLINE_MODE_NOTE = '离线模式：按名字认人，改名算新人，冒名认不出';
 
@@ -68,13 +103,15 @@ export function linkedViewerLabel(viewer: PlayerLinkedViewer): string {
 }
 
 /**
- * 按名字找玩家：现名或任一曾用名包含关键字就算（不分大小写）。
- * 运营者想找的常常是他以前的名字（观众说"那个叫 Steve 的"），所以曾用名也要能搜到；关键字为空全部保留。
+ * 按名字找玩家：现名、任一曾用名或常用称呼包含关键字就算（不分大小写）。
+ * 运营者想找的常常是他以前的名字或口头简称，所以三者都要能搜到；关键字为空全部保留。
  */
 export function matchesPlayerQuery(item: PlayerItem, query: string): boolean {
   const keyword = query.trim().toLowerCase();
   if (!keyword) return true;
-  return [item.name, ...item.former_names].some(name => name.toLowerCase().includes(keyword));
+  return [item.name, ...item.former_names, ...(item.aliases ?? [])].some(name =>
+    name.toLowerCase().includes(keyword),
+  );
 }
 
 /**

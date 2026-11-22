@@ -1,6 +1,7 @@
-"""游戏里的人：记忆页的玩家列表、观众对号确认与删玩家。
+"""游戏里的人：记忆页的玩家列表、常用称呼维护、观众对号确认与删玩家。
 
-- GET    /memory/players                         玩家列表（最近见到的在前）：名字、曾用名、互动条数、关联观众
+- GET    /memory/players                         玩家列表（最近见到的在前）：名字、曾用名、常用称呼、互动条数、关联观众
+- PATCH  /memory/players/{id}/aliases            运营者手动维护一位玩家的纯游戏侧常用称呼
 - POST   /memory/players/{id}/links              确认"这位玩家是直播间的哪位观众"
 - DELETE /memory/players/{id}/links/{viewer_id}  取消关联
 - DELETE /memory/players/{id}                    删玩家
@@ -11,8 +12,9 @@
 - DELETE /memory/players/candidates/{id}         删掉这一条（哪种状态都行）
 
 对号只由运营者确认，同名、名字像、同时出现都不自动关联；关联只用来连带删除（删观众、"忘了我"时
-一起删这位玩家）和给运营者看清楚，从不告诉她。删玩家时他的互动、游戏公屏、对他的承诺随之删除，
-名字换成"一位玩家"，UUID 进不记录名单，之后他再出现也不再记。
+一起删这位玩家）和给运营者看清楚，从不告诉她。常用称呼是纯游戏侧同伴称呼，仅由运营者手动维护，
+与观众对号表彻底无关，且绝不向任何 LLM 工具开放写入。删玩家时他的互动、游戏公屏、对他的承诺随之删除，
+名字与常用称呼换成"一位玩家"，UUID 进不记录名单，之后他再出现也不再记。
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from src.modules.dashboard.dependencies import server_component
 from src.modules.dashboard.schemas.players import (
     LinkedViewer,
+    PlayerAliasesResponse,
+    PlayerAliasesUpdateRequest,
     PlayerCandidateApproveRequest,
     PlayerCandidateItem,
     PlayerCandidateListResponse,
@@ -98,6 +102,7 @@ async def list_players(
                 uuid=row.uuid,
                 name=row.name,
                 former_names=row.former_names(),
+                aliases=list(row.aliases),
                 # 见过他的存档连同账号验证：离线模式的存档面板上标明认人只认得名字
                 saves=[
                     PlayerSaveItem(save_id=save.save_id, save_name=save.save_name, online_mode=save.online_mode)
@@ -199,6 +204,20 @@ async def delete_player_candidate(candidate_id: int, players: PlayerRepoDep) -> 
     except MemoryReviewError as exc:
         _raise_review_error(exc)
     return PlayerMutationResponse(success=True, detail="已删掉这一条")
+
+
+@router.patch("/{player_id}/aliases", response_model=PlayerAliasesResponse)
+async def update_player_aliases(
+    player_id: int,
+    request: PlayerAliasesUpdateRequest,
+    players: PlayerRepoDep,
+) -> PlayerAliasesResponse:
+    """运营者手动维护一位玩家的纯游戏侧常用称呼（自动去空白、去重、忽略与现名相同项）。"""
+    try:
+        updated = await players.set_aliases(player_id=int(player_id), aliases=request.aliases)
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return PlayerAliasesResponse(id=updated.id, name=updated.name, aliases=list(updated.aliases))
 
 
 @router.post("/{player_id}/links", response_model=PlayerMutationResponse)

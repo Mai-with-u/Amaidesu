@@ -35,6 +35,7 @@ class PlayerItem(BaseModel):
     uuid: str = Field(description="游戏给这个账号的 UUID（删玩家按它进不记录名单）")
     name: str = Field(description="最近一次见到时的名字")
     former_names: List[str] = Field(default_factory=list, description="以前用过的名字")
+    aliases: List[str] = Field(default_factory=list, description="运营者维护的纯游戏侧常用称呼（与观众对号彻底无关）")
     saves: List[PlayerSaveItem] = Field(default_factory=list, description="见过他的存档，按第一次见到的先后")
     first_seen_ms: int = Field(description="第一次见到的时刻")
     last_seen_ms: int = Field(description="最近一次见到的时刻")
@@ -45,6 +46,20 @@ class PlayerItem(BaseModel):
     forget_requested_at_ms: Optional[int] = Field(
         default=None, description="他在游戏公屏发'忘了我'的时刻；宽限期满后自动删除"
     )
+
+
+class PlayerAliasesUpdateRequest(BaseModel):
+    """运营者手动更新一位玩家的纯游戏侧常用称呼。"""
+
+    aliases: List[str] = Field(default_factory=list, description="常用称呼列表（自动去空白、去重、忽略与现名相同项）")
+
+
+class PlayerAliasesResponse(BaseModel):
+    """更新玩家常用称呼后的回执，返回清洗落库后的最终列表。"""
+
+    id: int = Field(description="玩家主键")
+    name: str = Field(description="最近一次见到时的名字")
+    aliases: List[str] = Field(default_factory=list, description="落库后的常用称呼列表")
 
 
 class PlayerListResponse(BaseModel):

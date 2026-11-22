@@ -83,6 +83,8 @@ import type {
   PersonaListResponse,
   PersonaCreateResponse,
   PersonaOperationResponse,
+  PlayerAliasesResponse,
+  PlayerAliasesUpdatePayload,
   PlayerCandidateItem,
   PlayerCandidateListResponse,
   PlayerLinkPayload,
@@ -707,6 +709,8 @@ export const ledgerApi = {
 // 不告诉她。删玩家时他的互动、游戏公屏、对他的承诺一起删，UUID 进不记录名单。
 export const playersApi = {
   list: (params?: { game?: string }) => api.get<PlayerListResponse>('/memory/players', { params }),
+  updateAliases: (playerId: number, payload: PlayerAliasesUpdatePayload) =>
+    api.patch<PlayerAliasesResponse>(`/memory/players/${playerId}/aliases`, payload),
   linkViewer: (playerId: number, payload: PlayerLinkPayload) =>
     api.post<LedgerMutationResponse>(`/memory/players/${playerId}/links`, payload),
   unlinkViewer: (playerId: number, viewerId: number) =>

@@ -1800,6 +1800,8 @@ export interface PlayerItem {
   /** 最近一次见到时的名字 */
   name: string;
   former_names: string[];
+  /** 运营者维护的纯游戏侧常用称呼（与观众对号彻底无关） */
+  aliases: string[];
   /** 见过他的存档，按第一次见到的先后 */
   saves: PlayerSave[];
   first_seen_ms: number;
@@ -1845,6 +1847,18 @@ export interface PlayerCandidateListResponse {
 /** 确认这位玩家是直播间的哪位观众 */
 export interface PlayerLinkPayload {
   viewer_id: number;
+}
+
+/** 运营者更新一位玩家的纯游戏侧常用称呼 */
+export interface PlayerAliasesUpdatePayload {
+  aliases: string[];
+}
+
+/** 更新玩家常用称呼后的回执（返回清洗落库后的最终列表） */
+export interface PlayerAliasesResponse {
+  id: number;
+  name: string;
+  aliases: string[];
 }
 
 /** 批准一条候选：可改标题；观众定下的可标稳定 */

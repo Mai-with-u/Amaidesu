@@ -81,9 +81,10 @@ async def test_list_link_unlink_and_delete_a_player(client, store: SQLiteDatabas
     )
 
     (item,) = (await client.get("/api/v1/memory/players")).json()["items"]
-    assert (item["name"], item["former_names"], item["interactions"], item["linked_viewers"]) == (
+    assert (item["name"], item["former_names"], item["aliases"], item["interactions"], item["linked_viewers"]) == (
         "Alex",
         ["Steve"],
+        [],
         {"greet": 1, "gift": 1},
         [],
     )
@@ -187,3 +188,48 @@ async def test_revoke_or_delete_a_self_statement(client, store: SQLiteDatabase) 
     assert (await client.delete(f"/api/v1/memory/players/candidates/{candidate_id}")).status_code == 200
     assert (await client.delete(f"/api/v1/memory/players/candidates/{candidate_id}")).status_code == 404
     assert (await client.get("/api/v1/memory/players/candidates", params={"status": "all"})).json()["items"] == []
+
+
+async def test_operator_updates_player_aliases_with_cleanup_and_validation(api, client, store: SQLiteDatabase) -> None:
+    """运营者手动维护玩家常用称呼：自动清洗去重、与观众关联隔离、越界 422、不存在 404、未装配 503。"""
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    alpha = await store.game_players.meet_player(
+        game="minecraft",
+        uuid="uuid-alpha",
+        name="AlphaPlayer",
+        live_session_id=session,
+        at_ms=1_010,
+    )
+
+    updated = await client.patch(
+        f"/api/v1/memory/players/{alpha.id}/aliases",
+        json={"aliases": [" 小阿尔 ", "AlphaPlayer", "小阿尔", "", "阿法"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json() == {"id": alpha.id, "name": "AlphaPlayer", "aliases": ["小阿尔", "阿法"]}
+
+    (item,) = (await client.get("/api/v1/memory/players")).json()["items"]
+    assert item["aliases"] == ["小阿尔", "阿法"]
+    assert item["linked_viewers"] == [], "常用称呼纯属游戏侧，绝不写 viewer_player_links"
+
+    # 清空常用称呼
+    cleared = await client.patch(f"/api/v1/memory/players/{alpha.id}/aliases", json={"aliases": []})
+    assert cleared.status_code == 200 and cleared.json()["aliases"] == []
+
+    # 校验边界：超条数、超字数、不存在、未装配
+    too_many = await client.patch(
+        f"/api/v1/memory/players/{alpha.id}/aliases",
+        json={"aliases": [f"别名{i}" for i in range(9)]},
+    )
+    assert too_many.status_code == 422
+    too_long = await client.patch(
+        f"/api/v1/memory/players/{alpha.id}/aliases",
+        json={"aliases": ["长" * 25]},
+    )
+    assert too_long.status_code == 422
+    assert (await client.patch("/api/v1/memory/players/99999/aliases", json={"aliases": ["小阿尔"]})).status_code == 404
+
+    unwired = await api()
+    assert (
+        await unwired.patch(f"/api/v1/memory/players/{alpha.id}/aliases", json={"aliases": ["小阿尔"]})
+    ).status_code == 503

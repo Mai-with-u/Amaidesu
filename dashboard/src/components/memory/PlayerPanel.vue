@@ -10,8 +10,8 @@
           >
         </div>
         <p class="panel-hint">
-          她在游戏里遇到过的玩家。玩家开口时她会看到一条玩家线索；这里的关联观众她看不到。确认“这位玩家就是直播间的某位观众”后，
-          删这位观众、或任何一方发“忘了我”，两边一起删除；同名、名字像都不会自动关联。
+          她在游戏里遇到过的玩家。玩家开口时她会看到一条玩家线索；可以手动维护纯游戏侧的常用称呼，帮助她在游戏公屏与记忆里认准同一人。
+          这里的关联观众她看不到——确认“这位玩家就是直播间的某位观众”后，删这位观众、或任何一方发“忘了我”，两边一起删除；同名、名字像都不会自动关联。
         </p>
       </div>
       <div class="head-actions">
@@ -20,7 +20,7 @@
           size="small"
           clearable
           class="search-input"
-          placeholder="按名字或以前的名字找"
+          placeholder="按名字、曾用名或常用称呼找"
         />
         <el-button size="small" :loading="loading" @click="reload">刷新</el-button>
       </div>
@@ -31,7 +31,7 @@
     <ul v-loading="loading" class="player-list">
       <li v-for="item in shown" :key="item.id" class="player-item">
         <div class="player-head">
-          <span class="player-name">{{ item.name }}</span>
+          <span class="player-name">{{ formatPlayerDisplayName(item.name, item.aliases) }}</span>
           <span class="player-game mono">{{ item.game }}</span>
           <el-tag
             v-if="item.forget_requested_at_ms !== null"
@@ -49,6 +49,50 @@
         <p v-if="item.former_names.length > 0" class="player-meta">
           {{ formerNamesText(item.former_names) }}
         </p>
+        <div class="player-aliases">
+          <span class="links-label">常用称呼</span>
+          <template v-if="editingAliasId === item.id">
+            <el-input
+              v-model="aliasDraft"
+              size="small"
+              clearable
+              class="alias-input"
+              placeholder="多个称呼用顿号或逗号分隔，留空清空"
+              @keyup.enter="saveAliases(item)"
+            />
+            <el-button
+              size="small"
+              type="primary"
+              :loading="busyId === item.id"
+              :disabled="busyId !== null && busyId !== item.id"
+              @click="saveAliases(item)"
+              >保存</el-button
+            >
+            <el-button size="small" :disabled="busyId === item.id" @click="cancelEditAliases"
+              >取消</el-button
+            >
+          </template>
+          <template v-else>
+            <el-tag
+              v-for="alias in item.aliases"
+              :key="alias"
+              size="small"
+              type="success"
+              effect="plain"
+              disable-transitions
+              >{{ alias }}</el-tag
+            >
+            <span v-if="item.aliases.length === 0" class="links-empty">未设置</span>
+            <el-button
+              size="small"
+              link
+              type="primary"
+              :disabled="busyId !== null"
+              @click="startEditAliases(item)"
+              >编辑称呼</el-button
+            >
+          </template>
+        </div>
         <p v-if="item.saves.length > 0" class="player-meta">{{ savesText(item.saves) }}</p>
         <!-- 离线模式的存档：服务器不验正版账号，在那里认人只认得名字，标出来让运营者心里有数 -->
         <p v-if="offlineSavesNote(item.saves)" class="player-meta offline-note">
@@ -123,12 +167,15 @@ import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn } from '@/utils/format';
 import {
   deletePlayerWarning,
+  formatAliasesInput,
+  formatPlayerDisplayName,
   formerNamesText,
   interactionsText,
   linkedViewerLabel,
   linkViewerWarning,
   matchesPlayerQuery,
   offlineSavesNote,
+  parseAliasesInput,
   savesText,
 } from './playersView';
 
@@ -138,12 +185,15 @@ const loading = ref(false);
 const loadError = ref('');
 const actionError = ref('');
 const busyId = ref<number | null>(null);
+/** 正在行内编辑常用称呼的玩家 ID（一次仅编辑一位，与观众关联互不干扰） */
+const editingAliasId = ref<number | null>(null);
+const aliasDraft = ref('');
 /** 每位玩家行里观众选择器选中的观众（点“确认关联”时交上去） */
 const linkTargets = reactive<Record<number, number | null>>({});
 /** 选择器选中的那位观众（昵称等）：确认对话框点名用 */
 const linkPicked = reactive<Record<number, ViewerListItem | null>>({});
 
-/** 按名字过滤后的列表：现名或曾用名命中都算 */
+/** 按名字、曾用名或常用称呼过滤后的列表 */
 const shown = computed(() => items.value.filter(item => matchesPlayerQuery(item, query.value)));
 /** 发过“忘了我”、还在宽限期里的玩家数 */
 const forgetPendingCount = computed(
@@ -160,6 +210,30 @@ async function reload(): Promise<void> {
     loadError.value = getApiErrorMessage(err, '玩家列表加载失败');
   } finally {
     loading.value = false;
+  }
+}
+
+function startEditAliases(item: PlayerItem): void {
+  actionError.value = '';
+  editingAliasId.value = item.id;
+  aliasDraft.value = formatAliasesInput(item.aliases);
+}
+
+function cancelEditAliases(): void {
+  editingAliasId.value = null;
+  aliasDraft.value = '';
+}
+
+async function saveAliases(item: PlayerItem): Promise<void> {
+  const aliases = parseAliasesInput(aliasDraft.value, item.name);
+  const ok = await mutate(
+    item,
+    () => playersApi.updateAliases(item.id, { aliases }),
+    '已更新常用称呼',
+    '更新常用称呼失败',
+  );
+  if (ok) {
+    cancelEditAliases();
   }
 }
 
@@ -204,15 +278,17 @@ async function mutate(
   action: () => Promise<unknown>,
   success: string,
   fallback: string,
-): Promise<void> {
+): Promise<boolean> {
   busyId.value = item.id;
   actionError.value = '';
   try {
     await action();
     ElMessage.success(success);
     await reload();
+    return true;
   } catch (err) {
     actionError.value = getApiErrorMessage(err, fallback);
+    return false;
   } finally {
     busyId.value = null;
   }
@@ -299,12 +375,17 @@ defineExpose({ reload });
 }
 
 .player-head,
+.player-aliases,
 .player-links,
 .player-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--spacing-sm);
+}
+
+.alias-input {
+  width: 260px;
 }
 
 .player-name {
