@@ -198,13 +198,37 @@ class RundownControlProvider:
     非线程安全；仅在 StreamerAgent 单一 asyncio 事件循环内使用。
     """
 
-    def __init__(self, state: RundownState) -> None:
+    def __init__(
+        self,
+        state: RundownState,
+        *,
+        can_mutate_provider: Optional[Callable[[], bool]] = None,
+    ) -> None:
         self._state = state
+        # 可选只读闸门回调：返回 False 表示当前非直播进行中或正处收播道别轮，拒绝所有写操作
+        self._can_mutate_provider = can_mutate_provider
         self._logger = get_logger("RundownControlTool")
 
     def invoke(self, args: Dict[str, Any]) -> str:
         """执行控制动作，返回观察 JSON 文本（成功与结构化拒绝都重新写入给 LLM）。"""
         action = str(args.get("action", "") or "")
+        # 收播道别或非直播进行中只读拦截：防止 live.ended 之后模型误调流程单产生播后 rundown.changed 事件
+        if self._can_mutate_provider is not None:
+            try:
+                can_mutate = bool(self._can_mutate_provider())
+            except Exception as exc:  # noqa: BLE001 - 闸门探测异常保守拒绝写操作
+                self._logger.warning(f"rundown_control 读取只读闸门失败（保守拒绝变更）: {exc}", exc=True)
+                can_mutate = False
+            if not can_mutate:
+                self._logger.info(f"rundown_control 处于非直播/收播只读态，拒绝执行 action={action!r}")
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "reason": "not_live_readonly",
+                        "error": "当前未处于直播进行中或正在收播道别，流程单处于只读锁定态，不能变更环节",
+                    },
+                    ensure_ascii=False,
+                )
         try:
             outcome = dispatch_rundown_control(
                 self._state,

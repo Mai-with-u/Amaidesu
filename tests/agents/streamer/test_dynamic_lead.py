@@ -54,6 +54,7 @@ from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.rundown import RundownChangedPayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload
@@ -98,6 +99,7 @@ class _FakeAutonomousGameAgent(BaseAgent):
         self.yield_reasons: List[str] = []
         self.spoken_echoes: List[Tuple[str, str, int]] = []
         self.rundown_updates: List[Tuple[str, str, str, int]] = []
+        self.rundown_nudges: List[Dict[str, Any]] = []
         self.silence_nudges: List[int] = []
         self.suggestions: List[Tuple[str, str, Optional[List[str]]]] = []
         self.woken_by_echo: bool = False
@@ -139,6 +141,27 @@ class _FakeAutonomousGameAgent(BaseAgent):
 
     def receive_silence_nudge(self, *, silent_ms: int) -> None:
         self.silence_nudges.append(silent_ms)
+
+    def receive_rundown_nudge(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        elapsed_ms: int = 0,
+        expected_ms: int = 0,
+        next_segment_id: str = "",
+        next_segment_title: str = "",
+    ) -> None:
+        self.rundown_nudges.append(
+            {
+                "segment_id": segment_id,
+                "segment_title": segment_title,
+                "elapsed_ms": elapsed_ms,
+                "expected_ms": expected_ms,
+                "next_segment_id": next_segment_id,
+                "next_segment_title": next_segment_title,
+            }
+        )
 
     async def receive_suggestion(
         self,
@@ -2405,3 +2428,226 @@ async def test_game_lead_blocks_set_game_leaks_and_forwards_operator_prompt_as_s
     finally:
         await agent.stop()
         await game.stop()
+
+
+async def test_game_lead_rundown_overdue_pushes_throttled_nudge_without_waking_streamer(prompts: Any) -> None:
+    """游戏主控期非杂谈段超期：通过协调器节流推送超时提醒给主控游戏侧，且不越权唤醒主播 Planner。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "proactive": {"enabled": True, "rundown_overdue_interval_ms": 300_000},
+        },
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        round_executor=round_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=808, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        # 切入游戏段（main_play，expected_ms=3_600_000，下一段 closing）并进入游戏主控态
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+        round_exec.calls.clear()
+        game.rundown_nudges.clear()
+
+        # 未超时不推送
+        clock.advance(3_600_000)
+        await agent._maybe_flush()
+        assert game.rundown_nudges == []
+        assert round_exec.calls == []
+
+        # 超期（> 3_600_000ms）触发首次推送给主控游戏侧，主播零越权唤醒
+        clock.advance(1_000)
+        await agent._maybe_flush()
+        assert len(game.rundown_nudges) == 1
+        nudge = game.rundown_nudges[0]
+        assert nudge["segment_id"] == "main_play"
+        assert nudge["elapsed_ms"] == 3_601_000
+        assert nudge["expected_ms"] == 3_600_000
+        assert nudge["next_segment_id"] == "closing"
+        assert round_exec.calls == []
+
+        # 5 分钟节流期内不重复推送
+        clock.advance(299_000)
+        await agent._maybe_flush()
+        assert len(game.rundown_nudges) == 1
+        assert round_exec.calls == []
+
+        # 满 5 分钟节流后再次推送，主播仍不越权唤醒
+        clock.advance(1_000)
+        await agent._maybe_flush()
+        assert len(game.rundown_nudges) == 2
+        assert round_exec.calls == []
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_signoff_and_ended_state_blocks_rundown_control_mutations(prompts: Any) -> None:
+    """下播后（not is_live / 收播道别态）经 ToolRegistry 调用 rundown_control 被只读闸拦截，零播后 rundown.changed。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    registry = ToolRegistry()
+    rundown_events: List[Any] = []
+
+    async def _on_rundown_changed(_e: str, payload: Any, _s: str) -> None:
+        rundown_events.append(payload)
+
+    bus.on(CoreEvents.RUNDOWN_CHANGED, _on_rundown_changed, model_class=RundownChangedPayload)
+
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "proactive": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        tool_registry=registry,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        round_executor=round_exec,
+        clock=clock,
+    )
+    await agent.start()
+
+    try:
+        # 1) 开播前未直播态调用 rundown_control 被只读闸拦下
+        pre_live = await registry.invoke(
+            ToolInvocation(
+                tool_name="rundown_control",
+                arguments={"action": "next"},
+                source="planner-react",
+                invoking_agent="streamer",
+            )
+        )
+        assert pre_live.structured_content["ok"] is False
+        assert pre_live.structured_content["reason"] == "not_live_readonly"
+
+        # 2) 开播进行中（跨过首段预期时长）可正常推进流程单
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=809, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        clock.advance(300_000)
+        live_res = await registry.invoke(
+            ToolInvocation(
+                tool_name="rundown_control",
+                arguments={"action": "next"},
+                source="planner-react",
+                invoking_agent="streamer",
+            )
+        )
+        assert live_res.structured_content["ok"] is True
+        await bus.wait_until_drained()
+
+        # 3) 下播后（live.ended）所有写操作均被拦截，绝不产出播后 rundown.changed 事件
+        await bus.emit(
+            CoreEvents.LIVE_ENDED,
+            LiveEndedPayload(live_session_id=809),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        rundown_events.clear()
+
+        for action, extra in [("next", {}), ("renew", {}), ("goto", {"segment_id": "closing"})]:
+            post_res = await registry.invoke(
+                ToolInvocation(
+                    tool_name="rundown_control",
+                    arguments={"action": action, **extra},
+                    source="planner-react",
+                    invoking_agent="streamer",
+                )
+            )
+            assert post_res.structured_content["ok"] is False
+            assert post_res.structured_content["reason"] == "not_live_readonly"
+        await bus.wait_until_drained()
+        assert rundown_events == []
+    finally:
+        await agent.stop()
+
+
+async def test_danmaku_quiet_window_flushes_single_fast_and_merges_burst_with_fake_clock(prompts: Any) -> None:
+    """假时钟端到端验证：单条观众弹幕 800ms 静默快放，连发弹幕自动顺延合并为一批送入决策轮。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {
+            "batch": {
+                "batch_window_ms": 3_000,
+                "danmaku_quiet_window_ms": 800,
+                "enable_idle_compensation": True,
+                "batch_max_wait_ms": 30_000,
+            },
+            "proactive": {"enabled": False},
+        },
+        prompt=prompts,
+        event_bus=bus,
+        round_executor=round_exec,
+        clock=clock,
+    )
+    await agent.start()
+
+    try:
+        # 单条弹幕：t+799 未放行，t+800 立即放行（远早于 3000ms）
+        await agent.handle_message(
+            RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="u1", name="观众甲"),
+                content="晚上好呀",
+            )
+        )
+        clock.advance(799)
+        await agent._maybe_flush()
+        assert len(round_exec.calls) == 0
+
+        clock.advance(1)
+        await agent._maybe_flush()
+        assert len(round_exec.calls) == 1
+        assert [m.content for m in round_exec.calls[0]["batch"]] == ["晚上好呀"]
+
+        # 连发 2 条弹幕（间隔 500ms）：不触发 9.5s 空窗补偿拖延，距第 2 条满 800ms 合并放行
+        round_exec.calls.clear()
+        await agent.handle_message(
+            RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="u2", name="观众乙"),
+                content="这波操作好秀",
+            )
+        )
+        clock.advance(500)
+        await agent.handle_message(
+            RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="u2", name="观众乙"),
+                content="能不能再演示一遍",
+            )
+        )
+        clock.advance(799)
+        await agent._maybe_flush()
+        assert len(round_exec.calls) == 0
+
+        clock.advance(1)
+        await agent._maybe_flush()
+        assert len(round_exec.calls) == 1
+        assert [m.content for m in round_exec.calls[0]["batch"]] == ["这波操作好秀", "能不能再演示一遍"]
+    finally:
+        await agent.stop()

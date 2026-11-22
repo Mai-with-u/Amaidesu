@@ -391,3 +391,65 @@ def test_unspoken_beats_guardrail_blocks_agent_next_until_done_overdue_or_forced
     overdue_ok = _call(provider, action="next")
     assert overdue_ok["ok"] is True
     assert overdue_ok["rundown"]["current"]["id"] == "stories"
+
+
+@pytest.mark.parametrize("action", ["next", "renew", "goto", "pause", "resume", "append"])
+def test_readonly_guard_blocks_all_write_actions_and_emits_no_events(action: str) -> None:
+    """收播/非直播只读闸门：can_mutate_provider 返回 False 时拒绝一切写操作，状态机不变且不发 rundown.changed。"""
+    clock = _FakeClock()
+    emitted: list[tuple[str, Any]] = []
+    state = RundownState(emit=lambda name, payload: emitted.append((name, payload)), clock=clock)
+    state.load(_plain_rundown(), now_ms=clock.now)
+    state.begin(by="system", now_ms=clock.now)
+    emitted.clear()
+
+    is_live = False
+    provider = RundownControlProvider(state, can_mutate_provider=lambda: is_live)
+    args: Dict[str, Any] = {"action": action}
+    if action == "goto":
+        args["segment_id"] = "chat"
+    elif action == "append":
+        args["segment"] = {"seg_id": "extra", "title": "加时", "task_description": "再聊会", "expected_ms": 120_000}
+
+    resp = _call(provider, **args)
+    assert resp["ok"] is False
+    assert resp["reason"] == "not_live_readonly"
+    assert state.current_segment_id == "opening"
+    assert emitted == []
+
+
+def test_readonly_guard_fail_closed_on_callback_error() -> None:
+    """只读闸门回调异常时保守拒绝写入，防止异常放行播后改单。"""
+    clock = _FakeClock()
+    state = RundownState(clock=clock)
+    state.load(_plain_rundown(), now_ms=clock.now)
+    state.begin(by="system", now_ms=clock.now)
+
+    def _broken() -> bool:
+        raise RuntimeError("gate error")
+
+    provider = RundownControlProvider(state, can_mutate_provider=_broken)
+    resp = _call(provider, action="next")
+    assert resp["ok"] is False and resp["reason"] == "not_live_readonly"
+    assert state.current_segment_id == "opening"
+
+
+async def test_signoff_round_hides_rundown_control_from_planner_tools() -> None:
+    """收播道别轮（TriggerKind.SIGNOFF）从 Planner 工具列表中隐藏 rundown_control，杜绝模型道别时顺手切段。"""
+    from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind, TriggerSource
+
+    provider, _ = _provider()
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="晚安啦"))
+    planner = _planner(_registry_with(provider), llm)
+
+    await planner.plan(
+        [],
+        forced=True,
+        proactive=True,
+        trigger_cause=TriggerCause(kind=TriggerKind.SIGNOFF, source=TriggerSource.LIVE_END),
+    )
+
+    tools_sent = llm.generate.await_args.kwargs["tools"]
+    tool_names = [t["name"] for t in tools_sent]
+    assert "rundown_control" not in tool_names

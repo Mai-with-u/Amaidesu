@@ -387,7 +387,7 @@ class StreamerAgent(BaseAgent):
 
                     {
                         "enabled": bool,  # 是否启用 TTS 下游管线
-                        "max_queue": int,  # 队列容量（默认 3）
+                        "max_queue": int,  # 队列容量（默认 6）
                         "render_timeout_ms": int,  # 单 utterance 超时（默认 60000）
                         "wait_playback": bool,  # 发言等上一句播完（默认 True）
                         "wait_playback_timeout_ms": int,  # 等播排空上限（默认 60000，0 不限时）
@@ -539,6 +539,7 @@ class StreamerAgent(BaseAgent):
             batch_max_size=config.batch.batch_max_size,
             enable_idle_compensation=config.batch.enable_idle_compensation,
             batch_max_wait_ms=config.batch.batch_max_wait_ms,
+            quiet_window_ms=config.batch.danmaku_quiet_window_ms,
         )
         # 强制触发判定就是一次集合归属判定（消息类型 ∈ 强制名单），直接持有
         # 名单内联判定，不再为它单设类
@@ -559,6 +560,8 @@ class StreamerAgent(BaseAgent):
             event_bus=event_bus,
             logger=self._logger,
             notify_proactive=self._on_rundown_changed_proactive,
+            clock=self._clock,
+            can_mutate=self._can_mutate_rundown,
         )
 
         # 杂谈与自我表达三件内部件（均不进工具表，仅 talk_draw_cards 在启动期注册工具）：
@@ -3480,12 +3483,13 @@ class StreamerAgent(BaseAgent):
         ):
             return
         self._stats.total_messages += 1
+        arrival_ms = self._clock()
         # RoomState 热度信号
-        self._room_state.update(msg, now_ms=now_ms())
+        self._room_state.update(msg, now_ms=arrival_ms)
         # 强制触发判定：消息类型在强制名单内即强制
         forced = msg.message_type in self._force_message_types
         # 入缓冲
-        self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
+        self._buffer.add(msg, arrival_ms=arrival_ms, forced=forced)
         # 收到观众弹幕或付费消息时，立即打断正在等放行的旧自主独白，避免继续占用决策锁
         self._notify_fresh_input()
         # 弹幕一到就在后台算它的查询向量：攒批窗口几秒，组装线索时多半已算好，决策不等它
@@ -3738,6 +3742,9 @@ class StreamerAgent(BaseAgent):
             # 动态主从周期评估：若游戏从断连/不健康恢复就绪或状态需要对齐，先完成切权再跑本 tick 判定
             if self._live_active and self._lead_coordinator is not None:
                 await self._maybe_periodic_lead_sync()
+                # 游戏主控期且当前为非杂谈环节时，若流程单已超时则节流向主控游戏侧推送超时提醒
+                # （放在缓冲判空前检查，避免直播间弹幕活跃时饿死游戏侧流程单时间感知）
+                self._maybe_publish_game_lead_rundown_nudge()
 
             # 递话评估移出判空闸：提醒队列非空时每个 tick 先走主动判定序——
             # 弹幕批次滞留期间递话到达也照常成轮，批次原地不动继续等自己的
@@ -3753,7 +3760,7 @@ class StreamerAgent(BaseAgent):
 
             if not self._buffer.is_empty:
                 # 弹幕聚合 → 两阶段决策
-                now = now_ms()
+                now = self._clock()
                 avg_interval_ms = self._estimate_avg_interval_ms()
                 flush_due, flush_reason = self._buffer.should_flush(now, avg_interval_ms=avg_interval_ms)
                 if not flush_due:
@@ -3781,6 +3788,32 @@ class StreamerAgent(BaseAgent):
                 return
             # 游戏自主主控态下：弹幕与提醒队列均为空且主播未触发主动发言时，检查连续无声是否达到静默提醒阈值
             self._maybe_publish_game_lead_silence_nudge()
+
+    def _can_mutate_rundown(self) -> bool:
+        """流程单控制工具写操作闸门：仅直播进行中且非收播道别期允许变更流程单。"""
+        return self._live_active and self._closings_in_flight == 0
+
+    def _maybe_publish_game_lead_rundown_nudge(self) -> None:
+        """游戏自主主控期流程单超时提醒：非杂谈段超期时通过协调器节流推送给当前主控游戏 Agent。"""
+        coord = self._lead_coordinator
+        if coord is None or not self._running or not self._live_active or self._closings_in_flight > 0:
+            return
+        if not self._is_game_lead_active():
+            return
+        if self._rundown_coord.current_segment_mode() == "talk":
+            return
+        info = self._rundown_coord.overdue_nudge_info(now_ms=self._clock())
+        if info is None:
+            return
+        coord.publish_rundown_nudge(
+            segment_id=info["segment_id"],
+            segment_title=info["segment_title"],
+            elapsed_ms=info["elapsed_ms"],
+            expected_ms=info["expected_ms"],
+            next_segment_id=info["next_segment_id"],
+            next_segment_title=info["next_segment_title"],
+            min_interval_ms=self.typed_config.proactive.rundown_overdue_interval_ms,
+        )
 
     def _maybe_publish_game_lead_silence_nudge(self) -> None:
         """游戏自主主控态静默暖场提醒：全场连续无声满阈值且过冷却时通知前线游戏侧按需解说。"""
@@ -3821,7 +3854,7 @@ class StreamerAgent(BaseAgent):
             trigger=self._proactive_trigger,
             room_state=self._room_state,
             now_ms=self._clock(),
-            rundown_overdue=self._rundown_coord.is_overdue(),
+            rundown_overdue=self._rundown_coord.is_overdue(now_ms=self._clock()),
             rundown_ready=self._rundown_coord.is_active(),
             # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
             # （送达在决策执行器取空队列处发生，任何决策窗都会消费）

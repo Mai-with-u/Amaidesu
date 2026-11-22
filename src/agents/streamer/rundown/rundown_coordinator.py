@@ -68,6 +68,8 @@ class RundownCoordinator:
         event_bus: Optional[EventBus],
         logger: ModuleLogger,
         notify_proactive: Callable[[], None],
+        clock: Optional[Callable[[], int]] = None,
+        can_mutate: Optional[Callable[[], bool]] = None,
     ) -> None:
         """构造协调器并完成状态机与控制工具的装配。
 
@@ -101,8 +103,9 @@ class RundownCoordinator:
         self._state = RundownState(
             emit=self._emit_rundown_changed,
             on_changed=self._on_rundown_changed,
+            clock=clock,
         )
-        self.tool_provider = RundownControlProvider(self._state)
+        self.tool_provider = RundownControlProvider(self._state, can_mutate_provider=can_mutate)
 
     # ==================================================================
     # 宿主动词（推进权归宿主；状态机细节不外露）
@@ -143,9 +146,34 @@ class RundownCoordinator:
     # 情境供给（决策执行器 / reply_tool 的 provider 闭包）
     # ==================================================================
 
-    def is_overdue(self) -> bool:
-        """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟）。"""
-        return self._state.is_current_segment_overdue()
+    def is_overdue(self, *, now_ms: Optional[int] = None) -> bool:
+        """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟与游戏主控超时推送）。"""
+        return self._state.is_current_segment_overdue(now_ms=now_ms)
+
+    def overdue_nudge_info(self, *, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """返回当前超期环节的结构化提醒载荷（含下一段提示）；未超期或非运行态返回 None。"""
+        if not self._state.is_current_segment_overdue(now_ms=now_ms):
+            return None
+        snap = self._state.get_snapshot(now_ms=now_ms)
+        current = snap.get("current")
+        if not isinstance(current, dict):
+            return None
+        next_seg_id = ""
+        next_seg_title = ""
+        rundown = self._state.rundown
+        next_index = self._state.index + 1
+        if rundown is not None and 0 <= next_index < len(rundown.segments):
+            next_seg = rundown.segments[next_index]
+            next_seg_id = next_seg.id
+            next_seg_title = next_seg.title
+        return {
+            "segment_id": str(current.get("id") or ""),
+            "segment_title": str(current.get("title") or ""),
+            "elapsed_ms": int(current.get("elapsed_ms") or 0),
+            "expected_ms": int(current.get("expected_ms") or 0),
+            "next_segment_id": next_seg_id,
+            "next_segment_title": next_seg_title,
+        }
 
     def is_active(self) -> bool:
         """判定流程单是否在供能（供 ProactiveTrigger rundown_ready 持续产出信号）。
