@@ -12,7 +12,10 @@ from src.agents.streamer.memory.cues import (
     MAX_PUSHES_PER_CARD,
     PUSH_COOLDOWN_MS,
     MemoryCueProvider,
+    is_social_fact_safe_for_game_lead,
 )
+from src.agents.streamer.memory.index import MemoryIndexer
+from src.agents.streamer.memory.search import MemorySearch
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import PendingArchiveLine, PendingViewerCandidate
@@ -799,3 +802,634 @@ async def test_familiar_viewer_card_logs_without_nickname_and_familiarity_map_pe
     )
     assert dict(forget_round.familiarity_by_message_id) == {}
     assert "[老观众·阿杰]" not in forget_round.text
+
+
+# ---------------------------------------------------------------------------
+# 游戏主控态：按意图触发联想（跨场档案 + 现行游戏社交事实）
+# ---------------------------------------------------------------------------
+
+
+async def _insert_game_chat_evidence(
+    store: SQLiteDatabase,
+    *,
+    live_session_id: int,
+    game: str,
+    save_id: str,
+    content: str,
+    save_name: str = "主档",
+) -> int:
+    """插入一条真实的游戏公屏玩家聊天行，返回主键供社交事实作防投毒证据。"""
+    with store.manager.transaction() as conn:
+        cur = conn.execute(
+            "INSERT INTO game_chat(live_session_id, game, direction, content, save_id, save_name, at_ms, message_id)"
+            " VALUES (?, ?, 'player', ?, ?, ?, ?, ?)",
+            (live_session_id, game, content, save_id, save_name, _NOW - 50_000, "gc_1"),
+        )
+        return int(cur.lastrowid or 0)
+
+
+async def _insert_danmaku_evidence(
+    store: SQLiteDatabase,
+    *,
+    live_session_id: int,
+    content: str,
+) -> int:
+    """插入一条真实直播间观众弹幕行，返回主键用于验证防弹幕投毒拦截。"""
+    return await store.chat.insert_live_chat(
+        live_session_id=live_session_id,
+        timestamp_ms=_NOW - 50_000,
+        sender_role="viewer",
+        content=content,
+        message_type="danmaku",
+        message_id="dm_ev_1",
+    )
+
+
+@pytest.mark.parametrize("with_fts_index", [False, True])
+async def test_game_lead_intent_recalls_social_fact_and_archive_without_embedding(
+    store: SQLiteDatabase, with_fts_index: bool
+) -> None:
+    """游戏主控态不配向量模型时，按意图文本精准浮出被前 6 条截断的 works 事实与跨场档案，并遵守限频与记账。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+
+    # 先写入 6 条挂在常驻公共规矩里的事实，以及第 7 条被前 6 条上限截断的 works 工程现状事实
+    resident_texts = [
+        "这是多人共建生存服",
+        "PlayerA 负责基地仓库分类",
+        "PlayerB 负责北边牧场管理",
+        "公共仓库的木头可以按需取用",
+        "夜里外出探险记得带床",
+        "矿道入口插火把标记方向",
+    ]
+    resident_excludes: list[str] = []
+    for idx, text in enumerate(resident_texts):
+        gc_id = await _insert_game_chat_evidence(
+            store, live_session_id=old_session, game=game, save_id=save_id, content=text
+        )
+        kind = "sharing" if idx >= 3 else "setting"
+        await store.social_facts.insert_fact(
+            kind=kind,
+            text=text,
+            quote=text,
+            game=game,
+            save_id=save_id,
+            save_name="主世界",
+            evidence_game_chat_id=gc_id,
+            created_session_id=old_session,
+            now_ms_value=_NOW - 80_000_000 + idx,
+        )
+        prefix = "共享惯例：" if kind == "sharing" else "环境形态："
+        resident_excludes.append(f"{prefix}{text}")
+
+    # 第 7 条被前 6 条上限截断的 works 事实：游戏公屏有实证
+    portal_gc_id = await _insert_game_chat_evidence(
+        store,
+        live_session_id=old_session,
+        game=game,
+        save_id=save_id,
+        content="营地本来就有一座现成的下界门，别再重新砌啦",
+    )
+    portal_fact_id = await store.social_facts.insert_fact(
+        kind="works",
+        text="营地本来就有一座现成的下界门",
+        quote="营地本来就有一座现成的下界门",
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        evidence_game_chat_id=portal_gc_id,
+        created_session_id=old_session,
+        now_ms_value=_NOW - 79_000_000,
+    )
+    assert portal_fact_id is not None
+
+    # 往期正式场跨场档案（不设 keywords 与 place，模拟纯文本档案靠意图关键词/FTS 命中）
+    archive_id = await store.archive.insert_line(
+        live_session_id=old_session,
+        text="营地西侧点亮了下界门",
+        quote="这座下界门终于点亮了",
+        evidence_chat_id=1,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        keywords=[],
+        place="",
+    )
+    assert archive_id > 0
+
+    search: Optional[MemorySearch] = None
+    if with_fts_index:
+        indexer = MemoryIndexer(repo=store.memory_index, embedding=None, embedding_note="test-no-vec")
+        await indexer.run_once()
+        search = MemorySearch(repo=store.memory_index, embedding=None)
+
+    clock = _Clock()
+    provider = _passive(
+        store,
+        current_session,
+        clock,
+        social_fact_repo=store.social_facts,
+        search=search,
+    )
+
+    cues = await provider.cues_for_game_lead(
+        game=game,
+        texts=("凑钻石镐去砌下界门",),
+        exclude_texts=resident_excludes,
+        current_saves=saves,
+        limit=2,
+    )
+    assert len(cues) == 2
+    assert cues[0] == "[存档记忆·记着的事] 营地本来就有一座现成的下界门"
+    assert "事实#" not in cues[0], "社交事实卡面绝不暴露内部数据库主键"
+    assert "营地西侧点亮了下界门" in cues[1]
+
+    # memory_cue_log 正常写入两条记录且不含错误
+    entries = await store.memory_cue_log.list_session_entries(live_session_id=current_session)
+    assert len(entries) == 2
+    assert {entry.card_kind for entry in entries} == {"social_fact", "intent"}
+    fact_entry = next(entry for entry in entries if entry.card_kind == "social_fact")
+    assert fact_entry.archive_line_id is None and fact_entry.commitment_id is None
+    assert fact_entry.detail["social_fact_id"] == portal_fact_id
+
+    # 10 分钟限频与本场去重：紧接着再次触发同计划不再重复推；过冷却可推第 2 次；推满 2 次后停推
+    assert (
+        await provider.cues_for_game_lead(
+            game=game,
+            texts=("准备砌一座下界门",),
+            exclude_texts=resident_excludes,
+            current_saves=saves,
+            limit=2,
+        )
+        == []
+    )
+    clock.value += PUSH_COOLDOWN_MS + 1
+    second = await provider.cues_for_game_lead(
+        game=game,
+        texts=("准备砌一座下界门",),
+        exclude_texts=resident_excludes,
+        current_saves=saves,
+        limit=2,
+    )
+    assert len(second) == 2
+    clock.value += PUSH_COOLDOWN_MS + 1
+    assert (
+        await provider.cues_for_game_lead(
+            game=game,
+            texts=("准备砌一座下界门",),
+            exclude_texts=resident_excludes,
+            current_saves=saves,
+            limit=2,
+        )
+        == []
+    )
+
+
+async def test_game_lead_intent_skips_facts_already_in_exclude_texts(store: SQLiteDatabase) -> None:
+    """已在 [当前存档公共规矩]（带「共享惯例：」前缀）里的事实绝不重复推送。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+    gc_id = await _insert_game_chat_evidence(
+        store,
+        live_session_id=old_session,
+        game=game,
+        save_id=save_id,
+        content="公共熔炉区里的铁锭随便拿",
+    )
+    await store.social_facts.insert_fact(
+        kind="sharing",
+        text="公共熔炉区里的铁锭随便拿",
+        quote="公共熔炉区里的铁锭随便拿",
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        evidence_game_chat_id=gc_id,
+        created_session_id=old_session,
+        now_ms_value=_NOW - 79_000_000,
+    )
+
+    provider = _passive(store, current_session, _Clock(), social_fact_repo=store.social_facts)
+    excluded = await provider.cues_for_game_lead(
+        game=game,
+        texts=("去公共熔炉区拿铁锭",),
+        exclude_texts=("共享惯例： 公共熔炉区里的铁锭随便拿（上一场）",),
+        current_saves=saves,
+        limit=2,
+    )
+    assert excluded == []
+
+    # 取消该条排除后，同条事实被精准推送
+    included = await provider.cues_for_game_lead(
+        game=game,
+        texts=("去公共熔炉区拿铁锭",),
+        exclude_texts=(),
+        current_saves=saves,
+        limit=2,
+    )
+    assert included == ["[存档记忆·共享惯例] 公共熔炉区里的铁锭随便拿"]
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_pushed"),
+    [
+        ("danmaku_unlocked", False),
+        ("mixed_danmaku_unlocked", False),
+        ("danmaku_human_locked", True),
+        ("no_evidence_unlocked", False),
+        ("other_save", False),
+        ("other_game", False),
+        ("open_question", False),
+        ("her_role", False),
+        ("superseded", False),
+    ],
+)
+async def test_game_lead_intent_firewall_blocks_poisoned_other_save_and_invalid_facts(
+    store: SQLiteDatabase,
+    scenario: str,
+    expected_pushed: bool,
+) -> None:
+    """安全防火墙：拦截未锁定弹幕来源、无证据来源、他档/他游戏、非行动类及已取代事实；放行人工锁定事实。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+
+    gc_id = await _insert_game_chat_evidence(
+        store,
+        live_session_id=old_session,
+        game=game,
+        save_id=save_id,
+        content="营地东边已经建好了自动刷石机",
+    )
+    dm_id = await _insert_danmaku_evidence(
+        store,
+        live_session_id=old_session,
+        content="弹幕说营地东边有自动刷石机",
+    )
+
+    fact_kwargs: dict[str, Any] = {
+        "kind": "works",
+        "text": "营地东边已经建好了自动刷石机",
+        "quote": "营地东边已经建好了自动刷石机",
+        "game": game,
+        "save_id": save_id,
+        "save_name": "主世界",
+        "evidence_game_chat_id": gc_id,
+        "evidence_chat_id": None,
+        "human_locked": 0,
+        "created_session_id": old_session,
+        "now_ms_value": _NOW - 79_000_000,
+    }
+
+    if scenario == "danmaku_unlocked":
+        fact_kwargs["evidence_game_chat_id"] = None
+        fact_kwargs["evidence_chat_id"] = dm_id
+    elif scenario == "mixed_danmaku_unlocked":
+        fact_kwargs["evidence_chat_id"] = dm_id
+    elif scenario == "danmaku_human_locked":
+        fact_kwargs["evidence_game_chat_id"] = None
+        fact_kwargs["evidence_chat_id"] = dm_id
+        fact_kwargs["human_locked"] = 1
+    elif scenario == "no_evidence_unlocked":
+        fact_kwargs["evidence_game_chat_id"] = None
+        fact_kwargs["evidence_chat_id"] = None
+    elif scenario == "other_save":
+        fact_kwargs["save_id"] = "save_beta"
+        fact_kwargs["save_name"] = "二周目"
+    elif scenario == "other_game":
+        fact_kwargs["game"] = "other_game"
+    elif scenario == "open_question":
+        fact_kwargs["kind"] = "open_question"
+        fact_kwargs["human_locked"] = 1
+    elif scenario == "her_role":
+        fact_kwargs["kind"] = "her_role"
+        fact_kwargs["human_locked"] = 1
+
+    fact_id = await store.social_facts.insert_fact(**fact_kwargs)
+    assert fact_id is not None
+
+    if scenario == "superseded":
+        new_id = await store.social_facts.insert_fact(
+            kind="works",
+            text="西边码头栈桥正在扩建",
+            quote="西边码头栈桥正在扩建",
+            game=game,
+            save_id=save_id,
+            save_name="主世界",
+            evidence_game_chat_id=gc_id,
+            supersedes_id=fact_id,
+            created_session_id=old_session,
+            now_ms_value=_NOW - 78_000_000,
+        )
+        assert new_id is not None
+
+    loaded = await store.social_facts.get_fact(fact_id=fact_id)
+    assert loaded is not None
+    assert is_social_fact_safe_for_game_lead(loaded, game=game, current_saves=saves) is expected_pushed
+
+    provider = _passive(store, current_session, _Clock(), social_fact_repo=store.social_facts)
+    cues = await provider.cues_for_game_lead(
+        game=game,
+        texts=("修一下自动刷石机",),
+        current_saves=saves,
+        limit=2,
+    )
+    if expected_pushed:
+        assert cues == ["[存档记忆·记着的事] 营地东边已经建好了自动刷石机"]
+    else:
+        assert cues == []
+
+
+@pytest.mark.parametrize(
+    "current_saves",
+    [
+        {},
+        {"block_game": GameSave(id="", name="")},
+    ],
+)
+async def test_game_lead_intent_unknown_save_blocks_other_save_and_allows_generic_fact(
+    store: SQLiteDatabase,
+    current_saves: dict[str, GameSave],
+) -> None:
+    """当前存档未知或未上报时：带明确 save_id 的他档事实一律拦截，仅放行 save_id='' 的整游戏通用事实。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    other_gc = await _insert_game_chat_evidence(
+        store,
+        live_session_id=old_session,
+        game=game,
+        save_id="save_other",
+        content="二周目北边已经建好了自动刷石机",
+    )
+    other_fact_id = await store.social_facts.insert_fact(
+        kind="works",
+        text="二周目北边已经建好了自动刷石机",
+        quote="二周目北边已经建好了自动刷石机",
+        game=game,
+        save_id="save_other",
+        save_name="二周目",
+        evidence_game_chat_id=other_gc,
+        created_session_id=old_session,
+        now_ms_value=_NOW - 79_000_000,
+    )
+    generic_gc = await _insert_game_chat_evidence(
+        store,
+        live_session_id=old_session,
+        game=game,
+        save_id="",
+        content="公用附魔台放在图书馆二楼",
+    )
+    generic_fact_id = await store.social_facts.insert_fact(
+        kind="sharing",
+        text="公用附魔台放在图书馆二楼",
+        quote="公用附魔台放在图书馆二楼",
+        game=game,
+        save_id="",
+        save_name="",
+        evidence_game_chat_id=generic_gc,
+        created_session_id=old_session,
+        now_ms_value=_NOW - 78_000_000,
+    )
+    assert other_fact_id is not None and generic_fact_id is not None
+
+    other_fact = await store.social_facts.get_fact(fact_id=other_fact_id)
+    generic_fact = await store.social_facts.get_fact(fact_id=generic_fact_id)
+    assert other_fact is not None and generic_fact is not None
+    assert is_social_fact_safe_for_game_lead(other_fact, game=game, current_saves=current_saves) is False
+    assert is_social_fact_safe_for_game_lead(generic_fact, game=game, current_saves=current_saves) is True
+
+    provider = _passive(store, current_session, _Clock(), social_fact_repo=store.social_facts)
+    assert (
+        await provider.cues_for_game_lead(
+            game=game,
+            texts=("修一下自动刷石机",),
+            current_saves=current_saves,
+            limit=2,
+        )
+        == []
+    )
+    assert await provider.cues_for_game_lead(
+        game=game,
+        texts=("去图书馆找附魔台",),
+        current_saves=current_saves,
+        limit=2,
+    ) == ["[存档记忆·共享惯例] 公用附魔台放在图书馆二楼"]
+
+
+@pytest.mark.parametrize("ellipsis", ["…", "..."])
+async def test_game_lead_intent_skips_truncated_long_social_rule_with_ellipsis(
+    store: SQLiteDatabase, ellipsis: str
+) -> None:
+    """超过 75 字的常驻公共规矩被截断为 80 字带省略号后，exclude_texts 依然准确去重且短截断不误杀。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+    long_text = (
+        "西侧主仓库一楼的储物箱已经全部按矿物木材红石农作物工具分类贴好告示牌，"
+        "大家拿取附魔书与铁锭后请尽量放回对应格子里，避免后续找物资翻半天找不到耽误全队建造进度"
+    )
+    assert len(long_text) >= 76
+
+    gc_id = await _insert_game_chat_evidence(
+        store, live_session_id=old_session, game=game, save_id=save_id, content=long_text
+    )
+    await store.social_facts.insert_fact(
+        kind="sharing",
+        text=long_text,
+        quote=long_text,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+        evidence_game_chat_id=gc_id,
+        created_session_id=old_session,
+        now_ms_value=_NOW - 79_000_000,
+    )
+
+    # 模拟 80 字截断后的常驻规矩文本（带类别前缀与省略号）
+    prefix = "共享惯例："
+    truncated_rule = (prefix + long_text)[: 80 - len(ellipsis)] + ellipsis
+    assert len(truncated_rule) == 80
+
+    provider = _passive(store, current_session, _Clock(), social_fact_repo=store.social_facts)
+    assert (
+        await provider.cues_for_game_lead(
+            game=game,
+            texts=("去主仓库拿附魔书",),
+            exclude_texts=(truncated_rule,),
+            current_saves=saves,
+            limit=2,
+        )
+        == []
+    )
+
+    # 极短截断前缀（不足 12 字）不得误杀长事实
+    assert await provider.cues_for_game_lead(
+        game=game,
+        texts=("去主仓库拿附魔书",),
+        exclude_texts=(f"共享惯例：西侧主仓库{ellipsis}",),
+        current_saves=saves,
+        limit=2,
+    ) == [f"[存档记忆·共享惯例] {long_text}"]
+
+
+@pytest.mark.parametrize(
+    "chatter",
+    [
+        "今天天气真好随便逛逛看看附近",
+        "我准备去前面看一眼",
+        "嗯好的马上来",
+        "准备盖一座高塔",
+        "帮我整理一下东西吧",
+        "ok hello good",
+        "挖点石头",
+        "知道了",
+        "没问题",
+        "明白",
+        "收到",
+        "小心点",
+        "等等",
+        "不管了",
+        "回营地",
+        "去挖矿",
+        "砍点木头",
+    ],
+)
+async def test_game_lead_intent_returns_empty_for_irrelevant_or_generic_chatter(
+    store: SQLiteDatabase, chatter: str
+) -> None:
+    """无关闲聊、日常口头禅与高频基础泛词严格返回空列表（0 噪声），绝不误触发无关事实或档案。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+
+    for text in (
+        "营地本来就有一座现成的下界门",
+        "营地东边已经建好了自动刷石机",
+        "目前准备一起修一条通往矿洞的铁路",
+        "大家平时共用整理好的箱子放东西",
+        "PlayerA 在北岸修了一座石头城堡",
+        "下界传送门修在北边山脚下，用石头围起来了",
+        "知道了大家的问题，小心点挖矿别掉岩浆",
+    ):
+        gc_id = await _insert_game_chat_evidence(
+            store, live_session_id=old_session, game=game, save_id=save_id, content=text
+        )
+        await store.social_facts.insert_fact(
+            kind="works",
+            text=text,
+            quote=text,
+            game=game,
+            save_id=save_id,
+            save_name="主世界",
+            evidence_game_chat_id=gc_id,
+            created_session_id=old_session,
+            now_ms_value=_NOW - 79_000_000,
+        )
+    await store.archive.insert_line(
+        live_session_id=old_session,
+        text="今天在北岸修好了水车",
+        quote="今天终于把水车修好了，明白流程就没问题了",
+        evidence_chat_id=1,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+    )
+
+    indexer = MemoryIndexer(repo=store.memory_index, embedding=None, embedding_note="test-no-vec")
+    await indexer.run_once()
+    search = MemorySearch(repo=store.memory_index, embedding=None)
+    provider = _passive(store, current_session, _Clock(), social_fact_repo=store.social_facts, search=search)
+
+    assert (
+        await provider.cues_for_game_lead(
+            game=game,
+            texts=(chatter,),
+            current_saves=saves,
+            limit=2,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("intent_text", "expected_snippet"),
+    [
+        ("凑钻石镐去砌下界门", "营地本来就有一座现成的下界门"),
+        ("修一下刷石机", "营地东边已经建好了自动刷石机"),
+        ("去北岸看水车转没转", "今天在北岸修好了水车"),
+    ],
+)
+async def test_game_lead_intent_preserves_recall_for_real_action_intents(
+    store: SQLiteDatabase,
+    intent_text: str,
+    expected_snippet: str,
+) -> None:
+    """收紧泛词过滤后，真实实质行动意图（下界门/刷石机/水车）依然 100% 精准命中对应记忆。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    current_session = await _session(store)
+
+    game = "block_game"
+    save_id = "save_alpha"
+    saves = {game: GameSave(id=save_id, name="主世界")}
+
+    for text in (
+        "营地本来就有一座现成的下界门",
+        "营地东边已经建好了自动刷石机",
+    ):
+        gc_id = await _insert_game_chat_evidence(
+            store, live_session_id=old_session, game=game, save_id=save_id, content=text
+        )
+        await store.social_facts.insert_fact(
+            kind="works",
+            text=text,
+            quote=text,
+            game=game,
+            save_id=save_id,
+            save_name="主世界",
+            evidence_game_chat_id=gc_id,
+            created_session_id=old_session,
+            now_ms_value=_NOW - 79_000_000,
+        )
+    await store.archive.insert_line(
+        live_session_id=old_session,
+        text="今天在北岸修好了水车",
+        quote="今天终于把水车修好了",
+        evidence_chat_id=1,
+        game=game,
+        save_id=save_id,
+        save_name="主世界",
+    )
+
+    provider = _passive(store, current_session, _Clock(), social_fact_repo=store.social_facts)
+    cues = await provider.cues_for_game_lead(
+        game=game,
+        texts=(intent_text,),
+        current_saves=saves,
+        limit=2,
+    )
+    assert any(expected_snippet in item for item in cues)
