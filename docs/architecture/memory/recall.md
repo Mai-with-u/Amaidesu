@@ -68,5 +68,5 @@ flowchart TD
 
 ## 相关决策
 
-- [混合检索与被动想起](../../decisions/072-memory-hybrid-search-and-passive-recall.md)
-- [检索抗干扰、双侧桥接与名场面分层](../../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)
+- [ADR-072：混合检索与被动想起](../../decisions/072-memory-hybrid-search-and-passive-recall.md)
+- [ADR-079：检索抗干扰、双侧桥接与名场面分层](../../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)

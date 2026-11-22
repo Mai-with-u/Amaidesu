@@ -10,12 +10,12 @@
 
 - `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态，以及下播整理的进度：`settled_at_ms`（整理完成的时刻，空 = 待整理）、`settle_attempts`（自动重试次数，用满后等运营者手动重排）、`settle_report`（失败原因或未登记清单，JSON 文本）。`notes` 是运营者手写的场次备注（自由文本，空 = 没写；与自动整理出的场次档案不是一回事）；`overview` 是模型写的这场概览（"这场发生了什么"，给人快速回看与查找用；不进任何记忆表，主播说话时看不到它）。两列各写各的：人写的话不会被整理覆盖，模型写的也不参与记忆审核。
 - `live_chat`：全量消息流，观众/主播/搭档同表（`sender_role` 区分）；`message_id` ↔ `reply_to_message_id` 构成"主播回复了哪条弹幕"的关联键。主播行另带 `utterance_id`（与 `tts.utterance.*` 共用的全链路关联键）、`dropped_at_ms`（播放队列确知这句没送到观众面前的时刻；为空即送到过，算"她说过"）与 `memory_refs`（这句点名引用了哪条记忆）。
-- `gifts` / `super_chats` / `guards`：付费明细三表，按平台原始单位入库（口径见 [观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)）。
+- `gifts` / `super_chats` / `guards`：付费明细三表，按平台原始单位入库（口径见 [ADR-029：观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)）。
 - `timeline_summary`：一场内的分段摘要轨迹（后台维护者写入）。
 
 **观众与身份**
 
-- `viewers`：观众，一行一人（按平台），同一行记账号 ID 与开放平台 ID，带跨场统计（其中 `sessions_count` / `last_session_id` / `prev_seen_ms` 是正式场来访计数与档位依据，由观众本场第一条真弹幕在同一事务里推进）；新出现的 ID 按当前昵称找同名老观众，默认只挂一条合并建议、由人工确认，配置了关联时限才在时限内自动关联（见 [观众身份映射](../decisions/047-viewer-identity-mapping.md) 与 [按昵称关联默认关](../decisions/064-viewer-name-match-off-by-default.md)）。明细四表经 `viewer_id` 挂到观众，并保留收到时的原始外部 ID。
+- `viewers`：观众，一行一人（按平台），同一行记账号 ID 与开放平台 ID，带跨场统计（其中 `sessions_count` / `last_session_id` / `prev_seen_ms` 是正式场来访计数与档位依据，由观众本场第一条真弹幕在同一事务里推进）；新出现的 ID 按当前昵称找同名老观众，默认只挂一条合并建议、由人工确认，配置了关联时限才在时限内自动关联（见 [ADR-047：观众身份映射](../decisions/047-viewer-identity-mapping.md) 与 [ADR-064：按昵称关联默认关](../decisions/064-viewer-name-match-off-by-default.md)）。明细四表经 `viewer_id` 挂到观众，并保留收到时的原始外部 ID。
 - `viewer_names`：观众用过的昵称（含曾用名），只在新建、改名、合并时写入。
 - `forget_list`：不记录名单，只存 `HMAC-SHA256(库外密钥, 种类|外部ID)` 摘要与登记时刻，不落明文外部 ID；密钥在库外文件（默认 `secrets/forget.key`）。文件丢失而名单非空时存储启动硬报错，避免被遗忘的观众静默恢复记录。
 
@@ -28,9 +28,9 @@
 - `memory_vectors_*` / `memory_fts_*`：记忆检索的派生索引，档案行、承诺、她播出的台词、游戏事件各一张向量表、一张 FTS5 全文表，行号即来源行主键。正本始终是来源行，这些表随时能重算。向量表外键级联；全文表是虚表，靠触发器跟着来源行删除，来源正文被改（删观众替换昵称、台词标成没播出、清空承诺原话）时连同向量一起删掉等重算；全文表打开了 FTS5 的 `secure-delete`，删掉的词元不留在影子表里。收什么由 `MemoryIndexRepo` 一处定：台词只收正式场里她播出满 30 秒的正文（不带她回应的弹幕），游戏事件只收里程碑与阶段汇报（白名单，游戏聊天与玩家肢体动作不收），判了误记的承诺不收；场次改成彩排时来源行不变，在改类型的同一个事务里删掉那一场的台词与事件索引。
 - `memory_cue_log`：每张推给她的记忆线索一行（哪一场、什么卡、被哪几路命中、分数、用上的时刻），只记条目编号、不记观众身份；条目或场次被删时外键级联删除。
 - 记忆页人工审核：`live_sessions.reviewed_at_ms`（标已审的时刻，空即待审）、`archive_lines.human_locked`（运营者改过或新增的行，之后的整理不能去掉或替换）、`archive_snapshot_lines.pinned`（运营者放回快照或新增的行，接进新快照时跟着带过去；一份快照至多 4 行，可以取消放回）。整理照旧自动生效，人只在事后改。`memory_edits` 记每次操作（场次、对象、动作、改前改后、时刻；批准、驳回候选时另记候选编号，不记观众身份），与档案同寿命：场次被删时级联删除；档案行或候选被删时记录留着、改前改后的文本由触发器清空；删观众与"忘了我"把提到 ta 昵称的记录文本整段清空；挂在 ta 自己弹幕上的候选随弹幕整条删，挂在别人弹幕上、只是原话或标题里提到 ta 的候选不删，只把昵称换成"一位观众"（驳回过的仍是驳回，同一条以后不再列）。按昵称匹配时 `%`、`_` 按原字比。
-- `viewer_candidates`：待审候选，一条一行，类型分"观众定下的"（`viewer_defined`）、"她说欠着的"（`claimed_missing`）与"老观众近况"（`viewer_self`），挂在观众那条弹幕、她那句回应两条 `live_chat` 记录及 `viewer_id`（`viewers`）上（外键级联：删观众、"忘了我"、按句删、删场次一起删；改彩排时由场次仓储撤掉本场候选）；状态待审 / 已批 / 已驳回，前两类批准后记下生成的档案行或承诺，老观众近况批准后原地留在本表供场内老观众线索按 `viewer_id` 只读查询（不进全局档案与承诺，改动记录不落自述文本，支持撤销批准回待审）；观众定下的一类另存观众定下的那个词（`word`），批准时抄到生成的档案行上（`archive_lines.viewer_word`），渲染时原话里这一段不遮；读档案的仓储不碰候选表。待审的列出后 14 天没人审自动删掉。保留期清理不删批准进档案或已批老观众近况挂着的那条源弹幕，否则对应档案行或已批近况会被外键级联删掉。`archive_lines` 另有来源（主播 / 观众）与观众那条弹幕两列，批准来的行挂着那条弹幕。决策见 [观众定下的事经人批准](../decisions/074-viewer-defined-memory-needs-approval.md)。
+- `viewer_candidates`：待审候选，一条一行，类型分"观众定下的"（`viewer_defined`）、"她说欠着的"（`claimed_missing`）与"老观众近况"（`viewer_self`），挂在观众那条弹幕、她那句回应两条 `live_chat` 记录及 `viewer_id`（`viewers`）上（外键级联：删观众、"忘了我"、按句删、删场次一起删；改彩排时由场次仓储撤掉本场候选）；状态待审 / 已批 / 已驳回，前两类批准后记下生成的档案行或承诺，老观众近况批准后原地留在本表供场内老观众线索按 `viewer_id` 只读查询（不进全局档案与承诺，改动记录不落自述文本，支持撤销批准回待审）；观众定下的一类另存观众定下的那个词（`word`），批准时抄到生成的档案行上（`archive_lines.viewer_word`），渲染时原话里这一段不遮；读档案的仓储不碰候选表。待审的列出后 14 天没人审自动删掉。保留期清理不删批准进档案或已批老观众近况挂着的那条源弹幕，否则对应档案行或已批近况会被外键级联删掉。`archive_lines` 另有来源（主播 / 观众）与观众那条弹幕两列，批准来的行挂着那条弹幕。决策见 [ADR-074：观众定下的事经人批准](../decisions/074-viewer-defined-memory-needs-approval.md)。
 
-**游戏里的人**（决策见 [游戏里的人](../decisions/075-game-players-by-uuid.md)）
+**游戏里的人**（决策见 [ADR-075：游戏里的人](../decisions/075-game-players-by-uuid.md)）
 
 - `game_players`：她在游戏里遇到过的玩家，一个游戏账号 UUID 一行：最近一次的名字、见过的名字、见过的存档、首次与最近一次见到的场次与时刻；`forget_requested_at_ms` 记他在游戏公屏发"忘了我"的时刻。
 - `game_player_interactions`：和她的互动（打招呼一场合并一行、送东西、切磋），挂玩家，外键级联；场次改成彩排时撤掉本场互动。
@@ -39,7 +39,7 @@
 - `player_candidates`：玩家自述的待审候选：玩家在游戏公屏说的关于他自己的事、她当场接住了，下播整理找承诺那次顺带列出，挂在他那句游戏公屏和她的回应上（外键级联）；人在记忆页批准后只写在这位玩家的玩家线索上，不进记忆摘要。待审的 14 天没人审就删；保留期不删批准过的自述挂着的那句游戏公屏。
 - `commitments` 另有 `target_player_id`（对哪位玩家答应的，外键级联）与 `evidence_game_chat_id`（证据是她在游戏公屏打的那句）；`live_chat` 的主播行另有 `reply_player_id`（这句在回应哪位玩家：Planner 点名回应、认得出是谁的那位；没点名时，那一窗只有他一位在游戏里开过口、她又正在回他才记）。
 
-**流程单（五表族，设计见 [流程单设计决策](../decisions/011-rundown-replaces-agenda.md)）**
+**流程单（五表族，设计见 [ADR-011：流程单设计决策](../decisions/011-rundown-replaces-agenda.md)）**
 
 - `rundowns` / `rundown_segments`：流程单模板与环节行。
 - `rundown_instances` / `rundown_instance_segments`：每场实例快照（崩溃恢复的游标与计时锚点存这里）。
@@ -53,9 +53,9 @@
 
 **观众模拟器**
 
-- `sim_personas` / `sim_gifts`：模拟观众人设与礼物目录（开发基础设施，见 [模拟器是开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md)）。
+- `sim_personas` / `sim_gifts`：模拟观众人设与礼物目录（开发基础设施，见 [ADR-006：模拟器是开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md)）。
 
-`live_sessions.kind` 标记场次类型：正式（面向真实观众）或彩排（模拟、回放、调试），开场时声明。只有正式场会被整理成承诺与场次档案，读取也按类型过滤；对外同步只认正式场（见 [场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md)）。`live_chat` / `gifts` / `super_chats` / `guards` 四表另带 `simulated` 贯穿列，标记单条消息是不是造出来的。
+`live_sessions.kind` 标记场次类型：正式（面向真实观众）或彩排（模拟、回放、调试），开场时声明。只有正式场会被整理成承诺与场次档案，读取也按类型过滤；对外同步只认正式场（见 [ADR-050：场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md)）。`live_chat` / `gifts` / `super_chats` / `guards` 四表另带 `simulated` 贯穿列，标记单条消息是不是造出来的。
 
 ## 迁移机制
 
@@ -64,7 +64,7 @@
 - 启动时先执行完整 DDL（`IF NOT EXISTS` 幂等），再按当前版本到目标版本的区间依次跑迁移回调；回调原地修改、自带列存在性检查，重复执行无副作用。
 - 升版本前自动在线备份到 `data/backups/`（`<库名>-pre-v<版本>-<时间戳>.db`）；备份失败仅告警不阻塞迁移。备份默认不自动清理，配置了 `[retention].raw_days` 后按保留期统一清理：整库备份与迁移时移入的旧记忆目录都按条目自身的修改时刻判定。
 - 库版本高于代码版本（回滚到旧程序）只告警不拒启。
-- **存在不可逆的清理版本**：记忆改按账本记录之后，删除旧表（`session_recaps`、`viewer_profiles`）与场次表的备忘录列，并把库文件同级的 `memory/` 目录（旧长期笔记与历史留底）整目录移入 `backups/` 下的 `memory-pre-v25-<时间戳>/`——移走后不再被任何代码读取，内容留在备份目录里，可手工取回。这一版之后旧版本二进制无法正确回退（它会把旧表按建库语句重建出来），退路是升级前自动留下的整库备份与这次移入备份目录的旧记忆目录；升级前请确认备份可用。设计见 [清掉旧记忆的存储面](../decisions/067-irreversible-memory-cleanup.md)。
+- **存在不可逆的清理版本**：记忆改按账本记录之后，删除旧表（`session_recaps`、`viewer_profiles`）与场次表的备忘录列，并把库文件同级的 `memory/` 目录（旧长期笔记与历史留底）整目录移入 `backups/` 下的 `memory-pre-v25-<时间戳>/`——移走后不再被任何代码读取，内容留在备份目录里，可手工取回。这一版之后旧版本二进制无法正确回退（它会把旧表按建库语句重建出来），退路是升级前自动留下的整库备份与这次移入备份目录的旧记忆目录；升级前请确认备份可用。设计见 [ADR-067：清掉旧记忆的存储面](../decisions/067-irreversible-memory-cleanup.md)。
 
 ## 访问层
 
@@ -94,7 +94,7 @@
 
 - `logs/llm_requests/<日期>/<时>.jsonl`：每请求一条完整档案（参数、正文、原始用量）。
 - `logs/llm_context/latest.json`：每模型上下文水位快照。
-- `logs/events/`：事件诊断流，场次回看的事件侧事实源（见 [回看以诊断事件流为事实源](../decisions/039-event-replay-diagnostics-source.md)）。
+- `logs/events/`：事件诊断流，场次回看的事件侧事实源（见 [ADR-039：回看以诊断事件流为事实源](../decisions/039-event-replay-diagnostics-source.md)）。
 
 库内 `llm_requests` 只保留统计列与正文存档；`infra.toml` 的 `[diagnostics].retention_days = 0`（默认）表示诊断文件永不清理，设为正数启用按天滚删。
 
@@ -105,19 +105,19 @@
 
 ## 相关决策
 
-- [live_chat 单一事实源](../decisions/015-live-chat-single-source.md)
-- [观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)
-- [回看以诊断事件流为事实源](../decisions/039-event-replay-diagnostics-source.md)
-- [主播记忆改按账本记录](../decisions/065-memory-ledger-shadow-run.md)
-- [记忆注入切到账本](../decisions/066-memory-injection-switch.md)
-- [清掉旧记忆的存储面](../decisions/067-irreversible-memory-cleanup.md)
-- [观众数据可自行删除与保留期](../decisions/068-memory-privacy-retention-and-forget.md)
-- [观众身份映射](../decisions/047-viewer-identity-mapping.md)
-- [混合检索与被动想起](../decisions/072-memory-hybrid-search-and-passive-recall.md)
-- [整理结果的人工审核](../decisions/073-settlement-human-review.md)
-- [观众定下的事经人批准进记忆](../decisions/074-viewer-defined-memory-needs-approval.md)
-- [游戏里的人按 UUID 认](../decisions/075-game-players-by-uuid.md)
-- [场次档案改为档案快照](../decisions/071-rolling-session-archive.md)
-- [记忆摘要分区与场内更正](../decisions/077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
-- [游戏社交事实边界治理](../decisions/078-game-social-facts-boundaries-and-governance.md)
-- [检索抗干扰、双侧桥接与名场面分层](../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)
+- [ADR-015：live_chat 单一事实源](../decisions/015-live-chat-single-source.md)
+- [ADR-029：观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)
+- [ADR-039：回看以诊断事件流为事实源](../decisions/039-event-replay-diagnostics-source.md)
+- [ADR-065：主播记忆改按账本记录](../decisions/065-memory-ledger-shadow-run.md)
+- [ADR-066：记忆注入切到账本](../decisions/066-memory-injection-switch.md)
+- [ADR-067：清掉旧记忆的存储面](../decisions/067-irreversible-memory-cleanup.md)
+- [ADR-068：观众数据可自行删除与保留期](../decisions/068-memory-privacy-retention-and-forget.md)
+- [ADR-047：观众身份映射](../decisions/047-viewer-identity-mapping.md)
+- [ADR-072：混合检索与被动想起](../decisions/072-memory-hybrid-search-and-passive-recall.md)
+- [ADR-073：整理结果的人工审核](../decisions/073-settlement-human-review.md)
+- [ADR-074：观众定下的事经人批准进记忆](../decisions/074-viewer-defined-memory-needs-approval.md)
+- [ADR-075：游戏里的人按 UUID 认](../decisions/075-game-players-by-uuid.md)
+- [ADR-071：场次档案改为档案快照](../decisions/071-rolling-session-archive.md)
+- [ADR-077：记忆摘要分区与场内更正](../decisions/077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
+- [ADR-078：游戏社交事实边界治理](../decisions/078-game-social-facts-boundaries-and-governance.md)
+- [ADR-079：检索抗干扰、双侧桥接与名场面分层](../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)

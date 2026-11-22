@@ -55,4 +55,4 @@
 
 ## 相关决策
 
-- [档案快照](../../decisions/071-rolling-session-archive.md)
+- [ADR-071：档案快照](../../decisions/071-rolling-session-archive.md)

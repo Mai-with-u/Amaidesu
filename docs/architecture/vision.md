@@ -14,11 +14,11 @@
 
 ### 2. 视觉直连
 
-工具回执与 Planner 可以把截图以句柄形式挂进对话观察，让主模型直接看图而不是读转述（设计见 [视觉直连：工具图像进对话观察](../decisions/037-vision-direct-tool-image-observation.md)）。硬约束：请求消息里禁止内联 base64 图片（引擎期硬错），图必须走图像仓 + 句柄。另有一道内联载荷守卫：文本承载字段合计超 20 万字符拒发（防大载荷意外泄漏，与按模型窗口换算的 token 预算是两道独立的闸）。
+工具回执与 Planner 可以把截图以句柄形式挂进对话观察，让主模型直接看图而不是读转述（设计见 [ADR-037：视觉直连：工具图像进对话观察](../decisions/037-vision-direct-tool-image-observation.md)）。硬约束：请求消息里禁止内联 base64 图片（引擎期硬错），图必须走图像仓 + 句柄。另有一道内联载荷守卫：文本承载字段合计超 20 万字符拒发（防大载荷意外泄漏，与按模型窗口换算的 token 预算是两道独立的闸）。
 
 ### 3. 直播画面流
 
-`live_frame` 采集器常驻采样节目画面（OBS WebSocket 截指定源，OBS 不可用自动回退桌面截屏），每次采样覆盖写图像仓的"最新帧"槽位——**不发事件**，规划器查询式取用：Planner 在每个决策回合的第一次请求尾部挂一张最新帧（同一决策回合的后续步骤不重复挂），主播每次决策都看得到直播间此刻的样子；帧龄过旧会限频告警（设计见 [直播画面做成采集流](../decisions/041-live-frame-stream.md)）。
+`live_frame` 采集器常驻采样节目画面（OBS WebSocket 截指定源，OBS 不可用自动回退桌面截屏），每次采样覆盖写图像仓的"最新帧"槽位——**不发事件**，规划器查询式取用：Planner 在每个决策回合的第一次请求尾部挂一张最新帧（同一决策回合的后续步骤不重复挂），主播每次决策都看得到直播间此刻的样子；帧龄过旧会限频告警（设计见 [ADR-041：直播画面做成采集流](../decisions/041-live-frame-stream.md)）。
 
 ## 能力协商
 
@@ -31,5 +31,5 @@
 
 ## 相关决策
 
-- [视觉直连：工具图像进对话观察](../decisions/037-vision-direct-tool-image-observation.md)
-- [直播画面做成采集流](../decisions/041-live-frame-stream.md)
+- [ADR-037：视觉直连：工具图像进对话观察](../decisions/037-vision-direct-tool-image-observation.md)
+- [ADR-041：直播画面做成采集流](../decisions/041-live-frame-stream.md)

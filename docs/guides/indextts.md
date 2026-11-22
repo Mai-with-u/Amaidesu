@@ -2,7 +2,7 @@
 
 Amaidesu 的 `index_tts` TTS 引擎对接本机运行的 [IndexTTS](https://github.com/index-tts/index-tts) 服务：Amaidesu 把待合成文本通过 HTTP 发给它，收回流式音频播出。IndexTTS 官方只提供 Python API 与给人用的 WebUI，没有 HTTP 服务，本仓库的 `scripts/indextts_serve.py` 把官方推理包包装成 Amaidesu 对接的常驻 HTTP 服务。本文说明如何部署 IndexTTS、启动该服务，以及 Amaidesu 侧的对应配置。
 
-> 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤。TTS 基础设施的整体位置见 [TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md)。
+> 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤。TTS 基础设施的整体位置见 [ADR-007：TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md)。
 >
 > 定位说明（先读再决定装不装）：IndexTTS-2.5 的强项是**细粒度情感控制**（8 维情感向量 / 情感参考音频）与零样本声音克隆；代价是推理比 GPT-SoVITS 重得多——消费级 8GB 显卡上吞吐跟不上实时，**直播生产链暂不建议切换**，适合做音色/情感评估与离线合成。另注意它使用 bilibili 模型许可（自用与中小规模商用免费，许可全文见其仓库 LICENSE）。
 

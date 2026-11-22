@@ -44,4 +44,4 @@
 
 ## 相关决策
 
-- [混合检索与被动想起](../../decisions/072-memory-hybrid-search-and-passive-recall.md)
+- [ADR-072：混合检索与被动想起](../../decisions/072-memory-hybrid-search-and-passive-recall.md)

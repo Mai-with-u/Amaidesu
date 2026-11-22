@@ -116,6 +116,6 @@
 
 ## 相关文档
 
-- [场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md) — 场次类型与真假分流
-- [LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md) — 定位
+- [ADR-050：场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md) — 场次类型与真假分流
+- [ADR-006：LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md) — 定位
 - [事件系统](../architecture/event-system.md) — `room.message.*` / `streamer.speech` 事件表

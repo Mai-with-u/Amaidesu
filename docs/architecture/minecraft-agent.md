@@ -6,7 +6,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 - 只有主播 Agent 自我驱动；游戏 Agent 命令驱动（类 Code Agent）——收到命令启动任务循环，完成即停、空闲零消耗
 - 因有自身状态与任务内自主决策，游戏 Agent 仍是 Agent 而非工具（三分判据见 [v2-architecture.md](v2-architecture.md)）
-- 游戏 Agent 与主播有两种交互形态：**委派型**（本文——主播交代目标，游戏侧自带 LLM 拆解）与**遥控型**（主播直接按键、选项，游戏侧零 LLM，如 text_adv、game_2048）。主播按各工具面的使用说明拼装【当前游戏的玩法】，两种形态的定案见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
+- 游戏 Agent 与主播有两种交互形态：**委派型**（本文——主播交代目标，游戏侧自带 LLM 拆解）与**遥控型**（主播直接按键、选项，游戏侧零 LLM，如 text_adv、game_2048）。主播按各工具面的使用说明拼装【当前游戏的玩法】，两种形态的定案见 [ADR-043：游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
 
 ## 核心意象
 
@@ -60,14 +60,14 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 - **事实核实**：目标的 asked / paused / resumed / finished 事件只说明"变了"，宿主再用 `goal(get)` 取它此刻的样子（结果、变化、问题）交给任务；finished 事件另带的 `self_brief`（结束那一刻角色在哪、血、饱食、手上拿着什么、开着什么界面）查询里没有，随查询结果一起交过去；结束的目标不再跟踪
 - **唤醒**：结束 → 注入"目标 N 结束了"、结束时的自身摘要与结果；Mod 把大块证据折进 `result.folded` 时，通知里说明照抄 `path` 用 `maicraft_goal(get, goal_id, path)` 读回；提问 → 注入问题、选项与回答方式；被暂停 → 注入"身体没在做它"。只有这些需要模型处理的变化才唤醒，恢复推进静默记账
 - **换世界**：事件流编号变了（换世界、重进世界、Mod 重启）时旧游标作废，逐个重新查在跟踪的目标；查不到或编号已是别的能力的目标，按"不在了"注入通知，不让任务挂着等不来的结果
-- **认存档**：MaiCraft 在每页事件与 `observe(self)` 里报 `world{id, name}`（不在世界里为 null，旧版 Mod 不报这个键）。每读一页交给 `WorldIdentity`，读自己时顺手也喂；三态：旧版 Mod（不分存档，与以前一样）、不明、认出。"换存档"只认上一个认出的编号被另一个取代，回主菜单再进同一存档不算，不看事件流编号。认出后：工具面 `current_save()` 报给主播（主播每个决策回合拉一次），游戏事件载荷填上存档；待办、工作笔记与近期上报按存档分开，换存档收起旧的、换上新的（新存档是空的），回老存档还原，切换只经 `MinecraftAgentState.switch_world`；换存档时手上有任务就告诉它任务是在旧存档里接的，并发一条换存档里程碑。进程启动后第一次认出只记下。生物名册按世界编号分，第一次按新编号读前把旧编号名下的名册整份搬过来（新编号已有就不搬）。决策依据见 [游戏里的记忆按存档分开](../decisions/069-game-memory-per-save.md)
+- **认存档**：MaiCraft 在每页事件与 `observe(self)` 里报 `world{id, name}`（不在世界里为 null，旧版 Mod 不报这个键）。每读一页交给 `WorldIdentity`，读自己时顺手也喂；三态：旧版 Mod（不分存档，与以前一样）、不明、认出。"换存档"只认上一个认出的编号被另一个取代，回主菜单再进同一存档不算，不看事件流编号。认出后：工具面 `current_save()` 报给主播（主播每个决策回合拉一次），游戏事件载荷填上存档；待办、工作笔记与近期上报按存档分开，换存档收起旧的、换上新的（新存档是空的），回老存档还原，切换只经 `MinecraftAgentState.switch_world`；换存档时手上有任务就告诉它任务是在旧存档里接的，并发一条换存档里程碑。进程启动后第一次认出只记下。生物名册按世界编号分，第一次按新编号读前把旧编号名下的名册整份搬过来（新编号已有就不搬）。决策依据见 [ADR-069：游戏里的记忆按存档分开](../decisions/069-game-memory-per-save.md)
 - **身体事件**：与目标无关的事件（生存需求的临时任务开始与结束、处理不了的需求、角色死亡）进本批身体上下文；处理不了的需求与角色死亡同时注入任务并发 `game.attention_required`；处理不了的需求的说明（饿了没吃上会逐个列出各来源的原因，常有几千字）与对话历史或待读队列里一字不差的那条重复时，只注入一句指回前面那条，前面那条已被历史整理换成摘要时才完整再给
 - **Mod 挂出的决策**：死亡恢复这类决策不是谁下达的目标（`goal_id` 是负数）。它提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕），模型按问题里给的选项用 `maicraft_goal(answer)` 回答；不进跟踪名单、不记任务登记，执行结果事件 `death_recovery_applied` 不转给主播
 - **任务登记镜像**：目标同时记进通用任务登记（`maicraft-goal-<id>`，发起方 minecraft），主播的任务查询看得到；任务登记的长时间无进展告警回到 Agent 注入提醒，成败本身以事件流为准
 
 ### 运营干预入口（递话 / 硬取消 / 断连恢复）
 
-委派之外，minecraft 另有两个干预入口与一条自愈路径（入口设计见 [Agent 干预原语](../decisions/034-agent-intervention-primitives.md)，escalation 上报的状态语义见 [escalation 状态语义与断连恢复](../decisions/035-escalation-ledger-semantics.md)）：
+委派之外，minecraft 另有两个干预入口与一条自愈路径（入口设计见 [ADR-034：Agent 干预原语](../decisions/034-agent-intervention-primitives.md)，escalation 上报的状态语义见 [ADR-035：escalation 状态语义与断连恢复](../decisions/035-escalation-ledger-semantics.md)）：
 
 - **递话 `receive_prompt`**：纯文本留言（主播经 `framework_prompt` 工具、运营经 REST），不派新任务、不进任务登记——文本入消息队列 + 唤醒；入队时按来源加 `[运营原话]` / `[主播补充]` 标签，冲突时原话与游戏结果优先于转述。
 - **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 状态记录写 `cancelled` + 注入"任务已被取消"通知，LLM 下一步自行停手（还在跑的游戏目标由它用 `maicraft_goal(cancel)` 取消）。软取消：不打断当前工具调用。
@@ -140,7 +140,7 @@ enabled = true                     # 总开关，关闭时 minecraft_drawing 不
 max_validation_retries = 3         # 图纸被 Mod 校验拒绝后的重画上限
 ```
 
-配版本同步规则：配置结构变更升该文件 `[meta].version` 并保证漂移写回（见 [配置文件按领域拆分](../decisions/014-config-six-file-refactor.md)）。
+配版本同步规则：配置结构变更升该文件 `[meta].version` 并保证漂移写回（见 [ADR-014：配置文件按领域拆分](../decisions/014-config-six-file-refactor.md)）。
 
 ## 解耦边界
 
@@ -155,5 +155,5 @@ max_validation_retries = 3         # 图纸被 Mod 校验拒绝后的重画上�
 - [事件系统](event-system.md) — game.* 事件语义单一事实源
 - [数据流规则](data-flow.md) — 事件流约束
 - [组件开发指南](../guides/component.md) — 游戏 Agent 范式
-- [Agent 干预原语（递话/硬取消/运营直派）](../decisions/034-agent-intervention-primitives.md)
-- [escalation 状态语义与断连恢复续跑](../decisions/035-escalation-ledger-semantics.md)
+- [ADR-034：Agent 干预原语（递话/硬取消/运营直派）](../decisions/034-agent-intervention-primitives.md)
+- [ADR-035：escalation 状态语义与断连恢复续跑](../decisions/035-escalation-ledger-semantics.md)

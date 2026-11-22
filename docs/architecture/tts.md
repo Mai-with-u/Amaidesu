@@ -1,6 +1,6 @@
 # 语音合成（TTS）
 
-一句话形状：**TTS 是基础设施不是工具——装配期按配置单选一个引擎实例直接注入主播 Agent，发言队列串行播出；ToolRegistry 里零 TTS 条目。**决策依据见 [TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md)。
+一句话形状：**TTS 是基础设施不是工具——装配期按配置单选一个引擎实例直接注入主播 Agent，发言队列串行播出；ToolRegistry 里零 TTS 条目。**决策依据见 [ADR-007：TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md)。
 
 ## 装配与接口
 
@@ -43,7 +43,7 @@ Replyer 产出 speech
 
 ## 口型分接
 
-播放器把合成音频复制递入 AudioSink（`src/modules/audio/sink.py`），虚拟形象域的共享口型分析器消费同一份流——协议中性，TTS 域不知道 avatar 的存在（见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md)）。
+播放器把合成音频复制递入 AudioSink（`src/modules/audio/sink.py`），虚拟形象域的共享口型分析器消费同一份流——协议中性，TTS 域不知道 avatar 的存在（见 [ADR-024：口型帧级通道](../decisions/024-lipsync-frame-channel.md)）。
 
 ## 配置面
 
@@ -51,5 +51,5 @@ Replyer 产出 speech
 
 ## 相关决策
 
-- [TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md)
-- [口型帧级通道（AudioSink 分接）](../decisions/024-lipsync-frame-channel.md)
+- [ADR-007：TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md)
+- [ADR-024：口型帧级通道（AudioSink 分接）](../decisions/024-lipsync-frame-channel.md)

@@ -79,5 +79,5 @@ sequenceDiagram
 
 ## 相关决策
 
-- [主播记忆改按账本记录](../../decisions/065-memory-ledger-shadow-run.md)
-- [场次分正式与彩排](../../decisions/050-session-kind-live-and-rehearsal.md)
+- [ADR-065：主播记忆改按账本记录](../../decisions/065-memory-ledger-shadow-run.md)
+- [ADR-050：场次分正式与彩排](../../decisions/050-session-kind-live-and-rehearsal.md)

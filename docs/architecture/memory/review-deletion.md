@@ -90,8 +90,8 @@
 
 ## 相关决策
 
-- [观众身份映射](../../decisions/047-viewer-identity-mapping.md)
-- [清掉旧记忆的存储面](../../decisions/067-irreversible-memory-cleanup.md)
-- [观众数据可自行删除与保留期](../../decisions/068-memory-privacy-retention-and-forget.md)
-- [整理结果的人工审核](../../decisions/073-settlement-human-review.md)
-- [观众定下的事经人批准](../../decisions/074-viewer-defined-memory-needs-approval.md)
+- [ADR-047：观众身份映射](../../decisions/047-viewer-identity-mapping.md)
+- [ADR-067：清掉旧记忆的存储面](../../decisions/067-irreversible-memory-cleanup.md)
+- [ADR-068：观众数据可自行删除与保留期](../../decisions/068-memory-privacy-retention-and-forget.md)
+- [ADR-073：整理结果的人工审核](../../decisions/073-settlement-human-review.md)
+- [ADR-074：观众定下的事经人批准](../../decisions/074-viewer-defined-memory-needs-approval.md)

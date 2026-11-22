@@ -113,7 +113,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
 
 ### ③ 发现平面（受限放行，允许上行）
 
-"能做什么"这类只读、静态或慢变的能力/发现元数据**允许**从工具层上行到 Agent（用于动作选择）。慢变指只随人在游戏里的操作慢慢变、读它不触发任何行为的状态，例如游戏眼下所在的存档（`ToolRegistry.current_saves()`，见 [游戏里的记忆按存档分开](../decisions/069-game-memory-per-save.md)）。必须满足全部以下条件：
+"能做什么"这类只读、静态或慢变的能力/发现元数据**允许**从工具层上行到 Agent（用于动作选择）。慢变指只随人在游戏里的操作慢慢变、读它不触发任何行为的状态，例如游戏眼下所在的存档（`ToolRegistry.current_saves()`，见 [ADR-069：游戏里的记忆按存档分开](../decisions/069-game-memory-per-save.md)）。必须满足全部以下条件：
 
 - **只读**：Agent 只查询，不写、不触发工具行为。
 - **拉取式（pull）**：由 Agent 主动查询，不是工具推送/广播事件给 Agent。推送会落回 ① 的禁区。
@@ -211,7 +211,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
 
 - **每一步都是单向流动**。控制台输入 → EventBus → StreamerAgent → 工具调用 → 返回值，全程无环。Planner→Replyer 是同 Agent 内 await（经 registry 调用而非事件中转）。
 - **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果；场次盖章（session_stamp）字段驱动、不限域——payload 声明 `live_session_id` 字段即盖章（`live.*` 自带非 0 主键，过盖章拦截器但不被覆写）。`core.*` / `tts.utterance.*` 未声明该字段，盖章拦截器对它们零触碰。
-- **TTS 是基础模块而非工具**。每句 reply 落库即发声——reply 结构化结果的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具；装配期 `build_tts_infrastructure(infra.toml [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`infra.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 [TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md)。
+- **TTS 是基础模块而非工具**。每句 reply 落库即发声——reply 结构化结果的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具；装配期 `build_tts_infrastructure(infra.toml [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`infra.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 [ADR-007：TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md)。
 - **空转提醒不经事件**。空闲提醒职责归 ProactiveTrigger 自身（流程单超时提醒是其触发源之一）。
 
 ---
@@ -225,7 +225,7 @@ v2 中不同数据走不同通道，不要混用：
 | **EventBus** | 元数据事件（房间消息、状态变更、工具结果、流程单变更、TTS 生命周期） | 小型 JSON/Pydantic 对象 | `room.message.danmaku` / `tool.result.choose_option` / `rundown.changed` / `tts.utterance.started` |
 | **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("streamer_reply", args)` / `await registry.invoke("avatar_act", args)` |
 | **基础模块直调** | TTS 引擎由装配期注入，运行时绕过 ToolRegistry | 调用方持有引擎实例 | `await tts_engine.handle_speech(text, utterance_id)`（StreamerAgent 内部 speak 适配器；TTS 不在工具池中） |
-| **REST 控制面直调** | 运营干预（递话/直派/硬取消，见 [Agent 干预原语](../decisions/034-agent-intervention-primitives.md)） | 同步请求-响应、语义化错误码；意图递给归属组件，不代写其内部状态 | `POST /api/v1/agents/{name}/prompt|delegate|tasks/{id}/cancel` → `AgentControl` |
+| **REST 控制面直调** | 运营干预（递话/直派/硬取消，见 [ADR-034：Agent 干预原语](../decisions/034-agent-intervention-primitives.md)） | 同步请求-响应、语义化错误码；意图递给归属组件，不代写其内部状态 | `POST /api/v1/agents/{name}/prompt|delegate|tasks/{id}/cancel` → `AgentControl` |
 
 **EventBus 与 ToolRegistry 的边界**：事件总线是"发生了什么事"的广播；ToolRegistry 是"我要做什么事"的直接调用。同一工具调用既可以同步等结果，也可以 fire-and-forget 后让工具异步 emit `tool.result.<name>` 由订阅者回收——这两种语义都允许，工具实现侧在 `invoke()` 内自行决定。
 
@@ -233,13 +233,13 @@ v2 中不同数据走不同通道，不要混用：
 
 | 耦合度 | 通道 | 典型消费方 | 数据形态 |
 |--------|------|-----------|---------|
-| **帧级**（需要逐块 PCM 同步） | **播放器分接（AudioSink 协议）**——已建，详见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md) | 虚拟形象口型分析（共享分析器） | 原始音频块 |
+| **帧级**（需要逐块 PCM 同步） | **播放器分接（AudioSink 协议）**——已建，详见 [ADR-024：口型帧级通道](../decisions/024-lipsync-frame-channel.md) | 虚拟形象口型分析（共享分析器） | 原始音频块 |
 | **起止对齐**（与播放区间对齐） | **订阅 `tts.utterance.started` / `finished`** | 字幕跟随播放、面捕合成器（表情在开始播放时浮现、播完回落） | `UtteranceStartedPayload` / `UtteranceFinishedPayload` |
 | **无耦合**（独立于播放时机） | **直接 invoke 工具**（不经 TTS 队列、不经事件） | action → （暂未接线） | 工具自身契约 |
 
 设计要点：
 
-- **帧级通道已建**：口型同步经播放器分接（AudioSink 协议）承接——播放器把音频复制递入共享口型分析器，各平台渲染器把口型信号翻译为本平台参数（通道设计见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md)，它承接了 [TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md) 为帧级消费预留的出口）。
+- **帧级通道已建**：口型同步经播放器分接（AudioSink 协议）承接——播放器把音频复制递入共享口型分析器，各平台渲染器把口型信号翻译为本平台参数（通道设计见 [ADR-024：口型帧级通道](../decisions/024-lipsync-frame-channel.md)，它承接了 [ADR-007：TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md) 为帧级消费预留的出口）。
 - **事件通道是终点广播**：消费者不得基于 `tts.utterance.*` 触发新一轮决策（"TTS→决策→TTS"会成环）；可做的记账 / 释放锁 / 字幕对齐不构成新决策。
 - **直接 invoke 由 Agent 包内完成**：StreamerAgent 解析 `reply.result.content` 后，speech 走 UtteranceQueue → 注入的 `tts_engine.handle_speech`（装配期直连，零 ToolRegistry）；emotion 随 `streamer.speech` 发布、由虚拟形象侧订阅（主播包对平台零感知）；action 当前范围明确不接入决策（独立议题）。
 

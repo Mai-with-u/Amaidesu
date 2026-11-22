@@ -614,7 +614,7 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 典型用例：
 
 - **业务 Agent**（如 `streamer`）——主播规划器
-- **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作。与主播的交互分两种形态：委派型（主播交代目标，覆写 `receive_delegation`）与遥控型（主播直接调它的工具，不接委派）；形态由它的工具面说明（`guide_for`）告诉主播，见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
+- **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作。与主播的交互分两种形态：委派型（主播交代目标，覆写 `receive_delegation`）与遥控型（主播直接调它的工具，不接委派）；形态由它的工具面说明（`guide_for`）告诉主播，见 [ADR-043：游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
 - **自定义 Agent**（如 `custom`）——任何不归属业务/游戏的特殊决策体
 
 ### 协议六项（最小契约）
@@ -887,13 +887,13 @@ class MyToolProvider(ToolProvider):
          ↓
 12. Planner 循环收到 reply 成功即收尾 → outcome{replied/speech/...} → Agent 解析 speech 生成 utterance_id 入 UtteranceQueue（fire-and-forget，不阻塞决策循环）；
     emotion → 随 streamer.speech 业务事件发布；面捕合成器订阅后按播放时刻上脸
-   （自动情绪路径，主播域零平台知识——见 [虚拟形象平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md)）
+   （自动情绪路径，主播域零平台知识——见 [ADR-023：虚拟形象平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md)）
          ↓
 13. 队列 worker 串行 await speak(text, utterance_id)（speak 是构造期注入的适配器，绑定装配期由 build_tts_infrastructure 选中的 tts_engine.handle_speech）→ 引擎合成 + 播放
     （TTS 引擎自身——基础模块，非工具——发布 tts.utterance.started/finished/failed 事件供字幕等消费者订阅；ToolRegistry 中零 TTS 条目）
          ↓
 14. 音频经 AudioDeviceManager（src/modules/audio/）输出到扬声器；播放器分接（AudioSink
-    协议）把音频复制递入口型分析器（共享件，[avatar.lipsync]）——见 [口型分析帧通道](../decisions/024-lipsync-frame-channel.md)
+    协议）把音频复制递入口型分析器（共享件，[avatar.lipsync]）——见 [ADR-024：口型分析帧通道](../decisions/024-lipsync-frame-channel.md)
 ```
 
 **关键要点**：
@@ -908,11 +908,11 @@ class MyToolProvider(ToolProvider):
 | Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 局部工具（不进 ToolRegistry）；Planner 循环内直连 invoke |
 | Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `replyer` profile + WordFilter；复古提示词生成纯文本，不发送工具；情绪由 Planner 提供 |
 | 发声队列 | `src/agents/streamer/utterance_queue.py` | FIFO 串行；满时丢最旧；单条 render_timeout_ms 看门狗；构造期注入 `speak` 适配器（绑定 `tts_engine.handle_speech`） |
-| TTS 播出 | `src/modules/tts/` 基础模块（4 引擎 Provider）+ `build_tts_infrastructure` 装配入口 | 引擎（`handle_speech`）发 `tts.utterance.*` 事件；详见 [TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md) |
+| TTS 播出 | `src/modules/tts/` 基础模块（4 引擎 Provider）+ `build_tts_infrastructure` 装配入口 | 引擎（`handle_speech`）发 `tts.utterance.*` 事件；详见 [ADR-007：TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md) |
 
 ### 设计边界说明
 
-- **TTS 是基础模块而非工具**：`infra.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md)。
+- **TTS 是基础模块而非工具**：`infra.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [ADR-007：TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md)。
 - **工具注册路径唯一**：`AgentManager` 不聚合工具注册——真实注册只走两条：① Agent 子类 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；② 分类工具在 `main.py` 由 `bind_core_tools(registry, tools_cfg)` 按域开关装配。装配结束后 `AgentManager.audit_tools(registry)` 按派生全名对账（缺失即 warning），不写任何工具实现。
 
 ---

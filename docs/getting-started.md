@@ -141,7 +141,7 @@ user_nickname = "控制台"
 
 #### 启用渲染输出（可选）
 
-字幕 / 虚拟形象 / OBS 等渲染输出各有装配入口：虚拟形象由 `config/avatar.toml` 的平台名单决定哪家平台接收面捕合成器的逐帧数据与主播的动作，OBS 走 `config/tools.toml` 的提供者开关，字幕走 `config/infra.toml` 的 `[subtitle]` 段；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
+字幕 / 虚拟形象 / OBS 等渲染输出各有装配入口：虚拟形象由 `config/avatar.toml` 的平台名单决定哪家平台接收面捕合成器的逐帧数据与主播的动作，OBS 走 `config/tools.toml` 的提供者开关，字幕走 `config/infra.toml` 的 `[subtitle]` 段；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
 
 ```toml
 # config/avatar.toml —— 虚拟形象平台启用（名单成员 = 接收面捕合成器的逐帧驱动，不向 LLM 提供工具）
@@ -192,7 +192,7 @@ uv run python main.py --dry
 | **业务 Agent（Agent）** | 拥有内部状态与工具的主循环体；订阅事件、决策、调用工具 | `src/agents/` | `[agents]` + `[agents.<name>]` |
 | **工具（Tool）** | 单一能力契约（ToolSpec + BaseToolProvider / as_tool_impl），由 Agent 在决策时按需调用 | `src/modules/tools/` | `tools.toml` 提供者开关与子配置 |
 
-> 渲染输出（字幕 / 虚拟形象 / OBS 等）的装配入口不统一：OBS 等能力以 **Tool Provider** 的形式注册，开启对应开关后工具进入可见集；虚拟形象平台只接收面捕合成器的逐帧数据与 `avatar_act` 的动作，不注册 LLM 工具；字幕由 `infra.toml` 的 `[subtitle]` 段驱动。**TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component.md) 与 [TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
+> 渲染输出（字幕 / 虚拟形象 / OBS 等）的装配入口不统一：OBS 等能力以 **Tool Provider** 的形式注册，开启对应开关后工具进入可见集；虚拟形象平台只接收面捕合成器的逐帧数据与 `avatar_act` 的动作，不注册 LLM 工具；字幕由 `infra.toml` 的 `[subtitle]` 段驱动。**TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component.md) 与 [ADR-007：TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
 
 ### 3.3 可用组件清单
 
@@ -209,7 +209,7 @@ uv run python main.py --dry
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
 | `bili_danmaku_laplace` | LAPLACE Event Bridge 弹幕（client 角色连 leb-server 或 Event Fetcher bridge mode） | 包内 ConfigSchema（url / token / room_id / 事件开关） |
 | `stt` | 语音转文字（讯飞 ASR + VAD） | 包内 ConfigSchema（iflytek_asr / vad / audio） |
-| `live_frame` | 直播画面帧采集（OBS WebSocket 取帧，主播每次决策可见最新画面，见 [直播画面帧流](decisions/041-live-frame-stream.md)） | 包内 ConfigSchema（OBS 连接 / 采样参数） |
+| `live_frame` | 直播画面帧采集（OBS WebSocket 取帧，主播每次决策可见最新画面，见 [ADR-041：直播画面帧流](decisions/041-live-frame-stream.md)） | 包内 ConfigSchema（OBS 连接 / 采样参数） |
 
 Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agent 开关，名单见 `src/modules/agents/companions.py`）：
 

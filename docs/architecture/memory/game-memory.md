@@ -53,7 +53,7 @@
 
 ## 相关决策
 
-- [游戏里的记忆按存档分开](../../decisions/069-game-memory-per-save.md)
-- [游戏里的人按 UUID 认](../../decisions/075-game-players-by-uuid.md)
-- [游戏社交事实边界治理](../../decisions/078-game-social-facts-boundaries-and-governance.md)
-- [检索抗干扰、双侧桥接与名场面分层](../../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)
+- [ADR-069：游戏里的记忆按存档分开](../../decisions/069-game-memory-per-save.md)
+- [ADR-075：游戏里的人按 UUID 认](../../decisions/075-game-players-by-uuid.md)
+- [ADR-078：游戏社交事实边界治理](../../decisions/078-game-social-facts-boundaries-and-governance.md)
+- [ADR-079：检索抗干扰、双侧桥接与名场面分层](../../decisions/079-memory-anti-noise-cross-agent-bridge-and-highlights.md)

@@ -170,7 +170,7 @@ sequenceDiagram
     注册表-->>主播: 工作文档（想看细节时再查）
 ```
 
-文字冒险和 2048 走另一条通道：不接委派，主播直接调它们的专属工具驱动——启停观察循环、推进剧情、在选项间做选择、对局落子；文字冒险的观察循环遇到选项屏会上报，等主播来选。两种交互形态的定案见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)。
+文字冒险和 2048 走另一条通道：不接委派，主播直接调它们的专属工具驱动——启停观察循环、推进剧情、在选项间做选择、对局落子；文字冒险的观察循环遇到选项屏会上报，等主播来选。两种交互形态的定案见 [ADR-043：游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)。
 
 按设计，加一类游戏只需新增一个独立的 Agent 包和一份配置，不需要改框架。
 
@@ -188,7 +188,7 @@ sequenceDiagram
 
 ### 配置：七文件 + 每文件版本 + 包内权威 + 单一管线
 
-`agents / collectors / tools / avatar / model / storage / infra` 七文件按领域拆分（`config/` 目录）；每文件自带 `[meta].version` 结构版本，经升级钩子注册表按区间独立推进（缺失硬错）。avatar 配置独立为域文件，域文件数量边界见 [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)（独立判据：域内多 provider 实例 + 自有协议/模块目录 + 配置已跨文件分散）。组件配置权威在各组件包内的 `ConfigSchema`（中央树只留槽位与聚合段），加载走单一管线（read → 版本推进 → Pydantic 校验硬错 → 漂移写回（备份 + 自写压标）→ 合并视图）。启用开关收敛为两处：`[agents].enabled` 与 `collectors.toml` 顶层 `enabled`；全局工具停用名单为 `[tools].disabled_tools`（重启生效）。设计决策见 [配置文件按领域拆分](../decisions/014-config-six-file-refactor.md)。
+`agents / collectors / tools / avatar / model / storage / infra` 七文件按领域拆分（`config/` 目录）；每文件自带 `[meta].version` 结构版本，经升级钩子注册表按区间独立推进（缺失硬错）。avatar 配置独立为域文件，域文件数量边界见 [ADR-028：虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)（独立判据：域内多 provider 实例 + 自有协议/模块目录 + 配置已跨文件分散）。组件配置权威在各组件包内的 `ConfigSchema`（中央树只留槽位与聚合段），加载走单一管线（read → 版本推进 → Pydantic 校验硬错 → 漂移写回（备份 + 自写压标）→ 合并视图）。启用开关收敛为两处：`[agents].enabled` 与 `collectors.toml` 顶层 `enabled`；全局工具停用名单为 `[tools].disabled_tools`（重启生效）。设计决策见 [ADR-014：配置文件按领域拆分](../decisions/014-config-six-file-refactor.md)。
 
 ### 错误隔离：让边界守边界，不让一处失败扩散成全局停摆
 
@@ -232,4 +232,4 @@ sequenceDiagram
 - [数据流与边界规则](data-flow.md) - 三条约束层面的精确表述
 - [事件系统](event-system.md) - 事件全表、通配语义、拦截器开发
 - [组件开发指南](../guides/component.md) - 采集器/工具/Agent 三范式实操
-- [Agent + 工具架构总决策](../decisions/005-v2-agent-tool-architecture.md) - 本决策的正式决策记录
+- [ADR-005：Agent + 工具架构总决策](../decisions/005-v2-agent-tool-architecture.md) - 本决策的正式决策记录

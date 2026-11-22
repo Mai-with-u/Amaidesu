@@ -83,6 +83,6 @@ stateDiagram-v2
 
 ## 相关决策
 
-- [记忆注入切到账本](../../decisions/066-memory-injection-switch.md)
-- [记忆摘要分区与场内更正](../../decisions/077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
-- [记忆摘要按表快照逐窗重渲](../../decisions/082-brief-re-render-per-decision-window.md)
+- [ADR-066：记忆注入切到账本](../../decisions/066-memory-injection-switch.md)
+- [ADR-077：记忆摘要分区与场内更正](../../decisions/077-memory-zones-opening-wrapup-ttl-and-in-stream-correction.md)
+- [ADR-082：记忆摘要按表快照逐窗重渲](../../decisions/082-brief-re-render-per-decision-window.md)
