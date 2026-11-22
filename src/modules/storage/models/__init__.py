@@ -31,6 +31,7 @@ from src.modules.storage.models.events import (
 )
 from src.modules.storage.models.game_creatures import GameCreatureRecord
 from src.modules.storage.models.game_work_docs import GameWorkDocRecord
+from src.modules.storage.models.learned_skills import LearnedSkillRecord, LearnedSkillScope
 from src.modules.storage.models.memory import (
     Viewer,
     ViewerName,
@@ -86,6 +87,9 @@ __all__ = [
     "GameCreatureRecord",
     # game_work_docs 域
     "GameWorkDocRecord",
+    # agent_learned_skills 域
+    "LearnedSkillRecord",
+    "LearnedSkillScope",
     # memory 域
     "Viewer",
     "ViewerName",

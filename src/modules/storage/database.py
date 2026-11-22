@@ -42,6 +42,7 @@ from src.modules.storage.repos import (
     GameCreatureRepo,
     GamePlayerRepo,
     GameWorkDocsRepo,
+    LearnedSkillRepo,
     LLMRepo,
     MemoryCorrectionRepo,
     MemoryCueLogRepo,
@@ -143,6 +144,8 @@ class SQLiteDatabase:
         self.game_creatures = GameCreatureRepo(self._manager)
         # 游戏 Agent 的工作文档（工作笔记与待办，按游戏与存档跨重启保留）
         self.game_work_docs = GameWorkDocsRepo(self._manager)
+        # 游戏 Agent 自建技能卡（按游戏、作用域与存档持久化可复用操作流程）
+        self.learned_skills = LearnedSkillRepo(self._manager)
         self.llm = LLMRepo(self._manager)
         self.rundowns = RundownRepo(self._manager)
         # 流程单实例快照与变更事实（崩溃恢复 / 分析数据面；接线由流程单切片承担）

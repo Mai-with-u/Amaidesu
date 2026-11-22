@@ -64,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 49
+SCHEMA_VERSION: int = 50
 
 
 # =============================================================================
@@ -173,6 +173,9 @@ def build_schema_sql() -> str:
         # game_work_docs —— 游戏工作文档（笔记与待办，按游戏与存档落库）
         + _GAME_WORK_DOCS_SQL
         + "\n"
+        # agent_learned_skills —— 游戏 Agent 自建可读写/可修订技能卡（按游戏、作用域与存档落库）
+        + _AGENT_LEARNED_SKILLS_SQL
+        + "\n"
         # memory_vectors_* / memory_fts_* —— 记忆检索的派生索引（排在来源表之后：触发器要引用它们）
         + _MEMORY_INDEX_SQL
         + "\n"
@@ -245,6 +248,7 @@ def list_expected_tables() -> List[str]:
         "game_events",
         "game_creatures",
         "game_work_docs",
+        "agent_learned_skills",
         "memory_vectors_archive",
         "memory_vectors_commitment",
         "memory_vectors_speech",
@@ -770,6 +774,25 @@ CREATE TABLE IF NOT EXISTS game_work_docs (
     updated_at_ms      INTEGER NOT NULL,
     PRIMARY KEY (game, save_id)
 );
+""".strip()
+
+
+# 游戏 Agent 自建技能卡：按 (game, scope, save_id, name) 唯一约束。
+# scope='world' 绑定具体存档（save_id 非空），scope='global' 跨存档通用（save_id 存空串）。
+_AGENT_LEARNED_SKILLS_SQL = """
+CREATE TABLE IF NOT EXISTS agent_learned_skills (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    game          TEXT NOT NULL,
+    save_id       TEXT NOT NULL DEFAULT '',
+    scope         TEXT NOT NULL CHECK (scope IN ('world', 'global')),
+    name          TEXT NOT NULL,
+    trigger       TEXT NOT NULL DEFAULT '',
+    content       TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE(game, scope, save_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_learned_skills_lookup
+    ON agent_learned_skills(game, scope, save_id);
 """.strip()
 
 
