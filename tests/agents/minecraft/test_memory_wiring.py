@@ -866,3 +866,305 @@ async def test_streamer_chat_send_does_not_double_record_when_player_chat_interl
     finally:
         await agent.stop()
         await bus.cleanup()
+
+
+async def test_commitment_ledger_injected_at_tail_only_omitted_when_empty_and_keeps_msg0_prefix() -> None:
+    """权威承诺账本仅挂在尾部任务状态，空时省略键，绝不修改 msg[0] 前缀，且透传视野与近期公屏在线玩家 UUID。"""
+    clock = FakeClock(6_000_000)
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    server = FakeMaicraft()
+    server.enter_world("save_ledger_1", "联机承诺测试档")
+    server.scene_view["entities"] = [
+        {
+            "id": "e1",
+            "type": "minecraft:player",
+            "name": "PlayerA",
+            "uuid": "uuid-player-a",
+            "distance": 4.0,
+        }
+    ]
+
+    ledger_calls: List[Dict[str, Any]] = []
+    ledger_state: Dict[str, Any] = {"value": {}}
+
+    async def _ledger_provider(
+        *,
+        game: str,
+        save_id: str = "",
+        player_uuids: Any = (),
+        limit: int = 8,
+    ) -> Dict[str, Any]:
+        ledger_calls.append(
+            {
+                "game": game,
+                "save_id": save_id,
+                "player_uuids": tuple(player_uuids),
+                "limit": limit,
+            }
+        )
+        return dict(ledger_state["value"])
+
+    coord.set_commitment_ledger_provider(_ledger_provider)
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        lambda _messages: _resp("明白，记着当前任务与承诺"),
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=0,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        # 1) 账本为空时开局：尾部完全不出现 commitment_ledger，零多余 token
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="账本测试"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+
+        first_seen = llm.seen[0]
+        msg0_before = dict(first_seen[0])
+        assert "commitment_ledger" not in _texts(first_seen)
+        assert "约#43" not in str(msg0_before.get("content") or "")
+        assert ledger_calls
+        assert ledger_calls[-1]["game"] == "minecraft"
+        assert ledger_calls[-1]["save_id"] == "save_ledger_1"
+        assert "uuid-player-a" in ledger_calls[-1]["player_uuids"]
+
+        # 2) 账本变为非空且 PlayerB 在公屏发言唤醒：尾部任务状态出现 commitment_ledger，同时携带视野 PlayerA 与公屏 PlayerB UUID，msg[0] 纹丝不动
+        ledger_state["value"] = {
+            "open": [{"id": "约#43", "target": "PlayerA", "what": "补还 3 颗钻石"}],
+            "closed_this_session": [],
+        }
+        turns_before = len(llm.seen)
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerB",
+                sender_id="uuid-player-b",
+                sender_online=True,
+                sender_distance=5.0,
+                content="钻石挖够了吗",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await _wait_until(lambda: len(llm.seen) > turns_before and not agent.batch_active)
+
+        second_seen = llm.seen[-1]
+        assert second_seen[0] == msg0_before, "权威承诺账本绝不能改写 msg[0] 系统提示词前缀"
+        assert "约#43" not in str(second_seen[0].get("content") or "")
+        joined = _texts(second_seen)
+        assert "commitment_ledger" in joined
+        assert "约#43" in joined
+        assert "补还 3 颗钻石" in joined
+        assert "closed_this_session" not in joined
+        assert "uuid-player-a" in ledger_calls[-1]["player_uuids"]
+        assert "uuid-player-b" in ledger_calls[-1]["player_uuids"]
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_game_lead_sees_and_invokes_streamer_memory_correct_and_receives_items_tossed_receipt() -> None:
+    """游戏主控态可见并可调用 streamer_memory_correct，收到 items_tossed 时上下文给简明 [交付回执] 并刷新尾部账本。"""
+    from src.modules.tools.models import ToolExecutionResult, ToolSpec
+    from src.modules.tools.provider import BaseToolProvider
+
+    clock = FakeClock(7_000_000)
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    invocations: List[Dict[str, Any]] = []
+    ledger_state: Dict[str, Any] = {
+        "open": [{"id": "约#12", "target": "PlayerA", "what": "还 2 颗钻石"}],
+        "closed_this_session": [],
+    }
+
+    class _FakeMemoryCorrectProvider(BaseToolProvider):
+        @property
+        def name(self) -> str:
+            return "streamer"
+
+        def list_tools(self) -> List[ToolSpec]:
+            return [
+                ToolSpec(
+                    name="memory_correct",
+                    provider="streamer",
+                    description="更新本场记忆或承诺账本",
+                    parameters_schema={"type": "object", "properties": {}},
+                    visible_to=["streamer", "minecraft"],
+                )
+            ]
+
+        async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+            invocations.append(dict(invocation.arguments))
+            ledger_state["open"] = []
+            ledger_state["closed_this_session"] = [
+                {"id": "约#12", "what": "还 2 颗钻石", "summary": "已当面扔还 2 颗钻石"}
+            ]
+            return ToolExecutionResult(
+                tool_name=invocation.tool_name,
+                success=True,
+                structured_content={"ok": True, "effect": "约#12 已了结"},
+            )
+
+    registry.register_provider(_FakeMemoryCorrectProvider())
+
+    async def _ledger_provider(
+        *,
+        game: str,
+        save_id: str = "",
+        player_uuids: Any = (),
+        limit: int = 8,
+    ) -> Dict[str, Any]:
+        del game, save_id, player_uuids, limit
+        return dict(ledger_state)
+
+    coord.set_commitment_ledger_provider(_ledger_provider)
+
+    server = FakeMaicraft()
+    server.enter_world("save_toss_1", "交付回执测试档")
+
+    corrected = {"done": False}
+    seen_tools: List[List[str]] = []
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        joined = _texts(messages)
+        if "[交付回执]" in joined and not corrected["done"]:
+            corrected["done"] = True
+            match = re.search(r"\[交付回执\]\s*([^。]+)。", joined)
+            assert match is not None
+            receipt_quote = match.group(1)
+            return _resp(
+                "已当面扔出钻石，调用 streamer_memory_correct 结案",
+                calls=[
+                    _call(
+                        "streamer_memory_correct",
+                        {
+                            "target": "约#12",
+                            "verdict": "done",
+                            "summary": "已当面扔还 2 颗钻石",
+                            "evidence_kind": "game_receipt",
+                            "evidence_quote": receipt_quote,
+                        },
+                        "c_mc_correct_1",
+                    )
+                ],
+            )
+        return _resp("收到，继续推进")
+
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        script,
+        registry=registry,
+        bus=bus,
+        live=True,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=0,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+
+    # 包装 generate 以核验传给游戏侧模型的工具定义列表包含 streamer_memory_correct
+    orig_generate = llm.generate
+
+    async def _spy_generate(messages: Any, **kwargs: Any) -> Response:
+        tools = kwargs.get("tools") or []
+        seen_tools.append([str(t.get("name") or "") for t in tools if isinstance(t, dict)])
+        return await orig_generate(messages, **kwargs)
+
+    llm.generate = _spy_generate  # type: ignore[method-assign]
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="交付验证"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+        assert any("streamer_memory_correct" in names for names in seen_tools)
+
+        turns_before = len(llm.seen)
+        # 模拟 Mod 发来带观察编号与括号坐标的真实 items_tossed 事实事件 -> GoalWatch -> MinecraftAgent._on_body_event
+        server.body_event(
+            "items_tossed",
+            "朝 PlayerA（e4）扔出了 2 个 minecraft:diamond（12, 64, -8）",
+            {
+                "items_tossed": {
+                    "to": "PlayerA",
+                    "to_uuid": "uuid-player-a",
+                    "at": {"x": 12, "y": 64, "z": -8, "dimension": "minecraft:overworld"},
+                    "items": [{"id": "minecraft:diamond", "count": 2}],
+                }
+            },
+        )
+        await _wait_until(lambda: corrected["done"] and len(llm.seen) >= turns_before + 2 and not agent.batch_active)
+
+        assert len(invocations) == 1
+        assert invocations[0]["verdict"] == "done"
+        # 游戏侧 [交付回执] 已按同源口径剥除观察编号与括号坐标，模型直接照抄即与落库消息一致
+        assert invocations[0]["evidence_quote"] == "朝 PlayerA 扔出了 2 个 minecraft:diamond"
+        # 调完 streamer_memory_correct 后，紧邻下一步尾部 [当前任务状态] 立即反映本场已了结
+        latest = _texts(llm.seen[-1])
+        assert "[交付回执] 朝 PlayerA 扔出了 2 个 minecraft:diamond。" in latest
+        assert "（e4）" not in latest and "（12, 64, -8）" not in latest
+        assert "closed_this_session" in latest
+        assert "已当面扔还 2 颗钻石" in latest
+
+        # 顺带验证 others_things_touched：stored 剥除括号坐标与落库同源，非 stored（如 took）保留原话不动
+        turns_before_stored = len(llm.seen)
+        server.body_event(
+            "others_things_touched",
+            "往 PlayerA 放的木桶（10, 64, 5）存进了 1 个 minecraft:diamond",
+            {
+                "others_things": {
+                    "action": "stored",
+                    "owner": "PlayerA",
+                    "owner_uuid": "uuid-player-a",
+                    "block": "minecraft:barrel",
+                    "at": {"x": 10, "y": 64, "z": 5},
+                    "items": [{"item": "minecraft:diamond", "count": 1}],
+                }
+            },
+        )
+        await _wait_until(lambda: len(llm.seen) > turns_before_stored and not agent.batch_active)
+        stored_notice = str(llm.seen[-1][-1].get("content") or "")
+        assert "[身体] 往 PlayerA 放的木桶存进了 1 个 minecraft:diamond。" in stored_notice
+        assert "（10, 64, 5）" not in stored_notice
+
+        turns_before_took = len(llm.seen)
+        server.body_event(
+            "others_things_touched",
+            "从 PlayerA 放的箱子（20, 64, 8）拿了 1 个 minecraft:oak_planks",
+            {
+                "others_things": {
+                    "action": "took",
+                    "owner": "PlayerA",
+                    "owner_uuid": "uuid-player-a",
+                    "block": "minecraft:chest",
+                    "at": {"x": 20, "y": 64, "z": 8},
+                    "items": [{"item": "minecraft:oak_planks", "count": 1}],
+                }
+            },
+        )
+        await _wait_until(lambda: len(llm.seen) > turns_before_took and not agent.batch_active)
+        took_notice = str(llm.seen[-1][-1].get("content") or "")
+        assert "[身体] 从 PlayerA 放的箱子（20, 64, 8）拿了 1 个 minecraft:oak_planks。" in took_notice
+    finally:
+        await agent.stop()
+        await bus.cleanup()

@@ -49,6 +49,7 @@ _GOAL_STALLED_KIND = "stalled"
 # 饿急了从别人家箱子拿了吃的也不带目标编号：交过去记一笔，主人回头来问时游戏 Agent 对得上号。
 # 别的玩家冲角色做的肢体动作（蹲起、拍一下、扔东西过来）也不带目标编号：交过去，由游戏 Agent 叫醒模型回一个动作。
 # 装备用坏同样不带目标编号：交过去，由路由表决定注入模型与发主播素材。
+# 朝玩家扔出物品（items_tossed）同样不带目标编号：交过去，由游戏 Agent 给上下文补一条简明交付回执并登记交互对象。
 _BODY_EVENT_KINDS = frozenset(
     {
         "temporary_task_started",
@@ -62,6 +63,7 @@ _BODY_EVENT_KINDS = frozenset(
         "others_things_touched",
         "player_body_language",
         "gear_broken",
+        "items_tossed",
     }
 )
 

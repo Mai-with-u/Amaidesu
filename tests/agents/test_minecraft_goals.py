@@ -205,6 +205,25 @@ async def test_player_body_language_passes_through_to_the_body_callback() -> Non
     assert recorder.changed == [] and server.calls_to("goal") == []
 
 
+async def test_items_tossed_passes_through_to_the_body_callback() -> None:
+    """朝玩家扔出物品事件不挂目标编号：原样交给身体回调，让游戏 Agent 在上下文给出简明交付回执。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    tossed = {
+        "to": "PlayerA",
+        "to_uuid": "uuid-player-a",
+        "items": [{"id": "minecraft:diamond", "count": 3}],
+    }
+    server.body_event("items_tossed", "朝 PlayerA 扔出了 3 个 minecraft:diamond", {"items_tossed": tossed})
+
+    await watch.step()
+
+    assert [event["kind"] for event in recorder.body] == ["items_tossed"]
+    assert recorder.body[0]["items_tossed"]["to_uuid"] == "uuid-player-a"
+    assert recorder.changed == [] and server.calls_to("goal") == []
+
+
 async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
     """事件流换了：逐个查在跟踪的目标，查不到的如实说不在了。"""
     server, recorder = FakeMaicraft(), _Recorder()

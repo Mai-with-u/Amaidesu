@@ -245,10 +245,10 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN,
         CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
         CoreEvents.GAME_BODY_RARE_SIGHTED,
+        CoreEvents.GAME_BODY_ITEMS_TOSSED,
         CoreEvents.GAME_MILESTONE,
     }
-    for kind, event_name in KIND_TO_EVENT.items():
-        assert event_name.rsplit(".", 1)[-1] == kind, "判别字段必须等于事件名末段"
+    assert all(ev.rsplit(".", 1)[-1] == k for k, ev in KIND_TO_EVENT.items()), "判别字段必须等于事件名末段"
 
 
 def test_body_payload_requires_game_and_kind() -> None:
@@ -730,3 +730,85 @@ async def test_suicide_marks_death_intentional_and_unseen_hurt_hides_attacker() 
     assert accident.kind == "died" and accident.intentional is False
     assert unseen_arrow.kind == "attacked" and unseen_arrow.attacker == ""
     assert unseen_arrow.summary == "不知从哪射来箭打中好几下"
+
+
+async def test_items_tossed_forwards_delivery_event_with_save_and_details() -> None:
+    """朝玩家扔出物品：转成 game.body.items_tossed，携带存档信息、对方身份与结构化 details，不虚构对方已拾取。"""
+    assert classify("items_tossed") == "items_tossed"
+    bus = _FakeEventBus()
+    now_tick = 1_795_000_123_000
+    collector, client = await _primed(bus, cursor=5, clock=lambda: now_tick)
+    event = _event(6, "items_tossed", "朝 PlayerA（e4）扔出了 3 个 minecraft:diamond（12, 64, -8）")
+    event["items_tossed"] = {
+        "to": "PlayerA",
+        "to_uuid": "uuid-player-a",
+        "at": {"x": 12, "y": 64, "z": -8, "dimension": "minecraft:overworld"},
+        "items": [{"id": "minecraft:diamond", "count": 3}],
+    }
+    page = _page([event], cursor=6)
+    page["world"] = {"id": "save-a", "name": "联机二周目", "source": "world_id_file"}
+    client.pages.append(page)
+
+    await collector._drain()
+
+    [(name, payload)] = bus.events
+    assert name == CoreEvents.GAME_BODY_ITEMS_TOSSED
+    assert payload.kind == "items_tossed"
+    assert payload.source_event_type == "items_tossed"
+    assert payload.resolved is True
+    assert payload.occurred_at_ms == now_tick
+    assert payload.save_id == "save-a"
+    assert payload.save_name == "联机二周目"
+    assert (payload.player_uuid, payload.player_name) == ("uuid-player-a", "PlayerA")
+    assert payload.summary == "朝 PlayerA 扔出了 3 个 minecraft:diamond"
+    assert "捡起" not in payload.summary and "收下" not in payload.summary
+    assert payload.details == {"items_tossed": event["items_tossed"]}
+
+
+async def test_items_tossed_falls_back_to_structured_fields_when_message_is_blank() -> None:
+    """items_tossed 缺少 message 时由结构化 items_tossed 拼出客观交付句。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5, clock=lambda: 1_795_000_200_000)
+    event = _event(6, "items_tossed", "")
+    event["items_tossed"] = {
+        "to": "PlayerB",
+        "to_uuid": "uuid-player-b",
+        "items": [{"id": "minecraft:iron_ingot", "count": 5}],
+    }
+    client.pages.append(_page([event], cursor=6))
+
+    await collector._drain()
+
+    [(name, payload)] = bus.events
+    assert name == CoreEvents.GAME_BODY_ITEMS_TOSSED
+    assert payload.summary == "朝 PlayerB 扔出了 5 个 minecraft:iron_ingot"
+    assert payload.player_uuid == "uuid-player-b"
+
+
+async def test_others_things_stored_forwards_save_and_action_details() -> None:
+    """往他人容器存物时，others_things_touched 携带 save_id/save_name 与 action='stored' 供存储台账记 item_delivery。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5, clock=lambda: 1_795_000_300_000)
+    detail = {
+        "action": "stored",
+        "owner": "PlayerA",
+        "owner_uuid": "uuid-player-a",
+        "block": "minecraft:barrel",
+        "at": {"x": 10, "y": 64, "z": 5},
+        "items": [{"item": "minecraft:diamond", "count": 2}],
+    }
+    event = _event(6, "others_things_touched", "往 PlayerA 放的木桶（10, 64, 5）存进了 2 个 minecraft:diamond")
+    event["others_things"] = detail
+    page = _page([event], cursor=6)
+    page["world"] = {"id": "save-a", "name": "联机二周目", "source": "world_id_file"}
+    client.pages.append(page)
+
+    await collector._drain()
+
+    [(name, payload)] = bus.events
+    assert name == CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED
+    assert payload.save_id == "save-a"
+    assert payload.save_name == "联机二周目"
+    assert payload.details["action"] == "stored"
+    assert payload.details["others_things"]["owner_uuid"] == "uuid-player-a"
+    assert payload.summary == "往 PlayerA 放的木桶存进了 2 个 minecraft:diamond"

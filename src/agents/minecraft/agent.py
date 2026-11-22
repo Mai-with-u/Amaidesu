@@ -27,6 +27,7 @@ from copy import deepcopy
 from typing import Any, Awaitable, ClassVar, Deque, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from src.agents.minecraft.attention_material import AttentionMaterialPublisher
+from src.agents.minecraft.attention_matrix import items_tossed_line
 from src.agents.minecraft.chat_gate import DEFAULT_BATCH_WINDOW_MS, MinecraftChatGate
 from src.agents.minecraft.chosen_death import is_suicide_ability
 from src.agents.minecraft.context import (
@@ -117,6 +118,7 @@ from src.agents.minecraft.notice_router import (
 )
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, FoodTakenLog, food_taken_of
 from src.agents.minecraft.others_things import OTHERS_THINGS_TOUCHED, OthersThingsLog, others_things_of
+from src.agents.minecraft.others_things import spoken_line as others_things_line
 from src.agents.minecraft.picture import (
     PICTURE_NOT_DESCRIBED,
     PictureBudget,
@@ -126,7 +128,7 @@ from src.agents.minecraft.picture import (
 )
 from src.agents.minecraft.place_marks import NearPlaceTracker, PlaceMark, place_change_of
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
-from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents, spar_interaction
+from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents, player_of, spar_interaction
 from src.agents.minecraft.short_term_memory import SessionShortTermMemory
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.social_rules import SOCIAL_RULES_MSG_KEY, WORLD_SOCIAL_RULES_KEY, WorldSocialRulesCache
@@ -579,6 +581,13 @@ class MinecraftAgent(BaseAgent):
         self._last_self_coords: Optional[Coords] = None
         # 最近一次看周围时身边的玩家名：随游戏情境交给主播，主播发情境给外部服务前遮名用
         self._nearby_players: Tuple[str, ...] = ()
+        # 当前视野及近期公屏/交互过的在线玩家 UUID：供游戏主控态向权威承诺账本按人筛选关联承诺
+        self._nearby_player_uuids: Tuple[str, ...] = ()
+        self._recent_player_uuids: Deque[str] = deque(maxlen=16)
+        # 权威承诺账本的尾部状态缓存：绝不写入 msg[0] 系统提示词前缀，只在尾部 [当前任务状态]/[继续原游戏任务] 动态挂出
+        self._commitment_ledger_cache: Dict[str, Any] = {}
+        self._shown_commitment_ledger: Dict[str, Any] = {}
+        self._commitment_ledger_dirty: bool = False
         # 地点动静（记住、忘掉、走近、离开一个记住的地点）：只发给存储给下播整理认地点，不改怎么做事。
         # 记地点成功是在同步的回执处理里认出来的，先连同当时的存档与时刻排进待发队列，回到异步处再发
         self._near_places = NearPlaceTracker(self._clock)
@@ -1190,6 +1199,9 @@ class MinecraftAgent(BaseAgent):
         self._pending_chat_players.clear()
         self._pending_chat_senders.clear()
         self._pending_place_flash = None
+        self._commitment_ledger_cache.clear()
+        self._shown_commitment_ledger.clear()
+        self._commitment_ledger_dirty = False
         self._release_epoch += 1
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
@@ -1237,6 +1249,9 @@ class MinecraftAgent(BaseAgent):
         self._pending_chat_players.clear()
         self._pending_chat_senders.clear()
         self._pending_place_flash = None
+        self._commitment_ledger_cache.clear()
+        self._shown_commitment_ledger.clear()
+        self._commitment_ledger_dirty = False
         self._wait_progress.resume()
         self._furnace_waits.clear()
         self._set_open_question("")
@@ -1931,6 +1946,9 @@ class MinecraftAgent(BaseAgent):
         messages = self._messages
         close_interrupted_calls(messages)
         if not self._interaction_only and not self._task_finished and self._task_instructions:
+            # 主控态续做前刷新权威承诺账本（仅放尾部任务状态，绝不改写 msg[0] 前缀）
+            if self._in_lead_mode:
+                await self._refresh_commitment_ledger()
             # 后台目标有了结果先恢复原目标、待办与目标状态，再让模型解释这次通知。
             # 这条是任务状态、不算固定层：每次叫醒都插一条，当成固定层会把可折区间切碎（见 STATE_KEY）
             messages.append(
@@ -2042,6 +2060,12 @@ class MinecraftAgent(BaseAgent):
                                 SOCIAL_RULES_MSG_KEY: True,
                             }
                         )
+                # 开局代读已让出事件循环并认出存档：同步重读工具定义（确保主控切换后新放行的
+                # streamer_memory_correct / rundown_control 立即可见），并在主控态把非空权威承诺账本挂进尾部状态
+                tool_defs = self._tool_definitions()
+                if self._in_lead_mode:
+                    await self._refresh_commitment_ledger()
+                    self._append_commitment_ledger_state_if_changed(messages)
             if not self._interaction_only:
                 # 只回应互动的一批不碰委派账：等主播定夺的委派要一直显示在等定夺，不能被一次蹲起改回进行中
                 self._delegations.mark_running()
@@ -2056,6 +2080,12 @@ class MinecraftAgent(BaseAgent):
             self._append_unread_spoken_echoes(messages, step_start_len=step_start_len)
             self._append_eavesdrop_chats(messages, step_start_len=step_start_len)
             self._append_pending_place_flash(messages, step_start_len=step_start_len)
+            # 主控态若本步前发生过承诺更正、交付事实、新交互玩家或认档变化，按需刷新权威承诺账本并仅在变化且非空时挂入尾部状态
+            if self._in_lead_mode and self._commitment_ledger_dirty:
+                await self._refresh_commitment_ledger()
+                self._append_commitment_ledger_state_if_changed(messages)
+            # 每步重算一次按名称排序的工具定义，确保运行中动态放行/收回的跨 Agent 工具即时生效且未变时零破坏
+            tool_defs = self._tool_definitions()
             steps += 1
 
             # 先换上后台写好的折叠、给新消息编号，再看预算；过了折叠线就在后台请模型折叠，这一步照常行动
@@ -2211,6 +2241,9 @@ class MinecraftAgent(BaseAgent):
                 # 记录调用 framework_commentary 前已有的回声快照，仅在本次出声时精准剥离新增的 game_commentary 自产回声
                 pre_commentary_echoes = self._spoken_echo_buffer.snapshot() if is_commentary_call else None
                 observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
+                if call.name == "streamer_memory_correct":
+                    # 刚更新完承诺账本（进展或结案），标记下一推理步前刷新尾部权威承诺状态
+                    self._commitment_ledger_dirty = True
                 if is_commentary_call and observation.get("accepted") is True:
                     commentary_succeeded = True
                     if observation.get("spoken") is True:
@@ -2369,6 +2402,9 @@ class MinecraftAgent(BaseAgent):
         self._fold_job.abandon()
         self._idle_prep.abandon()
         self._shown_context = {}
+        self._commitment_ledger_cache.clear()
+        self._shown_commitment_ledger.clear()
+        self._commitment_ledger_dirty = False
         if not self._in_lead_mode:
             # 委派模式开新任务清空上一单的阶段待办；自主主控开局保留当前存档已有待办，便于承接跨场进度
             self._mc_state.clear_todos_for_new_task()
@@ -2728,8 +2764,10 @@ class MinecraftAgent(BaseAgent):
                 self._last_position = (pos, self._clock())
             return
         if name == OBSERVE and arguments.get("what", "scene") == "scene":
-            # 顺手同步身边玩家名单，供旧版 Mod 未报 sender_distance 时公屏门控降级判定 [公屏·身边]
+            # 顺手同步身边玩家名单，供旧版 Mod 未报 sender_distance 时公屏门控降级判定 [公屏·身边]；
+            # 并提取视野内在线玩家 UUID，供游戏主控态拉取权威承诺账本
             self._nearby_players = nearby_player_names(MaicraftReply(ok=True, data=data))
+            self._sync_nearby_player_uuids(data)
             return
         if name not in (EXECUTE, GOAL):
             return
@@ -2926,13 +2964,7 @@ class MinecraftAgent(BaseAgent):
         """
         kind = str(event.get("kind") or "")
         message = str(event.get("message") or kind)
-        if kind != PLAYER_BODY_LANGUAGE:
-            # 别的玩家的肢体动作不记进随上报带给主播的身体事件：一个人连着蹲能来十几条，会把饿了、死了这些挤掉，
-            # 主播那边也已经由注意流采集器一条条知道了
-            record = {"event_type": kind, "message": message, "cursor": event.get("cursor")}
-            self._batch_body_events.append(record)
-            if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
-                self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
+        notice_message = message
         if kind == TIMER_DUE:
             # 回炉计时与自设计时器响了：划掉到点的计时并记一次进展，叫醒照常走路由表
             self._furnace_waits.timer_due(event)
@@ -2942,7 +2974,36 @@ class MinecraftAgent(BaseAgent):
             self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))
         if kind == OTHERS_THINGS_TOUCHED:
             # 闲着时（如生存临时任务）动了别人放的容器或方块同样入账，后续任务或认账都能查到
-            self._others_things.record(self._creatures.world_key, others_things_of(event, now_ms()))
+            entry = others_things_of(event, now_ms())
+            self._others_things.record(self._creatures.world_key, entry)
+            if entry.owner_uuid:
+                self._note_active_player_uuid(entry.owner_uuid)
+            if entry.action == "stored":
+                self._commitment_ledger_dirty = True
+                # 存物交付通知复用注意流同源口径（剥除括号坐标），确保模型直接摘录即可通过 game_receipt 逐字核验
+                notice_message = others_things_line(entry)
+        if kind == "items_tossed":
+            # 朝玩家确认扔出物品后记录交互对象 UUID，并复用注意流同源剥离口径生成交付回执，
+            # 与 StorageLedger 落库的 game_events(item_delivery).message 逐字一致
+            tossed_summary, tossed_facts = items_tossed_line(event)
+            notice_message = tossed_summary
+            tossed_uuid = str(tossed_facts.get("to_uuid") or "").strip()
+            if not tossed_uuid:
+                tossed_uuid, _ = player_of(event)
+            if tossed_uuid:
+                self._note_active_player_uuid(tossed_uuid)
+            self._commitment_ledger_dirty = True
+        if kind in (PLAYER_BODY_LANGUAGE, "follow_status"):
+            actor_uuid, _ = player_of(event)
+            if actor_uuid:
+                self._note_active_player_uuid(actor_uuid)
+        if kind != PLAYER_BODY_LANGUAGE:
+            # 别的玩家的肢体动作不记进随上报带给主播的身体事件：一个人连着蹲能来十几条，会把饿了、死了这些挤掉，
+            # 主播那边也已经由注意流采集器一条条知道了
+            record = {"event_type": kind, "message": notice_message, "cursor": event.get("cursor")}
+            self._batch_body_events.append(record)
+            if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
+                self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
         # 死的时候手上正跑着寻死目标：是自己选的死（回重生点），通知换成"回家"的说法、不发主播素材
         chosen_death = kind == "character_died" and any(
             is_suicide_ability(ability) for ability in self._goals.tracked_abilities()
@@ -2968,7 +3029,7 @@ class MinecraftAgent(BaseAgent):
         elif route.channel == "inject_if_busy":
             if self._batch_active or self._in_lead_mode or not self._task_finished:
                 self._inject_wakeup_message(
-                    body_notice_content(route, message, history=self._messages, queue=self._message_queue)
+                    body_notice_content(route, notice_message, history=self._messages, queue=self._message_queue)
                 )
             if route.publish_material:
                 # 必须传 Mod 原话：白话速览的分句改写器会整段丢弃排查类分句（实测 30 句输入只剩
@@ -3210,8 +3271,13 @@ class MinecraftAgent(BaseAgent):
         if change.switched and change.before is not None and self._mc_state.dirty:
             await self._save_work_docs_for(change.before.id, change.before.name)
         if change.switched:
-            # 检测到角色切换到另一个存档时，先立即清空旧存档公共规矩缓存，再读取新存档规矩，防止旧世界惯例串进新世界
+            # 检测到角色切换到另一个存档时，先立即清空旧存档公共规矩与承诺账本缓存，防止旧世界惯例与欠账串进新世界
             self._social_rules.clear()
+            self._commitment_ledger_cache.clear()
+            self._shown_commitment_ledger.clear()
+            self._nearby_player_uuids = ()
+            self._recent_player_uuids.clear()
+        self._commitment_ledger_dirty = True
         self._mc_state.switch_world(change.after.id)
         await self._ensure_world_work_docs_loaded(change.after.id, change.after.name)
         await self._refresh_world_social_rules(change.after.id)
@@ -3439,6 +3505,9 @@ class MinecraftAgent(BaseAgent):
             context["recent_human_lines"] = recent_human
         # 当前世界已观测到的模组能力、最近一次连锁挖矿统计与取材留坑记录（未报过的键不出现）
         context.update(self._mining_facts.view(self._mining_world_key()))
+        # 主控态权威承诺账本（仅在 open 或 closed_this_session 非空时挂出，两者都空省略该键，零多余 token）
+        if self._in_lead_mode and self._commitment_ledger_cache:
+            context["commitment_ledger"] = deepcopy(self._commitment_ledger_cache)
         return context
 
     def _continue_task_context(self) -> Dict[str, Any]:
@@ -3446,6 +3515,8 @@ class MinecraftAgent(BaseAgent):
         current = self._current_task_context()
         shown = self._shown_context
         self._shown_context = deepcopy(current)
+        if self._in_lead_mode:
+            self._shown_commitment_ledger = deepcopy(self._commitment_ledger_cache)
         if not shown:
             return current
         delta = {key: value for key, value in current.items() if shown.get(key) != value}
@@ -3458,6 +3529,117 @@ class MinecraftAgent(BaseAgent):
             delta["recent_human_lines"] = ""
         delta["unchanged_since_earlier_task_state"] = sorted(key for key in current if key not in delta)
         return delta
+
+    @staticmethod
+    def _extract_scene_player_uuids(data: Mapping[str, Any]) -> Tuple[str, ...]:
+        """从 ``observe(scene)`` 回复中提取当前视野及在线玩家 UUID（去重保序）。"""
+        uuids: List[str] = []
+        for entity in data.get("entities") or []:
+            if not isinstance(entity, Mapping) or entity.get("type") != "minecraft:player":
+                continue
+            uid = str(entity.get("uuid") or entity.get("player_uuid") or "").strip()
+            if uid and uid not in uuids:
+                uuids.append(uid)
+        raw_remote = data.get("online_players_not_nearby")
+        if isinstance(raw_remote, list):
+            for item in raw_remote:
+                if not isinstance(item, Mapping):
+                    continue
+                uid = str(item.get("uuid") or item.get("player_uuid") or "").strip()
+                if uid and uid not in uuids:
+                    uuids.append(uid)
+        return tuple(uuids)
+
+    def _sync_nearby_player_uuids(self, data: Mapping[str, Any]) -> None:
+        """同步视野在线玩家 UUID；视野新出现未见过的玩家时标记下一步刷新尾部承诺账本。"""
+        fresh = self._extract_scene_player_uuids(data)
+        prev = set(self._nearby_player_uuids)
+        self._nearby_player_uuids = fresh
+        if any(uid not in prev for uid in fresh):
+            self._commitment_ledger_dirty = True
+
+    def _note_active_player_uuid(self, player_uuid: str) -> None:
+        """记录本场近期公屏或肢体/交付互动过的在线玩家 UUID（有界去重，新见时标记刷新账本）。"""
+        uid = (player_uuid or "").strip()
+        if not uid:
+            return
+        existed = uid in self._recent_player_uuids
+        if existed:
+            self._recent_player_uuids.remove(uid)
+        self._recent_player_uuids.append(uid)
+        if not existed:
+            self._commitment_ledger_dirty = True
+
+    def _collect_commitment_player_uuids(self) -> Tuple[str, ...]:
+        """汇总当前视野与近期交互过的在线玩家 UUID（去重保序），供权威承诺账本按人过滤。"""
+        ordered: List[str] = []
+        for uid in (*self._nearby_player_uuids, *reversed(self._recent_player_uuids)):
+            clean = uid.strip()
+            if clean and clean not in ordered:
+                ordered.append(clean)
+        return tuple(ordered)
+
+    @staticmethod
+    def _normalize_commitment_ledger(raw: Any) -> Dict[str, Any]:
+        """规范化权威承诺账本快照：仅保留非空的 ``open`` / ``closed_this_session``，两者都空返回空字典。"""
+        if not isinstance(raw, Mapping):
+            return {}
+        open_items = [dict(item) for item in (raw.get("open") or []) if isinstance(item, Mapping)]
+        closed_items = [dict(item) for item in (raw.get("closed_this_session") or []) if isinstance(item, Mapping)]
+        if not open_items and not closed_items:
+            return {}
+        ledger: Dict[str, Any] = {}
+        if open_items:
+            ledger["open"] = open_items
+        if closed_items:
+            ledger["closed_this_session"] = closed_items
+        return ledger
+
+    async def _refresh_commitment_ledger(self) -> Dict[str, Any]:
+        """主控活跃态经协调器拉取当前存档与在场/近期交互玩家的权威承诺账本（短超时保护，异常降级）。"""
+        self._commitment_ledger_dirty = False
+        if not (self._in_lead_mode and self._live_active) or self._lead_coordinator is None:
+            self._commitment_ledger_cache.clear()
+            return {}
+        fetcher = getattr(self._lead_coordinator, "fetch_commitment_ledger", None)
+        if not callable(fetcher):
+            self._commitment_ledger_cache.clear()
+            return {}
+        save_id = self._world.save_fields()[0]
+        player_uuids = self._collect_commitment_player_uuids()
+        timeout_s = max(0.25, self._passive_cue_timeout_ms / 1000.0)
+        try:
+            raw = await asyncio.wait_for(
+                fetcher(game=_GAME, save_id=save_id, player_uuids=player_uuids),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            self._logger.debug(f"拉取权威承诺账本超时（{int(timeout_s * 1000)}ms），本次沿用空/原快照")
+            return deepcopy(self._commitment_ledger_cache)
+        except Exception as exc:  # noqa: BLE001 - 拉取失败降级为空/不阻塞游戏行动步
+            self._logger.warning(f"拉取权威承诺账本失败（本次跳过）: {exc}", exc=True)
+            return deepcopy(self._commitment_ledger_cache)
+        normalized = self._normalize_commitment_ledger(raw)
+        self._commitment_ledger_cache = normalized
+        return deepcopy(normalized)
+
+    def _append_commitment_ledger_state_if_changed(self, messages: List[Dict[str, Any]]) -> None:
+        """权威承诺账本非空且较上次展示发生变化时，在消息尾部追加 ``[当前任务状态]``（绝不改写 msg[0] 前缀）。"""
+        if not self._in_lead_mode or not self._commitment_ledger_cache:
+            return
+        if self._commitment_ledger_cache == self._shown_commitment_ledger:
+            return
+        ledger_copy = deepcopy(self._commitment_ledger_cache)
+        messages.append(
+            {
+                "role": "user",
+                "content": "[当前任务状态]\n" + json_text({"commitment_ledger": ledger_copy}),
+                STATE_KEY: True,
+            }
+        )
+        self._shown_commitment_ledger = deepcopy(ledger_copy)
+        if self._shown_context:
+            self._shown_context["commitment_ledger"] = deepcopy(ledger_copy)
 
     def _schedule_idle_compaction(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
         """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。
@@ -3788,6 +3970,7 @@ class MinecraftAgent(BaseAgent):
         if not self._maicraft_ready():
             self._last_position = None
             self._nearby_players = ()
+            self._nearby_player_uuids = ()
             view["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
         else:
             body = await self._call_maicraft(OBSERVE, {"what": "self"})
@@ -3808,6 +3991,8 @@ class MinecraftAgent(BaseAgent):
             # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
             scene = await self._read_creatures(body)
             self._nearby_players = nearby_player_names(scene)
+            if scene.ok and isinstance(scene.data, Mapping):
+                self._sync_nearby_player_uuids(scene.data)
             view.update(glance_scene(scene, self._creatures.nicknames_by_scene_id()))
             creatures = self._creatures.status_view()
             if creatures:
@@ -4027,6 +4212,11 @@ class MinecraftAgent(BaseAgent):
         self._pending_chat_senders.clear()
         self._last_chat_reply_candidates.clear()
         self._pending_place_flash = None
+        self._nearby_player_uuids = ()
+        self._recent_player_uuids.clear()
+        self._commitment_ledger_cache.clear()
+        self._shown_commitment_ledger.clear()
+        self._commitment_ledger_dirty = False
 
     def _note_chat_partner_from_execute(self, arguments: Dict[str, Any]) -> None:
         """角色发游戏内 chat 时把目标玩家或刚回应的公屏对话人记入近 2 分钟互动同伴窗。"""
@@ -4267,6 +4457,9 @@ class MinecraftAgent(BaseAgent):
                 if not content:
                     return
                 sender = (payload.sender or "").strip() or "其他玩家"
+                if payload.sender_id and payload.sender_online:
+                    # 记下本场公屏交互过的在线玩家 UUID，供尾部权威承诺账本精准按人拉取
+                    self._note_active_player_uuid(payload.sender_id)
                 # 统一使用 Agent 注入的单调时钟域入库，避免 payload 的 wall-clock 毫秒与单调时钟错位导致时间衰减失效
                 self._short_term_memory.record_player_chat(
                     sender,

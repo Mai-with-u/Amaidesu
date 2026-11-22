@@ -25,6 +25,7 @@ from src.agents.minecraft.attention_matrix import (
     KIND_TO_EVENT,
     RESOLVED_KINDS,
     classify,
+    items_tossed_line,
     rare_sighting_line,
     summarize,
     without_coordinates,
@@ -88,6 +89,8 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             return await self._forward_body_language(event)
         if source_type == "rare_sighting":
             return await self._forward_rare_sighting(event)
+        if source_type == "items_tossed":
+            return await self._forward_items_tossed(event)
         kind = classify(source_type)
         if kind is None:
             return False
@@ -165,20 +168,60 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         return True
 
     async def _forward_others_things(self, event: Dict[str, Any]) -> bool:
-        """动了别人放的容器或方块：把拿/存/拆/改的事实与俏皮认账口径转给主播，并挂放置者身份。"""
+        """动了别人放的容器或方块：把拿/存/拆/改的事实与俏皮认账口径转给主播，并挂放置者身份与结构化明细。"""
         entry = others_things_of(event, self._clock())
         owner_name = "" if entry.owner == "一位不在线的玩家" else entry.owner
+        world = self._page_world
+        # 往他人容器存物时，存储台账据此落库 game_events(item_delivery)，供场内承诺核验与下播校对
+        raw_detail = event.get("others_things")
+        details: Dict[str, Any] = {"action": entry.action}
+        if isinstance(raw_detail, dict):
+            details["others_things"] = dict(raw_detail)
         payload = BodyEventPayload(
             game="minecraft",
             kind="others_things_touched",
             summary=others_things_line(entry),
             source_event_type=OTHERS_THINGS_TOUCHED,
             resolved=True,
+            occurred_at_ms=entry.at_ms,
             player_uuid=entry.owner_uuid,
             player_name=owner_name,
+            save_id=world.id if world is not None else "",
+            save_name=world.name if world is not None else "",
+            details=details,
         )
         await self.emit_event(KIND_TO_EVENT["others_things_touched"], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{OTHERS_THINGS_TOUCHED}）")
+        return True
+
+    async def _forward_items_tossed(self, event: Dict[str, Any]) -> bool:
+        """朝玩家确认扔出物品后，转发 ``game.body.items_tossed`` 供存储台账记录物品交付凭证。"""
+        summary, facts = items_tossed_line(event)
+        fallback_uuid, fallback_name = player_of(event)
+        player_uuid = str(facts.get("to_uuid") or "").strip() or fallback_uuid
+        player_name = str(facts.get("to") or "").strip() or fallback_name
+        raw_occurred = event.get("occurred_at_ms")
+        occurred_at_ms = (
+            raw_occurred
+            if isinstance(raw_occurred, int) and not isinstance(raw_occurred, bool) and raw_occurred > 0
+            else self._clock()
+        )
+        world = self._page_world
+        payload = BodyEventPayload(
+            game="minecraft",
+            kind="items_tossed",
+            summary=summary,
+            source_event_type="items_tossed",
+            resolved=True,
+            occurred_at_ms=occurred_at_ms,
+            player_uuid=player_uuid,
+            player_name=player_name,
+            save_id=world.id if world is not None else "",
+            save_name=world.name if world is not None else "",
+            details={"items_tossed": facts},
+        )
+        await self.emit_event(KIND_TO_EVENT["items_tossed"], payload, source=self.name)
+        self.logger.info(f"[身体事件] {payload.summary}（items_tossed）")
         return True
 
     async def _forward_body_language(self, event: Dict[str, Any]) -> bool:

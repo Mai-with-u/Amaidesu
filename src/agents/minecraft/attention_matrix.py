@@ -59,13 +59,14 @@ KIND_TO_EVENT: Dict[str, str] = {
     "others_food_taken": CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN,
     "others_things_touched": CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
     "rare_sighted": CoreEvents.GAME_BODY_RARE_SIGHTED,
+    "items_tossed": CoreEvents.GAME_BODY_ITEMS_TOSSED,
     # 步进完成不进身体事件通道，转 game.milestone（主播可讲的进展）
     "milestone": CoreEvents.GAME_MILESTONE,
 }
 
 #: 已经是"结局面"的种类（主播据此把措辞从"正在"改成"刚才"）；肢体动作是 Mod 等一段做完
-#: （1.5 秒没新动作）才发的，到主播这里已经是"刚才"
-RESOLVED_KINDS = frozenset({"attack_ended", "respawned", "reflex_finished", "player_body_language"})
+#: （1.5 秒没新动作）才发的，到主播这里已经是"刚才"；朝玩家扔出物品同样在确认扔出后才发
+RESOLVED_KINDS = frozenset({"attack_ended", "respawned", "reflex_finished", "player_body_language", "items_tossed"})
 
 #: 事件种类 → 叙事种类。生存需求的临时任务就是"身体先停下手上的活处理急事"，对应本能接管。
 _SOURCE_KINDS: Dict[str, str] = {
@@ -90,6 +91,7 @@ _SOURCE_KINDS: Dict[str, str] = {
     "follow_status": "follow_status",
     "sky_changed": "sky_changed",
     "rare_sighting": "rare_sighted",
+    "items_tossed": "items_tossed",
 }
 
 #: 目标运行的处境变化与死亡恢复决策的执行结果：游戏 Agent 的任务通道，不进叙事通道
@@ -422,12 +424,54 @@ def rare_sighting_line(event: Dict[str, Any]) -> Tuple[str, str]:
     return line, category or "rare"
 
 
+_ID_AFTER_NAME = re.compile(r"(?<=[A-Za-z0-9_])\s*[（(][a-z]\d+[）)](?=[^\s，；：。、,;:])")
+
+
+def items_tossed_line(event: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """把上游 ``items_tossed`` 事件转成客观交付事实句与结构化明细 ``(summary, facts)``。
+
+    角色用 ``body_language(operation="toss")`` 朝某玩家确认扔出物品后，Mod 发出该事实事件：
+    剥除括号坐标与观察编号，保留对方名字、数量与物品标识，只陈述“朝谁扔出了什么几件”，
+    不虚构对方已拾取或已收下，供存储台账落库 ``item_delivery`` 与场内承诺核验。
+    """
+    raw_facts = event.get("items_tossed")
+    facts: Dict[str, Any] = {}
+    if isinstance(raw_facts, dict):
+        for key, value in raw_facts.items():
+            if key == "items" and isinstance(value, list):
+                facts[key] = [dict(item) for item in value if isinstance(item, dict)]
+            elif key == "at" and isinstance(value, dict):
+                facts[key] = dict(value)
+            else:
+                facts[key] = value
+
+    raw_message = str(event.get("message") or "")
+    stripped_ids = _OBSERVATION_IDS.sub("", _ID_AFTER_NAME.sub(" ", raw_message))
+    cleaned = _PARENTHESIZED_COORDINATES.sub("", stripped_ids).strip().rstrip("。")
+    if cleaned:
+        return cleaned, facts
+
+    target = str(facts.get("to") or "").strip() or "玩家"
+    raw_items = facts.get("items") if isinstance(facts.get("items"), list) else []
+    parts: List[str] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or item.get("item") or "").strip() or "物品"
+        count_raw = item.get("count")
+        count = count_raw if isinstance(count_raw, int) and not isinstance(count_raw, bool) and count_raw > 0 else 1
+        parts.append(f"{count} 个 {item_id}")
+    things = "、".join(parts) if parts else "物品"
+    return f"朝 {target} 扔出了 {things}", facts
+
+
 __all__ = [
     "KIND_TO_EVENT",
     "RESOLVED_KINDS",
     "biome_name",
     "classify",
     "item_name",
+    "items_tossed_line",
     "plain_detail",
     "rare_sighting_line",
     "summarize",

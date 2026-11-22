@@ -64,6 +64,10 @@ _BODY_NOTICE_TEMPLATES = {
         "[身体] {message}。刚才动了别人放的容器或方块，已记进任务事实、主播那边也知道了。"
         "接下来能用自家或无主材料的优先用自家的，非必要不再多动别人的；交付时顺带如实提一句。手上的活照常接着做。"
     ),
+    "items_tossed": (
+        "[交付回执] {message}。已记录为本场物品交付事实（仅表示已确认朝对方扔出，不代表对方已拾取）；"
+        "若这次交付对应承诺账本里的约定，可凭此回执调用 streamer_memory_correct 更新进展或了结。"
+    ),
 }
 
 # 跟随中的处境变化：跟随还在进行，角色自己会等、会找，模型据此决定要不要换许可重下、取消或跟主播说一声。
@@ -175,6 +179,12 @@ _BODY_EVENT_ROUTES: Dict[str, BodyEventRoute] = {
         kind=OTHERS_THINGS_TOUCHED,
         channel="inject_if_busy",
         template=_BODY_NOTICE_TEMPLATES[OTHERS_THINGS_TOUCHED],
+    ),
+    # 朝玩家确认扔出物品：任务或主控活跃态给游戏侧一条简明交付回执；存储落库由注意流采集器负责
+    "items_tossed": BodyEventRoute(
+        kind="items_tossed",
+        channel="inject_if_busy",
+        template=_BODY_NOTICE_TEMPLATES["items_tossed"],
     ),
     # 急事开始：任务进行中转告主播，开头点明是做事时碰上的
     "temporary_task_started": BodyEventRoute(
