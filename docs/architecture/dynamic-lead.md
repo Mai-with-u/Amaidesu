@@ -1,8 +1,18 @@
 # 动态主从
 
-> 主播 Agent（`StreamerAgent`）与自主领航型游戏 Agent 之间的主控权动态移交机制。系统在运行期只有两个主控态——**主播主控**与**游戏自主主控**，同一时刻至多一个主控方；切换由框架单例 `LeadCoordinator` 串行执行，双方协作只走五束单向契约，任何一束都不构成回流闭环。
+> 主播 Agent（`StreamerAgent`）与自主领航型游戏 Agent 之间的主控权动态移交机制。系统在运行期只有两个主控态——**主播主控**与**游戏自主主控**，同一时刻至多一个主控方。
 >
-> **怎么读**：想搞清两态各管什么，看[两态分工](#两态分工)；想改什么时候交权、什么时候收权，看[主控权怎么切换](#主控权怎么切换)；想改交接时给游戏侧看什么，看[交权简报与收尾摘要](#交权简报与收尾摘要)；想改跨 Agent 的某条通路，看[五束单向契约](#五束单向契约)；想改游戏主控期主播还能动哪些工具，看[游戏主控态的工具面切换](#游戏主控态的工具面切换)；想改出声抢占与急停，看[四档发声优先级与两级语音打断](#四档发声优先级与两级语音打断)；想回退这套机制，看[配置与回退](#配置与回退)。取舍背景见文末[相关决策](#相关决策)。
+> 切换由框架单例 `LeadCoordinator` 串行执行，双方协作只走五束单向契约，任何一束都不构成回流闭环。
+>
+> **怎么读**：
+>
+> - 想搞清两态各管什么，看[两态分工](#两态分工)
+> - 想改什么时候交权、什么时候收权，看[主控权怎么切换](#主控权怎么切换)
+> - 想改交接时给游戏侧看什么，看[交权简报与收尾摘要](#交权简报与收尾摘要)
+> - 想改跨 Agent 的某条通路，看[五束单向契约](#五束单向契约)
+> - 想改游戏主控期主播还能动哪些工具，看[游戏主控态的工具面切换](#游戏主控态的工具面切换)
+> - 想改出声抢占与急停，看[四档发声优先级与两级语音打断](#四档发声优先级与两级语音打断)
+> - 想回退这套机制，看[配置与回退](#配置与回退)。取舍背景见文末[相关决策](#相关决策)
 
 ## 两态分工
 
@@ -15,7 +25,7 @@
 | 主播做什么 | 全权主导话题、弹幕互动与口播；按委派模式调度游戏 | 退居轻从侧：独享直播间输入并口播回复观众、润色游戏发来的实况解说、低频冷场兜底 |
 | 游戏做什么 | 待命，或作为委派执行者按单干活 | 主导游戏内目标规划、执行与游戏公屏交流；环节到点自主推进流程单 |
 | 直播间输入 | 一直归主播（任何主控态下直播间采集流都只接主播 Agent） | 主播承接，游戏侧不读直播间弹幕 |
-| 游戏输入 | 经委派与递话通道进主播决策 | 公屏与身体事件直接驱动游戏 Agent，不进主播规划器 |
+| 游戏输入 | 经委派与递话通道进主播决策 | 游戏公屏与身体事件直接驱动游戏 Agent，不进主播规划器 |
 
 两态都不改变的骨架事实（对齐[架构红线](../../AGENTS.md)）：
 
@@ -27,9 +37,19 @@
 游戏 Agent 通过一个类属性加一个方法向框架声明自身支持自主领航（`src/modules/agents/base.py`）：
 
 - `supports_autonomous_lead: ClassVar[bool]`——声明位，默认 `False`；未覆写协议成员的既有 Agent 因此天然不支持，行为完全不变。
-- `can_take_lead()`——运行态就绪判定，由 `LeadCoordinator` 在每次切换前现查。`MinecraftAgent` 的实现（`src/agents/minecraft/agent.py`）要求三个条件同时成立：本场已开播、MCP 已连接且游戏工具可用、LLM 可用且未因连续失败进入冷却。
+- `can_take_lead()`——运行态就绪判定，由 `LeadCoordinator` 在每次切换前现查。`MinecraftAgent` 的实现（`src/agents/minecraft/agent.py`）要求三个条件同时成立：
+  - 本场已开播
+  - MCP 已连接且游戏工具可用
+  - LLM 可用且未因连续失败进入冷却
 
-另有配套协议成员：`enter_lead(context)`（接管主控）、`yield_lead(reason)`（交回主控并回报摘要）、`receive_suggestion(...)`（收非强杀建议）、`receive_spoken_echo(...)`（收口播回声）、`receive_rundown_update(...)` / `receive_rundown_nudge(...)` / `receive_silence_nudge(...)`（收流程单与静默提醒）、`query_short_term_memory(...)`（本场短期记忆查询）。
+另有配套协议成员：
+
+- `enter_lead(context)`（接管主控）
+- `yield_lead(reason)`（交回主控并回报摘要）
+- `receive_suggestion(...)`（收非强杀建议）
+- `receive_spoken_echo(...)`（收口播回声）
+- `receive_rundown_update(...)` / `receive_rundown_nudge(...)` / `receive_silence_nudge(...)`（收流程单与静默提醒）
+- `query_short_term_memory(...)`（本场短期记忆查询）
 
 ## 主控权怎么切换
 
@@ -50,7 +70,9 @@
 | `notify_agent_unavailable(agent_name, reason)` | 游戏断连/故障/心跳静默不再就绪 | 仅当该游戏确为主控方时收权；只做运行态安全收权，不改动人工覆盖标记 |
 | `set_override(target, reason)` | Dashboard 人工切换 | `auto` 解除覆盖不强制打断；`streamer` 锁主播并在需要时立即收权；具体游戏名校验就绪后构建简报交权并锁定覆盖，目标拒绝时回滚覆盖标记并抛错 |
 
-换主控游戏时（A 主控 → 交 B）：先让 A `yield_lead` 有序收尾，内存态退回主播，再让 B `enter_lead`；B 拒绝接管时发一条回退方向的 `agent.lead.changed`（reason 形如 `fallback_after_refuse:<目标>`），保证观测事件与内存态一致。
+换主控游戏时（A 主控 → 交 B）：先让 A `yield_lead` 有序收尾，内存态退回主播，再让 B `enter_lead`。
+
+B 拒绝接管时发一条回退方向的 `agent.lead.changed`（reason 形如 `fallback_after_refuse:<目标>`），保证观测事件与内存态一致。
 
 ### 交权的门禁（主播侧评估）
 
@@ -102,7 +124,11 @@ sequenceDiagram
 
 ### 切换事件与监听者
 
-`agent.lead.changed`（`CoreEvents.AGENT_LEAD_CHANGED`，payload `AgentLeadChangedPayload`，定义在 `src/modules/events/payloads/agents.py`）是主控态切换的唯一观测事件，携带：切换前后主控名、`mode`、`reason`、当前人工覆盖、交权方向的 `handover_brief`（`LeadHandoverBrief`）或收权方向的 `handover_summary` 文本。场次归属由事件总线的场次盖章拦截器注入，控制台复盘与只读观察者都消费它。
+`agent.lead.changed`（`CoreEvents.AGENT_LEAD_CHANGED`，payload `AgentLeadChangedPayload`，定义在 `src/modules/events/payloads/agents.py`）是主控态切换的唯一观测事件。
+
+携带：切换前后主控名、`mode`、`reason`、当前人工覆盖、交权方向的 `handover_brief`（`LeadHandoverBrief`）或收权方向的 `handover_summary` 文本。
+
+场次归属由事件总线的场次盖章拦截器注入，控制台复盘与只读观察者都消费它。
 
 主播侧监听器 `_on_lead_changed`（`streamer_agent.py`）做的事：
 
@@ -113,7 +139,9 @@ sequenceDiagram
 
 ## 交权简报与收尾摘要
 
-**交权简报**（`LeadHandoverContext`，`src/modules/agents/lead.py`）是交权瞬间主播侧一次性生成的只读现场记忆摘要，随 `enter_lead` 传给游戏侧。构建在主播侧 `_build_lead_handover_context`（`streamer_agent.py`）：
+**交权简报**（`LeadHandoverContext`，`src/modules/agents/lead.py`）是交权瞬间主播侧一次性生成的只读现场记忆摘要，随 `enter_lead` 传给游戏侧。
+
+构建在主播侧 `_build_lead_handover_context`（`streamer_agent.py`）：
 
 | 字段 | 来源 |
 |---|---|
@@ -125,7 +153,9 @@ sequenceDiagram
 
 构建器经 `bind_handover_builder` 绑定到协调器；人工覆盖切换与自动评估两条路都走它。构建失败或无构建器时回落到仅含 `reason` 的默认简报，不阻断切换。
 
-游戏侧消费：`MinecraftAgent.enter_lead` 把简报格式化成 `[主控交接简报]` user 消息（`src/agents/minecraft/lead_mode.py` 的 `format_lead_handover_brief`）推入唤醒队列的固定层，作为自主开局的第一份材料。流程单在游戏主控期切段时，主播侧经 `publish_rundown_update` 把新环节同步过去，游戏侧原地刷新固定层简报并追加一条 `[流程单切换]` 通知，长场次不沿用开场旧环节描述。
+游戏侧消费：`MinecraftAgent.enter_lead` 把简报格式化成 `[主控交接简报]` user 消息（`src/agents/minecraft/lead_mode.py` 的 `format_lead_handover_brief`）推入唤醒队列的固定层，作为自主开局的第一份材料。
+
+流程单在游戏主控期切段时，主播侧经 `publish_rundown_update` 把新环节同步过去，游戏侧原地刷新固定层简报并追加一条 `[流程单切换]` 通知，长场次不沿用开场旧环节描述。
 
 **收尾摘要**：收权时 `yield_lead` 在取消在跑目标之前提取当前进度与未完事项（`MinecraftAgent.yield_lead` → `_summarize_current_progress`），随返回值交给协调器，再经 `agent.lead.changed` 的 `handover_summary` 与监听器回调两条路送到主播侧入账。
 
@@ -157,22 +187,37 @@ flowchart LR
 
 - **谁发起**：当前主控的游戏 Agent，经框架工具 `framework_commentary(summary, mood, urgency, about_player, correction)` 提交 1–2 句客观现场要点（不替主播写台词）。
 - **通道**：工具执行体在 `AgentControlProvider._invoke_commentary`（`src/modules/agents/control.py`）→ `LeadCoordinator.submit_commentary` → 主播侧绑定的处理器 `_handle_game_commentary`（`streamer_agent.py`）。
-- **门禁**：只有此刻的主控者能提交；非主控调用返回 `not_in_lead` 回执（工具侧转为业务失败，附 human-readable 说明），不抛异常。工具仅对自主领航候选游戏 Agent 可见、绝不对主播暴露（`_commentary_spec` 的 `visible_to`），且仅当名册中存在候选时才注册。
-- **主播侧处理**：串行锁保护；要点先记入游戏近况；普通档按最小出声间隔防抖，间隔内的要点进缓冲合并到下次一起说，`urgency="high"` 或纠偏（`correction=True`）穿透防抖立即播报；随后直接构造轻量决策计划调回复器润色（**完全不走规划器**，这是防环的核心：游戏侧出声请求不会反向拉起主播的重决策循环），过预算与敏感词把关后进统一发言管线，优先级按 urgency 取 P1 / P0。
-- **失败表现**：回复器异常、空输出、被词表过滤等每条路径都返回结构化回执（`accepted` / `spoken` / `reason`）；处理器抛异常被协调器隔离成 `handler_error` 回执。每条退出路径（成功与每种失败）都发观测事件 `agent.lead.commentary`，直播控制台解说卡消费。
+- **门禁**：
+  - 只有此刻的主控者能提交；非主控调用返回 `not_in_lead` 回执（工具侧转为业务失败，附 human-readable 说明），不抛异常。
+  - 工具仅对自主领航候选游戏 Agent 可见、绝不对主播暴露（`_commentary_spec` 的 `visible_to`），且仅当名册中存在候选时才注册。
+- **主播侧处理**：
+  - 串行锁保护；要点先记入游戏近况。
+  - 普通档按最小出声间隔防抖，间隔内的要点进缓冲合并到下次一起说，`urgency="high"` 或纠偏（`correction=True`）穿透防抖立即播报。
+  - 随后直接构造轻量决策计划调回复器润色（**完全不走规划器**，这是防环的核心：游戏侧出声请求不会反向拉起主播的重决策循环）。
+  - 过预算与敏感词把关后进统一发言管线，优先级按 urgency 取 P1 / P0。
+- **失败表现**：
+  - 回复器异常、空输出、被词表过滤等每条路径都返回结构化回执（`accepted` / `spoken` / `reason`）；处理器抛异常被协调器隔离成 `handler_error` 回执。
+  - 每条退出路径（成功与每种失败）都发观测事件 `agent.lead.commentary`，直播控制台解说卡消费。
 
 ### 束 2：主播发声 → 游戏回声（`receive_spoken_echo`，零唤醒）
 
 - **谁发起**：主播的发声出口。`SpeechDispatcher` 挂了一个发声监听，每真正播出一句面向观众的话就经 `LeadCoordinator.publish_spoken_echo` 转发。
 - **通道**：同步方法直转，只在当前处于游戏主控态时投递给主控游戏 Agent。
-- **防环**：游戏侧 `receive_spoken_echo`（`src/agents/minecraft/agent.py`）是纯同步写入——文本进一个有界滚动缓冲 `SpokenEchoBuffer`（`src/agents/minecraft/lead_mode.py`：去重、超长截断、留最近几句），**绝不置位唤醒事件**；缓冲内容在游戏侧下一次正常推理步被拼成 `[直播间刚说过]` 只读提示顺带参考，用于解说避重复与纠偏比对。转发侧异常只记日志，绝不反噬发声主链。
+- **防环**：
+  - 游戏侧 `receive_spoken_echo`（`src/agents/minecraft/agent.py`）是纯同步写入——文本进一个有界滚动缓冲 `SpokenEchoBuffer`（`src/agents/minecraft/lead_mode.py`：去重、超长截断、留最近几句），**绝不置位唤醒事件**。
+  - 缓冲内容在游戏侧下一次正常推理步被拼成 `[直播间刚说过]` 只读提示顺带参考，用于解说避重复与纠偏比对。
+  - 转发侧异常只记日志，绝不反噬发声主链。
 
 ### 束 3：主播 → 游戏非强杀建议（`framework_suggest`）
 
 - **谁发起**：主播规划器（观众点菜、提醒）或运营者（Dashboard 建议通道 `POST /api/v1/agents/lead/suggest`）。
 - **通道**：工具执行体 `_invoke_suggest` → `LeadCoordinator.send_suggestion` → 主控游戏 `receive_suggestion`。
-- **语义**：不创建委派账本、不调结单、不取消游戏在跑目标——只是把建议（可附来源观众原话，经宿主附件透传）送达游戏侧，由它自主决定立即执行、排进待办或搁置。游戏侧包装成 `[直播间建议]` 通知入队唤醒，且仅在主控态或有活跃任务时受理（`MinecraftAgent.receive_suggestion`）。
-- **门禁与失败**：当前非游戏主控态 → `not_in_game_lead`（提示改用常规委派）；指定目标非主控方 → `target_not_leading`；游戏侧拒收 → `refused`。每条路径发观测事件 `agent.lead.suggestion`，控制台建议卡消费。
+- **语义**：
+  - 不创建委派账本、不调结单、不取消游戏在跑目标——只是把建议（可附来源观众原话，经宿主附件透传）送达游戏侧，由它自主决定立即执行、排进待办或搁置。
+  - 游戏侧包装成 `[直播间建议]` 通知入队唤醒，且仅在主控态或有活跃任务时受理（`MinecraftAgent.receive_suggestion`）。
+- **门禁与失败**：
+  - 当前非游戏主控态 → `not_in_game_lead`（提示改用常规委派）；指定目标非主控方 → `target_not_leading`；游戏侧拒收 → `refused`。
+  - 每条路径发观测事件 `agent.lead.suggestion`，控制台建议卡消费。
 
 ### 束 4：交权记忆摘要（`bind_handover_builder`）
 
@@ -185,7 +230,11 @@ flowchart LR
 - **返回**：按当前存档与在场玩家归一化成 `open`（未兑现承诺，含目标与进度）与 `closed_this_session`（本场已兑现）两组紧凑条目；两者皆空或回调异常一律返回空字典，不让空结构白占游戏推理上下文。
 - **防环**：只读拉取、异常降级为空、不携带任何会触发主播决策的回调。
 
-三束之外的补充旁路（同一注册机制，不属五束）：跨场被动记忆线索 `fetch_passive_cues`（游戏公屏合批或到达地标时拉取，游戏侧呈现为 `[脑中闪过]` 只读线索）、本场短期记忆聚合 `query_active_short_term_memory`（主播的回忆工具按它聚合主控与各候选游戏的本场记忆，私聊条目按隐私规则过滤）、流程单超时提醒 `publish_rundown_nudge`（按环节节流推送）与静默暖场提醒 `publish_silence_nudge`。
+三束之外的补充旁路（同一注册机制，不属五束）：
+
+- 跨场被动记忆线索 `fetch_passive_cues`：游戏公屏合批或到达地标时拉取，游戏侧呈现为 `[脑中闪过]` 只读线索
+- 本场短期记忆聚合 `query_active_short_term_memory`：主播的回忆工具按它聚合主控与各候选游戏的本场记忆，私聊条目按隐私规则过滤
+- 流程单超时提醒 `publish_rundown_nudge`（按环节节流推送）与静默暖场提醒 `publish_silence_nudge`
 
 ## 游戏主控态的工具面切换
 
@@ -199,7 +248,9 @@ flowchart LR
 | `rundown_control` | 主播可见 | 可见名单并入当前主控游戏（环节推进归当场主控）；游戏侧提示词只授权 `next` / `renew`，跳段与流程单内容编辑不在游戏侧授权内 |
 | `streamer_memory_correct` | 主播可见 | 可见名单并入当前主控游戏（场内记忆更正跟随当场主控） |
 
-框架工具的使用说明（`guide_for`）随主控态自动换文：主控游戏收到"用 framework_commentary 提交要点"的守则；主播收到"不要委派/强杀主控游戏、用 framework_suggest 转达"的守则（若还有非主控的委派型游戏，附常规委派守则）。主播规划器在游戏主控期还会跳过游戏相关参考段与游戏主动唤醒——普通游戏事件只入账、不进规划器（例外：高光里程碑仍交即时反应当场惊呼）。
+框架工具的使用说明（`guide_for`）随主控态自动换文：主控游戏收到"用 framework_commentary 提交要点"的守则；主播收到"不要委派/强杀主控游戏、用 framework_suggest 转达"的守则（若还有非主控的委派型游戏，附常规委派守则）。
+
+主播规划器在游戏主控期还会跳过游戏相关参考段与游戏主动唤醒——普通游戏事件只入账、不进规划器（例外：高光里程碑仍交即时反应当场惊呼）。
 
 ## 四档发声优先级与两级语音打断
 
@@ -216,10 +267,17 @@ flowchart LR
 
 两级打断（实现与语义在 `utterance_queue.py` / `speech_dispatcher.py`）：
 
-- **一级软打断（清待播）**：任何 `priority > P0` 的发言入队前，`interrupt_lower_priority` 移除队列中尚未开始播放且优先级更低的条目——P2 清待播 P0/P1，P1 清待播 P0。正在播段落的余句沿用 `tts.utterance.dropped(reason="segment_interrupted")` 并保留尾句回调；跨来源低优独立句发 `reason="priority_preempted"`。
-- **二级硬打断（停正在播的 P0）**：仅当调用方显式开启 `allow_hard_interrupt=True` 且优先级到 P3 时，`hard_interrupt_playing` 先清低优待播，再仅当正在播放条目优先级不高于 P0 时取消该句播放子任务并立即停播声卡音频，发 `tts.utterance.dropped(reason="hard_interrupted")`（不计渲染超时、不终止队列循环）。正在播放的 P1 高光与 P2 观众回复绝不被硬打断。
+- **一级软打断（清待播）**：任何 `priority > P0` 的发言入队前，`interrupt_lower_priority` 移除队列中尚未开始播放且优先级更低的条目——P2 清待播 P0/P1，P1 清待播 P0。
+  - 正在播段落的余句沿用 `tts.utterance.dropped(reason="segment_interrupted")` 并保留尾句回调；跨来源低优独立句发 `reason="priority_preempted"`。
+- **二级硬打断（停正在播的 P0）**：仅当调用方显式开启 `allow_hard_interrupt=True` 且优先级到 P3 时，`hard_interrupt_playing` 先清低优待播，再仅当正在播放条目优先级不高于 P0 时取消该句播放子任务并立即停播声卡音频。
+  - 此时发 `tts.utterance.dropped(reason="hard_interrupted")`（不计渲染超时、不终止队列循环）。
+  - 正在播放的 P1 高光与 P2 观众回复绝不被硬打断。
 
-冷场兜底分工：游戏主控期静默达到阈值时，主播侧先向游戏侧发 `[直播间静默提醒]`（`publish_silence_nudge`，按阈值自身时长冷却）；主播侧自身的冷场暖场兜底由配置开关控制（见[配置与回退](#配置与回退)），关闭时静默暖场由游戏侧承接。流程单环节超期则由主播侧按节流间隔推送 `[流程单超时提醒]`（`publish_rundown_nudge`，同一环节冷却窗口内的推送节流在 `LeadCoordinator`，间隔配置在流程单主动信号配置段）。
+冷场兜底分工：
+
+- 游戏主控期静默达到阈值时，主播侧先向游戏侧发 `[直播间静默提醒]`（`publish_silence_nudge`，按阈值自身时长冷却）。
+- 主播侧自身的冷场暖场兜底由配置开关控制（见[配置与回退](#配置与回退)），关闭时静默暖场由游戏侧承接。
+- 流程单环节超期则由主播侧按节流间隔推送 `[流程单超时提醒]`（`publish_rundown_nudge`，同一环节冷却窗口内的推送节流在 `LeadCoordinator`，间隔配置在流程单主动信号配置段）。
 
 ## 配置与回退
 
@@ -232,7 +290,9 @@ flowchart LR
 | `game_lead_silence_nudge_ms` | 全场连续无声达到该时长时向主控游戏发静默暖场提醒；0 = 关闭 |
 | `game_lead_commentary_min_interval_ms` | 普通实况解说的最小出声间隔防抖；`urgency="high"` 与纠偏穿透 |
 
-回退路径：把 `lead_mode` 切成 `streamer_only` 即关闭动态移交——每次评估都会把开关同步进协调器（`set_enabled(False)`），协调器拒绝一切交权请求；已处于游戏主控的会立即收回（reason=`lead_mode_streamer_only`）。解说与建议通道因无主控方自然不可达（提交返回 `not_in_lead`、建议返回 `not_in_game_lead`）。委派四件、流程单与既有委派链路不受影响，行为与引入该机制前一致。
+回退路径：把 `lead_mode` 切成 `streamer_only` 即关闭动态移交——每次评估都会把开关同步进协调器（`set_enabled(False)`），协调器拒绝一切交权请求；已处于游戏主控的会立即收回（reason=`lead_mode_streamer_only`）。
+
+解说与建议通道因无主控方自然不可达（提交返回 `not_in_lead`、建议返回 `not_in_game_lead`）。委派四件、流程单与既有委派链路不受影响，行为与引入该机制前一致。
 
 ## 运营控制面（Dashboard）
 
