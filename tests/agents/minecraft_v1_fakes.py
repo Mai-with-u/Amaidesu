@@ -590,9 +590,11 @@ def assemble_minecraft_agent(
     mcp_client_factory: Optional[Callable[..., Any]] = None,
     mcp_provider_factory: Optional[Callable[..., Any]] = None,
     clock: Optional[Callable[[], float]] = None,
+    wall_clock_ms: Optional[Callable[[], int]] = None,
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
     social_fact_repo: Optional[Any] = None,
+    learned_skill_repo: Optional[Any] = None,
     embedding_setup: Optional[Any] = None,
     lead_coordinator: Optional[Any] = None,
     lead_idle_wakeup_s: Optional[float] = None,
@@ -641,6 +643,7 @@ def assemble_minecraft_agent(
         task_tracker=tracker,
         skill_library=skills,
         clock=clock,
+        wall_clock_ms=wall_clock_ms,
         live_active=live,
         mcp_client=mcp_client,
         mcp_provider=mcp_provider,
@@ -649,6 +652,7 @@ def assemble_minecraft_agent(
         creature_repo=creature_repo,
         work_docs_repo=work_docs_repo,
         social_fact_repo=social_fact_repo,
+        learned_skill_repo=learned_skill_repo,
         **lead_kwargs,
     )
 
@@ -667,9 +671,11 @@ async def make_minecraft_agent(
     config: Optional[MinecraftConfig] = None,
     mcp_client: Optional[Any] = None,
     clock: Optional[Callable[[], float]] = None,
+    wall_clock_ms: Optional[Callable[[], int]] = None,
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
     social_fact_repo: Optional[Any] = None,
+    learned_skill_repo: Optional[Any] = None,
     embedding_setup: Optional[Any] = None,
     lead_coordinator: Optional[Any] = None,
     lead_idle_wakeup_s: Optional[float] = None,
@@ -707,6 +713,7 @@ async def make_minecraft_agent(
         thinking_sink=thinking_sink,
         live=live,
         clock=clock,
+        wall_clock_ms=wall_clock_ms,
         # 有 MaiCraft 替身才给已连接的客户端替身；否则与旧装配一致（游戏未连）
         mcp_client=(mcp_client if mcp_client is not None else SimpleNamespace(connected=True))
         if server is not None or mcp_client is not None
@@ -715,6 +722,7 @@ async def make_minecraft_agent(
         creature_repo=creature_repo,
         work_docs_repo=work_docs_repo,
         social_fact_repo=social_fact_repo,
+        learned_skill_repo=learned_skill_repo,
         embedding_setup=embedding_setup,
         lead_coordinator=lead_coordinator,
         lead_idle_wakeup_s=lead_idle_wakeup_s,

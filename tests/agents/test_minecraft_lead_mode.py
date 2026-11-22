@@ -1064,3 +1064,240 @@ async def test_mcp_reconnect_notifies_ready_listener_without_self_grabbing_lead(
     finally:
         await agent.stop()
         await bus.cleanup()
+
+
+async def test_commentary_self_echo_not_reinjected_on_next_step_while_external_echo_kept(fake_clock: Any) -> None:
+    """framework_commentary 同步产出自产回声时，紧邻下一步不尾插该自产回声，且保留早先外部主播回声。"""
+    server = FakeMaicraft()
+    step = [0]
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        step[0] += 1
+        if step[0] == 1:
+            return _resp(
+                "开工并顺手解说一句",
+                calls=[
+                    _call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍白桦木"}}, "c_gather"),
+                    _call(
+                        "framework_commentary",
+                        {"summary": "正在营地西边砍白桦木准备扩建", "mood": "neutral", "urgency": "normal"},
+                        "c_comm",
+                    ),
+                ],
+            )
+        return _resp("继续等后台砍树完成")
+
+    env = _make_lead_env(server=server, script=script, fake_clock=fake_clock, lead_idle_wakeup_s=0.0)
+    agent, llm, _ = await _start_lead_env(env)
+    coord: LeadCoordinator = env["coordinator"]
+
+    async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
+        # 模拟主播侧同步润色播报并立即把刚说出的解说回声推回游戏侧（与 StreamerAgent 生产 source="game_commentary" 一致）
+        coord.publish_spoken_echo(f"主播润色：{req.summary}", source="game_commentary")
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_on_commentary)
+
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="扩建营地"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 2 and not agent.batch_active)
+
+        # 第 2 步是刚发完 framework_commentary 的紧邻步：不得尾插刚刚自产的 [直播间刚说过]
+        assert len(llm.seen) == 2
+        step2_tail = str(llm.seen[1][-1].get("content") or "")
+        assert "[直播间刚说过]" not in step2_tail
+        assert "正在营地西边砍白桦木" not in step2_tail
+        assert agent.observation()["spoken_echo_count"] == 0
+
+        # 之后主播独立回复观众弹幕（非本步自产回声），在下一次外部事件唤醒时照常带入
+        coord.publish_spoken_echo("刚回复观众说今晚会盖二楼", source="streamer")
+        assert agent.observation()["spoken_echo_count"] == 1
+        await coord.send_suggestion("顺便留点木板")
+        await _wait_until(lambda: len(llm.seen) >= 3 and not agent.batch_active)
+        assert "刚回复观众说今晚会盖二楼" in _texts(llm.seen[2])
+    finally:
+        await _stop_lead_env(env, agent)
+
+
+async def test_commentary_only_step_with_running_goal_yields_immediately_without_extra_llm_turn(
+    fake_clock: Any,
+) -> None:
+    """后台已有运行中目标且无排队事件时，仅含 framework_commentary 的推理步直接让出等待，不空烧下一轮。"""
+    server = FakeMaicraft()
+    commentary_calls: List[str] = []
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        joined = _texts(messages)
+        if "[直播间静默提醒]" in joined and not commentary_calls:
+            commentary_calls.append("sent")
+            return _resp(
+                "后台还在挖矿，顺手给观众解说一句近况",
+                calls=[
+                    _call(
+                        "framework_commentary",
+                        {"summary": "正在矿道深处继续采集铁矿，再挖几块就回营地", "urgency": "normal"},
+                        "c_only_comm",
+                    )
+                ],
+            )
+        if not server.goals:
+            return _resp(
+                "开始下矿挖铁",
+                calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "挖铁矿"}}, "c_start")],
+            )
+        return _resp("后台在跑，静默等待")
+
+    env = _make_lead_env(server=server, script=script, fake_clock=fake_clock, lead_idle_wakeup_s=0.0)
+    agent, llm, _ = await _start_lead_env(env)
+    coord: LeadCoordinator = env["coordinator"]
+
+    async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
+        coord.publish_spoken_echo(f"主播润色：{req.summary}", source="game_commentary")
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_on_commentary)
+
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="采矿"), target="minecraft") == "minecraft"
+        )
+        await _wait_until(lambda: len(agent.tracked_goal_ids) == 1 and not agent.batch_active)
+        turns_before_nudge = len(llm.seen)
+
+        # 触发静默提醒：模型只调一次 framework_commentary -> 直接让出等待，仅消耗 1 次 LLM 调用（绝不空烧第 2 次）
+        coord.publish_silence_nudge(silent_ms=90_000)
+        await _wait_until(lambda: bool(commentary_calls) and not agent.batch_active)
+        await _settle_loop(env["bus"])
+
+        assert len(llm.seen) == turns_before_nudge + 1
+        assert agent.observation()["spoken_echo_count"] == 0
+        assert len(agent.tracked_goal_ids) == 1
+    finally:
+        await _stop_lead_env(env, agent)
+
+
+async def test_commentary_strip_preserves_concurrent_external_echo_and_does_not_yield_on_failed_commentary(
+    fake_clock: Any,
+) -> None:
+    """并发外部主播回声在 framework_commentary 期间不被误吞；解说调用参数报错未受理时不提前让出等待。"""
+    server = FakeMaicraft()
+    step = [0]
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        step[0] += 1
+        if step[0] == 1:
+            return _resp(
+                "开工并提交实况解说",
+                calls=[
+                    _call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "采圆石"}}, "c_gather"),
+                    _call(
+                        "framework_commentary",
+                        {"summary": "正在矿洞口采集圆石准备修炉子", "mood": "neutral", "urgency": "normal"},
+                        "c_comm_ok",
+                    ),
+                ],
+            )
+        if step[0] == 2:
+            # 紧邻步收到并发外部弹幕回声后，故意发一次空 summary 的非法解说调用，验证失败不会提前让出
+            return _resp(
+                "尝试发一条非法空解说",
+                calls=[_call("framework_commentary", {"summary": ""}, "c_comm_bad")],
+            )
+        return _resp("收到错误观察后正常收尾等待")
+
+    env = _make_lead_env(server=server, script=script, fake_clock=fake_clock, lead_idle_wakeup_s=0.0)
+    agent, llm, _ = await _start_lead_env(env)
+    coord: LeadCoordinator = env["coordinator"]
+
+    async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
+        # 模拟在 framework_commentary await 期间并发穿插一条主播回复观众弹幕的外部回声 + 本次自产解说回声
+        coord.publish_spoken_echo("刚回复弹幕说待会顺路去修水车", source="streamer")
+        coord.publish_spoken_echo(f"主播润色：{req.summary}", source="game_commentary")
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_on_commentary)
+
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="采圆石"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 3 and not agent.batch_active)
+
+        # 第 2 步：自产 game_commentary 回声被精准剥离，但并发外部 streamer 回声完整保留并注入
+        step2_tail = str(llm.seen[1][-1].get("content") or "")
+        assert "刚回复弹幕说待会顺路去修水车" in step2_tail
+        assert "正在矿洞口采集圆石" not in step2_tail
+
+        # 第 2 步调非法空 summary 报错未受理 -> 不触发提前让出，模型顺利进入第 3 步看到报错并收尾
+        assert len(llm.seen) == 3
+        step3_text = _texts(llm.seen[2])
+        assert "commentary 需要非空的 summary" in step3_text
+    finally:
+        await _stop_lead_env(env, agent)
+
+
+async def test_receive_rundown_nudge_wakes_lead_mode_and_replaces_pending_without_stacking(fake_clock: Any) -> None:
+    """receive_rundown_nudge：非主控忽略，主控态入队唤醒并支持原地替换防堆积，提醒可调 rundown_control。"""
+    server = FakeMaicraft()
+    env = _make_lead_env(
+        server=server,
+        script=lambda _msgs: _resp("收到流程单提醒"),
+        fake_clock=fake_clock,
+        lead_idle_wakeup_s=0.0,
+    )
+    agent, llm, _ = await _start_lead_env(env)
+    coord: LeadCoordinator = env["coordinator"]
+
+    try:
+        # 非主控态直接忽略
+        agent.receive_rundown_nudge(
+            segment_id="seg-1",
+            segment_title="营地建设",
+            elapsed_ms=1_800_000,
+            expected_ms=1_500_000,
+            next_segment_id="seg-2",
+            next_segment_title="下矿探险",
+        )
+        assert agent.queued_messages == []
+
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="营地建设"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
+
+        # 暂停循环后连续推送两次流程单超时提醒：只留最新一条，不堆积两条
+        await agent.pause()
+        agent.receive_rundown_nudge(
+            segment_id="seg-1",
+            segment_title="营地建设",
+            elapsed_ms=1_800_000,
+            expected_ms=1_500_000,
+            next_segment_id="seg-2",
+            next_segment_title="下矿探险",
+        )
+        agent.receive_rundown_nudge(
+            segment_id="seg-1",
+            segment_title="营地建设",
+            elapsed_ms=2_100_000,
+            expected_ms=1_500_000,
+            next_segment_id="seg-2",
+            next_segment_title="下矿探险",
+        )
+        queued_nudges = [item for item in agent.queued_messages if "[流程单超时提醒]" in str(item[1])]
+        assert len(queued_nudges) == 1
+        assert "35 分钟" in str(queued_nudges[0][1]) or "35分" in str(queued_nudges[0][1])
+
+        await agent.resume()
+        await _wait_until(lambda: len(llm.seen) == 2 and not agent.batch_active)
+        nudge_prompt = _texts(llm.seen[1])
+        assert "[流程单超时提醒]" in nudge_prompt
+        assert "营地建设" in nudge_prompt
+        assert "下矿探险" in nudge_prompt
+        assert "rundown_control" in nudge_prompt
+    finally:
+        await _stop_lead_env(env, agent)

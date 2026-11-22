@@ -21,7 +21,7 @@ import json
 import re
 import time
 import uuid
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, Awaitable, ClassVar, Deque, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
@@ -81,6 +81,7 @@ from src.agents.minecraft.lead_mode import (
     LEAD_MODE_PROMPT_SECTION,
     SpokenEchoBuffer,
     format_lead_handover_brief,
+    format_rundown_nudge_notice,
     format_rundown_update_notice,
     format_silence_nudge_notice,
     format_suggestion_message,
@@ -163,6 +164,7 @@ from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.llm.errors import UnsendableRequestError
 from src.modules.llm.payload import response_to_assistant_message
 from src.modules.skills import SkillLibrary
+from src.modules.storage.repos.learned_skills import LearnedSkillRepo
 from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -238,37 +240,6 @@ _PRESERVED_MAX_TOTAL_CHARS = 500
 _MSG_REF_PREFIX_RE = re.compile(r"^\[m\d+\]\s*")
 # 游戏主控态拉取被动 [脑中闪过] 线索的单次短超时保护（毫秒），绝不阻塞慢嵌入拖慢行动步
 _DEFAULT_PASSIVE_CUE_TIMEOUT_MS = 250
-# 宿主自身生成的系统/状态/通知前缀（非人类原话，折叠原话抽取时跳过）
-_HOST_NON_HUMAN_PREFIXES: Tuple[str, ...] = (
-    "[系统]",
-    "[系统提示]",
-    "[开局资料]",
-    "[继续原游戏任务]",
-    "[当前任务状态]",
-    "[当前存档公共规矩]",
-    "[钉住规矩",
-    "[主控交接简报]",
-    "[流程单切换]",
-    "[直播间刚说过]",
-    "[直播间静默提醒]",
-    "[已折叠",
-    "[原文已收起",
-    "[身体]",
-    "[互动]",
-    "[天色]",
-    "[计时]",
-    "[跟随]",
-    "[拿过别人",
-    "[动过别人",
-    "[交接摘要]",
-    "[原任务事实",
-    "[历史推理摘要",
-    "[自主推进]",
-    "[任务尚需行动]",
-    "[还没交付]",
-    "[脑中闪过]",
-    "[公屏旁听]",
-)
 
 
 def _message_plain_text(content: Any) -> str:
@@ -295,11 +266,13 @@ def _trim_preserved_line(text: str) -> str:
 
 
 def _extract_preserved_human_lines(originals: Sequence[Mapping[str, Any]]) -> List[str]:
-    """从被折叠区间机械抽取人类原话（公屏、直播间建议与主播/运营递话）。
+    """按严格白名单从被折叠区间机械抽取人类原话（公屏、直播间建议与主播/运营递话）。
 
-    剥离 ``[mNNNN]`` 编号与附尾 ``[脑中闪过]``/``[直播间刚说过]`` 只读段，单条限 120 字、
-    单块最多保留 6 条且总字符不超过 500 字（超限时优先保住较新的原话）。
+    仅放行 ``[公屏``（不含 ``[公屏旁听]``）、``[直播间建议]`` 及 ``PROMPT_SOURCE_LABELS`` 开头的人类输入行，
+    杜绝 ``[装备]`` 等宿主系统通知被误收进保留区。剥离 ``[mNNNN]`` 编号与附尾只读段，
+    单条限 120 字、单块最多保留 6 条且总字符不超过 500 字（超限时优先保住较新的原话）。
     """
+    prompt_labels = tuple(PROMPT_SOURCE_LABELS.values())
     raw_candidates: List[str] = []
     for message in originals:
         if message.get("role") != "user":
@@ -314,7 +287,11 @@ def _extract_preserved_human_lines(originals: Sequence[Mapping[str, Any]]) -> Li
         for marker in ("\n\n[脑中闪过]", "\n\n[直播间刚说过]", "\n\n[公屏旁听]"):
             if marker in text:
                 text = text.split(marker, 1)[0].strip()
-        if not text or text.startswith(_HOST_NON_HUMAN_PREFIXES):
+        if not text:
+            continue
+
+        # 远处背景旁听明确排除，不挤占人类原话保留名额
+        if text.startswith("[公屏旁听]"):
             continue
 
         if text.startswith("[公屏合批]"):
@@ -352,7 +329,8 @@ def _extract_preserved_human_lines(originals: Sequence[Mapping[str, Any]]) -> Li
                     raw_candidates.append(item)
             continue
 
-        if text.startswith(tuple(PROMPT_SOURCE_LABELS.values())) or not text.startswith(_HOST_NON_HUMAN_PREFIXES):
+        # 严格白名单：只收录明确标注为主播/运营递话的人类消息，其余宿主通知（含 [装备] 等）一律忽略
+        if prompt_labels and text.startswith(prompt_labels):
             cleaned = text.split("\n[交付提醒]", 1)[0].strip()
             item = _trim_preserved_line(cleaned)
             if item:
@@ -419,9 +397,9 @@ def _places_view_unknown_to_mod(reply: MaicraftReply) -> bool:
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 
-# 天然只读的工具：看现场、查资料、读技能、读回折叠原文——用它们拼出的一整轮没有推进任务。
-# goal 不在此列：get/list 还须命中在跟踪的在跑目标（见 _polls_running_goal）才算读。
-_READ_ONLY_TOOL_NAMES = frozenset({OBSERVE, LOOKUP, "minecraft_skill", "minecraft_context_recall"})
+# 天然只读的工具：看现场、查资料、读回折叠原文——用它们拼出的一整轮没有推进任务。
+# goal 与 minecraft_skill 不在此列：goal 须命中在跑查询，minecraft_skill 仅 read/list 算只读（upsert/patch/remove 属写入推进）。
+_READ_ONLY_TOOL_NAMES = frozenset({OBSERVE, LOOKUP, "minecraft_context_recall"})
 
 # 委派自动收账的成功目标状态：批内目标回执全是 done 才算整单做成；
 # 其余非 cancelled 的终态（failed / partial / gone）都算没做成
@@ -478,6 +456,7 @@ class MinecraftAgent(BaseAgent):
         creature_repo: Optional[Any] = None,
         work_docs_repo: Optional[Any] = None,
         social_fact_repo: Optional[Any] = None,
+        learned_skill_repo: Optional[Any] = None,
         embedding_setup: Optional[Any] = None,
         lead_coordinator: Optional[LeadCoordinator] = None,
         lead_idle_wakeup_s: float = _LEAD_IDLE_WAKEUP_S,
@@ -489,6 +468,7 @@ class MinecraftAgent(BaseAgent):
         chat_flush_wait: Optional[Callable[[int], Awaitable[None]]] = None,
         passive_cue_timeout_ms: int = _DEFAULT_PASSIVE_CUE_TIMEOUT_MS,
         clock: Optional[Callable[[], float]] = None,
+        wall_clock_ms: Optional[Callable[[], int]] = None,
         live_active: Optional[bool] = None,
         mcp_client: Optional[Any] = None,
         mcp_provider: Optional[Any] = None,
@@ -528,8 +508,10 @@ class MinecraftAgent(BaseAgent):
         super().__init__(event_bus=event_bus)
         # 时间流逝统一经此时钟：缺省用系统单调时钟，测试注入假时钟冻结或推进时间
         self._clock = clock or time.monotonic
-        # 毫秒时钟视图：供公屏门控与本场短期记忆共享同一注入时间轴（零真实 sleep 漂移）
+        # 毫秒单调时钟视图：供公屏门控与本场短期记忆共享单一内部时间轴（绝不混入外部 epoch 时间戳）
         self._clock_ms: Callable[[], int] = lambda: int(round(self._clock() * 1000))
+        # Unix epoch 毫秒墙钟：供持久化数据库落库时间戳使用（符合全库 *_ms 契约，不随进程重启倒退）
+        self._wall_clock_ms: Callable[[], int] = wall_clock_ms if wall_clock_ms is not None else now_ms
         self._skills = skill_library
         self.typed_config = config
         # llm_manager 另需 async generate（ReAct 推理用）；视觉查询契约在装配期校验，
@@ -544,9 +526,18 @@ class MinecraftAgent(BaseAgent):
 
         # Agent 内部状态（内存，不持久化）：工作文档按存档分开，换存档经 switch_world 一处切换
         self._mc_state: MinecraftAgentState = MinecraftAgentState()
-        # 角色眼下在哪个存档里：GoalWatch 每读一页、每次读自己时喂入（认存档的唯一记录）
+        # 角色眼下在哪个存档里：GoalWatch 每读一页、每次读自己时喂入（认存档的唯一记录）；
+        # 用异步锁串行化认档/换档与工作文档/自建技能读库，避免事件页与开局代读并发抢跑
         self._world = WorldIdentity()
-        # 技能世界支撑件：目录合并、正文按需读、按连接缓存的装载资料与开局代读。
+        self._world_change_lock = asyncio.Lock()
+        # 自建技能仓储：优先使用显式注入，否则自动复用 work_docs_repo 的共享连接管理器派生（零侵入工厂装配）
+        resolved_learned_skill_repo = learned_skill_repo
+        if resolved_learned_skill_repo is None and work_docs_repo is not None:
+            conn_mgr = getattr(work_docs_repo, "connection_manager", None)
+            if conn_mgr is not None:
+                resolved_learned_skill_repo = LearnedSkillRepo(conn_mgr)
+        self._learned_skill_repo = resolved_learned_skill_repo
+        # 技能世界支撑件：目录合并、正文按需读、自建技能读写修订、短窗防重读、按连接缓存与开局代读。
         # 构造早于工具 Provider——minecraft_skill 的执行后端从这里取
         self._skill_support = SkillSupport(
             skills=skill_library,
@@ -557,6 +548,10 @@ class MinecraftAgent(BaseAgent):
             mcp_client=self._current_mcp_client,
             execute_tool=self._execute_tool,
             absorb_reply=self._absorb_reply,
+            learned_skill_repo=self._learned_skill_repo,
+            game_name=_GAME,
+            save_id_reader=lambda: self._world.save_fields()[0],
+            clock_ms=self._wall_clock_ms,
         )
         # 生物名册：自己的生物与主播起过名的生物是谁、在不在身边、死没死（速览与死讯共用这一份）
         self._creatures = CreatureBook()
@@ -600,12 +595,14 @@ class MinecraftAgent(BaseAgent):
             release_epoch_reader=lambda: self._release_epoch,
             max_validation_retries=config.drawing_builder.max_validation_retries,
         )
+        has_skill_tool = skill_library is not None or self._learned_skill_repo is not None
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
             report_callback=self._handle_report,
             glance_reader=self._glance,
             chat_sender=self._send_streamer_chat,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
+            skill_handler=self._handle_skill_tool if has_skill_tool else None,
             save_reader=self._world.game_save,
             situation_reader=self._current_situation,
             snapshot_reader=self._state_snapshot,
@@ -733,6 +730,9 @@ class MinecraftAgent(BaseAgent):
         # 游戏 Agent 自己通过 maicraft:chat 发出的公屏句缓存：收到 game.self.chatted 时据此排除己方重复注入，
         # 只把主播替角色发出的公屏话注入活跃任务上下文。
         self._own_emitted_chats: Deque[str] = deque(maxlen=16)
+        # 已在 _send_self_chat 中写入 chat_gate 与短期记忆的公屏句去重队列：防止主播直发公屏
+        # （from_streamer=True）触发异步 game.self.chatted 回调时，在玩家公屏插队间隙双写两条 [你回过]。
+        self._recorded_self_chats: Deque[str] = deque(maxlen=16)
         # 近期已注入上下文的公屏通知去重表：(来源键, 正文) → 注入时的单调时钟秒值（5 秒短窗 + 新任务清空）
         self._recent_chat_notices: Dict[Tuple[str, str], float] = {}
         # 非死亡服务器系统提示的 15 秒节流合并表：归并键 → [窗口起始单调秒, 窗口内已合并次数, 最新原文]
@@ -867,6 +867,7 @@ class MinecraftAgent(BaseAgent):
         self._last_self_coords = None
         self._pending_handover_summary = ""
         self._own_emitted_chats.clear()
+        self._recorded_self_chats.clear()
         self._recent_chat_notices.clear()
         self._system_chat_throttle.clear()
         settled = self._delegations.settle_on_live_end()
@@ -1089,9 +1090,13 @@ class MinecraftAgent(BaseAgent):
     async def read_skill_body(self, name: str) -> Dict[str, Any]:
         """读一份技能正文（检视页预览用）：与 minecraft_skill 工具同一条通道，模型读到什么这里读到什么。
 
-        无状态副作用：读取结果不进 Agent 的记忆与开局资料包（那是开局代读的路径）。
+        无状态副作用：读取结果不进 Agent 的记忆与开局资料包，也不触发短窗防重读限制。
         """
         return await self._skill_support.read_skill(name)
+
+    async def _handle_skill_tool(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """``minecraft_skill`` 工具后端：把当前任务步号透传给支撑件以支持短窗防重读与自建技能管理。"""
+        return await self._skill_support.handle_skill_tool(args, current_step=self._task_steps)
 
     # ==================================================================
     # 工具提供（list_tools）
@@ -1390,6 +1395,49 @@ class MinecraftAgent(BaseAgent):
         if not self._task_suspended:
             self._wake_event.set()
         self._logger.debug(f"MinecraftAgent 收到直播间静默提醒（silent_ms={max(0, int(silent_ms or 0))}）")
+
+    def receive_rundown_nudge(
+        self,
+        *,
+        segment_id: str = "",
+        segment_title: str = "",
+        elapsed_ms: int = 0,
+        expected_ms: int = 0,
+        next_segment_id: str = "",
+        next_segment_title: str = "",
+    ) -> None:
+        """接收流程单环节临近到期/超时提醒：主控态下以不堆积方式入队 ``[流程单超时提醒]`` 并按需唤醒循环。
+
+        触发条件：游戏自主主控期当前环节已临近到期或超时，由 ``LeadCoordinator.publish_rundown_nudge`` 节流推送；
+        动作与边界：若队列中已有未读的 ``[流程单超时提醒]`` 则原地替换为最新计时，防止重复堆积，
+        并唤醒挂起中的游戏循环以便主动决定调用 ``rundown_control`` 的 ``next`` 或 ``renew``。
+        """
+        if not (self._in_lead_mode and self._live_active):
+            return
+        notice = format_rundown_nudge_notice(
+            segment_id=segment_id,
+            segment_title=segment_title,
+            elapsed_ms=max(0, int(elapsed_ms or 0)),
+            expected_ms=max(0, int(expected_ms or 0)),
+            next_segment_id=next_segment_id,
+            next_segment_title=next_segment_title,
+        )
+        queue_items = self._wake_queue.items
+        replaced = False
+        for idx, item in enumerate(queue_items):
+            if isinstance(item, tuple) and len(item) == 2 and str(item[1]).startswith("[流程单超时提醒]"):
+                queue_items[idx] = ("", notice)
+                replaced = True
+                break
+        if not replaced:
+            self._wake_queue.push_notice(notice)
+        self._reset_lead_idle_state()
+        if not self._task_suspended:
+            self._wake_event.set()
+        self._logger.debug(
+            f"MinecraftAgent 收到流程单超时提醒（segment_id={segment_id or '未标'}, title={segment_title or '未命名'}, "
+            f"elapsed_ms={max(0, int(elapsed_ms or 0))}, expected_ms={max(0, int(expected_ms or 0))}）"
+        )
 
     def _schedule_lead_unavailable(self, reason: str) -> None:
         """从同步回调（如 MCP 断连）异步调度主控不可用上报，避免阻塞回调线程。"""
@@ -1869,11 +1917,12 @@ class MinecraftAgent(BaseAgent):
         # 回个动作就收尾；不续原任务，所以也不把原任务的事实再摊开一遍。批次一开头就定下来，
         # 下面读能力清单等着的这段时间里再来的互动，也按只回应互动的批次处理（攒着，不跟着读）
         self._interaction_only = (self._task_finished or self._task_suspended) and self._wake_queue.interaction_only()
-        # 先读能力清单（开局资料与本地策略的环境都用它），再登记 MaiCraft 的玩法技能目录，最后写系统提示词。
+        # 先读能力清单（开局资料与本地策略的环境都用它），再登记 MaiCraft 远端技能与自建技能目录，最后写系统提示词。
         await self._skill_support.ensure_ability_listing()
         # 玩法技能由 MaiCraft 随包发布：目录也每次连接只读一次，正文在模型要读时才取。
         self._skill_support.drop_remote_if_disconnected()
         await self._skill_support.ensure_remote_skills()
+        await self._skill_support.refresh_learned_skills()
         system_message = self._system_message()
         tool_defs = self._tool_definitions()
         await self._settle_idle_compaction(tool_defs)
@@ -1899,6 +1948,8 @@ class MinecraftAgent(BaseAgent):
         mc_seq_box = [0]
         action_reminded = False
         polling_reminded = False
+        # 上一步刚由自己成功调用 framework_commentary 触发解说时置位，紧邻下一步不立刻尾插刚自产的 [直播间刚说过]
+        suppress_next_commentary_echo = False
         # 请求发不出去时的补救进度：换过回执、重开过对话；请求一发成功就清零，下次再出事从头补救
         stripped = restarted = False
         batch_epoch = self._release_epoch
@@ -1964,6 +2015,15 @@ class MinecraftAgent(BaseAgent):
                     await self._save_work_docs()
                 seq_before_open = self._social_rules.load_seq
                 await self._skill_support.append_opening_bundle(messages)
+                # 开局代读中的 observe(self) 可能刚认出存档并加载出该存档的 world 自建技能；
+                # 首步尚未发往 LLM，趁发请求前同步刷新系统提示词里的技能目录段，确保首步即可见且不破坏后续前缀缓存
+                refreshed_system = self._system_message()
+                if (
+                    messages
+                    and messages[0].get("role") == "system"
+                    and messages[0].get("content") != refreshed_system["content"]
+                ):
+                    messages[0] = dict(refreshed_system)
                 current_save_id = self._world.save_fields()[0]
                 if current_save_id and self._social_rules.load_seq == seq_before_open:
                     # 角色早已认出存档而未在开局代读中触发换档回调时，也在新任务开跑前异步刷新一次当前存档公共规矩
@@ -1987,7 +2047,12 @@ class MinecraftAgent(BaseAgent):
                 self._delegations.mark_running()
             # 推理前确保抗折叠钉住规矩固定层与当前状态同步（无规矩时不占槽位，有规矩时紧跟固定前缀）
             self._sync_pinned_rules_message(messages, expect_rewrite=False)
-            # 主控态正常推理步前拼入未读的 [直播间刚说过] 回执、远处 [公屏旁听] 与地标 [脑中闪过]（均只附尾、保前缀缓存）
+            # 主控态正常推理步前拼入未读的 [直播间刚说过] 回执、远处 [公屏旁听] 与地标 [脑中闪过]（均只附尾、保前缀缓存）；
+            # 若上一步刚成功触发 framework_commentary 并出声，紧邻步先剔除异步稍晚落入的自产 game_commentary 回声，
+            # 同时照常放行并发到达的外部主播弹幕回声（零误吞、防自产回声续轮风暴）
+            if suppress_next_commentary_echo:
+                suppress_next_commentary_echo = False
+                self._strip_echoes_by_source("game_commentary")
             self._append_unread_spoken_echoes(messages, step_start_len=step_start_len)
             self._append_eavesdrop_chats(messages, step_start_len=step_start_len)
             self._append_pending_place_flash(messages, step_start_len=step_start_len)
@@ -2131,13 +2196,27 @@ class MinecraftAgent(BaseAgent):
                 continue
 
             read_only_round = True
+            all_commentary_only = True
+            commentary_succeeded = False
+            commentary_spoken = False
             # 模型本轮实际发起了工具调用：重置主控态连续空轮防空转计数
             if self._in_lead_mode:
                 self._lead_empty_turns = 0
             for call in tool_calls:
                 await self._paused.wait()
                 arguments = call.arguments if isinstance(call.arguments, dict) else {}
+                is_commentary_call = call.name == "framework_commentary"
+                if not is_commentary_call:
+                    all_commentary_only = False
+                # 记录调用 framework_commentary 前已有的回声快照，仅在本次出声时精准剥离新增的 game_commentary 自产回声
+                pre_commentary_echoes = self._spoken_echo_buffer.snapshot() if is_commentary_call else None
                 observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
+                if is_commentary_call and observation.get("accepted") is True:
+                    commentary_succeeded = True
+                    if observation.get("spoken") is True:
+                        commentary_spoken = True
+                        if pre_commentary_echoes is not None:
+                            self._strip_self_produced_echoes(pre_commentary_echoes)
                 self._absorb_reply(call.name, arguments, observation)
                 await self._flush_place_marks()
                 await self._flush_self_chats()
@@ -2167,9 +2246,28 @@ class MinecraftAgent(BaseAgent):
                     }
                 )
 
+            if commentary_spoken:
+                suppress_next_commentary_echo = True
+
             if self._task_reported:
                 self._logger.info(f"LLM 已上报，任务批次结束（{steps} 步）")
                 return
+            # 主控态下若本步全部仅调用 framework_commentary 且解说已成功受理、后台已有运行中目标/图纸/烧炉、
+            # 且无新事件排队：直接结束本轮让出等待，避免空烧一轮数万 token 并撞上 8 秒解说防抖；
+            # 若参数报错未受理，则不提前让出，允许模型在下一步修正
+            if self._in_lead_mode and all_commentary_only and commentary_succeeded and not self._message_queue:
+                tracked = self._goals.tracked_ids()
+                has_bg_work = (
+                    bool(tracked) or self._drawing_builder.in_progress() or bool(self._furnace_waits.waiting())
+                )
+                if has_bg_work:
+                    if tracked:
+                        await self._stand_for_goals(tracked)
+                    self._schedule_idle_compaction(messages, tool_defs)
+                    self._logger.info(
+                        f"主控步仅调用 framework_commentary 且后台有运行中目标，直接让出等待（{steps} 步）"
+                    )
+                    return
             if read_only_round and not self._message_queue:
                 # 一整轮只有读取、没有任何推进：第一次提醒；连续第二次且有目标在跑就替它让出（等目标事件唤醒）。
                 if polling_reminded:
@@ -2192,6 +2290,44 @@ class MinecraftAgent(BaseAgent):
             else:
                 polling_reminded = False
 
+    def _strip_self_produced_echoes(self, pre_echoes: Sequence[Any]) -> None:
+        """仅剔除本次 ``framework_commentary`` 调用期间新增的 ``game_commentary`` 自产回声。
+
+        调用期间并发落入的外部主播发言（如回复观众弹幕）按 ``source != "game_commentary"`` 完整保留，
+        避免回声剥离误吞真实直播间发言。
+        """
+        post_echoes = self._spoken_echo_buffer.snapshot()
+        pre_commentary_counts = Counter(
+            (entry.text, entry.timestamp_ms) for entry in pre_echoes if entry.source == "game_commentary"
+        )
+        kept: List[Any] = []
+        removed = False
+        for entry in post_echoes:
+            if entry.source == "game_commentary":
+                key = (entry.text, entry.timestamp_ms)
+                if pre_commentary_counts[key] > 0:
+                    pre_commentary_counts[key] -= 1
+                    kept.append(entry)
+                else:
+                    removed = True
+            else:
+                kept.append(entry)
+        if not removed:
+            return
+        self._spoken_echo_buffer.clear()
+        for entry in kept:
+            self._spoken_echo_buffer.push(entry.text, source=entry.source, timestamp_ms=entry.timestamp_ms)
+
+    def _strip_echoes_by_source(self, source: str) -> None:
+        """按来源精确剔除缓冲中对应 ``source`` 的未读回声，保留其他来源的外部主播回声。"""
+        entries = self._spoken_echo_buffer.snapshot()
+        kept = [entry for entry in entries if entry.source != source]
+        if len(kept) == len(entries):
+            return
+        self._spoken_echo_buffer.clear()
+        for entry in kept:
+            self._spoken_echo_buffer.push(entry.text, source=entry.source, timestamp_ms=entry.timestamp_ms)
+
     def _restart_conversation(self, messages: List[Dict[str, Any]], system_message: Dict[str, Any]) -> None:
         """这段对话发不出去：整段丢掉，只留系统说明与任务事实重开；原指令、待办、目标记录照旧。
 
@@ -2208,6 +2344,7 @@ class MinecraftAgent(BaseAgent):
         # 丢掉的那段对话里看过的截图也一并作废；在写的折叠提议与集中整理对应的历史已经没了，
         # 当场作废：集中整理写完会就地改写历史，晚一步就把旧摘要写进重开后的对话
         self._transient_images.drain()
+        self._skill_support.reset_read_window()
         self._fold_epoch += 1
         self._fold_job.abandon()
         self._idle_prep.abandon()
@@ -2220,6 +2357,7 @@ class MinecraftAgent(BaseAgent):
         # 上个任务最后看过还没来得及用的截图属于旧现场，新任务不带；看画面的次数与间隔也重新算
         self._transient_images.drain()
         self._picture_budget.reset()
+        self._skill_support.reset_read_window()
         self._prefix_guard.expect_rewrite("开新任务")
         self._context_compactor.checkpoints = 0
         # 上个任务的折叠块与请折叠的节奏都不带进新任务；后台还在写的折叠与集中整理当场作废，
@@ -2517,7 +2655,7 @@ class MinecraftAgent(BaseAgent):
         if name.startswith(f"{PROVIDER}_"):
             reply = reply_of(result)
             if name == OBSERVE and arguments.get("what") == "self" and reply.ok:
-                await self._apply_world_change(self._world.absorb_observation(reply.data))
+                await self._sync_world_fields(reply.data, from_observation=True)
             if picture_call and reply.ok:
                 return await self._absorb_picture(arguments, reply, result)
             return reply.raw
@@ -2659,11 +2797,15 @@ class MinecraftAgent(BaseAgent):
     def _call_is_read_only(self, name: str, arguments: Dict[str, Any]) -> bool:
         """这次调用只读取信息、不推进任务（纯读轮判定用）。
 
-        看现场、查资料、读技能、读回折叠原文天然只读；goal 只有在查在跟踪的在跑目标时
+        看现场、查资料、读回折叠原文天然只读；minecraft_skill 仅 read/list 算只读
+        （upsert/patch/remove 属于写入沉淀，不算纯读）；goal 只有在查在跟踪的在跑目标时
         才算读——带 ``path`` 读证据、回答提问、暂停取消都是在做事，不算读。
         """
         if name in _READ_ONLY_TOOL_NAMES:
             return True
+        if name == "minecraft_skill":
+            action = str(arguments.get("action") or "read").strip().lower()
+            return action in ("read", "list")
         if name == GOAL:
             return self._polls_running_goal(name, arguments)
         return False
@@ -2958,7 +3100,7 @@ class MinecraftAgent(BaseAgent):
         if self._in_lead_mode and not self._maicraft_ready():
             await self._notify_lead_unavailable("mcp_disconnected")
             return
-        await self._apply_world_change(self._world.absorb(page.world_fields))
+        await self._sync_world_fields(page.world_fields, from_observation=False)
         self._flush_due_interactions()
         self._flush_throttled_system_chats()
         if self._in_lead_mode and self._chat_gate.next_flush_delay_ms() == 0:
@@ -3051,6 +3193,13 @@ class MinecraftAgent(BaseAgent):
         )
         self._inject_wakeup_message(watchdog_wakeup_notice(goal_ids, stalled_s, doings=doings))
 
+    async def _sync_world_fields(self, payload: Any, *, from_observation: bool) -> None:
+        """在存档切换锁保护下吸收世界身份并完成工作文档/公共规矩/自建技能加载，防止事件页与开局代读并发抢跑。"""
+        async with self._world_change_lock:
+            change = self._world.absorb_observation(payload) if from_observation else self._world.absorb(payload)
+            if change is not None:
+                await self._on_world_identified(change)
+
     async def _apply_world_change(self, change: Optional[WorldChange]) -> None:
         """事件页或 observe(self) 认出了新的存档：切换工作文档；没变化什么也不做。"""
         if change is not None:
@@ -3066,6 +3215,7 @@ class MinecraftAgent(BaseAgent):
         self._mc_state.switch_world(change.after.id)
         await self._ensure_world_work_docs_loaded(change.after.id, change.after.name)
         await self._refresh_world_social_rules(change.after.id)
+        await self._skill_support.refresh_learned_skills(change.after.id)
         # 认出或切换存档后立即同步固定层钉住规矩与本场短期记忆工作文档切片，防止旧存档残留
         self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
         self._sync_short_term_work_docs()
@@ -3303,6 +3453,9 @@ class MinecraftAgent(BaseAgent):
             if clearable_key in shown and clearable_key not in current:
                 # 切入新存档或清空规矩时显式交付空列表告知前文规矩已失效，后续续做不再重复出现
                 delta[clearable_key] = []
+        if "recent_human_lines" in shown and "recent_human_lines" not in current:
+            # 近期公屏对话全部过期淘汰后显式清空，防止模型仍把前文陈旧对话当成眼下刚发生的
+            delta["recent_human_lines"] = ""
         delta["unchanged_since_earlier_task_state"] = sorted(key for key in current if key not in delta)
         return delta
 
@@ -3337,6 +3490,7 @@ class MinecraftAgent(BaseAgent):
             if await self._context_compactor.compact(messages, tools, facts, trigger_tokens=trigger, world_id=world_id):
                 self._sync_pinned_rules_message(messages, expect_rewrite=False)
                 self._shown_context = deepcopy(facts)
+                self._skill_support.note_context_folded()
                 # 整理就地改写了历史前段，之后的第一次请求重算前缀是预期内的
                 self._prefix_guard.expect_rewrite("后台集中整理")
         except asyncio.CancelledError:
@@ -3382,6 +3536,7 @@ class MinecraftAgent(BaseAgent):
             if await self._context_compactor.compact(messages, tools, facts, world_id=world_id):
                 self._sync_pinned_rules_message(messages, expect_rewrite=False)
                 self._shown_context = deepcopy(facts)
+                self._skill_support.note_context_folded()
                 self._prefix_guard.expect_rewrite("集中整理")
         except asyncio.CancelledError:
             raise
@@ -3410,7 +3565,8 @@ class MinecraftAgent(BaseAgent):
         )
         if saved <= 0:
             return False
-        # 收起就地改写了历史中段，下一次请求重算前缀是预期内的
+        # 收起就地改写了历史中段，下一次请求重算前缀是预期内的；同时通知短窗防重读允许按需重读被收起的技能
+        self._skill_support.note_context_folded()
         self._prefix_guard.expect_rewrite("收起旧记录")
         # 收起的记录里有任务状态：紧跟着补一份完整的，模型手上始终有一份没被收起的
         self._restate_if_swallowed(messages, states)
@@ -3524,7 +3680,8 @@ class MinecraftAgent(BaseAgent):
                 private=has_private_chat,
                 timestamp_ms=now_tick_ms,
             )
-        # 折叠就地改写了历史中段，下一次请求重算前缀是预期内的
+        # 折叠就地改写了历史中段，下一次请求重算前缀是预期内的；同时推进短窗折叠纪元允许按需重读被折走的技能
+        self._skill_support.note_context_folded()
         self._prefix_guard.expect_rewrite("后台折叠")
         # 折掉的区间里有任务状态：紧跟着补一份完整的，再量体积、记基线
         self._restate_if_swallowed(messages, states)
@@ -4042,7 +4199,8 @@ class MinecraftAgent(BaseAgent):
                 ),
                 timeout=timeout_s,
             )
-            return [hit.text for hit in hits if hit.text]
+            now_tick_ms = self._clock_ms()
+            return [self._short_term_memory.format_hit_for_flash(hit, now_ms=now_tick_ms) for hit in hits if hit.text]
 
         cross_res, local_res = await asyncio.gather(_load_cross_session(), _load_short_term(), return_exceptions=True)
         cross_lines: List[str] = []
@@ -4109,11 +4267,12 @@ class MinecraftAgent(BaseAgent):
                 if not content:
                     return
                 sender = (payload.sender or "").strip() or "其他玩家"
+                # 统一使用 Agent 注入的单调时钟域入库，避免 payload 的 wall-clock 毫秒与单调时钟错位导致时间衰减失效
                 self._short_term_memory.record_player_chat(
                     sender,
                     content,
                     private=bool(payload.private),
-                    timestamp_ms=int(payload.timestamp_ms or 0) or self._clock_ms(),
+                    timestamp_ms=self._clock_ms(),
                 )
                 ingest_result = self._chat_gate.ingest(payload, nearby_players=frozenset(self._nearby_players))
                 if not ingest_result.accepted:
@@ -4143,11 +4302,12 @@ class MinecraftAgent(BaseAgent):
             if not content:
                 return
             sender = (payload.sender or "").strip() or "其他玩家"
+            # 统一使用 Agent 注入的单调时钟域入库，保证与近期公屏窗及短期记忆衰减同源
             self._short_term_memory.record_player_chat(
                 sender,
                 content,
                 private=bool(payload.private),
-                timestamp_ms=int(payload.timestamp_ms or 0) or self._clock_ms(),
+                timestamp_ms=self._clock_ms(),
             )
             prefix = "[公屏·私聊]" if payload.private else "[公屏]"
             notice = f"{prefix} 玩家 {sender}：{content}"
@@ -4207,9 +4367,26 @@ class MinecraftAgent(BaseAgent):
         # 排除游戏 Agent 自己经 maicraft:chat 发出的公屏句，避免把刚说过的话重复注回自己上下文
         try:
             self._own_emitted_chats.remove(message)
+            try:
+                self._recorded_self_chats.remove(message)
+            except ValueError:
+                pass
             return
         except ValueError:
             pass
+        # 若该句已由本 Agent 在 _send_self_chat 阶段记入近期公屏与短期记忆（如主播直发工具 from_streamer=True），
+        # 这里消费去重标记后不再重复写入，防止并发玩家聊天穿插时出现两条相同的 [你回过]
+        already_recorded = False
+        try:
+            self._recorded_self_chats.remove(message)
+            already_recorded = True
+        except ValueError:
+            pass
+        # 外部通道替角色发出的公屏话：在开播活跃期同步记入双向近期公屏与本场短期记忆（统一使用本 Agent 单调时钟域）
+        if not already_recorded and self._live_active and (self._in_lead_mode or not self._task_finished):
+            now_tick_ms = self._clock_ms()
+            self._chat_gate.record_self_chat(message, now_ms=now_tick_ms)
+            self._short_term_memory.record_self_chat(message, timestamp_ms=now_tick_ms)
         # 空闲零消耗：没有活跃委派任务时不入队、不唤醒 LLM
         if not self._has_active_delegation_task():
             return
@@ -4225,7 +4402,7 @@ class MinecraftAgent(BaseAgent):
         if body.ok:
             # 读自己的回复同样带着 world：顺手更新一次眼下的存档；是不是旧版 Mod 只看事件页，
             # 这次回复恰好缺 world 键时不把已认出的存档退回不分存档
-            await self._apply_world_change(self._world.absorb_observation(body.data))
+            await self._sync_world_fields(body.data, from_observation=True)
         await self._bind_creature_world(body)
         scene = await self._call_maicraft(OBSERVE, {"what": "scene"})
         if scene.ok and self._creatures.world_key is not None:
@@ -4446,8 +4623,15 @@ class MinecraftAgent(BaseAgent):
         # 纯公屏回话类的补充指令在原话发出后即已完成，从固定层摘掉免得一直占在指令清单里
         self._task_instructions[:] = prune_sent_chat_supplements(self._task_instructions, message)
         text = message.strip()
-        # 游戏 Agent 自己经 maicraft:chat 发出时记入去重队列，供 _on_self_chatted 过滤回声；
-        # 主播经 minecraft_chat_send 直发时不记入，使其在活跃任务期可被游戏 Agent 旁听感知。
+        # 己方公屏发出一律同步写入近期双向对话窗与本场短期记忆，避免后续折叠或状态刷新时忘掉自己回过话；
+        # 记入 _recorded_self_chats 供 _on_self_chatted 判重，无论是否来自主播直发都不会在回调里二次写入；
+        # 游戏 Agent 自己经 maicraft:chat 发出时额外记入 _own_emitted_chats，供 _on_self_chatted 过滤回声防自唤醒。
+        if text:
+            now_tick_ms = self._clock_ms()
+            self._chat_gate.record_self_chat(text, now_ms=now_tick_ms)
+            self._short_term_memory.record_self_chat(text, timestamp_ms=now_tick_ms)
+            if self._event_bus is not None:
+                self._recorded_self_chats.append(text)
         if text and not from_streamer:
             self._own_emitted_chats.append(text)
         if self._event_bus is None:

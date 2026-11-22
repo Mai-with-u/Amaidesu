@@ -49,3 +49,13 @@ def test_removed_wait_tool_is_not_taught_anywhere() -> None:
     """minecraft_wait 已移除：游戏侧提示词不得再教它（话轮结束即让出，无需工具）。"""
     game = _game_prompt()
     assert "minecraft_wait" not in game
+
+
+def test_game_prompt_covers_station_registration_and_three_way_memory_tool_boundaries() -> None:
+    """提示词明确箱式加工站登记流程及 minecraft_rules / minecraft_notebook / minecraft_skill 三分边界。"""
+    game = _game_prompt()
+    assert 'remember(operation="station")' in game
+    assert "minecraft_rules" in game
+    assert "minecraft_notebook" in game
+    assert "minecraft_skill" in game
+    assert "scope=world" in game and "scope=global" in game
