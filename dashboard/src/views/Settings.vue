@@ -655,7 +655,9 @@ function getSectionFields(section: ConfigGroupSchema): ConfigFieldSchema[] {
 const isModelDomain = computed(() => activeFileTab.value === 'model.toml');
 
 /** 模型域所属分区（详情渲染取字段树用） */
-const modelSection = computed<ConfigGroupSchema | null>(() => getFileSections('model.toml')[0] ?? null);
+const modelSection = computed<ConfigGroupSchema | null>(
+  () => getFileSections('model.toml')[0] ?? null,
+);
 
 /** 详情模式判定：选中实体存在（模型域由专用页渲染，其余域要求实体在 schema 树中） */
 const isDetailMode = computed(() => activeEntityKey.value !== null);
@@ -1225,7 +1227,9 @@ function modelDetailKeyForField(key: string): string | null {
     const match = key.match(new RegExp(`^${arrayKey.replace(/\./g, '\\.')}\\.(\\d+)(\\.|$)`));
     if (!match) continue;
     const arr = getFieldValue(arrayKey);
-    const item = Array.isArray(arr) ? (arr[Number(match[1])] as Record<string, unknown> | undefined) : undefined;
+    const item = Array.isArray(arr)
+      ? (arr[Number(match[1])] as Record<string, unknown> | undefined)
+      : undefined;
     const name = String(item?.name ?? '');
     return name ? `${arrayKey}@${name}` : null;
   }

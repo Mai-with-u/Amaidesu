@@ -146,14 +146,16 @@ export function useTtsReplay(deps: TtsReplayDeps) {
   }
 
   function onLiveEvent(message: WebSocketMessage): void {
-    const utteranceId = typeof message.data?.utterance_id === 'string' ? message.data.utterance_id : '';
+    const utteranceId =
+      typeof message.data?.utterance_id === 'string' ? message.data.utterance_id : '';
     if (!utteranceId || utteranceId !== liveUtteranceId.value) return;
     if (message.type === EVENT.ttsUtterancePlaybackStarted) {
       // 首块出声：第一段已在说话（至少部分）
       liveLit.value = Math.max(liveLit.value, 1);
     } else if (message.type === EVENT.ttsUtteranceSentenceBoundary) {
       // 第 N 个句间隙 = 第 N 段已完整出声
-      const segmentIndex = typeof message.data.segment_index === 'number' ? message.data.segment_index : 0;
+      const segmentIndex =
+        typeof message.data.segment_index === 'number' ? message.data.segment_index : 0;
       liveLit.value = Math.max(liveLit.value, Math.min(segmentIndex, liveTotal.value));
     } else if (message.type === EVENT.ttsUtteranceFinished) {
       liveLit.value = liveTotal.value;
@@ -254,7 +256,9 @@ export function useTtsReplay(deps: TtsReplayDeps) {
     const ok = results.value.filter(r => r.success);
     const totalMs = ok.reduce((sum, r) => sum + (r.elapsedMs ?? 0), 0);
     const totalChars = ok.reduce((sum, r) => sum + r.chars, 0);
-    const firstAudioValues = ok.filter(r => r.firstAudioMs !== null).map(r => r.firstAudioMs as number);
+    const firstAudioValues = ok
+      .filter(r => r.firstAudioMs !== null)
+      .map(r => r.firstAudioMs as number);
     return {
       total: results.value.length,
       okCount: ok.length,
@@ -275,7 +279,8 @@ export function useTtsReplay(deps: TtsReplayDeps) {
   function buildSummaryText(): string {
     const s = summary.value;
     const name = deps.engineName?.value || '当前引擎';
-    const modeLabel = mode.value === 'play' ? '扬声器播放（耗时含播放）' : '仅合成测速（纯合成耗时）';
+    const modeLabel =
+      mode.value === 'play' ? '扬声器播放（耗时含播放）' : '仅合成测速（纯合成耗时）';
     const lines = [
       `TTS 整场回放 · ${name} · ${modeLabel}`,
       `句数：${s.okCount} 成功 / ${s.failedCount} 失败 / 共 ${s.total} 句已回放`,

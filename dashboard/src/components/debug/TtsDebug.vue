@@ -83,7 +83,10 @@
             :value="session.live_session_id"
           />
         </el-select>
-        <el-button :disabled="selectedSessionId === null || running" :loading="linesLoading" @click="loadLines"
+        <el-button
+          :disabled="selectedSessionId === null || running"
+          :loading="linesLoading"
+          @click="loadLines"
           >载入台词</el-button
         >
       </div>
@@ -103,7 +106,9 @@
       <div class="card-actions">
         <el-button type="primary" :disabled="!canStart" @click="startReplay">开始回放</el-button>
         <el-button v-if="running" type="warning" @click="stopReplay">停止</el-button>
-        <span v-if="lines.length > 0" class="replay-progress">{{ doneCount }} / {{ lines.length }}</span>
+        <span v-if="lines.length > 0" class="replay-progress"
+          >{{ doneCount }} / {{ lines.length }}</span
+        >
       </div>
       <p v-if="currentLine" class="replay-current">
         正在回放：<TtsStreamText :text="liveText || currentLine.content" :lit="liveLit" />
@@ -115,7 +120,9 @@
         <span v-if="summary.failedCount > 0" class="is-failed">失败 {{ summary.failedCount }}</span>
         <span>总耗时 {{ formatSeconds(summary.totalMs) }}</span>
         <span>平均每句 {{ formatSeconds(summary.avgMs) }}</span>
-        <span v-if="summary.avgFirstAudioMs !== null" title="请求起点到首个音频块出声：观众等主播开口的时长"
+        <span
+          v-if="summary.avgFirstAudioMs !== null"
+          title="请求起点到首个音频块出声：观众等主播开口的时长"
           >平均首声 {{ formatSeconds(summary.avgFirstAudioMs) }}</span
         >
         <span>平均每字 {{ formatSeconds(summary.perCharMs) }}/字</span>
@@ -138,7 +145,9 @@
             <template #default="{ row }">
               <TtsStreamText v-if="row.chat_id === liveChatId" :text="row.content" :lit="liveLit" />
               <span v-else :class="{ 'is-dropped': row.dropped }">{{ row.content }}</span>
-              <el-tag v-if="row.dropped" size="small" type="info" class="replay-dropped-tag">未送达</el-tag>
+              <el-tag v-if="row.dropped" size="small" type="info" class="replay-dropped-tag"
+                >未送达</el-tag
+              >
             </template>
           </el-table-column>
           <el-table-column label="字数" width="60">
@@ -146,16 +155,24 @@
           </el-table-column>
           <el-table-column label="情绪" width="96">
             <template #default="{ row }">
-              <span :class="{ 'is-unrecorded': !row.emotion }" :title="row.emotion ? `${row.emotion} × ${row.emotion_intensity ?? '—'}` : 'v49 前旧场次未落库情绪'">{{
-                emotionText(row)
-              }}</span>
+              <span
+                :class="{ 'is-unrecorded': !row.emotion }"
+                :title="
+                  row.emotion
+                    ? `${row.emotion} × ${row.emotion_intensity ?? '—'}`
+                    : 'v49 前旧场次未落库情绪'
+                "
+                >{{ emotionText(row) }}</span
+              >
             </template>
           </el-table-column>
           <el-table-column label="耗时" width="100">
             <template #default="{ row }">
-              <span :class="{ 'is-failed': isFailedRow(row.chat_id) }" :title="errorOf(row.chat_id)">{{
-                resultText(row.chat_id)
-              }}</span>
+              <span
+                :class="{ 'is-failed': isFailedRow(row.chat_id) }"
+                :title="errorOf(row.chat_id)"
+                >{{ resultText(row.chat_id) }}</span
+              >
             </template>
           </el-table-column>
         </el-table>
@@ -164,11 +181,14 @@
       <!-- 测速模式：最近一句合成音频试听 -->
       <template v-if="replayAudioUrl">
         <audio controls :src="replayAudioUrl" class="tts-audio" />
-        <el-button tag="a" :href="replayAudioUrl" :download="replayAudioFilename">下载 wav</el-button>
+        <el-button tag="a" :href="replayAudioUrl" :download="replayAudioFilename"
+          >下载 wav</el-button
+        >
       </template>
 
       <p class="card-hint">
-        回放经当前引擎的 handle_speech 生产入口逐句驱动，与直播实机同一链路（同文本规范化、同合成参数）；数据为场次落库台词。
+        回放经当前引擎的 handle_speech
+        生产入口逐句驱动，与直播实机同一链路（同文本规范化、同合成参数）；数据为场次落库台词。
       </p>
     </div>
   </section>
@@ -184,7 +204,12 @@ import { ElMessage } from 'element-plus';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { debugApi } from '@/api';
 import { DEFAULT_DEBUG_TEXT } from '@/components/debug/debugDefaults';
-import type { TtsDebugParamInfo, TtsStatusResponse, LiveSessionItem, ReviewSpeechLine } from '@/types';
+import type {
+  TtsDebugParamInfo,
+  TtsStatusResponse,
+  LiveSessionItem,
+  ReviewSpeechLine,
+} from '@/types';
 import { formatDateTimeCn, formatSeconds } from '@/utils/format';
 import { useTtsReplay, type ReplayLineResult } from '@/composables/useTtsReplay';
 import TtsReplayChart from '@/components/debug/TtsReplayChart.vue';

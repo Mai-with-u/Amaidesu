@@ -107,7 +107,11 @@
           </template>
 
           <template v-else-if="itemSchema?.type === 'boolean'">
-            <el-switch :model-value="items[index] as boolean" @update:model-value="items[index] = $event" @change="handleUpdate" />
+            <el-switch
+              :model-value="items[index] as boolean"
+              @update:model-value="items[index] = $event"
+              @change="handleUpdate"
+            />
           </template>
 
           <template v-else-if="isJsonItemType(itemSchema?.type)">

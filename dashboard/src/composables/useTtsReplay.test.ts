@@ -34,7 +34,12 @@ function speechLine(chatId: number, content: string, dropped = false) {
   return { chat_id: chatId, timestamp_ms: 1700000000000, content, dropped, memory_refs: [] };
 }
 
-function ttsOk(elapsedMs: number, audioBase64?: string, firstAudioMs?: number, playbackMs?: number) {
+function ttsOk(
+  elapsedMs: number,
+  audioBase64?: string,
+  firstAudioMs?: number,
+  playbackMs?: number,
+) {
   return {
     data: {
       success: true,
@@ -93,13 +98,26 @@ describe('useTtsReplay', () => {
     return onMessageMock.mock.calls[0]![0];
   }
 
-  function utteranceEvent(type: string, utteranceId: string, extra: Record<string, unknown> = {}): WebSocketMessage {
-    return { type, timestamp_ms: 0, data: { utterance_id: utteranceId, ...extra } } as WebSocketMessage;
+  function utteranceEvent(
+    type: string,
+    utteranceId: string,
+    extra: Record<string, unknown> = {},
+  ): WebSocketMessage {
+    return {
+      type,
+      timestamp_ms: 0,
+      data: { utterance_id: utteranceId, ...extra },
+    } as WebSocketMessage;
   }
 
   it('场次与台词加载：按场次号请求台词接口，行写入 lines；失败写 error 不抛出', async () => {
     listSessionsMock.mockResolvedValueOnce({
-      data: { items: [{ live_session_id: 7, kind: 'live', title: '周末场', started_at_ms: 1700000000000 }], total: 1 },
+      data: {
+        items: [
+          { live_session_id: 7, kind: 'live', title: '周末场', started_at_ms: 1700000000000 },
+        ],
+        total: 1,
+      },
     } as never);
     listSpeechMock.mockResolvedValueOnce({ data: { items: [speechLine(1, '你好')] } } as never);
     const { state } = makeState();
@@ -248,7 +266,9 @@ describe('useTtsReplay', () => {
     const dispatch = wsDispatch();
     await dispatch(utteranceEvent(EVENT.ttsUtterancePlaybackStarted, utteranceId));
     expect(state.liveLit.value).toBe(1);
-    await dispatch(utteranceEvent(EVENT.ttsUtteranceSentenceBoundary, utteranceId, { segment_index: 2 }));
+    await dispatch(
+      utteranceEvent(EVENT.ttsUtteranceSentenceBoundary, utteranceId, { segment_index: 2 }),
+    );
     expect(state.liveLit.value).toBe(2);
     // 别的 utterance 不点亮
     await dispatch(utteranceEvent(EVENT.ttsUtteranceFinished, 'replay-other-1'));
@@ -290,7 +310,9 @@ describe('useTtsReplay', () => {
       revokeObjectURL: vi.fn((url: string) => revokedUrls.push(url)),
     });
 
-    testTtsMock.mockResolvedValueOnce(ttsOk(150, 'YUJTSS1mYWtl')).mockResolvedValueOnce(ttsFail('不支持合成'));
+    testTtsMock
+      .mockResolvedValueOnce(ttsOk(150, 'YUJTSS1mYWtl'))
+      .mockResolvedValueOnce(ttsFail('不支持合成'));
 
     await state.startReplay();
 
@@ -329,7 +351,11 @@ describe('useTtsReplay', () => {
 
 describe('splitSpokenSegments', () => {
   it('按句末标点切段，保留标点', () => {
-    expect(splitSpokenSegments('你好。今天好吗？开始吧！')).toEqual(['你好。', '今天好吗？', '开始吧！']);
+    expect(splitSpokenSegments('你好。今天好吗？开始吧！')).toEqual([
+      '你好。',
+      '今天好吗？',
+      '开始吧！',
+    ]);
   });
 
   it('无标点整句一段；空文本返回空段', () => {

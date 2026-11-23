@@ -349,7 +349,8 @@ async function copyText(text: string): Promise<void> {
         class="delegate-line"
         :class="{ 'is-clamped': !delegateExpanded }"
       >
-        <span class="delegate-label">指令：</span><span class="delegate-text">{{ delegate.instruction }}</span>
+        <span class="delegate-label">指令：</span
+        ><span class="delegate-text">{{ delegate.instruction }}</span>
       </p>
       <p
         v-if="delegate.ownWords"
@@ -357,7 +358,8 @@ async function copyText(text: string): Promise<void> {
         class="delegate-line"
         :class="{ 'is-clamped': !delegateExpanded }"
       >
-        <span class="delegate-label">复述：</span><span class="delegate-text">{{ delegate.ownWords }}</span>
+        <span class="delegate-label">复述：</span
+        ><span class="delegate-text">{{ delegate.ownWords }}</span>
       </p>
       <button
         v-if="delegateOverflow"

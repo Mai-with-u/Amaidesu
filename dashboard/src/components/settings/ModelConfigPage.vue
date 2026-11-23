@@ -2,9 +2,7 @@
   <div class="model-config-page">
     <!-- ── 详情形态：单实体全宽编辑（设置壳目录/表格/搜索进入） ── -->
     <template v-if="detailKey">
-      <div v-if="!detailTarget" class="detail-missing">
-        该条目已不存在（可能已被删除或改名）
-      </div>
+      <div v-if="!detailTarget" class="detail-missing">该条目已不存在（可能已被删除或改名）</div>
 
       <!-- 用途详情：主模型与备选链 + 子字段 -->
       <div
@@ -12,10 +10,7 @@
         class="entity-detail"
         :data-config-key="detailKey"
       >
-        <div
-          v-if="danglingRefs(detailProfileEntry).length > 0"
-          class="warn"
-        >
+        <div v-if="danglingRefs(detailProfileEntry).length > 0" class="warn">
           引用的 {{ danglingRefs(detailProfileEntry).join('、') }} 已不在注册表
         </div>
         <div class="detail-block">
@@ -249,243 +244,243 @@
 
     <!-- ── 总览：三层关系 + 语义检索（关系视图） ── -->
     <template v-else>
-    <!-- ── 第一层：用途分配（llm_profiles） ── -->
-    <section class="zone" :data-config-key="PROFILES_CONTAINER_KEY">
-      <div class="zone-head">
-        <h2>用途分配</h2>
-        <span class="cnt">{{ profileEntries.length }} 个用途</span>
-      </div>
-      <div class="use-grid">
-        <div
-          v-for="profile in profileEntries"
-          :key="profile.key"
-          class="use-card"
-          :data-config-key="profile.key"
-        >
-          <div class="use-name">
-            <span class="u-dot"></span>{{ profileName(profile.key) }}
-            <el-tag
-              v-if="getChangeCount(`${profile.key}.model_list`) > 0"
-              size="small"
-              type="warning"
-              effect="plain"
-            >
-              已修改
-            </el-tag>
-          </div>
-          <div v-if="danglingRefs(profile).length > 0" class="warn">
-            引用的 {{ danglingRefs(profile).join('、') }} 已不在注册表
-          </div>
-          <div class="use-main">
-            <span class="u-main-label">主模型</span>
-            <el-select
-              :model-value="profile.modelList[0] ?? ''"
-              filterable
-              allow-create
-              default-first-option
-              placeholder="未设置"
-              class="use-main-select"
-              @update:model-value="setMainModel(profile, $event as string)"
-            >
-              <el-option v-for="name in modelNames" :key="name" :label="name" :value="name" />
-            </el-select>
-          </div>
-          <div class="use-chain">
-            <span
-              v-for="(name, i) in profile.modelList.slice(1)"
-              :key="`${profile.key}-fallback-${i}`"
-              class="chip"
-            >
-              {{ name }}
-              <el-icon class="chip-x" @click="removeFallback(profile, i + 1)"><Close /></el-icon>
-            </span>
-            <el-select
-              :model-value="''"
-              filterable
-              allow-create
-              default-first-option
-              placeholder="＋备选"
-              size="small"
-              class="add-fallback"
-              @update:model-value="addFallback(profile, $event as string)"
-            >
-              <el-option v-for="name in modelNames" :key="name" :label="name" :value="name" />
-            </el-select>
-          </div>
-          <!-- 其余真实子字段：低调折叠条（控件非指引），无子字段的卡不渲染 -->
-          <details v-if="profile.otherChildren.length > 0" class="more-block">
-            <summary class="more-toggle">更多设置（{{ profile.otherChildren.length }}）</summary>
-            <SubFieldGroup
-              :fields="profile.otherChildren"
-              :get-value="getValue"
-              :get-original="getOriginal"
-              :update-value="updateValue"
-              :get-change-count="getChangeCount"
-              :show-advanced="showAdvanced"
-            />
-          </details>
+      <!-- ── 第一层：用途分配（llm_profiles） ── -->
+      <section class="zone" :data-config-key="PROFILES_CONTAINER_KEY">
+        <div class="zone-head">
+          <h2>用途分配</h2>
+          <span class="cnt">{{ profileEntries.length }} 个用途</span>
         </div>
-      </div>
-    </section>
-
-    <!-- ── 第二层：模型注册（llm_models） ── -->
-    <section class="zone" :data-config-key="MODELS_KEY">
-      <div class="zone-head">
-        <h2>模型注册</h2>
-        <span class="cnt">{{ models.length }} 个模型 · {{ unusedCount }} 个未投入使用</span>
-      </div>
-      <div class="filters">
-        <button
-          type="button"
-          class="fbtn"
-          :class="{ on: providerFilter === 'all' }"
-          @click="providerFilter = 'all'"
-        >
-          全部
-        </button>
-        <button
-          v-for="name in providerNames"
-          :key="name"
-          type="button"
-          class="fbtn"
-          :class="{ on: providerFilter === name }"
-          @click="providerFilter = name"
-        >
-          {{ name }}
-        </button>
-      </div>
-      <table class="model-table">
-        <thead>
-          <tr>
-            <th>模型标识</th>
-            <th>提供商</th>
-            <th>输入 ¥/M</th>
-            <th>输出 ¥/M</th>
-            <th>能力</th>
-            <th>被用途引用</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <template v-for="idx in filteredModelIndices" :key="idx">
-            <tr class="model-row" @click="emit('navigate', modelDetailKey(idx))">
-              <td class="mono">{{ itemDisplayName(models[idx]) || '未命名' }}</td>
-              <td :class="{ 'dangling-cell': isProviderDangling(models[idx]) }">
-                {{ str(models[idx]?.api_provider) || '—' }}
-              </td>
-              <td class="mono">{{ formatPrice(models[idx]?.price_in) }}</td>
-              <td class="mono">{{ formatPrice(models[idx]?.price_out) }}</td>
-              <td>
-                <span v-if="models[idx]?.visual === true" class="tag">视觉</span>
-                <span v-if="models[idx]?.cache === 'hit_discount'" class="tag">缓存 5 折</span>
-                <span v-if="modelAbilityTags(models[idx]).length === 0" class="tag grey">—</span>
-              </td>
-              <td>
-                <template v-if="usageChips(models[idx]).length > 0">
-                  <span v-for="chip in usageChips(models[idx])" :key="chip" class="ref">{{
-                    chip
-                  }}</span>
-                </template>
-                <span v-else class="unused">未投入使用</span>
-              </td>
-              <td @click.stop>
-                <div class="row-actions">
-                  <el-button
-                    size="small"
-                    text
-                    :icon="Connection"
-                    :loading="testStates[idx]?.status === 'loading'"
-                    @click="testModelConnectivity(idx)"
-                    >测试</el-button
-                  >
-                  <el-tooltip
-                    v-if="testStates[idx]?.status === 'ok'"
-                    :content="`服务端模型：${testStates[idx]?.model ?? '未知'}${
-                      testStates[idx]?.finishReason
-                        ? ' · finish_reason: ' + testStates[idx]?.finishReason
-                        : ''
-                    }`"
-                    placement="top"
-                  >
-                    <span class="test-ok mono">连通 {{ testStates[idx]?.latencyMs }}ms</span>
-                  </el-tooltip>
-                  <el-tooltip
-                    v-else-if="testStates[idx]?.status === 'error'"
-                    :content="testStates[idx]?.error ?? ''"
-                    placement="top"
-                  >
-                    <span class="test-fail">失败</span>
-                  </el-tooltip>
-                  <el-button
-                    type="danger"
-                    size="small"
-                    text
-                    :icon="Delete"
-                    @click="removeModel(idx)"
-                  />
-                </div>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-      <div class="zone-foot">
-        <el-button type="primary" :icon="Plus" @click="addModel">＋ 添加模型</el-button>
-      </div>
-    </section>
-
-    <!-- ── 第三层：提供商接入（llm_providers） ── -->
-    <section class="zone" :data-config-key="PROVIDERS_KEY">
-      <div class="zone-head">
-        <h2>提供商接入</h2>
-        <span class="cnt">{{ providers.length }} 个提供商</span>
-        <span class="side">
-          <el-button type="primary" :icon="Plus" @click="addProvider">＋ 添加提供商</el-button>
-        </span>
-      </div>
-      <div v-for="entry in providerEntries" :key="entry.index" class="prov">
-        <div
-          class="prov-head"
-          @click="emit('navigate', `${PROVIDERS_KEY}@${itemDisplayName(entry.item)}`)"
-        >
-          <span class="name">{{ itemDisplayName(entry.item) || '未命名' }}</span>
-          <span class="host mono">{{ str(entry.item.base_url) }}</span>
-          <span class="key" :class="apiKeySet(entry.item.api_key) ? 'is-set' : 'is-unset'">
-            {{ apiKeySet(entry.item.api_key) ? '● 密钥已设置' : '○ 未设置' }}
-          </span>
-          <span class="models-count"
-            >{{ modelsOfProvider(itemDisplayName(entry.item)).length }} 个模型</span
+        <div class="use-grid">
+          <div
+            v-for="profile in profileEntries"
+            :key="profile.key"
+            class="use-card"
+            :data-config-key="profile.key"
           >
-          <el-button
-            type="danger"
-            size="small"
-            text
-            :icon="Delete"
-            @click.stop="removeProvider(entry.index)"
-          />
+            <div class="use-name">
+              <span class="u-dot"></span>{{ profileName(profile.key) }}
+              <el-tag
+                v-if="getChangeCount(`${profile.key}.model_list`) > 0"
+                size="small"
+                type="warning"
+                effect="plain"
+              >
+                已修改
+              </el-tag>
+            </div>
+            <div v-if="danglingRefs(profile).length > 0" class="warn">
+              引用的 {{ danglingRefs(profile).join('、') }} 已不在注册表
+            </div>
+            <div class="use-main">
+              <span class="u-main-label">主模型</span>
+              <el-select
+                :model-value="profile.modelList[0] ?? ''"
+                filterable
+                allow-create
+                default-first-option
+                placeholder="未设置"
+                class="use-main-select"
+                @update:model-value="setMainModel(profile, $event as string)"
+              >
+                <el-option v-for="name in modelNames" :key="name" :label="name" :value="name" />
+              </el-select>
+            </div>
+            <div class="use-chain">
+              <span
+                v-for="(name, i) in profile.modelList.slice(1)"
+                :key="`${profile.key}-fallback-${i}`"
+                class="chip"
+              >
+                {{ name }}
+                <el-icon class="chip-x" @click="removeFallback(profile, i + 1)"><Close /></el-icon>
+              </span>
+              <el-select
+                :model-value="''"
+                filterable
+                allow-create
+                default-first-option
+                placeholder="＋备选"
+                size="small"
+                class="add-fallback"
+                @update:model-value="addFallback(profile, $event as string)"
+              >
+                <el-option v-for="name in modelNames" :key="name" :label="name" :value="name" />
+              </el-select>
+            </div>
+            <!-- 其余真实子字段：低调折叠条（控件非指引），无子字段的卡不渲染 -->
+            <details v-if="profile.otherChildren.length > 0" class="more-block">
+              <summary class="more-toggle">更多设置（{{ profile.otherChildren.length }}）</summary>
+              <SubFieldGroup
+                :fields="profile.otherChildren"
+                :get-value="getValue"
+                :get-original="getOriginal"
+                :update-value="updateValue"
+                :get-change-count="getChangeCount"
+                :show-advanced="showAdvanced"
+              />
+            </details>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ── 第四层：语义检索（embedding）：引用一个提供商，状态标签以后端实际状态为准 ── -->
-    <section v-if="embeddingField" class="zone" :data-config-key="EMBEDDING_KEY">
-      <div class="zone-head">
-        <h2>语义检索</h2>
-        <span class="side">
-          <el-tag :type="embeddingState.ready ? 'success' : 'warning'" effect="plain">
-            {{ embeddingState.text }}
-          </el-tag>
-        </span>
-      </div>
-      <SubFieldGroup
-        :fields="embeddingField.children ?? []"
-        :get-value="getValue"
-        :get-original="getOriginal"
-        :update-value="updateValue"
-        :get-change-count="getChangeCount"
-        :show-advanced="showAdvanced"
-      />
-    </section>
+      <!-- ── 第二层：模型注册（llm_models） ── -->
+      <section class="zone" :data-config-key="MODELS_KEY">
+        <div class="zone-head">
+          <h2>模型注册</h2>
+          <span class="cnt">{{ models.length }} 个模型 · {{ unusedCount }} 个未投入使用</span>
+        </div>
+        <div class="filters">
+          <button
+            type="button"
+            class="fbtn"
+            :class="{ on: providerFilter === 'all' }"
+            @click="providerFilter = 'all'"
+          >
+            全部
+          </button>
+          <button
+            v-for="name in providerNames"
+            :key="name"
+            type="button"
+            class="fbtn"
+            :class="{ on: providerFilter === name }"
+            @click="providerFilter = name"
+          >
+            {{ name }}
+          </button>
+        </div>
+        <table class="model-table">
+          <thead>
+            <tr>
+              <th>模型标识</th>
+              <th>提供商</th>
+              <th>输入 ¥/M</th>
+              <th>输出 ¥/M</th>
+              <th>能力</th>
+              <th>被用途引用</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="idx in filteredModelIndices" :key="idx">
+              <tr class="model-row" @click="emit('navigate', modelDetailKey(idx))">
+                <td class="mono">{{ itemDisplayName(models[idx]) || '未命名' }}</td>
+                <td :class="{ 'dangling-cell': isProviderDangling(models[idx]) }">
+                  {{ str(models[idx]?.api_provider) || '—' }}
+                </td>
+                <td class="mono">{{ formatPrice(models[idx]?.price_in) }}</td>
+                <td class="mono">{{ formatPrice(models[idx]?.price_out) }}</td>
+                <td>
+                  <span v-if="models[idx]?.visual === true" class="tag">视觉</span>
+                  <span v-if="models[idx]?.cache === 'hit_discount'" class="tag">缓存 5 折</span>
+                  <span v-if="modelAbilityTags(models[idx]).length === 0" class="tag grey">—</span>
+                </td>
+                <td>
+                  <template v-if="usageChips(models[idx]).length > 0">
+                    <span v-for="chip in usageChips(models[idx])" :key="chip" class="ref">{{
+                      chip
+                    }}</span>
+                  </template>
+                  <span v-else class="unused">未投入使用</span>
+                </td>
+                <td @click.stop>
+                  <div class="row-actions">
+                    <el-button
+                      size="small"
+                      text
+                      :icon="Connection"
+                      :loading="testStates[idx]?.status === 'loading'"
+                      @click="testModelConnectivity(idx)"
+                      >测试</el-button
+                    >
+                    <el-tooltip
+                      v-if="testStates[idx]?.status === 'ok'"
+                      :content="`服务端模型：${testStates[idx]?.model ?? '未知'}${
+                        testStates[idx]?.finishReason
+                          ? ' · finish_reason: ' + testStates[idx]?.finishReason
+                          : ''
+                      }`"
+                      placement="top"
+                    >
+                      <span class="test-ok mono">连通 {{ testStates[idx]?.latencyMs }}ms</span>
+                    </el-tooltip>
+                    <el-tooltip
+                      v-else-if="testStates[idx]?.status === 'error'"
+                      :content="testStates[idx]?.error ?? ''"
+                      placement="top"
+                    >
+                      <span class="test-fail">失败</span>
+                    </el-tooltip>
+                    <el-button
+                      type="danger"
+                      size="small"
+                      text
+                      :icon="Delete"
+                      @click="removeModel(idx)"
+                    />
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <div class="zone-foot">
+          <el-button type="primary" :icon="Plus" @click="addModel">＋ 添加模型</el-button>
+        </div>
+      </section>
+
+      <!-- ── 第三层：提供商接入（llm_providers） ── -->
+      <section class="zone" :data-config-key="PROVIDERS_KEY">
+        <div class="zone-head">
+          <h2>提供商接入</h2>
+          <span class="cnt">{{ providers.length }} 个提供商</span>
+          <span class="side">
+            <el-button type="primary" :icon="Plus" @click="addProvider">＋ 添加提供商</el-button>
+          </span>
+        </div>
+        <div v-for="entry in providerEntries" :key="entry.index" class="prov">
+          <div
+            class="prov-head"
+            @click="emit('navigate', `${PROVIDERS_KEY}@${itemDisplayName(entry.item)}`)"
+          >
+            <span class="name">{{ itemDisplayName(entry.item) || '未命名' }}</span>
+            <span class="host mono">{{ str(entry.item.base_url) }}</span>
+            <span class="key" :class="apiKeySet(entry.item.api_key) ? 'is-set' : 'is-unset'">
+              {{ apiKeySet(entry.item.api_key) ? '● 密钥已设置' : '○ 未设置' }}
+            </span>
+            <span class="models-count"
+              >{{ modelsOfProvider(itemDisplayName(entry.item)).length }} 个模型</span
+            >
+            <el-button
+              type="danger"
+              size="small"
+              text
+              :icon="Delete"
+              @click.stop="removeProvider(entry.index)"
+            />
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 第四层：语义检索（embedding）：引用一个提供商，状态标签以后端实际状态为准 ── -->
+      <section v-if="embeddingField" class="zone" :data-config-key="EMBEDDING_KEY">
+        <div class="zone-head">
+          <h2>语义检索</h2>
+          <span class="side">
+            <el-tag :type="embeddingState.ready ? 'success' : 'warning'" effect="plain">
+              {{ embeddingState.text }}
+            </el-tag>
+          </span>
+        </div>
+        <SubFieldGroup
+          :fields="embeddingField.children ?? []"
+          :get-value="getValue"
+          :get-original="getOriginal"
+          :update-value="updateValue"
+          :get-change-count="getChangeCount"
+          :show-advanced="showAdvanced"
+        />
+      </section>
     </template>
   </div>
 </template>
@@ -716,7 +711,9 @@ const detailTarget = computed<DetailTarget | null>(() => {
 const detailProfileEntry = computed(() => {
   const target = detailTarget.value;
   if (!target || target.kind !== 'profile') return null;
-  return profileEntries.value.find(p => p.key === `${PROFILES_CONTAINER_KEY}.${target.name}`) ?? null;
+  return (
+    profileEntries.value.find(p => p.key === `${PROFILES_CONTAINER_KEY}.${target.name}`) ?? null
+  );
 });
 
 /** 模型详情底部的反向引用：被哪些用途以什么角色引用（点击跳到对应用途详情） */

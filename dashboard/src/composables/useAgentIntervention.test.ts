@@ -99,7 +99,12 @@ describe('useAgentIntervention', () => {
   it('建议模式：拒收回执以 warning 提示原因', async () => {
     const composable = mount(true);
     suggestLeadMock.mockResolvedValue({
-      data: { accepted: false, target: 'minecraft', lead_agent: 'streamer', reason: 'manual_streamer' },
+      data: {
+        accepted: false,
+        target: 'minecraft',
+        lead_agent: 'streamer',
+        reason: 'manual_streamer',
+      },
     } as never);
     await composable.sendToTarget(MINECRAFT_AGENT_NAME, 'suggest', '小心苦力怕');
     expect(ElMessage.warning).toHaveBeenCalled();

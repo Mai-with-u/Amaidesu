@@ -19,7 +19,10 @@
               :model-value="getValue(enabledLeaf(unit.container)!.key) === true"
               size="small"
               @click.stop
-              @change="(v: string | number | boolean) => unit.container && toggleSubEnabled(unit.container, v)"
+              @change="
+                (v: string | number | boolean) =>
+                  unit.container && toggleSubEnabled(unit.container, v)
+              "
             />
             <el-badge
               v-if="getChildrenChangeCount(unit.container) > 0"

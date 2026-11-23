@@ -9,7 +9,15 @@ import { GridComponent, MarkLineComponent, TooltipComponent } from 'echarts/comp
 import { CanvasRenderer } from 'echarts/renderers';
 import { useThemeStore } from '@/stores/theme';
 
-echarts.use([BarChart, LineChart, PieChart, GridComponent, MarkLineComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([
+  BarChart,
+  LineChart,
+  PieChart,
+  GridComponent,
+  MarkLineComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
 
 /** 图表内可用的主题色板；canvas 不解析 CSS 变量，需运行时读取实际色值 */
 export interface ChartPalette {

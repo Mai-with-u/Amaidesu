@@ -377,7 +377,10 @@
                 <el-radio-button :value="MINECRAFT_AGENT_NAME">minecraft</el-radio-button>
               </el-radio-group>
               <!-- 游戏主控态挑明：给主播的递话会被后端同时转一份非强杀建议给主控游戏 -->
-              <span v-if="interventionTarget === STREAMER_AGENT_NAME && streamerNudgeHint" class="input-target-hint">
+              <span
+                v-if="interventionTarget === STREAMER_AGENT_NAME && streamerNudgeHint"
+                class="input-target-hint"
+              >
                 {{ streamerNudgeHint }}
               </span>
             </div>

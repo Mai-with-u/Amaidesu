@@ -30,7 +30,9 @@ const palette = useChartPalette();
 const containerRef = ref<HTMLElement | null>(null);
 
 /** 任一句带锚点分段即按双线渲染；否则回退单条总耗时线 */
-const hasTimeline = computed(() => props.results.some(r => r.firstAudioMs !== null || r.playbackMs !== null));
+const hasTimeline = computed(() =>
+  props.results.some(r => r.firstAudioMs !== null || r.playbackMs !== null),
+);
 
 function toSeconds(values: Array<number | null>): Array<number | null> {
   return values.map(v => (v === null ? null : v / 1000));
@@ -60,7 +62,13 @@ const option = computed<EChartsCoreOption>(() => {
     markLine: averageMarkLine(props.avgMs, '平均总', palette.value.primaryColor),
   });
   return {
-    grid: { left: 56, right: 24, top: hasTimeline.value ? 28 : 16, bottom: 28, containLabel: false },
+    grid: {
+      left: 56,
+      right: 24,
+      top: hasTimeline.value ? 28 : 16,
+      bottom: 28,
+      containLabel: false,
+    },
     legend: hasTimeline.value
       ? {
           data: ['首声延迟', '总耗时'],
@@ -89,7 +97,11 @@ const option = computed<EChartsCoreOption>(() => {
   };
 });
 
-function averageMarkLine(avgMs: number | null, label: string, color: string): Record<string, unknown> | undefined {
+function averageMarkLine(
+  avgMs: number | null,
+  label: string,
+  color: string,
+): Record<string, unknown> | undefined {
   if (avgMs === null || avgMs <= 0) return undefined;
   return {
     silent: true,
