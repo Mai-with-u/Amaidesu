@@ -183,7 +183,8 @@ async def test_v50_db_upgrades_to_v51_and_progress_repo_semantics(db_path: Path)
     upgraded = SQLiteDatabase(db_path)
     await upgraded.initialize()
     try:
-        assert await upgraded.get_schema_version() == SCHEMA_VERSION == 51
+        assert SCHEMA_VERSION >= 51
+        assert await upgraded.get_schema_version() == SCHEMA_VERSION
         await upgraded.assert_schema_ready()
 
         # 存量运营提醒保留完好
@@ -264,7 +265,7 @@ async def test_v50_db_upgrades_to_v51_and_progress_repo_semantics(db_path: Path)
     reopened = SQLiteDatabase(db_path)
     await reopened.initialize()
     try:
-        assert await reopened.get_schema_version() == SCHEMA_VERSION == 51
+        assert await reopened.get_schema_version() == SCHEMA_VERSION
         persisted = await reopened.memory_corrections.list_commitment_updates_by_session(live_session_id=session_id)
         assert [(item.commitment_id, item.verdict) for item in persisted] == [(comm_b, "done"), (comm_a, "done")]
     finally:
