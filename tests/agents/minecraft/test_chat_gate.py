@@ -15,6 +15,7 @@ def _chat(
     sender: str,
     content: str,
     *,
+    sender_id: str = "",
     private: bool = False,
     self_mention: bool = False,
     note: str = "",
@@ -27,6 +28,7 @@ def _chat(
         game="minecraft",
         kind="player",
         sender=sender,
+        sender_id=sender_id,
         sender_distance=distance,
         content=content,
         private=private,
@@ -330,3 +332,44 @@ def test_recent_chats_render_bidirectional_dialogue_with_relative_age_and_expire
     fresh_rendered = gate.format_recent_human_lines()
     assert "[游戏公屏·身边4格·刚刚] PlayerA：现在去下矿吗" in fresh_rendered
     assert "给你羊肉" not in fresh_rendered
+
+
+def test_chat_gate_formats_sender_with_aliases_and_merges_note_cleanly() -> None:
+    """游戏公屏门控接通别名索引：UUID 优先、唯一名回落、附 note 合并单对括号、无别名平滑退回原名。"""
+    clock = FakeClock(1_200_000)
+    gate = MinecraftChatGate(clock=clock.now_ms)
+    by_uuid = {"uuid-alpha": ("阿甲",)}
+    by_name = {"playeralpha": ("阿甲",), "playerbeta": ("阿乙",)}
+
+    # 1) UUID 命中：合批行与近期对话均带常用称呼，recent_human_texts 仍保留原始账号名形态供短期记忆去重
+    res_near = gate.ingest(
+        _chat("PlayerAlpha", "仓库木板够了", sender_id="UUID-ALPHA", distance=6.0),
+        aliases_by_uuid=by_uuid,
+        aliases_by_name=by_name,
+    )
+    assert res_near.formatted_line == "[游戏公屏·身边6格] PlayerAlpha（常叫：阿甲）：仓库木板够了"
+    assert "PlayerAlpha：仓库木板够了" in gate.recent_human_texts()
+    assert "PlayerAlpha（常叫：阿甲）：仓库木板够了" in gate.format_recent_human_lines()
+
+    # 2) 带未核验 note 且命中别名：与归属层同源，合并到同一对中文括号内避免双括号
+    res_note = gate.ingest(
+        _chat("PlayerBeta", "密码在桥洞下", private=True, note="来源未核验"),
+        aliases_by_uuid=by_uuid,
+        aliases_by_name=by_name,
+    )
+    assert res_note.formatted_line == "[游戏公屏·私聊] PlayerBeta（常叫：阿乙；来源未核验）：密码在桥洞下"
+
+    # 3) 未登记别名或未传索引：平滑退回原名
+    res_plain = gate.ingest(
+        _chat("PlayerPlain", "我先去砍树", distance=5.0),
+        aliases_by_uuid=by_uuid,
+        aliases_by_name=by_name,
+    )
+    assert res_plain.formatted_line == "[游戏公屏·身边5格] PlayerPlain：我先去砍树"
+
+    clock.tick(2_000)
+    batch = gate.flush_due()
+    assert batch is not None
+    assert "[游戏公屏·身边6格] PlayerAlpha（常叫：阿甲）：仓库木板够了" in batch.lines
+    assert "[游戏公屏·私聊] PlayerBeta（常叫：阿乙；来源未核验）：密码在桥洞下" in batch.lines
+    assert "[游戏公屏·身边5格] PlayerPlain：我先去砍树" in batch.lines

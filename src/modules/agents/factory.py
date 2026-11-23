@@ -116,7 +116,8 @@ def instantiate_agent(
       组合根必须传入
     - minecraft：thinking_sink / task_tracker / creature_repo（缺失 = 生物名册只在
       内存里，不跨场次）/ work_docs_repo / social_fact_repo（缺失 = 不注入存档公共
-      社交规矩）/ embedding_setup（可选，缺失时本场短期记忆降级为关键词检索）；llm_profile 使用 Agent
+      社交规矩）/ game_player_repo（缺失 = 游戏公屏发言人仅按原名显示）/ embedding_setup（可选，
+      缺失时本场短期记忆降级为关键词检索）；llm_profile 使用 Agent
       类默认值（``[llm_profiles.minecraft]`` 段）；技能库在工厂内取全局单例注入
     - text_adv / game_2048：工厂只做"名字 → 包内 build"——配置解析后交给
       各包的 ``build(config, deps)``，感知/动作后端选型与装配知识收在包内
@@ -174,6 +175,7 @@ def instantiate_agent(
             "creature_repo": deps.creature_repo,
             "work_docs_repo": deps.work_docs_repo,
             "social_fact_repo": deps.social_fact_repo,
+            "game_player_repo": deps.game_player_repo,
         }
         if _accepts_init_kwarg(MinecraftAgent, "lead_coordinator"):
             minecraft_kwargs["lead_coordinator"] = deps.lead_coordinator

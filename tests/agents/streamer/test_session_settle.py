@@ -2430,3 +2430,79 @@ async def test_settle_progress_correction_not_flagged_unhandled_and_feeds_closur
     # comm_open 仍为 open，comm_closed 仍为 closed
     assert (await store.commitments.get_commitment(commitment_id=comm_open)).status == "open"
     assert (await store.commitments.get_commitment(commitment_id=comm_closed)).status == "closed"
+
+
+async def test_settle_viewer_names_guard_excludes_known_player_aliases(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """下播档案标题观众名护栏排除已知游戏玩家常用称呼：撞名玩家别名放行，纯观众昵称仍拦截。"""
+    session_id = await _ended_session(store, started_at_ms=2_000_000)
+    await _speech(store, session_id, "今天跟阿甲小队把仓库修好了", timestamp_ms=2_010_000)
+    await _speech(store, session_id, "谢谢路人观众甲提醒我们带火把", timestamp_ms=2_020_000)
+
+    # 观众表同时登记“阿甲小队”（与游戏玩家别名撞名）和“路人观众甲”（纯观众昵称）
+    await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="v1",
+        user_name="阿甲小队",
+        timestamp_ms=2_005_000,
+        name_match_window_ms=0,
+    )
+    await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="v2",
+        user_name="路人观众甲",
+        timestamp_ms=2_006_000,
+        name_match_window_ms=0,
+    )
+
+    player_alpha = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-alpha", name="PlayerAlpha", live_session_id=session_id, at_ms=2_007_000
+    )
+    await store.game_players.set_aliases(player_id=player_alpha.id, aliases=["阿甲小队"])
+
+    llm = _reply(
+        json.dumps(
+            {
+                "archive": [
+                    {
+                        "line": 1,
+                        "title": "和阿甲小队一起修好了仓库",
+                        "quote": "今天跟阿甲小队把仓库修好了",
+                    },
+                    {
+                        "line": 2,
+                        "title": "路人观众甲提醒直播间带火把",
+                        "quote": "谢谢路人观众甲提醒我们带火把",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        '{"commitments": []}',
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        viewer_repo=store.viewers,
+        game_player_repo=store.game_players,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 7_777,
+    )
+    assert await settler.settle_session(session_id) is True
+
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    texts = [line.text for line in lines]
+    assert any("阿甲小队" in text for text in texts)
+    assert all("路人观众甲" not in text for text in texts)
+    sess = await store.sessions.get_live_session(live_session_id=session_id)
+    assert sess is not None and sess.settle_report is not None
+    unregistered = json.loads(sess.settle_report)["unregistered"]
+    assert any("观众昵称" in item.get("reason", "") for item in unregistered)

@@ -22,8 +22,9 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import AbstractSet, Callable, Deque, Dict, List, Optional, Tuple
+from typing import AbstractSet, Callable, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from src.agents.minecraft.chat_attribution import format_chat_sender
 from src.modules.events.payloads.game_chat import GameChatPayload
 
 __all__ = [
@@ -200,15 +201,21 @@ class _PendingChatItem:
     mentioned_self: bool
     first_ts_ms: int
     last_ts_ms: int
+    sender_display: str = ""
     repeat_count: int = 1
     collapsed_extra: int = 0
     upstream_suppressed: int = 0
 
     def render(self) -> str:
-        """渲染成带事实标签、未核验说明与折叠计数的单行游戏公屏文本。"""
-        speaker = self.sender or "未知发言人"
+        """渲染成带事实标签、常用称呼、未核验说明与折叠计数的单行游戏公屏文本。"""
+        # 发言人抬头优先使用已锚定常用称呼的显示名；无别名时退回原名
+        speaker = self.sender_display or self.sender or "未知发言人"
         if self.note:
-            speaker = f"{speaker}（{self.note}）"
+            # 发言人已带「（常叫：…）」时合并到同一对括号内，与归属层保持同源整洁格式
+            if speaker.endswith("）") and "（" in speaker:
+                speaker = f"{speaker[:-1]}；{self.note}）"
+            else:
+                speaker = f"{speaker}（{self.note}）"
         line = f"{self.tag} {speaker}：{self.content}"
         suffixes: List[str] = []
         if self.repeat_count > 1:
@@ -313,6 +320,8 @@ class MinecraftChatGate:
         payload: GameChatPayload,
         *,
         nearby_players: AbstractSet[str] = frozenset(),
+        aliases_by_uuid: Optional[Mapping[str, Sequence[str]]] = None,
+        aliases_by_name: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> ChatIngestResult:
         """接收一条游戏聊天事件，贴好事实标签后按优先级分流至唤醒合并窗或远处旁听滑窗。"""
         if payload.kind != "player":
@@ -363,6 +372,13 @@ class MinecraftChatGate:
             in_nearby_set=in_nearby_set,
         )
         self._seq += 1
+        # 有登记常用称呼时按 UUID 优先、唯一账号名兜底格式化为「Name（常叫：Alias）」，无别名平滑退回原名
+        sender_display = format_chat_sender(
+            sender,
+            sender_id=str(getattr(payload, "sender_id", "") or ""),
+            aliases_by_uuid=aliases_by_uuid,
+            aliases_by_name=aliases_by_name,
+        )
         item = _PendingChatItem(
             seq=self._seq,
             priority=priority,
@@ -376,6 +392,7 @@ class MinecraftChatGate:
             mentioned_self=mentioned_self,
             first_ts_ms=now,
             last_ts_ms=now,
+            sender_display=sender_display,
             upstream_suppressed=max(0, int(payload.suppressed or 0)),
         )
         formatted_line = item.render()
@@ -658,6 +675,11 @@ class MinecraftChatGate:
                 existing.mentioned_self = existing.mentioned_self or incoming.mentioned_self
                 if incoming.note and not existing.note:
                     existing.note = incoming.note
+                if incoming.sender_display and (
+                    not existing.sender_display
+                    or ("（常叫：" in incoming.sender_display and "（常叫：" not in existing.sender_display)
+                ):
+                    existing.sender_display = incoming.sender_display
                 return
 
         # 同一发言人在同一短窗内连发超过上限条不同内容时：

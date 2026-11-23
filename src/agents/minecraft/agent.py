@@ -29,6 +29,7 @@ from typing import Any, Awaitable, ClassVar, Deque, Dict, Iterable, List, Litera
 
 from src.agents.minecraft.attention_material import AttentionMaterialPublisher
 from src.agents.minecraft.attention_matrix import items_tossed_line
+from src.agents.minecraft.chat_attribution import format_chat_sender
 from src.agents.minecraft.chat_gate import DEFAULT_BATCH_WINDOW_MS, MinecraftChatGate
 from src.agents.minecraft.chosen_death import is_suicide_ability
 from src.agents.minecraft.context import (
@@ -131,7 +132,13 @@ from src.agents.minecraft.picture import (
 )
 from src.agents.minecraft.place_marks import NearPlaceTracker, PlaceMark, place_change_of
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
-from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents, player_of, spar_interaction
+from src.agents.minecraft.player_interactions import (
+    SelfChatLog,
+    SparOpponents,
+    build_player_alias_index,
+    player_of,
+    spar_interaction,
+)
 from src.agents.minecraft.short_term_memory import SessionShortTermMemory
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.social_rules import SOCIAL_RULES_MSG_KEY, WORLD_SOCIAL_RULES_KEY, WorldSocialRulesCache
@@ -245,6 +252,8 @@ _PRESERVED_MAX_TOTAL_CHARS = 500
 _MSG_REF_PREFIX_RE = re.compile(r"^\[m\d+\]\s*")
 # 游戏主控态拉取被动 [脑中闪过] 线索的单次短超时保护（毫秒），绝不阻塞慢嵌入拖慢行动步
 _DEFAULT_PASSIVE_CUE_TIMEOUT_MS = 250
+# 实时游戏公屏发言人别名索引缓存有效期（秒）：减少高频公屏查库，兼顾运营在记忆页调整称呼后的时效
+_PLAYER_ALIAS_CACHE_TTL_S = 60.0
 
 
 def _message_plain_text(content: Any) -> str:
@@ -624,6 +633,7 @@ class MinecraftAgent(BaseAgent):
         creature_repo: Optional[Any] = None,
         work_docs_repo: Optional[Any] = None,
         social_fact_repo: Optional[Any] = None,
+        game_player_repo: Optional[Any] = None,
         learned_skill_repo: Optional[Any] = None,
         embedding_setup: Optional[Any] = None,
         lead_coordinator: Optional[LeadCoordinator] = None,
@@ -664,6 +674,8 @@ class MinecraftAgent(BaseAgent):
                 按（游戏，存档）落库、跨重启保留；None 时退化为纯内存文档。
             social_fact_repo: 游戏社交事实只读仓储（``list_active_facts``）。注入且认出具体存档后，
                 按存档筛选已核实的公共规矩缓存进任务上下文；None 时不注入公共规矩。
+            game_player_repo: 游戏玩家档案只读仓储（``list_players``）。注入时用于为实时游戏公屏发言人
+                锚定常用称呼（``Name（常叫：Alias）``）；None 时平滑退回原名。
             clock: 保留给测试注入假时钟的构造参数（统一构造签名）。
             live_active: 直播闸初始态。None = 生产默认（构造期按直播中，启动钩子落收工态，
                 等 live.started 恢复）；显式给值（测试用）则启动钩子不再改写。
@@ -726,6 +738,11 @@ class MinecraftAgent(BaseAgent):
         self._creature_repo = creature_repo
         self._work_docs_repo = work_docs_repo
         self._social_fact_repo = social_fact_repo
+        self._game_player_repo = game_player_repo
+        # 实时游戏公屏发言人别名只读索引缓存（UUID 与唯一账号名双表），按单调时钟 TTL 刷新
+        self._player_aliases_by_uuid: Dict[str, Tuple[str, ...]] = {}
+        self._player_aliases_by_name: Dict[str, Tuple[str, ...]] = {}
+        self._player_alias_cache_at: Optional[float] = None
         # 当前存档已核实的公共社交规矩缓存：认出存档与新开委派任务时异步刷新，推理步内零查库
         self._social_rules = WorldSocialRulesCache()
         self._current_session_id: Optional[int] = None
@@ -1015,6 +1032,7 @@ class MinecraftAgent(BaseAgent):
         # 新场次开播先等待残留合批定时器彻底退出，再清空上场游戏公屏门控与纯内存本场短期记忆
         await self._cancel_chat_flush_task(await_done=True)
         self._reset_session_chat_and_memory()
+        self._player_alias_cache_at = None
         # 新场次开播自动清空仅本场有效的临时钉住规矩（长期持久规矩不受影响）
         if self._mc_state.clear_session_rules():
             self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
@@ -1044,6 +1062,9 @@ class MinecraftAgent(BaseAgent):
         # 下播先等待挂起的合批定时器退出，再清空纯内存本场短期记忆与游戏公屏门控
         await self._cancel_chat_flush_task(await_done=True)
         self._reset_session_chat_and_memory()
+        self._player_aliases_by_uuid.clear()
+        self._player_aliases_by_name.clear()
+        self._player_alias_cache_at = None
         # 下播清空仅本场有效的临时钉住规矩与系统提示节流状态，不带入下一场
         if self._mc_state.clear_session_rules():
             self._sync_pinned_rules_message(self._messages, expect_rewrite=True)
@@ -1383,6 +1404,7 @@ class MinecraftAgent(BaseAgent):
         # 切入主控前推进收手纪元、终止残留合批定时器并清理旧门控待发/旁听窗口，让自主循环以干净开局启动
         await self._cancel_chat_flush_task(await_done=True)
         self._chat_gate.clear_pending_windows()
+        self._player_alias_cache_at = None
         self._pending_chat_texts.clear()
         self._pending_chat_players.clear()
         self._pending_chat_senders.clear()
@@ -4831,6 +4853,34 @@ class MinecraftAgent(BaseAgent):
             return ""
         return "\n".join(["[脑中闪过]（只读联想线索，切题时可参考，无需逐条回应）", *(f"- {line}" for line in picked)])
 
+    async def _get_player_alias_index(
+        self,
+    ) -> Tuple[Dict[str, Tuple[str, ...]], Dict[str, Tuple[str, ...]]]:
+        """读取实时游戏公屏用的只读玩家常用称呼索引（短超时 + TTL 缓存，无仓储或异常时平滑退回空表）。"""
+        repo = self._game_player_repo
+        if repo is None or not hasattr(repo, "list_players"):
+            return {}, {}
+        now_s = float(self._clock())
+        if (
+            self._player_alias_cache_at is not None
+            and (now_s - self._player_alias_cache_at) < _PLAYER_ALIAS_CACHE_TTL_S
+        ):
+            return self._player_aliases_by_uuid, self._player_aliases_by_name
+        timeout_s = max(0.15, self._passive_cue_timeout_ms / 1000.0)
+        try:
+            players = await asyncio.wait_for(repo.list_players(game=_GAME, limit=200), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            self._logger.debug(f"刷新游戏玩家常用称呼缓存超时（{int(timeout_s * 1000)}ms），本次沿用已有缓存")
+            return self._player_aliases_by_uuid, self._player_aliases_by_name
+        except Exception as exc:  # noqa: BLE001 - 查库异常绝不阻塞实时游戏公屏投递
+            self._logger.warning(f"刷新游戏玩家常用称呼缓存失败（回落已有缓存/原名）: {exc}", exc=exc)
+            return self._player_aliases_by_uuid, self._player_aliases_by_name
+        by_uuid, by_name = build_player_alias_index(players or ())
+        self._player_aliases_by_uuid = by_uuid
+        self._player_aliases_by_name = by_name
+        self._player_alias_cache_at = now_s
+        return by_uuid, by_name
+
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
         """``game.chat.received`` 回调：
         1. 玩家游戏公屏：主控态经游戏公屏门控（2 秒短合并窗、防刷屏、24 格/2 分钟分级唤醒、远处旁听滑窗）处理，
@@ -4861,7 +4911,13 @@ class MinecraftAgent(BaseAgent):
                     private=bool(payload.private),
                     timestamp_ms=self._clock_ms(),
                 )
-                ingest_result = self._chat_gate.ingest(payload, nearby_players=frozenset(self._nearby_players))
+                aliases_by_uuid, aliases_by_name = await self._get_player_alias_index()
+                ingest_result = self._chat_gate.ingest(
+                    payload,
+                    nearby_players=frozenset(self._nearby_players),
+                    aliases_by_uuid=aliases_by_uuid,
+                    aliases_by_name=aliases_by_name,
+                )
                 if not ingest_result.accepted:
                     return
                 if ingest_result.routed_to == "wake_window":
@@ -4888,7 +4944,8 @@ class MinecraftAgent(BaseAgent):
             content = (payload.content or "").strip()
             if not content:
                 return
-            sender = (payload.sender or "").strip() or "其他玩家"
+            raw_sender = (payload.sender or "").strip()
+            sender = raw_sender or "其他玩家"
             # 统一使用 Agent 注入的单调时钟域入库，保证与近期游戏公屏窗及短期记忆衰减同源
             self._short_term_memory.record_player_chat(
                 sender,
@@ -4896,8 +4953,19 @@ class MinecraftAgent(BaseAgent):
                 private=bool(payload.private),
                 timestamp_ms=self._clock_ms(),
             )
+            aliases_by_uuid, aliases_by_name = await self._get_player_alias_index()
+            sender_display = (
+                format_chat_sender(
+                    raw_sender,
+                    sender_id=payload.sender_id,
+                    aliases_by_uuid=aliases_by_uuid,
+                    aliases_by_name=aliases_by_name,
+                )
+                if raw_sender
+                else sender
+            )
             prefix = "[游戏公屏·私聊]" if payload.private else "[游戏公屏]"
-            notice = f"{prefix} 玩家 {sender}：{content}"
+            notice = f"{prefix} 玩家 {sender_display}：{content}"
             self._enqueue_chat_notice(
                 f"player:{sender}",
                 notice,

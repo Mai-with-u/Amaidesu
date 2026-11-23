@@ -133,17 +133,34 @@ def test_factory_forwards_streamer_infrastructure_and_repositories() -> None:
 
 
 def test_minecraft_gets_the_creature_roster_repository() -> None:
-    """生物名册与工作文档仓储经工厂交给 Minecraft Agent；Dashboard 动态启用不传时回落管理器成员。"""
+    """生物名册、工作文档与游戏玩家仓储经工厂交给 Minecraft Agent；Dashboard 动态启用不传时回落管理器成员。"""
     repo = object()
     docs_repo = object()
+    player_repo = object()
     agent = instantiate_agent(
         "minecraft",
         {},
-        deps=AgentDeps(llm_manager=MagicMock(), creature_repo=repo, work_docs_repo=docs_repo),
+        deps=AgentDeps(
+            llm_manager=MagicMock(),
+            creature_repo=repo,
+            work_docs_repo=docs_repo,
+            game_player_repo=player_repo,
+        ),
     )
-    assert isinstance(agent, MinecraftAgent) and agent._creature_repo is repo and agent._work_docs_repo is docs_repo
-    resolved = AgentManager(creature_repo=repo, work_docs_repo=docs_repo)._resolve_deps(None)
-    assert resolved.creature_repo is repo and resolved.work_docs_repo is docs_repo
+    assert (
+        isinstance(agent, MinecraftAgent)
+        and agent._creature_repo is repo
+        and agent._work_docs_repo is docs_repo
+        and agent._game_player_repo is player_repo
+    )
+    resolved = AgentManager(creature_repo=repo, work_docs_repo=docs_repo, game_player_repo=player_repo)._resolve_deps(
+        None
+    )
+    assert (
+        resolved.creature_repo is repo
+        and resolved.work_docs_repo is docs_repo
+        and resolved.game_player_repo is player_repo
+    )
 
 
 async def test_enable_agent_falls_back_to_the_manager_repositories() -> None:

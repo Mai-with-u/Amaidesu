@@ -225,6 +225,8 @@ function cancelEditAliases(): void {
 }
 
 async function saveAliases(item: PlayerItem): Promise<void> {
+  // 防止回车连击或并发操作期间重复提交常用称呼更新
+  if (busyId.value !== null) return;
   const aliases = parseAliasesInput(aliasDraft.value, item.name);
   const ok = await mutate(
     item,
@@ -270,7 +272,11 @@ async function unlink(item: PlayerItem, viewer: PlayerLinkedViewer): Promise<voi
 
 async function remove(item: PlayerItem): Promise<void> {
   if (!(await confirmAction(deletePlayerWarning(item), '删除玩家', { type: 'error' }))) return;
-  await mutate(item, () => playersApi.deletePlayer(item.id), '已删除玩家', '删除玩家失败');
+  const ok = await mutate(item, () => playersApi.deletePlayer(item.id), '已删除玩家', '删除玩家失败');
+  // 若正在行内编辑被删玩家的常用称呼，删除成功后顺手退出编辑态
+  if (ok && editingAliasId.value === item.id) {
+    cancelEditAliases();
+  }
 }
 
 async function mutate(

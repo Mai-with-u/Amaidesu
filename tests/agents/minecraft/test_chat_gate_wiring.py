@@ -11,6 +11,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game_chat import GameChatMention, GameChatPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.llm.payload import Response
+from src.modules.storage.models.game_players import GamePlayer
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.minecraft._wiring_helpers import StreamerPlaceholder, no_real_sleep, settle
@@ -395,7 +396,7 @@ async def test_chat_flush_timer_concurrent_reschedule_yield_cleanup_and_mid_awai
 
 
 async def test_online_players_not_nearby_never_triggers_nearby_fallback_wake() -> None:
-    """BUG-B3 回归：视野外在线玩家名单绝不混入 chat_gate 近身名单，同时脱敏情境仍保留全服在线名单。"""
+    """视野外在线玩家名单绝不混入 chat_gate 近身名单，同时脱敏情境仍保留全服在线名单。"""
     clock = FakeClock()
     server = FakeMaicraft()
     server.self_view["position"] = {"x": 0.0, "y": 64.0, "z": 0.0, "dimension": "minecraft:overworld"}
@@ -484,6 +485,182 @@ async def test_online_players_not_nearby_never_triggers_nearby_fallback_wake() -
         assert "[游戏公屏·远处] PlayerFar：我也在四十五格外" in step2_text
         assert "[游戏公屏·身边] PlayerRemote" not in step2_text
         assert "[游戏公屏·身边] PlayerFar" not in step2_text
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_on_game_chat_renders_registered_player_aliases_and_degrades_on_repo_error() -> None:
+    """实时公屏接线：game_players 有常用称呼时发言人渲染为「Name（常叫：Alias）」，异常或无别名时平滑退回原名。"""
+    clock = FakeClock(500_000)
+    server = FakeMaicraft()
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager(tool_registry=registry)
+    manager.register(StreamerPlaceholder())
+    coord = LeadCoordinator(manager, event_bus=bus, clock=clock.now_ms)
+
+    class _FakeGamePlayerRepo:
+        def __init__(self) -> None:
+            self.should_fail = False
+            self.calls = 0
+
+        async def list_players(self, *, game: str | None = None, limit: int = 200) -> List[GamePlayer]:
+            del game, limit
+            self.calls += 1
+            if self.should_fail:
+                raise RuntimeError("模拟仓储瞬时故障")
+            return [
+                GamePlayer(
+                    id=1,
+                    game="minecraft",
+                    uuid="uuid-alpha",
+                    name="PlayerAlpha",
+                    names=["PlayerAlpha"],
+                    aliases=["阿甲"],
+                    first_seen_ms=1_000,
+                    last_seen_ms=2_000,
+                ),
+                GamePlayer(
+                    id=2,
+                    game="minecraft",
+                    uuid="uuid-beta",
+                    name="PlayerBeta",
+                    names=["PlayerBeta"],
+                    aliases=["阿乙"],
+                    first_seen_ms=1_000,
+                    last_seen_ms=2_000,
+                ),
+                GamePlayer(
+                    id=3,
+                    game="minecraft",
+                    uuid="uuid-forgotten",
+                    name="PlayerGhost",
+                    names=["PlayerGhost"],
+                    aliases=["不应出现"],
+                    first_seen_ms=1_000,
+                    last_seen_ms=2_000,
+                    forget_requested_at_ms=5_000,
+                ),
+            ]
+
+    repo = _FakeGamePlayerRepo()
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        lambda _msgs: _resp("收到公屏消息"),
+        registry=registry,
+        bus=bus,
+        live=True,
+        game_player_repo=repo,
+        lead_coordinator=coord,
+        lead_idle_wakeup_s=0.0,
+        chat_batch_window_ms=2_000,
+        chat_flush_wait=no_real_sleep,
+        clock=lambda: clock.now_ms() / 1000.0,
+    )
+    manager.register(agent)
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="实时别名测试"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) == 1 and not agent.batch_active)
+
+        # 远处玩家（带别名）进旁听滑窗；身边玩家（带别名）、已遗忘玩家与无别名玩家进唤醒合并窗
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerBeta",
+                sender_id="uuid-beta",
+                sender_online=True,
+                sender_distance=70.0,
+                content="我在河对岸种小麦",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerAlpha",
+                sender_id="uuid-alpha",
+                sender_online=True,
+                sender_distance=8.0,
+                content="铁锭放主箱里了",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerGhost",
+                sender_id="uuid-forgotten",
+                sender_online=True,
+                sender_distance=9.0,
+                content="路过打个招呼",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerPlain",
+                sender_id="uuid-plain",
+                sender_online=True,
+                sender_distance=10.0,
+                content="工具台修好了",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await settle(bus)
+        # 四条公屏共享 TTL 缓存，只查一次库
+        assert repo.calls == 1
+
+        clock.tick(2_000)
+        assert await agent.flush_pending_chat() is True
+        await _wait_until(lambda: len(llm.seen) == 2 and not agent.batch_active)
+
+        step2_text = _texts(llm.seen[1])
+        assert "[游戏公屏·身边8格] PlayerAlpha（常叫：阿甲）：铁锭放主箱里了" in step2_text
+        assert "[游戏公屏·远处] PlayerBeta（常叫：阿乙）：我在河对岸种小麦" in step2_text
+        assert "[游戏公屏·身边9格] PlayerGhost：路过打个招呼" in step2_text
+        assert "不应出现" not in step2_text
+        assert "[游戏公屏·身边10格] PlayerPlain：工具台修好了" in step2_text
+
+        # TTL 过期后仓储抛异常：绝不阻塞或崩溃，公屏照常投递
+        repo.should_fail = True
+        clock.tick(70_000)
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="player",
+                sender="PlayerPlain",
+                sender_id="uuid-plain",
+                sender_online=True,
+                sender_distance=6.0,
+                content="仓储异常时也能收到这句话",
+                timestamp_ms=clock.now_ms(),
+            ),
+            source="test",
+        )
+        await settle(bus)
+        assert repo.calls == 2
+        clock.tick(2_000)
+        assert await agent.flush_pending_chat() is True
+        await _wait_until(lambda: len(llm.seen) == 3 and not agent.batch_active)
+        assert "[游戏公屏·身边6格] PlayerPlain：仓储异常时也能收到这句话" in _texts(llm.seen[2])
     finally:
         await agent.stop()
         await bus.cleanup()

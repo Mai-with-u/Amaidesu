@@ -1369,7 +1369,7 @@ class SessionSettler:
         return items, "【本场更正（必须逐条核对处理）】\n" + "\n".join(rendered)
 
     async def _load_viewer_names_guard(self) -> Set[str]:
-        """读取至少 3 个字符且不与已知游戏玩家同名的已知观众昵称（小写），供代码拦截把观众名误记进档案标题。"""
+        """读取至少 3 个字符且不与已知游戏玩家（含曾用名与常用称呼）同名的已知观众昵称（小写），供代码拦截把观众名误记进档案标题。"""
         if self._viewers is None:
             return set()
         try:
@@ -1381,10 +1381,11 @@ class SessionSettler:
         if self._players is not None:
             try:
                 all_players = await self._players.list_players()
+                # 同时排除游戏玩家现名、曾用名与常用称呼，避免已知玩家别名与观众撞名时误拦正常游戏档案标题
                 player_names_lower = {
                     str(name).strip().lower()
                     for p in all_players
-                    for name in (p.name, *p.former_names())
+                    for name in (p.name, *p.former_names(), *p.effective_aliases())
                     if name and str(name).strip()
                 }
             except Exception as exc:  # noqa: BLE001 - 玩家名读不到只按观众名单核对
