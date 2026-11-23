@@ -272,7 +272,12 @@ async function unlink(item: PlayerItem, viewer: PlayerLinkedViewer): Promise<voi
 
 async function remove(item: PlayerItem): Promise<void> {
   if (!(await confirmAction(deletePlayerWarning(item), '删除玩家', { type: 'error' }))) return;
-  const ok = await mutate(item, () => playersApi.deletePlayer(item.id), '已删除玩家', '删除玩家失败');
+  const ok = await mutate(
+    item,
+    () => playersApi.deletePlayer(item.id),
+    '已删除玩家',
+    '删除玩家失败',
+  );
   // 若正在行内编辑被删玩家的常用称呼，删除成功后顺手退出编辑态
   if (ok && editingAliasId.value === item.id) {
     cancelEditAliases();
