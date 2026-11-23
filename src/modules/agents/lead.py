@@ -535,6 +535,10 @@ class LeadCoordinator:
                 ts = self._clock()
                 self._since_ms = ts
                 self._reason = f"fallback_after_refuse:{target_name}"
+                # 跨游戏切主控失败回退主播态时，同步清理上一任主控的流程单提醒与同轮解说去重状态
+                self._last_rundown_nudge_ms = None
+                self._last_rundown_nudge_segment_id = ""
+                self._last_spoken_commentary_round.clear()
                 emitted.append(
                     AgentLeadChangedPayload(
                         lead_agent=STREAMER_AGENT_NAME,

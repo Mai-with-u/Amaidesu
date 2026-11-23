@@ -1591,3 +1591,16 @@ async def test_closed_commitment_and_linked_archive_do_not_resurrect_via_landmar
     assert "缺小麦种子" not in joined
     assert "风车磨坊建成投产名场面" in joined
     assert "下次顺手在风车磨坊周围插满火把" in joined
+
+
+async def test_rule_card_prefers_first_non_filler_keyword_in_why(store: SQLiteDatabase) -> None:
+    """规则命中同时包含虚词与实词时，卡面触发原因优先展示首个非虚词。"""
+    session_id = await _session(store)
+    await _old_line(store, text="北岸修好了水车", keywords=["主要是", "水车"])
+    cues = await _passive(store, session_id, _Clock()).collect(
+        batch=[_message(content="主要是想看看水车转没转", message_id="m_mix")]
+    )
+
+    assert cues.card_count == 1
+    assert "提到「水车」" in cues.text
+    assert "提到「主要是」" not in cues.text

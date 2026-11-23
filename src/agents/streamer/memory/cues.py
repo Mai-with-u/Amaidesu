@@ -1946,7 +1946,11 @@ class MemoryCueProvider:
         if hit.keywords and all(_is_filler_only_phrase(kw) for kw in hit.keywords):
             self._skip(hit.key, state, "虚词触发")
             return ""
-        keyword = hit.keywords[0] if hit.keywords else ""
+        # 同时命中虚词与实词时优先展示首个非虚词，避免卡面原因落在无信息量的口语虚词上
+        keyword = next(
+            (kw for kw in hit.keywords if not _is_filler_only_phrase(kw)),
+            hit.keywords[0] if hit.keywords else "",
+        )
         if SOURCE_DANMAKU in hit.sources:
             who = f"弹幕 {hit.message_id} " if hit.message_id else "观众"
             why = f"{who}提到「{keyword}」"

@@ -1538,10 +1538,7 @@ class StreamerAgent(BaseAgent):
             # 游戏活动也随场次重置：游戏承诺线索只看这一场"正在玩"什么，上一场的事件不带过来
             self._game_activity_ms.clear()
             self._session_games.clear()
-            self._commentary_buffer.clear()
-            self._last_commentary_round_id = ""
-            self._last_commentary_summary = ""
-            self._last_commentary_spoken_ms = None
+            self._reset_commentary_state()
             await self._cancel_enter_welcome_task()
             self._last_silence_nudge_ms = None
             # 仅在当前未处于游戏主控态时清空进入锚点，防止合法主控的冷场兜底基线被清零
@@ -1846,10 +1843,7 @@ class StreamerAgent(BaseAgent):
         del event_name, source
         self._live_active = False
         self._opening_wrapup_active = False
-        self._commentary_buffer.clear()
-        self._last_commentary_round_id = ""
-        self._last_commentary_summary = ""
-        self._last_commentary_spoken_ms = None
+        self._reset_commentary_state()
         self._last_silence_nudge_ms = None
         await self._cancel_enter_welcome_task()
         self._pace_wakeup.set()
@@ -2827,7 +2821,8 @@ class StreamerAgent(BaseAgent):
                     self._logger.warning(f"按 UUID 查玩家失败（跳过）: {exc}", exc=exc)
                     continue
                 if player is not None and player.forget_requested_at_ms is None:
-                    player_id_to_name[int(player.id)] = (player.name or "").strip() or "玩家"
+                    # 承诺账本目标名附带常用称呼锚定，防止主控游戏对照公屏或熟人表时把不同玩家串成同一人
+                    player_id_to_name[int(player.id)] = player.display_label() or "玩家"
 
         player_rows: List[Tuple[Any, str]] = []
         seen_open_ids: set[int] = set()
@@ -4461,6 +4456,13 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 名单刷新失败不阻断主控切换
             self._logger.warning(f"刷新 streamer_memory_correct 可见名单失败: {exc}", exc=True)
 
+    def _reset_commentary_state(self) -> None:
+        """清空主播侧实况解说缓冲与同轮防抖锚点，供开播、下播及主控切换共用。"""
+        self._commentary_buffer.clear()
+        self._last_commentary_round_id = ""
+        self._last_commentary_summary = ""
+        self._last_commentary_spoken_ms = None
+
     def _on_lead_changed(self, payload: AgentLeadChangedPayload) -> None:
         """动态主从状态变更监听：记录进入时刻、落账收权摘要，并在游戏故障被动降级时唤醒主播圆场。"""
         ts = payload.timestamp_ms or self._clock()
@@ -4471,16 +4473,20 @@ class StreamerAgent(BaseAgent):
             self._game_lead_entered_ms = ts
             self._last_silence_nudge_ms = None
             self._last_recorded_handover_summary = ""
+            # 切入游戏主控时清空上任主控滞留的解说缓冲与同轮防抖锚点，避免旧要点串台或同轮号误拦
+            self._reset_commentary_state()
             # 游戏自主接管本环节后，清掉切环节瞬间挂起的旧 rundown/game 主动信号，避免未来被动降级时误触发旧开场白
             self._proactive_signals.clear_superseded_by_game_lead()
             self._logger.info(f"主播切换为轻从模式：当前由 '{payload.lead_agent}' 自主主控（reason={payload.reason}）")
             return
 
-        # 游戏主控 → 主播主控：取消轻量欢迎通道、清进入锚点与静默提醒冷却、记收尾摘要；若属开播期异常被动降级则唤醒主播圆场
+        # 游戏主控 → 主播主控：取消轻量欢迎通道、清进入锚点与静默提醒冷却、清解说防抖缓冲、记收尾摘要；
+        # 若属开播期异常被动降级则唤醒主播圆场
         if payload.previous_lead and payload.previous_lead != self.name:
             self._cancel_enter_welcome_sync()
             self._game_lead_entered_ms = None
             self._last_silence_nudge_ms = None
+            self._reset_commentary_state()
             summary = (payload.handover_summary or "").strip()
             if summary:
                 self._last_recorded_handover_summary = summary

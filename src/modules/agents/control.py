@@ -1730,7 +1730,10 @@ class AgentControlProvider(BaseToolProvider):
                 },
                 "about_player": {
                     "type": "string",
-                    "description": "可选：涉及的游戏内其他玩家名（无则留空）",
+                    "description": (
+                        "可选：涉及的游戏内其他玩家名（无则留空）；"
+                        "填写前先核对【游戏里的熟人】或公屏抬头的账号名与常用称呼，确认指向同一位玩家"
+                    ),
                 },
                 "correction": {
                     "type": "boolean",
@@ -1795,7 +1798,10 @@ class AgentControlProvider(BaseToolProvider):
                 )
             if name == "framework_commentary":
                 return await self._invoke_commentary(
-                    args, caller=invocation.source, invoking_agent=invocation.invoking_agent
+                    args,
+                    caller=invocation.source,
+                    invoking_agent=invocation.invoking_agent,
+                    round_id=invocation.round_id,
                 )
             if name == "framework_suggest":
                 return await self._invoke_suggest(
@@ -2007,7 +2013,12 @@ class AgentControlProvider(BaseToolProvider):
         return business_fail_result(tool_name, started_ms, settled.message)
 
     async def _invoke_commentary(
-        self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
+        self,
+        args: Dict[str, Any],
+        *,
+        caller: str,
+        invoking_agent: str = "",
+        round_id: str = "",
     ) -> ToolExecutionResult:
         """执行 framework_commentary：校验调用方正处于主控态后转发解说素材给主播。"""
         tool_name = "framework_commentary"
@@ -2037,6 +2048,7 @@ class AgentControlProvider(BaseToolProvider):
             correction = bool(raw_correction)
         caller_agent = (invoking_agent or "").strip() or (caller or "").strip().removesuffix("-react")
 
+        # 透传调用轮次标识 round_id，使主从协调器可在同轮内过滤重复普通解说
         req = CommentaryRequest(
             game=caller_agent,
             summary=summary,
@@ -2045,6 +2057,7 @@ class AgentControlProvider(BaseToolProvider):
             about_player=about_player,
             correction=correction,
             timestamp_ms=started_ms,
+            round_id=str(round_id or "").strip(),
         )
         ack = await self.lead_coordinator.submit_commentary(caller_agent, req)
         finished_ms = self._now_ms()

@@ -1084,3 +1084,81 @@ async def test_brief_closed_commitments_isolates_viewer_other_save_and_forgotten
     finally:
         await privacy.close()
         await db.close()
+
+
+async def test_commitment_ledger_uses_player_display_label_with_aliases(tmp_path: Path) -> None:
+    """主控承诺账本的玩家目标名带常用称呼锚定；无别名玩家平滑退回原名。"""
+    db = SQLiteDatabase(tmp_path / "data" / "ledger_alias.db")
+    await db.initialize()
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    try:
+        s1 = await db.sessions.insert_live_session(started_at_ms=1_000_000, kind=SESSION_KIND_LIVE)
+        await db.sessions.close_live_session(live_session_id=s1, ended_at_ms=5_000_000)
+        s2 = await db.sessions.insert_live_session(started_at_ms=10_000_000, kind=SESSION_KIND_LIVE)
+
+        player_alpha = await db.game_players.meet_player(
+            game="minecraft", uuid="uuid-alpha", name="PlayerAlpha", live_session_id=s1, at_ms=2_000_000
+        )
+        await db.game_players.set_aliases(player_id=player_alpha.id, aliases=["阿甲"])
+        player_plain = await db.game_players.meet_player(
+            game="minecraft", uuid="uuid-plain", name="PlayerPlain", live_session_id=s1, at_ms=2_000_000
+        )
+
+        c_alpha = await db.commitments.insert_commitment(
+            what="帮阿甲运一箱橡木",
+            quote="下次帮你运橡木",
+            game="minecraft",
+            save_id="save-a",
+            created_session_id=s1,
+            now_ms_value=3_000_000,
+        )
+        c_plain = await db.commitments.insert_commitment(
+            what="还给 PlayerPlain 两把铁镐",
+            quote="还你两把铁镐",
+            game="minecraft",
+            save_id="save-a",
+            created_session_id=s1,
+            now_ms_value=3_100_000,
+        )
+        assert c_alpha is not None and c_plain is not None
+        with db.manager.transaction() as conn:
+            conn.execute("UPDATE commitments SET target_player_id=? WHERE id=?", (player_alpha.id, c_alpha))
+            conn.execute("UPDATE commitments SET target_player_id=? WHERE id=?", (player_plain.id, c_plain))
+
+        mgr = AgentManager()
+        coord = LeadCoordinator(mgr, event_bus=bus, enabled=True)
+        session_mgr = MagicMock()
+        session_mgr.active_pk = s2
+        session_mgr.active_kind = SESSION_KIND_LIVE
+
+        agent = StreamerAgent(
+            config=StreamerConfig(lead_mode="dynamic"),
+            llm_manager=MagicMock(),
+            prompt_manager=stub_prompt(),
+            event_bus=bus,
+            tool_registry=registry,
+            sessions_repo=db.sessions,
+            chat_repo=db.chat,
+            commitments_repo=db.commitments,
+            archive_repo=db.archive,
+            event_repo=db.events,
+            game_player_repo=db.game_players,
+            session_manager=session_mgr,
+            lead_coordinator=coord,
+        )
+        await agent.start()
+        try:
+            ledger = await coord.fetch_commitment_ledger(
+                game="minecraft",
+                save_id="save-a",
+                player_uuids=("uuid-alpha", "uuid-plain"),
+            )
+            by_id = {item["id"]: item["target"] for item in ledger["open"]}
+            assert by_id[f"约#{c_alpha}"] == "PlayerAlpha（常叫：阿甲）"
+            assert by_id[f"约#{c_plain}"] == "PlayerPlain"
+        finally:
+            await agent.cleanup()
+    finally:
+        await bus.cleanup()
+        await db.close()

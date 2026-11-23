@@ -1,8 +1,9 @@
-"""本文件测 MinecraftAgent 的两项公屏链路修复：
-1. sequence 内嵌 chat 的本方公屏记账（BUG-B4）：已执行步骤进 game.self.chatted 与 [你回过]，
-   未执行到被中断、命令与对生物说话不误记，折叠 /attempts 翻页读回，同一 goal_id 仅记一次；
-2. maicraft_execute 公屏消息超 45 字非阻断轻提醒（A-2 方案 A）：不拦截不报错，只在 notes 附温和提示，
-   兼容直接 chat 与 sequence 内嵌 chat，跳过 dry_run、命令/私聊与对生物说话。
+"""测试 MinecraftAgent 的两项公屏链路行为：
+
+- sequence 内嵌 chat 的本方公屏记账：已执行步骤进 game.self.chatted 与 [你回过]，
+  未执行到被中断、命令与对生物说话不误记，折叠 /attempts 翻页读回，同一 goal_id 仅记一次；
+- maicraft_execute 公屏消息超软上限的非阻断轻提醒：不拦截不报错，只在 notes 附温和提示，
+  兼容直接 chat 与 sequence 内嵌 chat，跳过 dry_run、命令/私聊与对生物说话。
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ def _tool_observations(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ======================================================================
-# 1. sequence 内嵌 chat 本方公屏提取与全链路记账（BUG-B4）
+# sequence 内嵌 chat 本方公屏提取与全链路记账
 # ======================================================================
 
 
@@ -318,7 +319,7 @@ async def test_sequence_with_folded_attempts_reads_back_and_emits_once() -> None
 
 
 # ======================================================================
-# 2. maicraft_execute 公屏超 45 字非阻断轻提醒（A-2 方案 A）
+# maicraft_execute 公屏超软上限非阻断轻提醒
 # ======================================================================
 
 

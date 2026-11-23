@@ -2882,3 +2882,154 @@ async def test_framework_commentary_same_round_dedupes_without_blocking_cross_ro
     finally:
         await agent.stop()
         await game.stop()
+
+
+async def test_lead_switch_clears_streamer_commentary_buffer_and_debounce_anchors(prompts: Any) -> None:
+    """切入新游戏主控与收回主播主控时，主播侧同步清空解说缓冲与同轮防抖锚点，不串旧要点也不误拦同轮号。"""
+    clock = _FakeClock()
+    bus = EventBus()
+
+    class _SecondGameAgent(_FakeAutonomousGameAgent):
+        name = "builder"
+        description = "第二款自主领航游戏代理"
+
+    manager = AgentManager()
+    game_a = _FakeAutonomousGameAgent(ready=True)
+    game_b = _SecondGameAgent(ready=True)
+    manager.register(game_a)
+    manager.register(game_b)
+    await game_a.start()
+    await game_b.start()
+
+    replyer_calls: List[Dict[str, Any]] = []
+
+    class _RecordingReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode, has_target
+            return 60
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            replyer_calls.append(dict(kwargs))
+            plan = kwargs["plan"]
+            return {"speech": f"播报：{plan.topic_summary}", "llm_request_id": f"req_sw_{len(replyer_calls)}"}
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "game_lead_commentary_min_interval_ms": 8_000,
+        },
+        prompt=prompts,
+        replyer=_RecordingReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=810, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+
+        # 进入甲游戏主控，建立主播侧同轮锚点与防抖缓冲
+        assert (
+            await lead_coord.request_game_lead(LeadHandoverContext(segment_id="main_play"), target="adventure")
+            == "adventure"
+        )
+        await bus.wait_until_drained()
+
+        ack_a1 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="甲号首轮探矿进展", urgency="normal", round_id="round_1"),
+        )
+        await bus.wait_until_drained()
+        assert ack_a1.spoken is True and ack_a1.reason == "dispatched"
+
+        clock.advance(2_000)
+        ack_a2 = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="甲号滞留缓冲旧要点", urgency="normal", round_id="round_2"),
+        )
+        assert ack_a2.accepted is True and ack_a2.spoken is False and ack_a2.reason == "throttled_recorded"
+
+        # 切入乙游戏主控（payload.mode == "game"）：主播侧解说缓冲与全部防抖锚点同步清空
+        assert (
+            await lead_coord.request_game_lead(
+                LeadHandoverContext(segment_id="main_play"), target="builder", reason="switch_game"
+            )
+            == "builder"
+        )
+        await bus.wait_until_drained()
+
+        # 1) 缓冲已清：短间隔内乙游戏发 high 解说时，state_facts 不得带出甲游戏的旧缓冲要点
+        clock.advance(1_000)
+        ack_b_high = await lead_coord.submit_commentary(
+            "builder",
+            CommentaryRequest(game="builder", summary="乙号突发高光时刻", urgency="high"),
+        )
+        await bus.wait_until_drained()
+        assert ack_b_high.spoken is True
+        assert "乙号突发高光时刻" in replyer_calls[-1]["state_facts"]
+        assert "甲号滞留缓冲旧要点" not in replyer_calls[-1]["state_facts"]
+
+        # 2) 同轮锚点已清：过最小间隔后乙游戏使用与甲游戏相同的 round_id="round_1" 不被误拦
+        clock.advance(9_000)
+        ack_b_same_round = await lead_coord.submit_commentary(
+            "builder",
+            CommentaryRequest(game="builder", summary="乙号同名轮次新解说", urgency="normal", round_id="round_1"),
+        )
+        await bus.wait_until_drained()
+        assert ack_b_same_round.spoken is True and ack_b_same_round.reason == "dispatched"
+
+        # 3) 短间隔重复摘要锚点已清：切回甲游戏后短间隔内提交相同摘要，走常规间隔防抖而非 same_round_deduped
+        assert (
+            await lead_coord.request_game_lead(
+                LeadHandoverContext(segment_id="main_play"), target="adventure", reason="switch_back"
+            )
+            == "adventure"
+        )
+        await bus.wait_until_drained()
+        clock.advance(1_000)
+        ack_a_after_switch = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="乙号同名轮次新解说", urgency="normal"),
+        )
+        assert ack_a_after_switch.accepted is True
+        assert ack_a_after_switch.spoken is False
+        assert ack_a_after_switch.reason == "throttled_recorded"
+
+        # 4) 收回主播主控（payload.previous_lead != self.name）：清空缓冲与全部防抖锚点
+        clock.advance(9_000)
+        ack_before_reclaim = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(
+                game="adventure", summary="收权前正常播报", urgency="normal", round_id="round_before_reclaim"
+            ),
+        )
+        await bus.wait_until_drained()
+        assert ack_before_reclaim.spoken is True
+
+        clock.advance(2_000)
+        ack_buffered_before_reclaim = await lead_coord.submit_commentary(
+            "adventure",
+            CommentaryRequest(game="adventure", summary="收权前滞留缓冲要点", urgency="normal", round_id="round_buf"),
+        )
+        assert ack_buffered_before_reclaim.reason == "throttled_recorded"
+
+        await lead_coord.reclaim_streamer_lead(reason="rundown_changed")
+        await bus.wait_until_drained()
+        assert list(agent._commentary_buffer) == []
+        assert agent._last_commentary_round_id == ""
+        assert agent._last_commentary_summary == ""
+        assert agent._last_commentary_spoken_ms is None
+    finally:
+        await agent.stop()
+        await game_a.stop()
+        await game_b.stop()

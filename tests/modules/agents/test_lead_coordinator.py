@@ -1446,3 +1446,141 @@ async def test_fetch_passive_cues_forwards_exclude_texts_and_keeps_legacy_compat
         exclude_texts=("记着的事：旧设施",),
     ) == ["动态参数线索"]
     assert kwargs_seen[-1]["exclude_texts"] == ("记着的事：旧设施",)
+
+
+async def test_framework_commentary_forwards_round_id_for_same_round_dedup_and_guides_about_player() -> None:
+    """AgentControlProvider 透传 invocation.round_id 使同轮二连发防抖端到端生效，且 about_player 参数附核对提示。"""
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    game = _AutonomousGameAgent("demo_game")
+    mgr.register(game)
+    coord = LeadCoordinator(mgr, enabled=True)
+    provider = build_agent_control_provider(mgr, lead_coordinator=coord)
+
+    # 校验 about_player 参数描述含开放式核对边界
+    commentary_spec = next(spec for spec in provider.list_tools() if spec.full_name == "framework_commentary")
+    about_desc = str((commentary_spec.parameters_schema or {})["properties"]["about_player"]["description"])
+    assert "【游戏里的熟人】" in about_desc
+    assert "常用称呼" in about_desc
+
+    received: List[CommentaryRequest] = []
+
+    async def _handler(req: CommentaryRequest) -> CommentaryAck:
+        received.append(req)
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_handler)
+    await game.start()
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="测试"), target="demo_game") == "demo_game"
+        )
+
+        # 1) 同轮首次普通解说：透传 round_id 并播报
+        first = await provider.invoke(
+            ToolInvocation(
+                tool_name="framework_commentary",
+                arguments={"summary": "挖到一组铁矿", "about_player": "PlayerAlpha"},
+                source="demo_game-react",
+                invoking_agent="demo_game",
+                round_id="mc_round_001",
+            )
+        )
+        assert first.success is True
+        assert first.structured_content["spoken"] is True
+        assert len(received) == 1
+        assert received[0].round_id == "mc_round_001"
+
+        # 2) 同轮第二次普通解说：被 LeadCoordinator 同轮防抖拦截，不重复调主播解说处理器
+        second = await provider.invoke(
+            ToolInvocation(
+                tool_name="framework_commentary",
+                arguments={"summary": "顺手又挖了点煤"},
+                source="demo_game-react",
+                invoking_agent="demo_game",
+                round_id="mc_round_001",
+            )
+        )
+        assert second.success is True
+        assert second.structured_content["accepted"] is True
+        assert second.structured_content["spoken"] is False
+        assert second.structured_content["reason"] == "same_round_deduped"
+        assert len(received) == 1
+
+        # 3) 同轮高紧急度或纠偏：正常穿透防抖
+        urgent = await provider.invoke(
+            ToolInvocation(
+                tool_name="framework_commentary",
+                arguments={"summary": "旁边刷出一只苦力怕", "urgency": "high"},
+                source="demo_game-react",
+                invoking_agent="demo_game",
+                round_id="mc_round_001",
+            )
+        )
+        assert urgent.success is True
+        assert urgent.structured_content["spoken"] is True
+        assert len(received) == 2
+        assert received[1].round_id == "mc_round_001"
+
+        # 4) 下一轮普通解说：round_id 变化后正常播报
+        next_round = await provider.invoke(
+            ToolInvocation(
+                tool_name="framework_commentary",
+                arguments={"summary": "安全回到地面"},
+                source="demo_game-react",
+                invoking_agent="demo_game",
+                round_id="mc_round_002",
+            )
+        )
+        assert next_round.success is True
+        assert next_round.structured_content["spoken"] is True
+        assert len(received) == 3
+        assert received[2].round_id == "mc_round_002"
+    finally:
+        await game.stop()
+
+
+async def test_cross_game_switch_refusal_fallback_clears_commentary_round_dedup(fake_clock: Any) -> None:
+    """跨游戏切主控时目标游戏拒绝接管并回退主播态，协调器同步清空旧主控的同轮解说去重记录。"""
+    bus = EventBus(enable_stats=False)
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+    game_a = _AutonomousGameAgent("game_a", ready=True)
+    game_b = _AutonomousGameAgent("game_b", ready=True, accept_lead=False)
+    mgr.register(game_a)
+    mgr.register(game_b)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, event_bus=bus, clock=fake_clock.now_ms)
+
+    async def _handler(req: CommentaryRequest) -> CommentaryAck:
+        del req
+        return CommentaryAck(accepted=True, spoken=True, reason="dispatched")
+
+    coord.bind_commentary_handler(_handler)
+    try:
+        assert await coord.request_game_lead(LeadHandoverContext(segment_title="甲段"), target="game_a") == "game_a"
+        first = await coord.submit_commentary(
+            "game_a",
+            CommentaryRequest(game="game_a", summary="甲号第一轮解说", urgency="normal", round_id="r_shared"),
+        )
+        assert first.spoken is True
+
+        # 切给拒绝接管的 game_b -> 回退至主播态，同时清空 _last_spoken_commentary_round
+        switched = await coord.request_game_lead(
+            LeadHandoverContext(segment_title="切乙段"), target="game_b", reason="switch_test"
+        )
+        assert switched is None
+        assert coord.mode == "streamer"
+        assert coord._last_spoken_commentary_round == {}
+
+        # 随后重新切回 game_a，同 round_id 不再被旧记录拦截
+        assert await coord.request_game_lead(LeadHandoverContext(segment_title="回甲段"), target="game_a") == "game_a"
+        after = await coord.submit_commentary(
+            "game_a",
+            CommentaryRequest(game="game_a", summary="重回甲号解说", urgency="normal", round_id="r_shared"),
+        )
+        assert after.spoken is True and after.reason == "dispatched"
+    finally:
+        await mgr.stop_all()
+        await bus.cleanup()
