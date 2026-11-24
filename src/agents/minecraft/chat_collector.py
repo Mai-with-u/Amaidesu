@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 import secrets
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 from src.agents.minecraft.chat_attribution import (
     SELF_MENTION_TYPE,
@@ -139,6 +139,7 @@ class MaicraftChatCollector(MaicraftEventsCollector):
             # 玩家消息透传上游报出的距离格数（用于主控态 24 格分级唤醒），系统消息与旧版 Mod 恒为 None
             sender_distance=None if system else _extract_sender_distance(event),
             content=attributed.content,
+            detail=extract_chat_detail(event),
             truncated=event.get("truncated") is True,
             # 私聊只有玩家发得出来：系统消息即使带了标记也不算
             private=not system and event.get("private") is True,
@@ -153,6 +154,14 @@ class MaicraftChatCollector(MaicraftEventsCollector):
         )
         await self.emit_event(CoreEvents.GAME_CHAT_RECEIVED, payload, source=self.name)
         return True
+
+
+def extract_chat_detail(event: Mapping[str, Any]) -> str:
+    """从上游聊天事件提取可选附加描述（如成就/进度悬停说明）：缺失、布尔或空白返回空串。"""
+    raw = event.get("detail")
+    if raw is None or isinstance(raw, bool):
+        return ""
+    return str(raw).strip()
 
 
 def _extract_sender_distance(event: Dict[str, Any]) -> Optional[float]:
@@ -172,4 +181,4 @@ def new_message_id() -> str:
     return secrets.token_hex(4)
 
 
-__all__ = ["MaicraftChatCollector", "new_message_id"]
+__all__ = ["MaicraftChatCollector", "extract_chat_detail", "new_message_id"]

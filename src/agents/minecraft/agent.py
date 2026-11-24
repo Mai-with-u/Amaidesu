@@ -85,6 +85,7 @@ from src.agents.minecraft.known_places import KNOWN_PLACES_KEY, build_known_plac
 from src.agents.minecraft.lead_mode import (
     LEAD_MODE_PROMPT_SECTION,
     SpokenEchoBuffer,
+    clean_segment_notes,
     format_lead_handover_brief,
     format_rundown_nudge_notice,
     format_rundown_update_notice,
@@ -142,6 +143,7 @@ from src.agents.minecraft.player_interactions import (
 from src.agents.minecraft.short_term_memory import SessionShortTermMemory
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.social_rules import SOCIAL_RULES_MSG_KEY, WORLD_SOCIAL_RULES_KEY, WorldSocialRulesCache
+from src.agents.minecraft.solo_pacing import SoloPacingTracker
 from src.agents.minecraft.sparring import spar_outcome_line
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
 from src.agents.minecraft.stop_receipt import GoalStopOutcome, cancel_receipt, stop_goal_label, stop_receipt
@@ -985,6 +987,8 @@ class MinecraftAgent(BaseAgent):
         # 挂起站桩的无进展监视：话轮结束仍有目标在跑时开始计时，超限叫醒重新评估
         self._wait_progress = WaitProgress(self._clock)
         self._stall_alerted = False
+        # 无外部引导期的自驱节奏监控（原地内耗逃逸阀）与在跑长搜寻目标耗时台账
+        self._solo_pacing = SoloPacingTracker(self._clock)
 
         # 平台暂停支持（AgentControl pause/resume 经 _on_pause/_on_resume 进入）
         self._paused = asyncio.Event()
@@ -1077,6 +1081,7 @@ class MinecraftAgent(BaseAgent):
         # 攒着的互动通知一并作废：下一场开播时冒出上一场的蹲起只是过时的事
         self._interaction_throttle.clear()
         self._wait_progress.reset()
+        self._solo_pacing.reset()
         self._last_self_coords = None
         self._last_position = None
         self._last_dimension = ""
@@ -1248,6 +1253,7 @@ class MinecraftAgent(BaseAgent):
                     self._logger.warning(f"停机本机兜底收手异常（忽略继续停机）: {exc}", exc=True)
         self._in_lead_mode = False
         self._lead_handover_context = None
+        self._solo_pacing.reset()
         self._spoken_echo_buffer.clear()
         self._reset_lead_idle_state()
         await self._cancel_chat_flush_task(await_done=True)
@@ -1395,9 +1401,10 @@ class MinecraftAgent(BaseAgent):
         if not self.can_take_lead():
             self._logger.info("MinecraftAgent 当前不具备自主领航条件，拒绝 enter_lead")
             return False
+        normalized_context = context.model_copy(update={"segment_notes": clean_segment_notes(context.segment_notes)})
         if self._in_lead_mode:
-            # 幂等：已在主控态只更新交接上下文，不重复重置历史或重复开批
-            self._lead_handover_context = context
+            # 幂等：已在主控态只更新交接上下文（单一事实源含备注与结束态），不重复重置历史或重复开批
+            self._lead_handover_context = normalized_context
             self._logger.debug("MinecraftAgent 已处于游戏主控态，enter_lead 幂等返回 True")
             return True
 
@@ -1418,7 +1425,8 @@ class MinecraftAgent(BaseAgent):
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
         self._in_lead_mode = True
-        self._lead_handover_context = context
+        self._lead_handover_context = normalized_context
+        self._solo_pacing.enter_lead()
         self._lead_llm_consecutive_failures = 0
         self._lead_unavailable_notified = False
         self._reset_lead_idle_state()
@@ -1428,7 +1436,10 @@ class MinecraftAgent(BaseAgent):
         self._pending_handover_summary = ""
 
         fallback_save = self._world.save_fields()[1]
-        brief = format_lead_handover_brief(context, fallback_save_name=fallback_save)
+        brief = format_lead_handover_brief(
+            normalized_context,
+            fallback_save_name=fallback_save,
+        )
         self._wake_queue.push_instruction("", brief)
         self._wake_event.set()
         self._logger.info(
@@ -1444,6 +1455,7 @@ class MinecraftAgent(BaseAgent):
         progress = self._summarize_current_progress()
         self._in_lead_mode = False
         self._lead_handover_context = None
+        self._solo_pacing.reset()
         self._release_epoch += 1
         self._drawing_builder.cancel()
 
@@ -1501,6 +1513,8 @@ class MinecraftAgent(BaseAgent):
         wrapped = format_suggestion_message(text, source=source, source_dialogue=source_dialogue)
         # 记入近期人类原话滚动窗，供集中整理或对话重开保真，不改写头部固定层
         self._chat_gate.record_streamer_suggestion(text)
+        # 收到直播间观众建议属于有效外部引导，重置无引导原地内耗计时
+        self._solo_pacing.note_external_interaction()
         # 用普通通知入队：不建委派账本、不触发新任务清历史、不取消当前在跑目标
         self._wake_queue.push_notice(wrapped)
         self._reset_lead_idle_state()
@@ -1521,47 +1535,65 @@ class MinecraftAgent(BaseAgent):
         segment_id: str = "",
         segment_title: str = "",
         segment_goal: str = "",
+        segment_notes: str = "",
         expected_ms: int = 0,
+        rundown_finished: bool = False,
     ) -> None:
-        """接收流程单切段更新：同步刷新主控持有的环节信息、原地更新固定层交接简报并按需追加紧凑切换通知。
+        """接收流程单切段更新或结束信号：刷新主控持有的环节信息、原地更新固定层交接简报并推送紧凑通知。
 
-        确保长场次切入后续环节后，固定层简报、任务事实与后台折叠都不再沿用开场旧环节描述。
+        触发条件：游戏自主主控期流程单切段、备注更新或整张流程单结束（``rundown_finished=True``）时调用；
+        动作与边界：
+        - ``rundown_finished=True`` 时绝不因字段全空而早退，强制清空末段环节目标与备注并把固定层简报
+          切换为自由游玩阶段，防止旧环节或收尾总结目标残留；
+        - 普通切段过滤纯占位模板备注后同步更新固定层简报、待消费队列与任务指令首条，并追加 ``[流程单切换]`` 通知。
         """
         if not self._in_lead_mode:
             return
-        seg_id = (segment_id or "").strip()
-        title = (segment_title or "").strip()
-        goal = (segment_goal or "").strip()
-        exp_ms = max(0, int(expected_ms or 0))
-        if not (seg_id or title or goal or exp_ms):
-            return
-        prev = self._lead_handover_context
-        if prev is not None and (prev.segment_id, prev.segment_title, prev.segment_goal, prev.expected_ms) == (
-            seg_id,
-            title,
-            goal,
-            exp_ms,
-        ):
-            return
-        if prev is not None:
-            self._lead_handover_context = prev.model_copy(
-                update={
-                    "segment_id": seg_id,
-                    "segment_title": title,
-                    "segment_goal": goal,
-                    "expected_ms": exp_ms,
-                }
-            )
+        finished = bool(rundown_finished)
+        if finished:
+            seg_id = ""
+            title = ""
+            goal = ""
+            notes = ""
+            exp_ms = 0
         else:
-            self._lead_handover_context = LeadHandoverContext(
-                segment_id=seg_id,
-                segment_title=title,
-                segment_goal=goal,
-                expected_ms=exp_ms,
-            )
+            seg_id = (segment_id or "").strip()
+            title = (segment_title or "").strip()
+            goal = (segment_goal or "").strip()
+            notes = clean_segment_notes(segment_notes)
+            exp_ms = max(0, int(expected_ms or 0))
+            if not (seg_id or title or goal or notes or exp_ms):
+                return
+
+        prev = self._lead_handover_context
+        if prev is not None and (
+            prev.segment_id,
+            prev.segment_title,
+            prev.segment_goal,
+            clean_segment_notes(prev.segment_notes),
+            prev.expected_ms,
+            prev.rundown_finished,
+        ) == (seg_id, title, goal, notes, exp_ms, finished):
+            return
+
+        update_fields: Dict[str, Any] = {
+            "segment_id": seg_id,
+            "segment_title": title,
+            "segment_goal": goal,
+            "segment_notes": notes,
+            "expected_ms": exp_ms,
+            "rundown_finished": finished,
+        }
+        if prev is not None:
+            self._lead_handover_context = prev.model_copy(update=update_fields)
+        else:
+            self._lead_handover_context = LeadHandoverContext(**update_fields)
 
         fallback_save = self._world.save_fields()[1]
-        updated_brief = format_lead_handover_brief(self._lead_handover_context, fallback_save_name=fallback_save)
+        updated_brief = format_lead_handover_brief(
+            self._lead_handover_context,
+            fallback_save_name=fallback_save,
+        )
 
         # 若初始交接简报仍停在待消费队列中，直接原地替换该入队简报，避免重复推送过时开场信息
         replaced_in_queue = False
@@ -1583,25 +1615,35 @@ class MinecraftAgent(BaseAgent):
                     refreshed_fixed = True
                     break
         if refreshed_fixed:
-            self._prefix_guard.expect_rewrite("流程单切段刷新交接简报")
+            rewrite_reason = "流程单结束清空交接简报" if finished else "流程单切段刷新交接简报"
+            self._prefix_guard.expect_rewrite(rewrite_reason)
 
-        # 初始简报已进入对话历史后，再追加一条紧凑 [流程单切换] 通知提醒模型转向最新环节目标，并记录新意图文本供下步按需联想
+        # 初始简报已进入对话历史后，再追加一条紧凑 [流程单切换] 通知提醒模型转向最新状态
         if not replaced_in_queue:
-            intent_parts = [part for part in (title, goal) if part]
-            if intent_parts:
-                self._pending_intent_texts = intent_parts
+            if finished:
+                # 流程单已结束：清空旧环节待联想意图，防止后续步仍按旧环节词做记忆联想
+                self._pending_intent_texts.clear()
+            else:
+                intent_parts = [part for part in (title, goal, notes) if part]
+                if intent_parts:
+                    self._pending_intent_texts = intent_parts
             notice = format_rundown_update_notice(
                 segment_title=title,
                 segment_goal=goal,
+                segment_notes=notes,
                 expected_ms=exp_ms,
+                rundown_finished=finished,
             )
             self._wake_queue.push_notice(notice)
             if self._live_active and not self._task_suspended:
                 self._reset_lead_idle_state()
                 self._wake_event.set()
-        self._logger.info(
-            f"MinecraftAgent 收到流程单切段更新（segment_id={seg_id or '未标'}, title={title or '未命名'}）"
-        )
+        if finished:
+            self._logger.info("MinecraftAgent 收到流程单结束更新：已清空旧环节目标并切换为自由游玩简报")
+        else:
+            self._logger.info(
+                f"MinecraftAgent 收到流程单切段更新（segment_id={seg_id or '未标'}, title={title or '未命名'}）"
+            )
 
     def receive_silence_nudge(self, *, silent_ms: int) -> None:
         """接收直播间连续静默提醒：主控态下以不堆积方式入队 ``[直播间静默提醒]`` 并按需唤醒等待中的循环。
@@ -1749,6 +1791,29 @@ class MinecraftAgent(BaseAgent):
             "若暂时仍无合适动作可直接结束本轮等待新事件。"
         )
         self._wake_event.set()
+
+    def _check_solo_pacing_nudge(self) -> None:
+        """事件页巡检：主控期长时间无外部引导且陷入原地内耗时，按冷却投递开放式换口味软提醒。"""
+        if not (self._in_lead_mode and self._live_active):
+            return
+        if self._batch_active or self._task_suspended:
+            return
+        nudge = self._solo_pacing.maybe_build_nudge()
+        if not nudge:
+            return
+        # 未读的 [节奏提醒] 原地替换避免堆积，不取消也不打断当前在跑后台目标
+        queue_items = self._wake_queue.items
+        replaced = False
+        for idx, item in enumerate(queue_items):
+            if isinstance(item, tuple) and len(item) == 2 and str(item[1]).startswith("[节奏提醒]"):
+                queue_items[idx] = ("", nudge)
+                replaced = True
+                break
+        if not replaced:
+            self._wake_queue.push_notice(nudge)
+        self._reset_lead_idle_state()
+        self._wake_event.set()
+        self._logger.info("无外部引导期触发原地内耗逃逸提醒，已投递开放式换口味软提醒")
 
     def _append_unread_spoken_echoes(self, messages: List[Dict[str, Any]], *, step_start_len: int) -> None:
         """主控态正常推理步前拼入未读的 [直播间刚说过] 只读回执，不改动此前已发过的历史前缀。"""
@@ -1898,6 +1963,8 @@ class MinecraftAgent(BaseAgent):
         label = PROMPT_SOURCE_LABELS.get(source, "")
         if source != "委派看门狗":
             self._chat_gate.record_streamer_suggestion(content)
+            # 运营或主播递话提醒属于有效外部引导，重置无引导原地内耗计时
+            self._solo_pacing.note_external_interaction()
         self._wake_queue.push_instruction("", f"{label}\n{body}" if label else body)
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到递话（source={source or '未知'}）：{content[:60]}")
@@ -2120,6 +2187,7 @@ class MinecraftAgent(BaseAgent):
         for gid in tracked_ids:
             self._goals.untrack(gid)
             self._goal_ledger.forget(gid)
+            self._solo_pacing.forget_goal(gid)
         self._wait_progress.resume()
         self._furnace_waits.clear()
         self._set_open_question("")
@@ -3040,6 +3108,7 @@ class MinecraftAgent(BaseAgent):
             coords = self_coords(data)
             if coords is not None:
                 self._last_self_coords = coords
+                self._solo_pacing.note_position(coords)
             pos = self_position(MaicraftReply(ok=True, data=data))
             if pos is not None:
                 self._last_position = (pos, self._clock())
@@ -3104,6 +3173,7 @@ class MinecraftAgent(BaseAgent):
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._goal_ledger.remember_finished(run)
                 self._goal_ledger.register_and_settle(run)
+                self._solo_pacing.note_goal_finished(run.goal_id, run.ability, run.purpose, run.result_status)
                 self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
                 misuse_hint = use_air_misuse_hint(run)
                 if misuse_hint:
@@ -3134,6 +3204,12 @@ class MinecraftAgent(BaseAgent):
             self._goal_ledger.forget(run.goal_id)
             self._goal_ledger.remember_finished(run)
             self._goal_ledger.update_task_ledger(run)
+            self._solo_pacing.note_goal_finished(
+                run.goal_id,
+                run.ability,
+                run.purpose,
+                run.result_status or ("cancelled" if arguments.get("operation") == "cancel" else ""),
+            )
             self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
             # 模型先于结束事件读到结束的 obtain：装好炉先走的回炉计时从这里记上（同一个计时只记一次）
             self._furnace_waits.absorb(run)
@@ -3188,6 +3264,7 @@ class MinecraftAgent(BaseAgent):
     def _track_goal(self, run: GoalRun) -> None:
         self._goals.track(run)
         self._goal_ledger.track(run)
+        self._solo_pacing.note_goal_started(run.goal_id, run.ability, run.purpose)
         self._logger.info(f"开始跟踪目标 {run.goal_id}（{run.ability}）：{run.state}")
 
     async def _on_goal_changed(
@@ -3220,6 +3297,7 @@ class MinecraftAgent(BaseAgent):
             # 目标结束时角色可能已走远，旧坐标不再给后续新目标充当站桩基线
             self._last_self_coords = None
             self._goal_ledger.settle_finished(run)
+            self._solo_pacing.note_goal_finished(run.goal_id, run.ability, run.purpose, run.result_status)
             self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
             # obtain 装好炉先走（partial + WRONG_TIME）不是做不成：记下回炉计时，等它响之前结束一轮算在等炉子
             self._furnace_waits.absorb(run)
@@ -3275,7 +3353,13 @@ class MinecraftAgent(BaseAgent):
     async def _on_goal_gone(self, goal_id: int, reason: str) -> None:
         """在跟踪的目标查不到了（多半是换了世界）：如实告诉任务，不让它挂着等不来的结果。"""
         self._wait_progress.note_progress()
-        self._goal_ledger.mark_gone(goal_id, reason)
+        note = self._goal_ledger.mark_gone(goal_id, reason)
+        self._solo_pacing.note_goal_finished(
+            goal_id,
+            str(note.get("ability") or ""),
+            str(note.get("purpose") or ""),
+            "gone",
+        )
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
@@ -3490,6 +3574,7 @@ class MinecraftAgent(BaseAgent):
             await self.flush_pending_chat()
         self._wake_for_overdue_furnaces()
         self._check_lead_idle_wakeup()
+        self._check_solo_pacing_nudge()
         # 本页自带新事件时紧接着就会逐条消费目标与身体变化，不在消费前抢跑无进展看门狗
         if not getattr(page, "events", None):
             await self._wake_if_suspension_stalled()
@@ -3513,6 +3598,8 @@ class MinecraftAgent(BaseAgent):
             body = await self._call_maicraft(OBSERVE, {"what": "self"})
             if body.ok:
                 self._last_self_coords = self_coords(body.data)
+                if self._last_self_coords is not None:
+                    self._solo_pacing.note_position(self._last_self_coords)
         self._wait_progress.stand(
             goal_ids,
             initial_pos=self._last_self_coords,
@@ -3530,6 +3617,7 @@ class MinecraftAgent(BaseAgent):
             coords = self_coords(body.data)
             if coords is not None:
                 self._last_self_coords = coords
+                self._solo_pacing.note_position(coords)
         goals_reply = await self._call_maicraft(GOAL, {"operation": "list"})
         if goals_reply.ok:
             tracked = set(self._wait_progress.goal_ids)
@@ -3574,7 +3662,10 @@ class MinecraftAgent(BaseAgent):
             f"挂起的目标 {goal_ids} 已 {stalled_s:.0f} 秒没有任何进展，叫醒核对现场",
             include_body_events=False,
         )
-        self._inject_wakeup_message(watchdog_wakeup_notice(goal_ids, stalled_s, doings=doings))
+        stop_loss_hint = self._solo_pacing.search_stop_loss_hint(goal_ids, stalled_s)
+        self._inject_wakeup_message(
+            watchdog_wakeup_notice(goal_ids, stalled_s, doings=doings, stop_loss_hint=stop_loss_hint)
+        )
 
     async def _sync_world_fields(self, payload: Any, *, from_observation: bool) -> None:
         """在存档切换锁保护下吸收世界身份并完成工作文档/公共规矩/自建技能加载，防止事件页与开局代读并发抢跑。"""
@@ -3625,6 +3716,10 @@ class MinecraftAgent(BaseAgent):
         self._furnace_waits.forget_world()
         self._wait_progress.clear_timers()
         self._last_self_coords = None
+        # 换存档后旧存档的局部位置与目标样本作废；若仍在游戏主控态则立即以新存档重启节奏计时
+        self._solo_pacing.reset()
+        if self._in_lead_mode:
+            self._solo_pacing.enter_lead()
         # 换存档时作废在跑的后台折叠/集中整理、旧存档的历史摘要、旧存档的目标终态与推理判断旁注
         self._fold_epoch += 1
         self._fold_job.abandon()
@@ -4229,6 +4324,8 @@ class MinecraftAgent(BaseAgent):
             min_tokens=lines.min_range,
             max_summary_chars=config.fold_summary_max_chars,
         )
+        for skipped in outcome.skipped:
+            self._logger.info(f"后台折叠跳过已覆盖区间：{skipped}")
         for error in outcome.errors:
             self._logger.warning(f"后台折叠有一段没套上：{error}")
         if not outcome.blocks:
@@ -4376,6 +4473,7 @@ class MinecraftAgent(BaseAgent):
             coords = self_coords(body.data) if body.ok else None
             if coords is not None:
                 self._last_self_coords = coords
+                self._solo_pacing.note_position(coords)
                 if self._wait_progress.standing:
                     self._wait_progress.observe_state(coords, self._tracked_goal_doings())
             # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
@@ -4512,12 +4610,18 @@ class MinecraftAgent(BaseAgent):
         self,
         content: str,
         *,
+        detail: str = "",
         message_key: str = "",
         upstream_suppressed: int = 0,
     ) -> None:
-        """对非死亡服务器系统提示执行 15 秒短窗去重节流：首次立即入队，同前缀重复刷屏合并计数。"""
+        """对非死亡服务器系统提示执行 15 秒短窗去重节流：首次立即入队，同前缀重复刷屏合并计数。
+
+        当系统消息携带附加描述（如成就/进度悬停说明 ``detail``）时，拼成自然说明便于游戏主控直接读懂含义。
+        """
         now_s = float(self._clock())
-        throttle_key = _system_chat_throttle_key(content, message_key)
+        detail_text = " ".join((detail or "").split())
+        rendered = f"{content}（描述：{detail_text}）" if detail_text else content
+        throttle_key = _system_chat_throttle_key(rendered, message_key)
         # 顺手排空其他已到期的合并窗口；跳过当前键，避免刚到期又重发时连续产出两条消息
         self._flush_throttled_system_chats(now_s=now_s, skip_key=throttle_key)
 
@@ -4525,17 +4629,17 @@ class MinecraftAgent(BaseAgent):
         if entry is not None and (now_s - float(entry[0])) < _SYSTEM_CHAT_THROTTLE_WINDOW_S:
             # 15 秒窗口内相同前缀/内容重复刷屏：仅累加次数与最新原文，不刷爆模型上下文
             entry[1] = int(entry[1]) + 1 + max(0, upstream_suppressed)
-            entry[2] = content
+            entry[2] = rendered
             return
 
-        notice = f"[系统提示] {content}"
+        notice = f"[系统提示] {rendered}"
         if entry is not None and int(entry[1]) > 0:
             total_merged = int(entry[1]) + max(0, upstream_suppressed)
             notice += f"（前 15 秒内已重复合并 {total_merged} 次）"
         elif upstream_suppressed > 0:
             notice += f"（上游已合并 {upstream_suppressed} 条）"
 
-        self._system_chat_throttle[throttle_key] = [now_s, 0, content]
+        self._system_chat_throttle[throttle_key] = [now_s, 0, rendered]
         if self._in_lead_mode:
             self._reset_lead_idle_state()
         self._enqueue_chat_notice(f"system:{throttle_key}", notice, wake_if_waiting=True)
@@ -4900,6 +5004,8 @@ class MinecraftAgent(BaseAgent):
                 content = " ".join((payload.content or "").split())
                 if not content:
                     return
+                # 收到玩家游戏公屏互动属于有效外部引导，重置无引导原地内耗计时
+                self._solo_pacing.note_external_interaction()
                 sender = (payload.sender or "").strip() or "其他玩家"
                 if payload.sender_id and payload.sender_online:
                     # 记下本场游戏公屏交互过的在线玩家 UUID，供尾部权威承诺账本精准按人拉取
@@ -5005,8 +5111,10 @@ class MinecraftAgent(BaseAgent):
         content = " ".join((payload.content or "").split())
         if not content or _is_system_join_leave_noise(content, payload.message_key):
             return
+        detail = " ".join((payload.detail or "").split())
         self._enqueue_system_chat_notice(
             content,
+            detail=detail,
             message_key=payload.message_key,
             upstream_suppressed=int(payload.suppressed or 0),
         )

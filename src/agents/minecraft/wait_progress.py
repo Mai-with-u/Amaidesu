@@ -79,16 +79,18 @@ def watchdog_wakeup_notice(
     stalled_s: float,
     *,
     doings: Optional[Mapping[int, str]] = None,
+    stop_loss_hint: str = "",
 ) -> str:
-    """生成中性的无进展核对提示：陈述等待时长与当前状态，不把取消作为默认导向。"""
+    """生成中性的无进展核对提示：陈述等待时长与当前状态，不把取消作为默认导向；命中长搜寻阈值时附带开放式止损建议。"""
     ids_text = ", ".join(str(g) for g in goal_ids)
     detail_parts = [f"{gid}: {text.strip()}" for gid in goal_ids if doings and (text := doings.get(gid, "").strip())]
     status_clause = f"当前状态：{'；'.join(detail_parts)}。" if detail_parts else ""
+    extra_hint = stop_loss_hint if stop_loss_hint else ""
     return (
         f"[系统] 挂起的目标（{ids_text}）已 {stalled_s:.0f} 秒未见新事件。{status_clause}"
         "请核对现场进展：若目标仍在正常推进（如长途赶路、连续作业或等待前置完成），"
         "可直接结束本轮继续等待（预计耗时较长也可用 timer 设定下次查看间隔）；"
-        "仅在确认目标确实受阻无法推进时，再调整办法或取消重下。"
+        f"仅在确认目标确实受阻无法推进时，再调整办法或取消重下。{extra_hint}"
     )
 
 

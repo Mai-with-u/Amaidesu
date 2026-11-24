@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from dataclasses import dataclass
 from typing import Deque, List, Optional, Sequence
@@ -25,6 +26,7 @@ __all__ = [
     "MAX_SPOKEN_ECHO_CHARS",
     "SpokenEchoEntry",
     "SpokenEchoBuffer",
+    "clean_segment_notes",
     "format_lead_handover_brief",
     "format_rundown_nudge_notice",
     "format_rundown_update_notice",
@@ -38,6 +40,12 @@ MAX_SPOKEN_ECHO_CHARS = 120
 # 观众建议附带的来源原话条数与单条截断长度
 _MAX_SUGGESTION_DIALOGUE_LINES = 5
 _MAX_SUGGESTION_DIALOGUE_CHARS = 120
+# 流程单备注未填占位模板识别：纯下划线/破折号/标点，或“标签：______”这类尚未填写的模板槽位
+_PURE_PLACEHOLDER_RE = re.compile(r"^[\s_\-—~·.。，,；;：:/\\()（）\[\]【】]+$")
+_UNDERSCORE_BLANK_RE = re.compile(r"_{3,}")
+_UNFILLED_SLOT_LINE_RE = re.compile(
+    r"^[^：:\n]{0,24}[：:]\s*[\s_\-—~·.。，,；;/\\()（）\[\]【】]*_{3,}[\s_\-—~·.。，,；;/\\()（）\[\]【】]*$"
+)
 
 # 游戏主控态追加到系统提示词末尾的自主领航段（开放边界描述，不列成品句范例）
 LEAD_MODE_PROMPT_SECTION = """
@@ -51,8 +59,8 @@ LEAD_MODE_PROMPT_SECTION = """
 - **申请获取前先核对背包**：下达 `obtain` 获取工具、装备或单件设备前，若近期背包快照已过时或不确定当前持有情况，先核对最新 `maicraft_observe(what=self)` 确认确实缺少再下单。
 - **直接主导游戏公屏与社交停手优先**：游戏内游戏公屏交流由你直接负责，主播侧不再替你代发游戏公屏。宿主会按事实为游戏公屏消息标注来源与距离，并按批次投递：收到 `[游戏公屏·私聊]`、`[游戏公屏·点名你]`、`[游戏公屏·身边…]` 或 `[游戏公屏合批]` 时，由你自主判断是否用 `maicraft_execute` 的 `chat` 能力直接回应同伴，并按需调整当前计划（私聊属对方只发给你的信息，切勿在公开直播解说或游戏公屏中转述原话）；游戏公屏聊天栏空间狭小，回应同伴时像平时联机顺手打字一样直说眼前这一句，不必一次把细节和方案全塞进一条消息。`[游戏公屏·远处]` 与行动步顺带附入的 `[游戏公屏旁听]` 属于远处非点名游戏公屏，仅作背景知悉参考，不必强行搭腔或为此打断手头推进。当联机同伴正在当面教导、展示设施或明确要求你停下留步时，优先暂停或取消非紧急的移动与施工目标并留在现场完成交流，待沟通告一段落再继续推进待办。
 - **自然参考 `[脑中闪过]` 只读线索**：当游戏公屏批次或走近地标时，消息末尾可能附带少量只读的 `[脑中闪过]` 线索（来自跨场记忆或本场较早的游戏公屏、折叠记录与规矩）。仅作背景联想参考：确实切题且有助于回应或避坑时自然用上，不切题就忽略，无需逐条复述或专门解释。
-- **节制提交实况解说与即时纠偏穿透（`framework_commentary`）**：主控期不使用 `minecraft_report` 交付或请示，改用 `framework_commentary` 向主播提交 1–2 句客观现场要点，由主播按人设润色讲给观众。只在确实出现值得分享的变化时调用——如阶段目标完成、明显局势转折、卡壳受阻、突发意外、有意思的新发现或同伴互动看点；常规赶路、翻箱、重复采集等平淡过程不要流水账式高频提交。仅在突发危险或关键转折时将 `urgency` 设为 `high`，涉及游戏内其他玩家时先核对【游戏里的熟人】或公屏抬头的账号名与常用称呼再填好 `about_player`，确保人物指代准确。若发现 `[直播间刚说过]` 里的口播与你手头已确认的最新现场事实明显不符，立即调用 `framework_commentary(..., urgency="high", correction=True)` 发出客观纠偏要点，简明陈述已核实的最新事实。反过来也同理：当你在游戏公屏上向同伴更正或澄清一件此前的口播可能已经向直播间讲错的事实，同一条纠偏要点也走 `framework_commentary(..., correction=True)` 提交，让直播间同步听到已核实的正确说法；纠偏只用于确实已被播报过的失实内容，偶尔的口头出入或无关紧要的细节差异不必逐条纠正，更不为凑数而发。
-- **环节到点自己推进（`rundown_control`）**：主控期的直播环节推进由你承担——当前环节目标达成、预期时长用尽或收到 `[流程单超时提醒]` 时，用 `rundown_control` 的 `next` 切换到下一环节，话题或进度仍值得继续时用 `renew` 为本环节续一个周期，按流程单节奏自主推进，不必等主播代劳。
+- **节制提交实况解说与即时纠偏穿透（`framework_commentary`）**：主控期不使用 `minecraft_report` 交付或请示，改用 `framework_commentary` 向主播提交 1–2 句客观现场要点，由主播按人设润色讲给观众。只在确实出现值得分享的变化时调用——如阶段目标完成、明显局势转折、卡壳受阻、突发意外、有意思的新发现或同伴互动看点；常规赶路、翻箱、重复采集等平淡过程不要流水账式高频提交。报送现场时严格区分“正在做/准备做”与“已做成”：在目标返回终态并核实结果前，只陈述当前正在推进的动作或进度，不提前夹带尚未确认的完成结论。仅在突发危险或关键转折时将 `urgency` 设为 `high`，涉及游戏内其他玩家时先核对【游戏里的熟人】或游戏公屏抬头的账号名与常用称呼再填好 `about_player`，确保人物指代准确。若发现 `[直播间刚说过]` 里的口播与你手头已确认的最新现场事实明显不符，立即调用 `framework_commentary(..., urgency="high", correction=True)` 发出客观纠偏要点，简明陈述已核实的最新事实。反过来也同理：当你在游戏公屏上向同伴更正或澄清一件此前的口播可能已经向直播间讲错的事实，同一条纠偏要点也走 `framework_commentary(..., correction=True)` 提交，让直播间同步听到已核实的正确说法；纠偏只用于确实已被播报过的失实内容，偶尔的口头出入或无关紧要的细节差异不必逐条纠正，更不为凑数而发。
+- **游玩节奏按现场推进，收尾归主播与运营者（`rundown_control`）**：主控期收到 `[流程单超时提醒]` 时，游玩段不必被闹钟催着收尾——只要当前探索、制作或联机互动仍值得继续，可直接调用 `rundown_control` 的 `renew` 安心续期；确认本段游玩目标已告一段落且需要切往下一环节时，再用 `next` 推进。整场直播的收尾告别、点名感谢与何时结束整张流程单由主播或运营者主导，游戏侧不在游玩段替主播提前做收尾总结；流程单结束后进入自由游玩阶段，按存档现状与现场兴致继续安排游玩即可。
 - **理性自主处理 `[直播间建议]`**：`[直播间建议]` 是主播转达的观众点菜或善意提醒，不是强制命令，也不会打断你正在执行的后台目标。结合当前安全态势、手头进度与环节目标自主评估：顺手且合适就立即执行或排进 `minecraft_todo`，当下不合适或与主线冲突时先搁置或完成手头事后再考虑。
 - **参考 `[直播间刚说过]` 避免复读**：当步消息若附带 `[直播间刚说过]`，说明直播间刚刚对观众播报过这些内容（仅作只读参考）。后续调用 `framework_commentary` 时避开已播过的同一话题，只补充新进展或新变化。
 - **按需回应 `[直播间静默提醒]`**：当直播间长时间无人发声时，宿主可能送来 `[直播间静默提醒]` 让你在后台推进间隙顺手暖场。若当前在跑的目标进度、眼下现场细节或下一步打算有值得向观众交代的新信息，可调用一次 `framework_commentary` 提交简短客观要点（不影响在跑后台目标）；若眼下暂无值得分享的新变化或正忙于关键操作，不必硬聊，忽略提醒并正常推进或结束本轮即可。
@@ -153,20 +161,60 @@ def _dedupe_clean_lines(
     return result
 
 
-def format_lead_handover_brief(context: LeadHandoverContext, *, fallback_save_name: str = "") -> str:
-    """把主控交接上下文格式化为紧凑的 ``[主控交接简报]`` user 消息。"""
-    lines: List[str] = ["[主控交接简报] 现在由你进入游戏自主领航模式，自主规划并推进本段游玩内容："]
+def clean_segment_notes(raw: str) -> str:
+    """清理流程单备注中的未填占位模板（如纯下划线 ``______`` 或未填槽位），保留真实有效备注。"""
+    text = str(raw or "").strip()
+    if not text or _PURE_PLACEHOLDER_RE.fullmatch(text):
+        return ""
+    # 逐行过滤仅含下划线空白或“字段名：______”这类未填模板行，避免占位模板原样进入交接简报
+    kept: List[str] = []
+    for line in text.splitlines():
+        normalized = " ".join(line.split())
+        if not normalized or _PURE_PLACEHOLDER_RE.fullmatch(normalized):
+            continue
+        if _UNFILLED_SLOT_LINE_RE.fullmatch(normalized):
+            continue
+        if _UNDERSCORE_BLANK_RE.search(normalized):
+            without_blanks = _UNDERSCORE_BLANK_RE.sub("", normalized).strip()
+            if not without_blanks or _PURE_PLACEHOLDER_RE.fullmatch(without_blanks):
+                continue
+        kept.append(normalized)
+    return "；".join(kept)
 
-    title = (context.segment_title or "").strip()
-    goal = (context.segment_goal or "").strip()
-    duration = _format_expected_duration(context.expected_ms)
-    if title or duration:
-        header = title or "游玩环节"
-        if duration:
-            header = f"{header}（预计时长：{duration}）"
-        lines.append(f"- 当前环节：{header}")
-    if goal:
-        lines.append(f"- 环节目标：{goal}")
+
+def format_lead_handover_brief(
+    context: LeadHandoverContext,
+    *,
+    fallback_save_name: str = "",
+    segment_notes: Optional[str] = None,
+    rundown_finished: Optional[bool] = None,
+) -> str:
+    """把主控交接上下文格式化为紧凑的 ``[主控交接简报]`` user 消息。
+
+    当 ``rundown_finished`` 为真时，渲染自由游玩阶段简报并清空一切过时环节目标；
+    普通环节下若存在非空且非占位模板的 ``segment_notes``，则附带渲染本场备注/大方向。
+    """
+    is_finished = bool(rundown_finished) if rundown_finished is not None else bool(context.rundown_finished)
+    if is_finished:
+        lines: List[str] = [
+            "[主控交接简报] 本场流程单已结束，进入自由游玩阶段（无收尾总结或点名感谢要求），由你自主规划并推进接下来的游玩内容："
+        ]
+    else:
+        lines = ["[主控交接简报] 现在由你进入游戏自主领航模式，自主规划并推进本段游玩内容："]
+        title = (context.segment_title or "").strip()
+        goal = (context.segment_goal or "").strip()
+        duration = _format_expected_duration(context.expected_ms)
+        if title or duration:
+            header = title or "游玩环节"
+            if duration:
+                header = f"{header}（预计时长：{duration}）"
+            lines.append(f"- 当前环节：{header}")
+        if goal:
+            lines.append(f"- 环节目标：{goal}")
+        raw_notes = segment_notes if segment_notes is not None else (context.segment_notes or "")
+        notes = clean_segment_notes(raw_notes)
+        if notes:
+            lines.append(f"- 本场备注/大方向：{notes}")
 
     save_name = (context.save_name or "").strip() or (fallback_save_name or "").strip()
     if save_name:
@@ -194,11 +242,19 @@ def format_rundown_update_notice(
     *,
     segment_title: str = "",
     segment_goal: str = "",
+    segment_notes: str = "",
     expected_ms: int = 0,
+    rundown_finished: bool = False,
 ) -> str:
-    """把流程单切段更新格式化为紧凑的 ``[流程单切换]`` 通知。"""
+    """把流程单切段更新或结束通知格式化为紧凑的 ``[流程单切换]`` 通知。"""
+    if rundown_finished:
+        return (
+            "[流程单切换] 本场流程单已结束，进入自由游玩阶段（无收尾总结或点名感谢要求）；"
+            "固定层交接简报中的旧环节目标已清空，请结合现场、待办与存档自由安排接下来的游玩内容。"
+        )
     title = (segment_title or "").strip() or "新游玩环节"
     goal = (segment_goal or "").strip()
+    notes = clean_segment_notes(segment_notes)
     duration = _format_expected_duration(expected_ms)
     header = f"当前环节已更新为「{title}」"
     if duration:
@@ -206,6 +262,8 @@ def format_rundown_update_notice(
     parts = [f"[流程单切换] {header}"]
     if goal:
         parts.append(f"环节目标：{goal}")
+    if notes:
+        parts.append(f"本场备注/大方向：{notes}")
     parts.append("固定层交接简报中的环节信息已同步刷新，请围绕最新环节目标推进。")
     return "；".join(parts)
 
@@ -239,10 +297,10 @@ def format_rundown_nudge_notice(
             "若当前进度仍值得继续，可调用 rundown_control(action='renew') 续期一个周期。"
         )
     else:
-        parts.append("本环节已是流程单最后一段")
+        parts.append("本环节已是流程单最后一段，计划时间已到")
         parts.append(
-            "若准备收尾进入自由互动，可调用 rundown_control(action='next') 结束流程单；"
-            "若当前进度仍值得继续，可调用 rundown_control(action='renew') 续期一个周期。"
+            "收尾与结束流程单由主播或运营者主导，可按需收尾手头阶段、等待交还控制权，"
+            "或若当前游玩仍值得继续，调用 rundown_control(action='renew') 续期一个周期。"
         )
     return "；".join(parts)
 

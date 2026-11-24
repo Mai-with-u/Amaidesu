@@ -6,7 +6,7 @@ from src.agents.minecraft.lead_mode import LEAD_MODE_PROMPT_SECTION, format_rund
 
 
 def test_format_rundown_nudge_notice_with_next_segment_and_last_segment() -> None:
-    """带下一段提示与末段两种形态均清晰包含当前段标题、耗时/预计时长与 next/renew 指引。"""
+    """带下一段提示包含 next/renew 指引；末段不再诱导调用 next，仅提示计划时间已到、收尾交权或 renew 续期。"""
     with_next = format_rundown_nudge_notice(
         segment_id="play_1",
         segment_title="主线探索",
@@ -28,5 +28,7 @@ def test_format_rundown_nudge_notice_with_next_segment_and_last_segment() -> Non
         expected_ms=300_000,
     )
     assert last_seg.startswith("[流程单超时提醒]")
-    assert "最后一段" in last_seg and "next" in last_seg and "renew" in last_seg
+    assert "最后一段" in last_seg and "计划时间已到" in last_seg and "renew" in last_seg
+    assert "交还控制权" in last_seg
+    assert "next" not in last_seg
     assert "[流程单超时提醒]" in LEAD_MODE_PROMPT_SECTION
