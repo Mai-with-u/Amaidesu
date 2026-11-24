@@ -37,7 +37,7 @@ class _LocalMemoryCardStore:
         return card_id in self.cards
 
 
-class _FakeSwitchClient:
+class _FakeMaiGOClient:
     def __init__(self) -> None:
         self.heartbeats: List[Dict[str, Any]] = []
 
@@ -96,9 +96,9 @@ class _FakeSwitchClient:
         return None
 
 
-async def test_topic_deck_merges_and_consumes_virtual_switch_cards() -> None:
+async def test_topic_deck_merges_and_consumes_virtual_maigo_cards() -> None:
     bus = EventBus()
-    client = _FakeSwitchClient()
+    client = _FakeMaiGOClient()
     bridge = MaiGOBridge(event_bus=bus, client=client, retry_delays_ms=())
     assert await bridge.ensure_checked_out(LiveStartedPayload(live_session_id=1, kind=SESSION_KIND_LIVE))
 
@@ -133,7 +133,7 @@ async def test_memory_cues_cross_channel_person_and_forgetting_guard(tmp_path: P
     privacy = PrivacyService(db.manager, db_path=db.db_path, key_path=tmp_path / "k.key", bot_name="麦麦")
     await privacy.initialize()
     bus = EventBus()
-    client = _FakeSwitchClient()
+    client = _FakeMaiGOClient()
     bridge = MaiGOBridge(event_bus=bus, client=client, retry_delays_ms=())
     now_value = 1_000_000_000_000
 

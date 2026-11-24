@@ -25,7 +25,7 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL
 
 
-class _StubSwitchClient:
+class _StubMaiGOClient:
     """实现 MaiGOClient 协议的内存替身，支持预设响应与故障注入。"""
 
     def __init__(self, checkout_response: Optional[Dict[str, Any]] = None) -> None:
@@ -160,7 +160,7 @@ async def test_http_client_requests_and_4xx_rejection() -> None:
 
 async def test_checkout_cache_rehearsal_skip_and_heartbeat_consumption() -> None:
     bus = EventBus()
-    client = _StubSwitchClient()
+    client = _StubMaiGOClient()
     bridge = MaiGOBridge(event_bus=bus, client=client, heartbeat_interval_ms=60_000, retry_delays_ms=())
     bridge.setup()
     try:
@@ -298,7 +298,7 @@ async def test_push_settled_session_filters_forgetting_players_and_replays_pendi
         await db.sessions.close_live_session(live_session_id=sid, ended_at_ms=1_020_000)
 
         bus = EventBus()
-        client = _StubSwitchClient()
+        client = _StubMaiGOClient()
         # 前 2 次 checkin 故意抛异常触发持久化待补推队列
         client.fail_checkin_times = 2
         bridge = MaiGOBridge(
@@ -358,7 +358,7 @@ async def test_push_settled_session_filters_forgetting_players_and_replays_pendi
 
 async def test_offline_degrades_gracefully_without_exceptions(tmp_path: Path) -> None:
     bus = EventBus()
-    client = _StubSwitchClient()
+    client = _StubMaiGOClient()
     client.fail_checkout = ConnectionError("connection refused")
     bridge = MaiGOBridge(event_bus=bus, client=client, retry_delays_ms=())
     bridge.setup()

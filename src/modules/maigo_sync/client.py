@@ -14,7 +14,7 @@ class MaiGORejected(RuntimeError):
 
 
 class MaiGOClient(Protocol):
-    """与 MaiGO 中心交换机通信的异步协议端口。"""
+    """与 MaiGO 跨端记忆中心通信的异步协议端口。"""
 
     async def checkout(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
 
