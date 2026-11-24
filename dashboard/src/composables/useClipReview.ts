@@ -204,6 +204,37 @@ export function useClipReview(deps: ClipReviewDeps) {
     }
   }
 
+  /** 以当前播放位置设选中段起点（I 键 / 设为起点按钮）；越界给提示不盲改 */
+  async function markSegmentStart(wallMs: number): Promise<void> {
+    const seg = selectedSegment.value;
+    if (!seg) return;
+    if (wallMs >= seg.end_ms) {
+      ElMessage.warning('播放位置已在这段终点之后，先跳回段内再设起点');
+      return;
+    }
+    const updated = await deps.updateSegment(seg.id, { start_ms: Math.round(wallMs) });
+    if (updated) replaceSegmentLocal(updated);
+  }
+
+  /** 以当前播放位置设选中段终点（O 键 / 设为终点按钮）；越界给提示不盲改 */
+  async function markSegmentEnd(wallMs: number): Promise<void> {
+    const seg = selectedSegment.value;
+    if (!seg) return;
+    if (wallMs <= seg.start_ms) {
+      ElMessage.warning('播放位置还没到这段起点，先放过起点再设终点');
+      return;
+    }
+    const updated = await deps.updateSegment(seg.id, { end_ms: Math.round(wallMs) });
+    if (updated) replaceSegmentLocal(updated);
+  }
+
+  /** 选中段；默认联动预览（点行即看这段，与时间轴点块一致） */
+  function selectSegment(segmentId: number, preview = true): void {
+    selectedSegmentId.value = segmentId;
+    const segment = deps.segments.value.find(s => s.id === segmentId);
+    if (segment && preview) deps.previewSegment(segment);
+  }
+
   /** 切场/手动刷新前清空本地工作态 */
   function resetForSession(): void {
     selectedSegmentId.value = null;
@@ -224,6 +255,9 @@ export function useClipReview(deps: ClipReviewDeps) {
     onDismissSegment,
     onDeleteSegment,
     advanceToNextReviewable,
+    markSegmentStart,
+    markSegmentEnd,
+    selectSegment,
     replaceSegmentLocal,
     insertSegmentLocal,
     removeSegmentLocal,

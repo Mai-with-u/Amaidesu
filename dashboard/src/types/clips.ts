@@ -76,6 +76,21 @@ export interface ClipConfigState {
   recording_dir_exists: boolean;
 }
 
+/** 预览播放状态（useClips 维护；墙钟映射供播放头回时间轴与入出点标记取位） */
+export interface ClipPreviewState {
+  src: string;
+  title: string;
+  /** 起播位置（视频内秒） */
+  seekS: number;
+  /** 从起播计的自动停点（秒）；null = 自由浏览不自动停 */
+  durationS: number | null;
+  /** 视频 t=0 对应的墙钟毫秒（整场=文件起点；段级现转=现转窗口起点；产物=段起点） */
+  wallStartMs: number;
+  sourcePath: string;
+  /** 是否整场直服（可自由拖动全场；段级现转与产物只含局部） */
+  wholeFile: boolean;
+}
+
 /** 配置保存结果（写盘 + 免重启重装配） */
 export interface ClipConfigApplyResult {
   success: boolean;

@@ -40,13 +40,12 @@ describe('切片段时间轴交互', () => {
     expect(clipsSource).toContain('function seekPreviewTo');
   });
 
-  it('播放头：组件接收 playheadMs 并渲染，Clips.vue 传当前播放位置', () => {
+  it('播放头：组件接收 playheadMs 并渲染；位置映射在播放器组件内完成', () => {
     expect(sfcSource).toContain('playheadMs: number | null;');
     expect(sfcSource).toContain('class="clip-playhead"');
     expect(clipsSource).toContain(':playhead-ms="playheadMs"');
-    expect(clipsSource).toContain(
-      'playheadMs.value = file.started_at_ms + player.currentTime * 1000;',
-    );
+    // 页面只转交播放器抛出的墙钟位置（映射在 ClipPreviewPlayer 内）
+    expect(clipsSource).toMatch(/function onPlayhead\(wallMs: number\): void \{\s*playheadMs\.value = wallMs;/);
   });
 
   it('段块边缘把手常显，不再悬停才出现', () => {
@@ -54,16 +53,12 @@ describe('切片段时间轴交互', () => {
     expect(edgeCss).toMatch(/\.clip-block-edge \{[\s\S]*?opacity: 0\.45/);
   });
 
-  it('点段块选中并跳段起点：Clips.vue 用 onSelectSegment 同时做两件事', () => {
-    expect(clipsSource).toContain('@select="onSelectSegment"');
-    expect(clipsSource).toMatch(
-      /function onSelectSegment[\s\S]*?seekPreviewTo\(segment\.start_ms\)/,
-    );
+  it('点段块选中并联动预览：接到 useClipReview 的 selectSegment', () => {
+    expect(clipsSource).toContain('@select="selectSegment($event)"');
   });
 
-  it('时间轴建段仍接到后端建段接口', () => {
+  it('时间轴建段接到 useClipReview 的建段处理', () => {
     expect(clipsSource).toContain('@create="onCreate"');
-    expect(clipsSource).toContain('createSegment(selectedSession.value.live_session_id');
   });
 
   it('段列表滚动定位：段行收集 ref，选中变化时 scrollIntoView', () => {

@@ -176,6 +176,51 @@ describe('useClipReview', () => {
     expect(review.selectedSegmentId.value).toBeNull();
   });
 
+  it('markSegmentStart 以播放位置写段起点；越过终点拦截不盲改', async () => {
+    const { review, updateBodies } = harness([
+      segment({ id: 1, start_ms: 1_000_000, end_ms: 1_060_000 }),
+    ]);
+    review.selectedSegmentId.value = 1;
+
+    await review.markSegmentStart(1_010_000);
+    expect(updateBodies).toEqual([{ id: 1, body: { start_ms: 1_010_000 } }]);
+
+    // 播放位置已在段终点之后：提示且不写
+    await review.markSegmentStart(1_070_000);
+    expect(mocks.ElMessage.warning).toHaveBeenCalled();
+    expect(updateBodies).toHaveLength(1);
+
+    // 未选中段：无动作
+    review.selectedSegmentId.value = null;
+    await review.markSegmentStart(1_020_000);
+    expect(updateBodies).toHaveLength(1);
+  });
+
+  it('markSegmentEnd 以播放位置写段终点；未过起点拦截', async () => {
+    const { review, updateBodies } = harness([
+      segment({ id: 1, start_ms: 1_000_000, end_ms: 1_060_000 }),
+    ]);
+    review.selectedSegmentId.value = 1;
+
+    await review.markSegmentEnd(1_050_000);
+    expect(updateBodies).toEqual([{ id: 1, body: { end_ms: 1_050_000 } }]);
+
+    await review.markSegmentEnd(990_000);
+    expect(mocks.ElMessage.warning).toHaveBeenCalled();
+    expect(updateBodies).toHaveLength(1);
+  });
+
+  it('selectSegment 默认联动预览；preview=false 只选中不预览', () => {
+    const { review, previewedIds } = harness([segment({ id: 1 })]);
+
+    review.selectSegment(1);
+    expect(review.selectedSegmentId.value).toBe(1);
+    expect(previewedIds).toEqual([1]);
+
+    review.selectSegment(1, false);
+    expect(previewedIds).toEqual([1]); // 未新增预览调用
+  });
+
   it('resetForSession 清空选中与全部草稿', () => {
     const { review } = harness([segment({ id: 1 })]);
     review.selectedSegmentId.value = 1;

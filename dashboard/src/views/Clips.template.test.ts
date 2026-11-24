@@ -72,6 +72,16 @@ describe('核对工作流与播放器接线', () => {
     expect(sfcSource).toContain('@create="onCreate"');
     expect(sfcSource).toContain('@seek="seekPreviewTo"');
   });
+
+  it('点行即预览（行点击与时间轴点块都走 selectSegment），入出点标记接到播放器事件', () => {
+    expect(sfcSource).toContain('@click="selectSegment(segment.id)"');
+    expect(sfcSource).toContain('@select="selectSegment($event)"');
+    expect(sfcSource).toContain('@mark-start="wall => markSegmentStart(wall)"');
+    expect(sfcSource).toContain('@mark-end="wall => markSegmentEnd(wall)"');
+    // 核对键盘：Enter 确认 / X 弃用在页面层监听
+    expect(sfcSource).toMatch(/function onReviewKeydown[\s\S]*?Enter[\s\S]*?onConfirmSegment/);
+    expect(sfcSource).toMatch(/function onReviewKeydown[\s\S]*?'x'[\s\S]*?onDismissSegment/);
+  });
 });
 
 describe('播放器空态与页头细节', () => {

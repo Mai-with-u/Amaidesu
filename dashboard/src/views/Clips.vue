@@ -6,7 +6,7 @@
  * 工作流排布：段列表 + 预览播放器同屏（主工作区），时间轴在其下（微调/建段），
  * 录播素材收成底部聚合条。段的时间在界面上统一用"自开播起"的相对时刻。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn, formatTimeHM } from '@/utils/format';
@@ -119,9 +119,11 @@ const sessionEndMs = computed(() => {
   return selectedSession.value.ended_at_ms ?? Date.now();
 });
 
-// ---- 核对工作流（选中/草稿/单行替换/自动前进）收拢在 useClipReview ----
+// ---- 核对工作流（选中/草稿/单行替换/自动前进/入出点标记）收拢在 useClipReview ----
 const {
   selectedSegmentId,
+  selectedSegment,
+  isReviewable,
   draftOf,
   isDirty,
   saveRow,
@@ -130,6 +132,9 @@ const {
   onConfirmSegment,
   onDismissSegment,
   onDeleteSegment,
+  markSegmentStart,
+  markSegmentEnd,
+  selectSegment,
   resetForSession,
 } = useClipReview({
   segments,
@@ -143,22 +148,41 @@ const {
 
 // ---- 预览播放器：视频交互收拢在 ClipPreviewPlayer，页面只接播放头与就绪 ----
 const playerRef = ref<InstanceType<typeof ClipPreviewPlayer> | null>(null);
-/** 播放头位置（墙钟毫秒）；整场文件预览才有意义，段级现转/产物预览不显示 */
+/** 播放头位置（墙钟毫秒；整场/段级现转/产物都有映射） */
 const playheadMs = ref<number | null>(null);
-/** 预览源文件的起始墙钟毫秒（播放头映射依据；找不到文件时为 null） */
-const previewSourceStartMs = computed(() => {
-  const current = preview.value;
-  if (!current) return null;
-  return recordings.value.find(f => f.path === current.sourcePath)?.started_at_ms ?? null;
-});
 
-function onPlayhead(wallMs: number | null): void {
+function onPlayhead(wallMs: number): void {
   playheadMs.value = wallMs;
 }
 
 /** 元数据可读 = 片段/整场已可播（段级现转在此收尾） */
 function onPreviewReady(): void {
   previewConverting.value = false;
+}
+
+// 预览关闭后时间轴上的播放头一并撤掉
+watch(preview, p => {
+  if (!p) playheadMs.value = null;
+});
+
+/** 核对键盘：Enter 确认当前段、X 弃用（播放键与入出点在播放器组件内监听） */
+function interactiveTarget(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (target === null) return false;
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName);
+}
+
+function onReviewKeydown(event: KeyboardEvent): void {
+  if (interactiveTarget(event)) return;
+  const seg = selectedSegment.value;
+  if (!seg || !isReviewable(seg)) return;
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void onConfirmSegment(seg);
+  } else if (event.key === 'x' || event.key === 'X') {
+    event.preventDefault();
+    void onDismissSegment(seg);
+  }
 }
 
 const STATUS_LABELS: Record<ClipSegmentStatus, string> = {
@@ -293,68 +317,74 @@ function fileExtOf(file: RecordingFileInfo): string {
 }
 
 function onPreviewFile(file: RecordingFileInfo): void {
-  void openPreview(file.path, `整段素材：${file.file_name}`, 0, null);
+  void openPreview({
+    sourcePath: file.path,
+    title: `整段素材：${file.file_name}`,
+    seekWallMs: file.started_at_ms,
+    durationMs: null,
+  });
 }
 
+/** 覆盖某墙钟时刻的录播文件（多文件场按起点选对文件；取不到回落第一份） */
+function pickFileForWallMs(wallMs: number): RecordingFileInfo | undefined {
+  const covering = recordings.value
+    .filter(f => f.started_at_ms <= wallMs)
+    .sort((a, b) => b.started_at_ms - a.started_at_ms);
+  return covering[0] ?? recordings.value[0];
+}
+
+/** 核对预览：整场就绪自由浏览全场；未就绪现转段窗口（前后各留 5 秒上下文） */
+const REVIEW_CONTEXT_MS = 5000;
+
 function onPreviewSegment(segment: ClipSegment): void {
-  const file = recordings.value[0]; // 常规单文件场；跨文件段先看第一份覆盖段起点的
+  const file = pickFileForWallMs(segment.start_ms);
   if (!file) {
     ElMessage.info('该场没有匹配到录播文件，无法预览');
     return;
   }
-  const offsetS = Math.max(0, (segment.start_ms - file.started_at_ms) / 1000);
-  void openPreview(
-    file.path,
-    `源片段：${segment.title || '未命名段'}`,
-    offsetS,
-    (segment.end_ms - segment.start_ms) / 1000,
-  );
+  void openPreview({
+    sourcePath: file.path,
+    title: `源片段：${segment.title || '未命名段'}`,
+    seekWallMs: segment.start_ms,
+    durationMs: segment.end_ms - segment.start_ms,
+    contextMs: REVIEW_CONTEXT_MS,
+  });
 }
 
 function onPreviewOutput(segment: ClipSegment): void {
   const output = outputsOf(segment)[0];
   if (!output) return;
-  void openPreview(
-    output,
-    `产物：${segment.title || '未命名段'}`,
-    0,
-    (segment.end_ms - segment.start_ms) / 1000,
-  );
+  void openPreview({
+    sourcePath: output,
+    title: `产物：${segment.title || '未命名段'}`,
+    seekWallMs: segment.start_ms,
+    durationMs: segment.end_ms - segment.start_ms,
+    wallStartMs: segment.start_ms,
+  });
 }
 
-/** 时间轴跳转：同整场文件的预览直接改播放位置，否则打开整段素材预览并定位 */
+/** 时间轴跳转：整场直服中直接改播放位置；否则秒开跳转点附近 ±30 秒的现转窗口 */
+const SEEK_WINDOW_MS = 30000;
+
 function seekPreviewTo(ms: number): void {
-  const file = recordings.value[0]; // 常规单文件场；多文件场与段预览同一取法（见 onPreviewSegment）
+  const file = pickFileForWallMs(ms);
+  const current = preview.value;
+  if (file && current?.wholeFile && current.sourcePath === file.path && playerRef.value) {
+    // 同一整场已在播：不重建播放器，直接改播放位置
+    playerRef.value.seekToWall(ms);
+    return;
+  }
   if (!file) {
     ElMessage.info('该场没有匹配到录播文件，无法跳转');
     return;
   }
-  const offsetS = Math.max(0, (ms - file.started_at_ms) / 1000);
-  const player = playerRef.value?.videoEl ?? null;
-  const current = preview.value;
-  if (
-    current &&
-    !current.range &&
-    current.sourcePath === file.path &&
-    player &&
-    player.readyState >= 1
-  ) {
-    // 同一整场文件已在播：不重建播放器，直接改播放位置；段范围自动停同时解除
-    current.baseS = 0;
-    current.durationS = null;
-    current.title = `整段素材：${file.file_name}`;
-    player.currentTime = offsetS;
-    void player.play().catch(() => undefined);
-    return;
-  }
-  void openPreview(file.path, `整段素材：${file.file_name}`, offsetS, null);
-}
-
-/** 时间轴点段块：选中该段并跳到段起点 */
-function onSelectSegment(segmentId: number): void {
-  selectedSegmentId.value = segmentId;
-  const segment = segments.value.find(s => s.id === segmentId);
-  if (segment) seekPreviewTo(segment.start_ms);
+  void openPreview({
+    sourcePath: file.path,
+    title: `跳转定位：${file.file_name}`,
+    seekWallMs: ms,
+    durationMs: 0,
+    contextMs: SEEK_WINDOW_MS,
+  });
 }
 
 // ---- 段列表滚动定位：时间轴点段块时把对应行滚进可视区 ----
@@ -458,9 +488,14 @@ async function refreshSessions(): Promise<void> {
 }
 
 onMounted(async () => {
+  window.addEventListener('keydown', onReviewKeydown);
   const state = await loadConfig();
   // 服务未装配时场次列表接口是 503，先看配置再决定拉不拉列表
   if (state?.assembled) await loadSessions();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onReviewKeydown);
 });
 </script>
 
@@ -634,10 +669,13 @@ onMounted(async () => {
                 ref="playerRef"
                 :preview="preview"
                 :preview-converting="previewConverting"
-                :source-start-ms="previewSourceStartMs"
+                :can-mark="!!selectedSegment && isReviewable(selectedSegment)"
+                :session-start-ms="selectedSession?.started_at_ms ?? 0"
                 @playhead="onPlayhead"
                 @ready="onPreviewReady"
                 @close="closePreview"
+                @mark-start="wall => markSegmentStart(wall)"
+                @mark-end="wall => markSegmentEnd(wall)"
               >
                 <template #empty>
                   <template v-if="segments.length > 0">
@@ -675,7 +713,7 @@ onMounted(async () => {
                   :ref="el => setSegmentRowEl(segment.id, el)"
                   class="clip-segment-row"
                   :class="{ 'is-selected': segment.id === selectedSegmentId }"
-                  @click="selectedSegmentId = segment.id"
+                  @click="selectSegment(segment.id)"
                 >
                   <div class="clip-segment-main">
                     <div class="clip-segment-top">
@@ -788,7 +826,7 @@ onMounted(async () => {
               :session-end-ms="sessionEndMs"
               :selected-id="selectedSegmentId"
               :playhead-ms="playheadMs"
-              @select="onSelectSegment"
+              @select="selectSegment($event)"
               @resize="onResize"
               @create="onCreate"
               @seek="seekPreviewTo"

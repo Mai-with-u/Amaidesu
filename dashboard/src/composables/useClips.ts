@@ -3,8 +3,9 @@
  *
  * 订阅 background.task.changed（经共享 websocket store）做"任务终态自动回读"：
  * clip-select / clip-cut 任务结束时回读对应场次的段列表，状态不用手动刷新。
- * 预览是混合式：整场缓存就绪直接播整场；未就绪走段级端点秒开。仅
- * "整段素材预览且源未转换"时才有 2 秒间隔的整场就绪轮询。
+ * 预览整场优先：整场缓存就绪直接播整场（可自由拖动全场）；未就绪走段级端点
+ * 秒开起播点附近一段（带前后余量，播放头照常映射回时间轴）。仅"整段素材预览
+ * 且源未转换"才有 2 秒间隔的整场就绪轮询。
  * 生命周期语义：页面在 keep-alive 内，订阅与轮询按激活态启停——onActivated
  * 订阅、onDeactivated 退订并停轮询、作用域销毁兜底；切割进行中切页则暂停
  * 回读，回页时段状态以下次进入/手动刷新为准。
@@ -21,6 +22,7 @@ import type {
   ClipConfig,
   ClipConfigState,
   ClippedSessionItem,
+  ClipPreviewState,
   ClipSegment,
   RecordingFileInfo,
   UnmatchedFileInfo,
@@ -199,21 +201,11 @@ export function useClips() {
     }
   }
 
-  // ---- 预览（混合式）：视频本体由 <video> 直连不走 axios 免超时 ----
-  // 整场缓存就绪 → 直接用整场文件（可自由拖动，从段起点开播）；
-  // 未就绪 → 走段级端点（后端只重封装那几分钟，秒级可播），不等整场转换。
-  // durationS 为 null 表示"整段素材从头播、不自动停"，此时整场未就绪才退回
-  // "等整场转换"的轮询流程。
-  const preview = ref<{
-    src: string;
-    title: string;
-    baseS: number;
-    durationS: number | null;
-    /** 预览对应的源录播文件路径（整场预览与段级现转都指向源文件） */
-    sourcePath: string;
-    /** 是否段级现转：视频 t=0 对应段起点而非文件起点，播放位置不能映射回场次时刻 */
-    range: boolean;
-  } | null>(null);
+  // ---- 预览（整场优先）：视频本体由 <video> 直连不走 axios 免超时 ----
+  // 核对切点需要看切点前后的画面，所以核对入口一律优先整场直服（可自由拖动
+  // 全场）；整场缓存未就绪才退到段级现转（只转起播点附近一段，秒级可播），
+  // 现转窗口同样带前后余量，播放头经 wallStartMs 映射回场次时间轴。
+  const preview = ref<ClipPreviewState | null>(null);
   const previewConverting = ref(false);
   let previewPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -235,24 +227,34 @@ export function useClips() {
     );
   }
 
+  function isMp4(path: string): boolean {
+    return path.toLowerCase().endsWith('.mp4');
+  }
+
   /** 等整场转换就绪的轮询（仅"整段素材预览且源未转换"时使用） */
-  function pollUntilReady(sourcePath: string, title: string): void {
+  function pollUntilReady(params: {
+    sourcePath: string;
+    title: string;
+    wallStartMs: number;
+    seekS: number;
+  }): void {
     preview.value = null;
     previewConverting.value = true;
     previewPollTimer = setInterval(() => {
       void (async () => {
         try {
-          const check = await clipsApi.previewStatus(sourcePath);
+          const check = await clipsApi.previewStatus(params.sourcePath);
           if (check.data.ready) {
             stopPreviewPoll();
             previewConverting.value = false;
             preview.value = {
-              src: previewFileUrl(sourcePath),
-              title,
-              baseS: 0,
+              src: previewFileUrl(params.sourcePath),
+              title: params.title,
+              seekS: params.seekS,
               durationS: null,
-              sourcePath,
-              range: false,
+              wallStartMs: params.wallStartMs,
+              sourcePath: params.sourcePath,
+              wholeFile: true,
             };
           }
         } catch {
@@ -262,40 +264,82 @@ export function useClips() {
     }, 2000);
   }
 
-  async function openPreview(
-    sourcePath: string,
-    title: string,
-    offsetS: number,
-    durationS: number | null,
-  ): Promise<void> {
+  /**
+   * 打开预览。统一入口：整场就绪（或源本就是 mp4）→ 整场直服自由浏览；
+   * 未就绪且给了内容跨度 → 段级现转带前后余量秒开；未就绪且无跨度（整段
+   * 素材预览）→ 轮询等整场转换。
+   */
+  async function openPreview(params: {
+    sourcePath: string;
+    title: string;
+    /** 期望起播的墙钟时刻 */
+    seekWallMs: number;
+    /** 起播点之后的内容跨度（毫秒）；null = 自由浏览 */
+    durationMs: number | null;
+    /** 起播点之前额外铺垫的上下文（毫秒；段级现转用，默认 0） */
+    contextMs?: number;
+    /** 独立文件（如产物）视频 t=0 的墙钟映射；整场与现转由本函数推导 */
+    wallStartMs?: number;
+  }): Promise<void> {
     stopPreviewPoll();
+    const contextMs = params.contextMs ?? 0;
     try {
-      const { data } = await clipsApi.previewStatus(sourcePath);
-      if (data.ready) {
+      const { data } = await clipsApi.previewStatus(params.sourcePath);
+      const file = recordings.value.find(f => f.path === params.sourcePath);
+      if (data.ready || isMp4(params.sourcePath)) {
+        if (file) {
+          // 整场直服：可自由拖动全场（核对切点要看切点前后，不设自动停）
+          preview.value = {
+            src: previewFileUrl(params.sourcePath),
+            title: params.title,
+            seekS: Math.max(0, (params.seekWallMs - file.started_at_ms) / 1000),
+            durationS: null,
+            wallStartMs: file.started_at_ms,
+            sourcePath: params.sourcePath,
+            wholeFile: true,
+          };
+        } else {
+          // 独立文件（产物）：只含段内容，按段起点映射，保留自动停
+          const wallStartMs = params.wallStartMs ?? params.seekWallMs;
+          preview.value = {
+            src: previewFileUrl(params.sourcePath),
+            title: params.title,
+            seekS: Math.max(0, (params.seekWallMs - wallStartMs) / 1000),
+            durationS: params.durationMs !== null ? params.durationMs / 1000 : null,
+            wallStartMs,
+            sourcePath: params.sourcePath,
+            wholeFile: false,
+          };
+        }
         previewConverting.value = false;
-        preview.value = {
-          src: previewFileUrl(sourcePath),
-          title,
-          baseS: offsetS,
-          durationS,
-          sourcePath,
-          range: false,
-        };
         return;
       }
-      if (durationS === null) {
-        pollUntilReady(sourcePath, title);
+      const fileStartMs = file?.started_at_ms ?? 0;
+      if (params.durationMs === null) {
+        // 整段素材预览且未就绪：等整场转换（预热已在开场触发）
+        pollUntilReady({
+          ...params,
+          wallStartMs: fileStartMs,
+          seekS: Math.max(0, (params.seekWallMs - fileStartMs) / 1000),
+        });
         return;
       }
-      // 段级秒开：后端现切现转那几分钟，loadedmetadata 即就绪
+      // 段级秒开：只现转起播点附近一段（带前后余量），loadedmetadata 即就绪
+      const windowStartMs = Math.max(fileStartMs, params.seekWallMs - contextMs);
+      const windowEndMs = params.seekWallMs + params.durationMs + contextMs;
       previewConverting.value = true;
       preview.value = {
-        src: previewRangeUrl(sourcePath, offsetS, durationS),
-        title,
-        baseS: 0,
-        durationS,
-        sourcePath,
-        range: true,
+        src: previewRangeUrl(
+          params.sourcePath,
+          (windowStartMs - fileStartMs) / 1000,
+          (windowEndMs - windowStartMs) / 1000,
+        ),
+        title: params.title,
+        seekS: (params.seekWallMs - windowStartMs) / 1000,
+        durationS: (windowEndMs - windowStartMs) / 1000,
+        wallStartMs: windowStartMs,
+        sourcePath: params.sourcePath,
+        wholeFile: false,
       };
     } catch (error) {
       previewConverting.value = false;
