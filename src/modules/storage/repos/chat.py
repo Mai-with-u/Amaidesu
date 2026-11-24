@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.storage.models.chat import (
     ChatDateCount,
+    ChatDensityBucket,
     DailyDanmakuCount,
     GiftRecord,
     GuardRecord,
@@ -1001,6 +1002,34 @@ class ChatRepo(BaseRepo):
                     (start_ms,),
                 ).fetchall()
                 return [DailyDanmakuCount(day=str(row["day"]), count=int(row["count"])) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def count_session_density(
+        self, *, live_session_id: int, bucket_start_ms: int, bucket_ms: int
+    ) -> List[ChatDensityBucket]:
+        """按时间桶统计本场聊天明细行数（切片页密度轨取数），桶起点正序。
+
+        只回 COUNT 不拉内容；覆盖弹幕/台词等全部 live_chat 来源行。桶从
+        ``bucket_start_ms`` 起算、每 ``bucket_ms`` 一桶，空桶不返回（由调用
+        方补零成连续数组）。
+        """
+
+        def _exec() -> List[ChatDensityBucket]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT (timestamp_ms - ?) / ? AS bucket_index, COUNT(*) AS count"
+                    " FROM live_chat WHERE live_session_id=? AND timestamp_ms>=?"
+                    " GROUP BY bucket_index ORDER BY bucket_index",
+                    (bucket_start_ms, bucket_ms, live_session_id, bucket_start_ms),
+                ).fetchall()
+                return [
+                    ChatDensityBucket(
+                        bucket_start_ms=bucket_start_ms + int(row["bucket_index"]) * bucket_ms,
+                        count=int(row["count"]),
+                    )
+                    for row in rows
+                ]
 
         return await self._run_in_executor(_exec)
 

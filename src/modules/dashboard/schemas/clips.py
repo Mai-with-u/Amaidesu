@@ -126,6 +126,15 @@ class SelectResponse(BaseModel):
     accepted: bool = Field(..., description="是否受理；完成后整批替换该场旧 AI 段")
 
 
+class SessionDensityResponse(BaseModel):
+    """场次聊天密度（切片页时间轴密度轨的渲染数据）。"""
+
+    live_session_id: int = Field(..., description="场次 ID")
+    bucket_ms: int = Field(..., description="桶宽（毫秒）")
+    started_at_ms: int = Field(..., description="首桶起点（=场次开播时刻，墙钟毫秒）")
+    counts: List[int] = Field(..., description="逐桶聊天行数；counts[i] 覆盖 start+i*bucket_ms 起的桶宽区间")
+
+
 class CutRequest(BaseModel):
     """发起切割的请求体。"""
 

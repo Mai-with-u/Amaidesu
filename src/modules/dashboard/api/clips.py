@@ -40,6 +40,7 @@ from src.modules.dashboard.schemas.clips import (
     SegmentMutationResponse,
     SegmentUpdateRequest,
     SelectResponse,
+    SessionDensityResponse,
     SessionRecordingsResponse,
     UnmatchedFileInfo,
 )
@@ -241,6 +242,22 @@ async def select_segments(live_session_id: int, service: ClippingDep) -> SelectR
         logger.error(f"场次 {live_session_id} AI 选段受理失败：{exc}", exc=exc)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"AI 选段失败：{exc}") from exc
     return SelectResponse(accepted=True)
+
+
+@router.get("/sessions/{live_session_id}/density", response_model=SessionDensityResponse)
+async def session_density(
+    live_session_id: int, service: ClippingDep, bucket_seconds: int = 30
+) -> SessionDensityResponse:
+    """场次聊天密度（密度轨取数；按桶计数、从场起点连续补零，场次不存在 404）。"""
+    density = await service.session_density(live_session_id=live_session_id, bucket_seconds=bucket_seconds)
+    if density is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"场次 {live_session_id} 不存在")
+    return SessionDensityResponse(
+        live_session_id=live_session_id,
+        bucket_ms=density.bucket_ms,
+        started_at_ms=density.started_at_ms,
+        counts=density.counts,
+    )
 
 
 @router.get("/sessions/{live_session_id}/segments", response_model=SegmentListResponse)

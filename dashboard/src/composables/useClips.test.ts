@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     listSessions: vi.fn(),
     listRecordings: vi.fn(),
     listSegments: vi.fn(),
+    sessionDensity: vi.fn(),
     select: vi.fn(),
     createSegment: vi.fn(),
     updateSegment: vi.fn(),
@@ -58,6 +59,8 @@ const SEGMENTS = { live_session_id: 7, segments: [] };
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  // 密度轨默认取不到（openSession 对此容忍且静默）；需要密度数据的用例自行覆盖
+  mocks.clipsApi.sessionDensity.mockRejectedValue(new Error('no density'));
 });
 
 describe('useClips', () => {
@@ -79,13 +82,27 @@ describe('useClips', () => {
     const clips = useClips();
     mocks.clipsApi.listRecordings.mockReturnValue(ok(RECORDINGS));
     mocks.clipsApi.listSegments.mockReturnValue(ok(SEGMENTS));
+    mocks.clipsApi.sessionDensity.mockReturnValue(
+      ok({ live_session_id: 7, bucket_ms: 30000, started_at_ms: 1000, counts: [1, 2] }),
+    );
     await clips.openSession(7);
     expect(clips.recordings.value).toEqual([]);
     expect(clips.detailLoading.value).toBe(false);
+    expect(clips.sessionDensity.value?.counts).toEqual([1, 2]);
 
     mocks.clipsApi.listSegments.mockRejectedValue(new Error('boom'));
     await clips.openSession(7);
     expect(mocks.ElMessage.error).toHaveBeenCalled();
+  });
+
+  it('密度取不到不阻塞打开场次（sessionDensity 置空且不弹错）', async () => {
+    const clips = useClips();
+    mocks.clipsApi.listRecordings.mockReturnValue(ok(RECORDINGS));
+    mocks.clipsApi.listSegments.mockReturnValue(ok(SEGMENTS));
+    mocks.clipsApi.sessionDensity.mockRejectedValue(new Error('没有该端点'));
+    await clips.openSession(7);
+    expect(clips.sessionDensity.value).toBeNull();
+    expect(mocks.ElMessage.error).not.toHaveBeenCalled();
   });
 
   it('runSelection 受理后返回 true 并置进行中；失败返回 false 且不置进行中', async () => {

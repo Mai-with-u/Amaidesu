@@ -33,6 +33,7 @@ const {
   detachedFiles,
   unmatchedFiles,
   segments,
+  sessionDensity,
   detailLoading,
   selecting,
   cutting,
@@ -826,6 +827,7 @@ onBeforeUnmount(() => {
               :session-end-ms="sessionEndMs"
               :selected-id="selectedSegmentId"
               :playhead-ms="playheadMs"
+              :density="sessionDensity"
               @select="selectSegment($event)"
               @resize="onResize"
               @create="onCreate"

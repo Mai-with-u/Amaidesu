@@ -493,6 +493,11 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         ("accepted",),
     ),
     (
+        "clipsApi.sessionDensity → GET /clips/sessions/{id}/density",
+        clips_schemas.SessionDensityResponse,
+        ("live_session_id", "bucket_ms", "started_at_ms", "counts"),
+    ),
+    (
         "clipsApi.cut → POST /clips/sessions/{id}/cut",
         clips_schemas.CutResponse,
         ("accepted",),

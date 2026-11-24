@@ -16,7 +16,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 import asyncio
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
+
+import time as time_module
 
 from src.modules.background.registry import BackgroundTaskRegistry, get_registry
 from src.modules.clipping.config_schema import ClippingConfigSchema
@@ -43,6 +45,19 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.modules.utils.task_utils import spawn_background_task
 
 logger = get_logger("ClippingService")
+
+
+class SessionDensityData(NamedTuple):
+    """场次聊天密度（密度轨取数结果，API 层转响应模型）。
+
+    ``counts[i]`` 覆盖墙钟区间 ``[started_at_ms + i*bucket_ms, started_at_ms +
+    (i+1)*bucket_ms)``，从场起点起连续补零。
+    """
+
+    bucket_ms: int
+    started_at_ms: int
+    counts: List[int]
+
 
 # 下播自动选段排队等本场记忆整理跑完的上限与轮询间隔（秒）：切片排在下播整理之后，避免抢占同一模型配额
 _WAIT_SETTLE_MAX_S = 600.0
@@ -551,6 +566,29 @@ class ClippingService:
     def session_outputs_summary(self, outputs: Sequence[str]) -> List[str]:
         """产物路径串（多份换行分隔）摊平成列表（API 响应用）。"""
         return [line for text in outputs for line in text.splitlines() if line.strip()]
+
+    # ---------- 密度 ----------
+
+    async def session_density(self, *, live_session_id: int, bucket_seconds: int) -> Optional[SessionDensityData]:
+        """场次聊天密度（时间轴密度轨取数）：按桶计数，从场起点连续补零到末桶。
+
+        场次不存在返回 None（API 层转 404）。桶宽入参夹取到 10~300 秒；
+        桶数封顶，未收播的长场不会撑爆载荷。
+        """
+        session = await self._database.sessions.get_live_session(live_session_id=live_session_id)
+        if session is None:
+            return None
+        bucket_ms = max(10, min(300, bucket_seconds)) * 1000
+        buckets = await self._database.chat.count_session_density(
+            live_session_id=live_session_id,
+            bucket_start_ms=session.started_at_ms,
+            bucket_ms=bucket_ms,
+        )
+        counts_by_start = {b.bucket_start_ms: b.count for b in buckets}
+        end_ms = session.ended_at_ms if session.ended_at_ms is not None else int(time_module.time() * 1000)
+        total = min(2000, max(1, (end_ms - session.started_at_ms) // bucket_ms + 1))
+        counts = [counts_by_start.get(session.started_at_ms + i * bucket_ms, 0) for i in range(total)]
+        return SessionDensityData(bucket_ms=bucket_ms, started_at_ms=session.started_at_ms, counts=counts)
 
     # ---------- 预览 ----------
 

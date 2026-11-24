@@ -53,6 +53,12 @@ export const clipsApi = {
     api.get<{ live_session_id: number; segments: ClipSegment[] }>(
       `/clips/sessions/${sessionId}/segments`,
     ),
+  // 密度轨：按桶计数的场次聊天密度（counts[i] 覆盖 start+i*bucket_ms 起的区间）
+  sessionDensity: (sessionId: number, bucketSeconds = 30) =>
+    api.get<{ live_session_id: number; bucket_ms: number; started_at_ms: number; counts: number[] }>(
+      `/clips/sessions/${sessionId}/density`,
+      { params: { bucket_seconds: bucketSeconds } },
+    ),
   createSegment: (sessionId: number, body: { start_ms: number; end_ms: number; title: string }) =>
     api.post<{ segment: ClipSegment | null }>(`/clips/sessions/${sessionId}/segments`, body),
   updateSegment: (

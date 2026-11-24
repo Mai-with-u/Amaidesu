@@ -230,6 +230,40 @@ async def test_select_accepts_immediately_and_replaces_in_background(store, even
     assert len(segments) == 2  # 替换未发生，段保持原状
 
 
+async def test_session_density_buckets_and_clamp(store, event_bus, tmp_path: Path, api) -> None:
+    """密度端点：按桶计数从场起点补零成连续数组；桶宽夹取；未知场次 404。"""
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    session_id = await store.sessions.insert_live_session(started_at_ms=started)
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 300_000)
+    # 桶命中：0 桶 2 条、1~3 桶 0 条（补零）、4 桶 1 条、5 桶（恰为收播时刻）1 条
+    for offset in (5_000, 10_000, 250_000, 300_000):
+        await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=started + offset,
+            sender_role="viewer",
+            content="弹幕",
+            message_type="danmaku",
+        )
+
+    service = _service(store, event_bus, tmp_path)
+    client = await api(clipping_service=service)
+    resp = await client.get(f"/api/v1/clips/sessions/{session_id}/density?bucket_seconds=60")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["live_session_id"] == session_id
+    assert body["bucket_ms"] == 60_000
+    assert body["started_at_ms"] == started
+    assert body["counts"] == [2, 0, 0, 0, 1, 1]  # 300 秒场 / 60 秒桶 = (300000//60000)+1 = 6 桶
+
+    # 桶宽夹取：超界入参收到 10~300 秒
+    clamped = await client.get(f"/api/v1/clips/sessions/{session_id}/density?bucket_seconds=9999")
+    assert clamped.json()["bucket_ms"] == 300_000
+
+    # 未知场次 404
+    missing = await client.get("/api/v1/clips/sessions/999999/density")
+    assert missing.status_code == 404
+
+
 async def test_clips_endpoints_503_when_not_assembled(api) -> None:
     client = await api()  # 不挂 clipping_service
     resp = await client.get("/api/v1/clips/sessions")

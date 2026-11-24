@@ -65,4 +65,20 @@ describe('切片段时间轴交互', () => {
     expect(clipsSource).toContain('setSegmentRowEl(segment.id, el)');
     expect(clipsSource).toContain("scrollIntoView({ block: 'nearest' })");
   });
+
+  it('两档视图：全场概览条 + 选中段自动放大，可退回全场', () => {
+    expect(sfcSource).toContain('class="clip-overview"');
+    expect(sfcSource).toContain('class="clip-overview-window"');
+    expect(sfcSource).toContain('显示全场');
+    expect(sfcSource).toMatch(/watch\(\s*\(\) => props\.selectedId,[\s\S]*?view\.value = \{/);
+  });
+
+  it('密度轨：接收 density 数据，按视图渲染非零桶直方图', () => {
+    expect(sfcSource).toContain(
+      'density: { bucketMs: number; startedAtMs: number; counts: number[] } | null;',
+    );
+    expect(sfcSource).toContain('class="clip-density-bar"');
+    expect(sfcSource).toMatch(/const densityBars = computed/);
+    expect(clipsSource).toContain(':density="sessionDensity"');
+  });
 });

@@ -252,3 +252,12 @@ class ChatDateCount(BaseModel):
 
     date: str = Field(..., description="本地日期（YYYY-MM-DD）")
     danmaku_count: int = Field(..., description="当日弹幕条数")
+
+
+class ChatDensityBucket(BaseModel):
+    """单个时间桶的聊天行数（切片页密度轨取数，GROUP BY 派生聚合行）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bucket_start_ms: int = Field(..., description="桶起点（墙钟毫秒）")
+    count: int = Field(..., description="桶内聊天明细行数（弹幕/台词等全部来源）")

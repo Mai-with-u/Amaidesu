@@ -43,6 +43,10 @@ export function useClips() {
   const unmatchedFiles = ref<UnmatchedFileInfo[]>([]);
 
   const segments = ref<ClipSegment[]>([]);
+  /** 场次聊天密度（时间轴密度轨渲染数据；取不到为 null） */
+  const sessionDensity = ref<{ bucketMs: number; startedAtMs: number; counts: number[] } | null>(
+    null,
+  );
   const detailLoading = ref(false);
 
   const selecting = ref(false);
@@ -96,7 +100,7 @@ export function useClips() {
     }
   }
 
-  /** 打开一场：录播文件与切片段一起取（段为空是正常态，不弹错误） */
+  /** 打开一场：录播文件、切片段、聊天密度一起取（段为空是正常态，不弹错误） */
   async function openSession(sessionId: number): Promise<void> {
     const seq = ++openSeq;
     activeSessionId.value = sessionId;
@@ -105,16 +109,26 @@ export function useClips() {
     detachedFiles.value = [];
     unmatchedFiles.value = [];
     segments.value = [];
+    sessionDensity.value = null;
     try {
-      const [recordingRes, segmentRes] = await Promise.all([
+      const [recordingRes, segmentRes, densityRes] = await Promise.all([
         clipsApi.listRecordings(sessionId),
         clipsApi.listSegments(sessionId),
+        // 密度轨是辅助信号：取不到不阻塞主数据，也不弹错
+        clipsApi.sessionDensity(sessionId).catch(() => null),
       ]);
       if (seq !== openSeq) return; // 期间已切到别的场次：丢弃过期响应
       recordings.value = recordingRes.data.files;
       detachedFiles.value = recordingRes.data.detached_files;
       unmatchedFiles.value = recordingRes.data.unmatched_files;
       segments.value = segmentRes.data.segments;
+      sessionDensity.value = densityRes
+        ? {
+            bucketMs: densityRes.data.bucket_ms,
+            startedAtMs: densityRes.data.started_at_ms,
+            counts: densityRes.data.counts,
+          }
+        : null;
     } catch (error) {
       if (seq !== openSeq) return;
       ElMessage.error(getApiErrorMessage(error, '加载场次切片数据失败'));
@@ -496,6 +510,7 @@ export function useClips() {
     detachedFiles,
     unmatchedFiles,
     segments,
+    sessionDensity,
     detailLoading,
     selecting,
     cutting,
