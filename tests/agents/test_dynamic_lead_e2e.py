@@ -96,6 +96,30 @@ def _play_then_talk_rundown() -> Rundown:
     )
 
 
+def _play_then_play_rundown() -> Rundown:
+    """首段与次段同为游玩（play）的端到端流程单：下一段不是收尾段，超时提醒照常送达游戏侧。"""
+    return Rundown(
+        rundown_id="e2e_play_then_play",
+        title="双 Agent 动态主从端到端测试单",
+        segments=[
+            RundownSegment(
+                id="seg_play",
+                title="主线林地建家",
+                task_description="在营地周边砍树采矿并推进小屋建造",
+                expected_ms=1_800_000,
+                mode="play",
+            ),
+            RundownSegment(
+                id="seg_dig",
+                title="洞窟探察",
+                task_description="探察营地附近的洞窟并带回资源",
+                expected_ms=1_200_000,
+                mode="play",
+            ),
+        ],
+    )
+
+
 class _FakeRundownRepo:
     """只读流程单仓储替身。"""
 
@@ -1407,7 +1431,11 @@ async def test_e2e_game_lead_rundown_overdue_nudges_real_minecraft_agent(
     prompts: Any,
     fake_clock: Any,
 ) -> None:
-    """真实 StreamerAgent 超期 -> 真实 LeadCoordinator 节流推送 -> 真实 MinecraftAgent 收到 [流程单超时提醒]，主播零唤醒。"""
+    """真实 StreamerAgent 超期 -> 真实 LeadCoordinator 节流推送 -> 真实 MinecraftAgent 收到 [流程单超时提醒]，主播零唤醒。
+
+    流程单用 play->play（下一段同为游玩段）：下一段是收尾/杂谈段时超时提醒静默不催，
+    见 test_e2e_game_lead_rundown_overdue_nudge_silenced_when_next_segment_is_talk。
+    """
 
     def _mc_script(_messages: List[Dict[str, Any]]) -> Response:
         return _resp("收到进度，继续按节奏推进")
@@ -1416,6 +1444,7 @@ async def test_e2e_game_lead_rundown_overdue_nudges_real_minecraft_agent(
         prompts=prompts,
         fake_clock=fake_clock,
         mc_script=_mc_script,
+        rundown=_play_then_play_rundown(),
         streamer_sections={
             "game_lead_silence_nudge_ms": 0,
             "proactive": {
@@ -1451,7 +1480,8 @@ async def test_e2e_game_lead_rundown_overdue_nudges_real_minecraft_agent(
         nudge_turn_text = _texts(rig.minecraft_llm.seen[-1])
         assert "[流程单超时提醒]" in nudge_turn_text
         assert "主线林地建家" in nudge_turn_text
-        assert "收尾闲聊复盘" in nudge_turn_text
+        # 下一环节同为游玩段：提醒带下一环节信息送达，游戏侧可自主决定切段或续期
+        assert "洞窟探察" in nudge_turn_text
         assert "rundown_control" in nudge_turn_text
         assert len(rig.streamer_llm.planner_calls) == 0
 
@@ -1461,6 +1491,52 @@ async def test_e2e_game_lead_rundown_overdue_nudges_real_minecraft_agent(
         await rig.streamer._maybe_flush()
         await _settle_loop(rig.bus)
         assert len(rig.minecraft_llm.seen) == turns_after_first
+        assert len(rig.streamer_llm.planner_calls) == 0
+    finally:
+        await rig.stop()
+
+
+async def test_e2e_game_lead_rundown_overdue_nudge_silenced_when_next_segment_is_talk(
+    prompts: Any,
+    fake_clock: Any,
+) -> None:
+    """当前游玩段超期但下一环节是收尾/杂谈段时，超时提醒静默不催游戏侧：收尾切段权留给主播与运营者，主播零唤醒。"""
+
+    def _mc_script(_messages: List[Dict[str, Any]]) -> Response:
+        return _resp("收到进度，继续按节奏推进")
+
+    rig = await _start_dual_agent_rig(
+        prompts=prompts,
+        fake_clock=fake_clock,
+        mc_script=_mc_script,
+        streamer_sections={
+            "game_lead_silence_nudge_ms": 0,
+            "proactive": {
+                "enabled": True,
+                "rundown_overdue_interval_ms": 300_000,
+            },
+        },
+    )
+    try:
+        await rig.bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=912, kind="live", started_at_ms=fake_clock.now_ms()),
+            source="e2e_test",
+        )
+        await rig.bus.wait_until_drained()
+        await _wait_until(lambda: rig.coordinator.is_agent_leading("minecraft") and len(rig.minecraft_llm.seen) >= 1)
+        await _wait_until(lambda: not rig.minecraft.batch_active)
+        turns_before = len(rig.minecraft_llm.seen)
+        assert len(rig.streamer_llm.planner_calls) == 0
+
+        # 当前游玩段超期（下一段是收尾闲聊 talk 段）-> 不向游戏侧推送超时提醒；
+        # 游戏侧可能因自身节奏提醒等缘由自行醒来出轮，但任何一轮都不该出现提醒正文
+        fake_clock.tick(1_801_000)
+        await rig.streamer._maybe_flush()
+        await _settle_loop(rig.bus)
+        new_texts = "\n".join(_texts(turn) for turn in rig.minecraft_llm.seen[turns_before:])
+        assert "下一环节为" not in new_texts
+        assert "本环节已是流程单最后一段" not in new_texts
         assert len(rig.streamer_llm.planner_calls) == 0
     finally:
         await rig.stop()
