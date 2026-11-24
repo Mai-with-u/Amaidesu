@@ -125,7 +125,13 @@ from .session_overview import SessionOverviewWriter
 from .message_buffer import MessageBuffer
 from .delegation_workbench import PLANNER_CALL_SOURCE
 from .delegation_stall_watch import DelegationStallWatch
-from .mouth import MOUTH_BODY_KINDS, SCENE_CHANGING_BODY_KINDS, Mouth
+from .mouth import (
+    HIGH_RISK_ATTACKED_KEY,
+    MOUTH_BODY_KINDS,
+    SCENE_CHANGING_BODY_KINDS,
+    Mouth,
+    is_high_risk_attacked,
+)
 from .mouth_reconcile import (
     ReconcileVerdict,
     SpokenLog,
@@ -140,7 +146,7 @@ from .planner_context import age_text
 from .paid_viewers import PaidViewerLookup
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
-from .replyer import TARGET_EXTRA_CHARS, Replyer
+from .replyer import COMMENTARY_EXTRA_CHARS, TARGET_EXTRA_CHARS, Replyer
 from .room_state import ENTER_RENDER_CAP, RoomState
 from .scene_card import brief_of
 from .speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT, SPEECH_PRIORITY_NORMAL, SpeechDispatcher
@@ -271,7 +277,12 @@ def _game_chat_line(payload: GameChatPayload) -> str:
     note = "（原话过长已截断）" if payload.truncated else ""
     if payload.suppressed:
         note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
-    return f"{speaker}：{payload.content}{note}"
+    line = f"{speaker}：{payload.content}{note}"
+    detail = (payload.detail or "").strip()
+    if detail:
+        # 补充说明（如成就或进度悬停描述）跟在整行末尾，让决策与回复器看得懂具体含义而不猜词
+        line = f"{line}（描述：{detail}）"
+    return line
 
 
 # ---------------------------------------------------------------------------
@@ -3238,7 +3249,7 @@ class StreamerAgent(BaseAgent):
                 who=payload.player_name if payload.kind == "player_body_language" else "",
             )
             if self._mouth is not None and summary:
-                # 所有身体侧经历都留进即时反应的近期背景，但轻微掉血、摔伤、挨打、天色变换不再触发即时反应嗷嗷叫
+                # 所有身体侧经历都留进即时反应的近期背景，普通轻摔伤、天色变换等仅记背景不叫唤
                 self._mouth.note_game(summary)
             should_react_and_wake = payload.kind in MOUTH_BODY_KINDS and not (
                 payload.kind == "died" and payload.intentional
@@ -3261,6 +3272,21 @@ class StreamerAgent(BaseAgent):
                 if not self._is_game_lead_active():
                     self._proactive_signals.set_game()
                     self._notify_fresh_input()
+            elif payload.kind == "attacked" and is_high_risk_attacked(
+                summary or payload.summary,
+                attacker=payload.attacker,
+                hits=payload.hits,
+            ):
+                # 高危受击（爆炸、着火、存在敌对攻击者、重伤或多连击）：即便处于游戏自主主控态，
+                # 也允许经独立长冷却桶发出一句简短临场惊呼（有效冷却由 Mouth._cooldown_for 单点取配置与下限的较大值），
+                # 不额外唤醒重型规划器；普通轻摔伤保持静默
+                if self._mouth is not None and summary:
+                    self._mouth.react(
+                        HIGH_RISK_ATTACKED_KEY,
+                        summary,
+                        refresh_scene=False,
+                        kind="attacked",
+                    )
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体侧事件失败: {exc}", exc=True)
 
@@ -3682,15 +3708,33 @@ class StreamerAgent(BaseAgent):
         reply_to: str,
         required_names: Sequence[str] = (),
         log_label: str,
+        commentary: bool = False,
     ) -> Optional[str]:
         """对直通 Replyer 的输出做外层预算与敏感词兜底；真实 Replyer 已保名补全时不因二次截断误丢称呼。"""
         has_target = bool(reply_to or required_names)
         budget_fn = getattr(self._replyer, "budget_for", None)
         if callable(budget_fn):
-            budget = int(budget_fn("play", has_target=has_target))
+            try:
+                params = inspect.signature(budget_fn).parameters
+                accepts_commentary = "commentary" in params or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+                )
+            except (TypeError, ValueError):
+                accepts_commentary = False
+            if accepts_commentary:
+                budget = int(budget_fn("play", has_target=has_target, commentary=commentary))
+            else:
+                budget = int(budget_fn("play", has_target=has_target))
         else:
             base_budget = int(self.typed_config.speech_max_chars)
-            budget = 0 if base_budget <= 0 else (base_budget + TARGET_EXTRA_CHARS if has_target else base_budget)
+            if base_budget <= 0:
+                budget = 0
+            elif has_target:
+                budget = base_budget + TARGET_EXTRA_CHARS
+            elif commentary:
+                budget = base_budget + COMMENTARY_EXTRA_CHARS
+            else:
+                budget = base_budget
 
         verdict = guard(raw_speech, speech_max_chars=budget, word_filter=self._word_filter)
         if verdict.text is None:
@@ -3762,31 +3806,48 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     def _on_rundown_changed_proactive(self) -> None:
-        """流程单环节变更通知（协调器回调）：按环节类型分流——游戏段同步游戏侧、杂谈段置位主播发言信号。"""
-        next_segment_mode = self._rundown_coord.current_segment_mode()
-        is_talk_segment = next_segment_mode == "talk"
+        """流程单环节变更通知（协调器回调）：按主控归属分流——游戏主控承接段或流程单结束同步游戏侧，其余归主播承接的有效环节置位发言信号。"""
+        segment = self._rundown_coord.current_segment()
+        is_finished = self._rundown_coord.is_finished()
+        is_game_lead_segment = self._is_dynamic_game_lead_segment()
+        # 人工强锁指定游戏（override 非 auto/streamer）且处于动态模式时，游戏主控可跨越 talk 段不收权
+        forced_game_lead = (
+            self._is_game_lead_active()
+            and self._lead_coordinator is not None
+            and self.typed_config.lead_mode == "dynamic"
+            and self._lead_coordinator.override not in ("auto", "streamer")
+        )
 
-        # 环节推进归当场主控：流程单段类型为游戏段时不置位 rundown_pending（无论主控切换是否完成——
-        # 开播瞬间主控切换尚未完成时运行时主控判据会落空，改按段类型判据杜绝竞态窗口的双开场白），
-        # 改为将新环节同步给游戏侧（未进入游戏主控时 publish 内部为空操作，交接记忆摘要会带环节信息）
-        if not is_talk_segment and self._lead_coordinator is not None:
-            segment = self._rundown_coord.current_segment()
-            if segment is not None:
+        # 环节推进归当场主控（与 _evaluate_proactive_round 的 _is_dynamic_game_lead_segment 口径对齐）：
+        # 1) 动态游戏主控承接段或人工强锁游戏主控态：同步新环节（含备注）给游戏侧，不置位主播 rundown_pending
+        #    （避免开播或切段竞态窗口产双开场白；未进入游戏主控时 publish 内部为空操作，交接记忆摘要会带环节信息）；
+        # 2) 流程单已全部结束（is_finished=True，而非编辑删段造成的 segment is None）：显式通知游戏侧清空旧环节目标；
+        # 3) 其余归主播承接的有效环节（talk 段、streamer_only、override=="streamer"、无自主候选场次或未装配协调器）：
+        #    置位主播 rundown_pending 并立即通知新输入，触发新环节开场白。
+        if segment is not None and (is_game_lead_segment or forced_game_lead):
+            if self._lead_coordinator is not None:
                 self._lead_coordinator.publish_rundown_update(
                     segment_id=segment.id,
                     segment_title=segment.title,
                     segment_goal=segment.task_description,
                     expected_ms=int(segment.expected_ms),
+                    segment_notes=segment.notes or "",
+                    rundown_finished=False,
                 )
-        elif is_talk_segment:
+        elif is_finished:
+            if self._lead_coordinator is not None:
+                # 流程单已结束（无当前环节且 status == 'done'）：显式通知当前主控游戏 Agent 清除旧环节目标并重置超时提醒节流
+                self._lead_coordinator.publish_rundown_update(rundown_finished=True)
+        elif segment is not None:
             self._proactive_signals.set_rundown()
             self._notify_fresh_input()
-        else:
-            # 游戏段但未装配游戏协调器：无主控方承接推进，只记日志不置位主播信号
-            self._logger.warning("流程单切到游戏段但未装配游戏协调器，环节推进无人承接")
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            return
+        # 开播初始化进行中（_on_live_started 正在同步存档与刷新记忆摘要）不得抢跑派发后台切权，
+        # 避免将旧“未进存档”记忆摘要提前交权给游戏侧；交权由 _on_live_started 末尾统一执行
+        if self._live_start_in_progress:
             return
         if self._lead_coordinator is not None:
             spawn_background_task(
@@ -4049,7 +4110,11 @@ class StreamerAgent(BaseAgent):
         return self._live_active and self._closings_in_flight == 0
 
     def _maybe_publish_game_lead_rundown_nudge(self) -> None:
-        """游戏自主主控期流程单超时提醒：非杂谈段超期时通过协调器节流推送给当前主控游戏 Agent。"""
+        """游戏自主主控期流程单超时提醒：仅在后续仍有游戏阶段可切时节流推送给当前主控游戏 Agent。
+
+        若当前游玩段已是流程单末段、或下一段是收尾/杂谈段（``mode == "talk"``），
+        不通过超时闹钟催促游戏 Agent 自动推进到收尾段，保持游玩流畅并把收尾切段权留给运营者或下播流程。
+        """
         coord = self._lead_coordinator
         if coord is None or not self._running or not self._live_active or self._closings_in_flight > 0:
             return
@@ -4059,6 +4124,9 @@ class StreamerAgent(BaseAgent):
             return
         info = self._rundown_coord.overdue_nudge_info(now_ms=self._clock())
         if info is None:
+            return
+        # 末段或下一段为非游戏收尾段（talk）时静默不催促游戏侧自动切段
+        if not info["next_segment_id"] or info.get("next_segment_mode") == "talk":
             return
         coord.publish_rundown_nudge(
             segment_id=info["segment_id"],
@@ -4095,6 +4163,25 @@ class StreamerAgent(BaseAgent):
         if coord.publish_silence_nudge(silent_ms=silent_ms):
             self._last_silence_nudge_ms = now
 
+    def _is_dynamic_game_lead_segment(self) -> bool:
+        """当前流程单环节是否应由动态游戏主控承接（动态模式开启、有自主候选、未锁回主播且当前为非 talk 环节）。
+
+        用于给 ProactiveTrigger 提供段类型主控归属门禁：仅在该由游戏自主主控接管的动态游玩段
+        拦截主播的 rundown_pending / rundown_ready，避免开播或切段竞态窗口产双开场白；
+        纯杂谈场、streamer_only 模式、人工锁回主播或流程单已结束态均返回 False，保持主播原有推进行为。
+        """
+        coord = self._lead_coordinator
+        if coord is None or self.typed_config.lead_mode != "dynamic":
+            return False
+        if coord.override == "streamer":
+            return False
+        if not coord.lead_capable_agents():
+            return False
+        segment = self._rundown_coord.current_segment()
+        if segment is None:
+            return False
+        return segment.mode != "talk"
+
     async def _evaluate_proactive_round(self) -> bool:
         """一个 tick 的主动发言判定序：读信号 → 判定 → 命中即执行一轮主动决策。
 
@@ -4102,6 +4189,9 @@ class StreamerAgent(BaseAgent):
         ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。返回这一轮
         有没有真的执行（调用方据此决定本 tick 还要不要看弹幕批次）。
         """
+        # 开播初始化进行中（流程单恢复、存档同步、记忆摘要刷新与首次切权尚未完成）不得抢跑触发主动发言
+        if self._live_start_in_progress:
+            return False
         # 读信号 → 下播折参 → 判定 → 确认消费的完整判定序收在
         # ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。
         reason = self._proactive_signals.evaluate_tick(
@@ -4118,7 +4208,7 @@ class StreamerAgent(BaseAgent):
             viewer_waiting_since_ms=None if self._buffer.is_empty else self._buffer.first_arrival_ms,
             in_game_lead=self._is_game_lead_active(),
             lead_since_ms=self._game_lead_entered_ms,
-            rundown_segment_talk=self._rundown_coord.current_segment_mode() == "talk",
+            rundown_segment_talk=not self._is_dynamic_game_lead_segment(),
         )
         if reason is None:
             return False
@@ -4520,7 +4610,9 @@ class StreamerAgent(BaseAgent):
         segment_id = segment.id if segment is not None else ""
         segment_title = segment.title if segment is not None else ""
         segment_goal = segment.task_description if segment is not None else ""
+        segment_notes = (segment.notes or "").strip() if segment is not None else ""
         expected_ms = int(segment.expected_ms) if segment is not None else 0
+        rundown_finished = self._rundown_coord.is_finished()
 
         # 只读刷新存档信息，取目标游戏当前存档名
         self._sync_current_saves()
@@ -4542,6 +4634,8 @@ class StreamerAgent(BaseAgent):
             segment_id=segment_id,
             segment_title=segment_title,
             segment_goal=segment_goal,
+            segment_notes=segment_notes,
+            rundown_finished=rundown_finished,
             expected_ms=expected_ms,
             save_name=save_name,
             memory_brief="\n\n".join(brief_parts),
@@ -4661,17 +4755,28 @@ class StreamerAgent(BaseAgent):
             recent_speeches = self._spoken_log.recent_texts(limit=8)
             rundown_text = self._rundown_coord.build_text_sync()
 
+            generate_kwargs: Dict[str, Any] = {
+                "plan": plan,
+                "batch": [],
+                "history": [],
+                "rundown": rundown_text,
+                "state_facts": state_facts,
+                "recent_speeches": recent_speeches,
+                "reply_to": reply_to,
+                "speech_mode": "play",
+            }
+            # 仅在 replyer.generate 声明支持 commentary 或 **kwargs 时透传，兼容固定签名的测试替身
             try:
-                generated = await self._replyer.generate(
-                    plan=plan,
-                    batch=[],
-                    history=[],
-                    rundown=rundown_text,
-                    state_facts=state_facts,
-                    recent_speeches=recent_speeches,
-                    reply_to=reply_to,
-                    speech_mode="play",
-                )
+                gen_params = inspect.signature(self._replyer.generate).parameters
+                if "commentary" in gen_params or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in gen_params.values()
+                ):
+                    generate_kwargs["commentary"] = True
+            except (TypeError, ValueError):
+                pass
+
+            try:
+                generated = await self._replyer.generate(**generate_kwargs)
             except Exception as exc:  # noqa: BLE001 - 解说润色异常隔离，不反噬主控游戏循环
                 self._logger.exception(f"实况解说调用 Replyer 异常: {exc}")
                 return CommentaryAck(accepted=True, spoken=False, reason=f"replyer_error: {type(exc).__name__}")
@@ -4683,7 +4788,7 @@ class StreamerAgent(BaseAgent):
             if not raw_speech:
                 return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
 
-            # 经过外层预算与敏感词兜底把关：与 Replyer.budget_for 复用同一预算口径，
+            # 经过外层预算与敏感词兜底把关：与 Replyer.budget_for 复用同一预算口径（含游戏解说放宽档），
             # 同时保护真实 Replyer 内层补回的同伴称呼不被二次裁句误丢
             required_names = [reply_to] if reply_to else []
             final_speech = self._guard_replyer_speech(
@@ -4691,6 +4796,7 @@ class StreamerAgent(BaseAgent):
                 reply_to=reply_to,
                 required_names=required_names,
                 log_label="实况解说",
+                commentary=True,
             )
             if final_speech is None:
                 return CommentaryAck(accepted=True, spoken=False, reason="word_filtered")

@@ -109,6 +109,21 @@ _CONTROL_SPEC = ToolSpec(
 )
 
 
+def _is_non_streamer_caller(invocation: ToolInvocation) -> bool:
+    """判定本次流程单工具调用是否来自非主播 Agent（如游戏自主主控 Agent）。
+
+    优先按 ``invoking_agent`` 注册名判定；旧调用方未填注册名时按 ``source`` 兜底
+    （空串、``streamer`` 或 ``planner*`` 视为主播通道，其余非主播来源视为游戏侧调用）。
+    """
+    agent_name = (invocation.invoking_agent or "").strip()
+    if agent_name:
+        return agent_name != "streamer"
+    source = (invocation.source or "").strip()
+    if not source or source == "streamer" or source.startswith("planner"):
+        return False
+    return True
+
+
 class RundownControlToolProvider(BaseToolProvider):
     """rundown_control 的注册 Provider：按运行期回调动态计算可见 Agent 名单。
 
@@ -154,7 +169,8 @@ class RundownControlToolProvider(BaseToolProvider):
         return [replace(_CONTROL_SPEC, visible_to=self._visible_agents())]
 
     async def _run(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        text = self._control.invoke(dict(invocation.arguments or {}))
+        is_game_agent = _is_non_streamer_caller(invocation)
+        text = self._control.invoke(dict(invocation.arguments or {}), is_game_agent=is_game_agent)
         return ToolExecutionResult(
             tool_name=_CONTROL_SPEC.full_name,
             success=True,
@@ -209,7 +225,14 @@ class RundownControlProvider:
         self._can_mutate_provider = can_mutate_provider
         self._logger = get_logger("RundownControlTool")
 
-    def invoke(self, args: Dict[str, Any]) -> str:
+    def is_on_last_segment(self) -> bool:
+        """判定当前流程单是否正停留在最后一个有效环节（此时执行 next 会结束整场流程单）。"""
+        rundown = self._state.rundown
+        if rundown is None or not rundown.segments:
+            return False
+        return self._state.index == len(rundown.segments) - 1
+
+    def invoke(self, args: Dict[str, Any], *, is_game_agent: bool = False) -> str:
         """执行控制动作，返回观察 JSON 文本（成功与结构化拒绝都重新写入给 LLM）。"""
         action = str(args.get("action", "") or "")
         # 收播道别或非直播进行中只读拦截：防止 live.ended 之后模型误调流程单产生播后 rundown.changed 事件
@@ -229,6 +252,18 @@ class RundownControlProvider:
                     },
                     ensure_ascii=False,
                 )
+        # 末段收尾权限隔离：非主播（游戏主控 Agent）不得在最后一个环节调用 next 结束整场流程单，
+        # 避免游玩中自动把流程单推完；收尾与结束流程单归主播或运营者决定，游戏侧继续游玩或 renew 续期即可
+        if is_game_agent and action == "next" and self.is_on_last_segment():
+            self._logger.info("游戏主控 Agent 在流程单末段请求 action='next'，已按收尾权限护栏拒绝")
+            return json.dumps(
+                {
+                    "ok": False,
+                    "reason": "game_agent_cannot_finish_rundown",
+                    "error": "收尾与结束流程单由主播或运营者决定，游戏主控不能在末段结束整场流程单；继续游玩或用 renew 续期即可",
+                },
+                ensure_ascii=False,
+            )
         try:
             outcome = dispatch_rundown_control(
                 self._state,

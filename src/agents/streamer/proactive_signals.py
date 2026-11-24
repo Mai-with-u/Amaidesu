@@ -146,8 +146,8 @@ class ProactiveSignals:
 
         ``talk_mode`` 与 ``viewer_waiting_since_ms`` 原样转给触发器，只影响
         ``rundown_ready`` 的沉默冷却档位与给攒批弹幕让路；
-        ``rundown_segment_talk`` 原样转给触发器，只影响 ``rundown_pending``
-        即时信号与 ``rundown_overdue`` 超时闹钟的主控归属判定。
+        ``rundown_segment_talk`` 原样转给触发器，用于控制 ``rundown_pending``
+        即时信号与 ``rundown_ready`` 持续产出信号的主控归属门禁（动态游戏主控游玩段不抢跑唤醒主播）。
         """
         tick = self.read_for_tick(live=live)
         kind = trigger.should_trigger(

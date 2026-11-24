@@ -254,12 +254,12 @@ class ProactiveTrigger:
             ``rundown_ready`` 用哪一档主动沉默冷却。
         viewer_waiting_since_ms: 观众弹幕正在攒批等放行时，最早一条的到达时刻；
             非空且未超过让路上限时 ``rundown_ready`` 让路。
-        rundown_segment_talk: 流程单当前环节段类型是否为杂谈段（talk）。
-            仅影响 ``rundown_pending`` 与 ``rundown_overdue``：环节推进归当场
-            主控，游戏段（非 talk）的环节切换即时信号与超时闹钟都不唤醒
-            主播 Planner——游戏段的开场白、过程解说与环节推进由游戏侧
-            承担；杂谈段照常触发。按段类型而非运行时主控态判定，避免
-            开播瞬间主控切换尚未完成时判据落空。
+        rundown_segment_talk: 流程单当前环节是否归主播承接（杂谈段，或非动态游戏主控模式）。
+            影响 ``rundown_pending`` 与 ``rundown_ready``：在动态游戏主控模式下，
+            非杂谈游玩段（``rundown_segment_talk=False``）的环节切换即时信号与
+            环节内持续产出信号都不抢跑唤醒主播 Planner——游戏段的开场白、过程解说
+            与环节推进由游戏侧承担；杂谈段或主播常驻主控模式照常触发。按段类型与
+            协作模式而非运行时主控态判定，避免开播瞬间主控切换尚未完成时判据落空。
 
         Returns:
             ``TriggerKind`` 成员（``EXTERNAL`` / ``REMINDER`` / ``RUNDOWN`` /
@@ -330,9 +330,15 @@ class ProactiveTrigger:
             return None
 
         # rundown_ready：环节内持续产出机会——内容推进信号，绕过公共三道前置
-        # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）；开窗受前瞻窗口约束，
+        # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）；
+        # 与 rundown_pending 同口径检查 rundown_segment_talk，防止动态游戏主控的游玩段在开播切权
+        # 尚未完成时借 rundown_ready 抢跑唤醒主播 Planner 产生双开场白；同时受前瞻窗口约束，
         # 仅在进入下次可发言前的前瞻窗口后才提前思考，避免刚说完话就高频空转连开窗。
-        if rundown_ready and self._ready_allowed(last_speech_ms, now_ms, talk_mode, viewer_waiting_since_ms):
+        if (
+            rundown_ready
+            and rundown_segment_talk
+            and self._ready_allowed(last_speech_ms, now_ms, talk_mode, viewer_waiting_since_ms)
+        ):
             self._last_rundown_immediate = False
             return TriggerKind.RUNDOWN
 

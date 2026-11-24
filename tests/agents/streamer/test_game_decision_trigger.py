@@ -326,3 +326,31 @@ async def test_player_chat_and_actions_reach_the_batch_with_names(live_agent) ->
     assert [(note.who, note.said) for note in notes] == [("玩家甲", False), ("玩家甲", True)]
     assert notes[0].line.endswith("玩家 玩家甲 朝我扔了 1 个铁锭，落在我脚边")
     assert notes[1].line.endswith("玩家 玩家甲：我勒个")
+
+
+async def test_game_chat_detail_is_rendered_at_line_end(live_agent) -> None:
+    """GameChatPayload.detail 非空（如成就/进度悬停描述）时拼出补充说明；为空时不追加括号。"""
+    agent, bus = live_agent
+    with_detail = GameChatPayload(
+        game="minecraft",
+        kind="system",
+        content="玩家甲 达成了进度 [机械动力时代]",
+        detail="制作一台基础水车并接入齿轮传动",
+        timestamp_ms=1_000,
+    )
+    without_detail = GameChatPayload(
+        game="minecraft",
+        kind="system",
+        content="玩家乙 加入了游戏",
+        timestamp_ms=1_001,
+    )
+    await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, with_detail, source="maicraft_chat")
+    await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, without_detail, source="maicraft_chat")
+    await bus.wait_until_drained()
+
+    batch = agent._scope.drain_window()
+    assert batch.events[0].endswith(
+        "系统消息：玩家甲 达成了进度 [机械动力时代]（描述：制作一台基础水车并接入齿轮传动）"
+    )
+    assert batch.events[1].endswith("系统消息：玩家乙 加入了游戏")
+    assert "（描述：" not in batch.events[1]

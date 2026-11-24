@@ -309,6 +309,35 @@ def test_rundown_pending_follows_segment_type_not_runtime_lead() -> None:
     )
 
 
+def test_rundown_ready_follows_segment_type_gate_like_rundown_pending() -> None:
+    """rundown_ready 与 rundown_pending 同口径检查段类型门禁：动态游戏游玩段即使未切完主控也不抢跑唤醒主播。"""
+    trigger = _trigger(rundown_ready_interval_ms=30_000, rundown_think_lead_ms=10_000)
+    room = _Room(last_speech_ms=None, last_message_ms=9_999_000)
+
+    # 非杂谈游玩段（rundown_segment_talk=False）且主控尚未完成切换（in_game_lead=False）：拦截 rundown_ready 防止抢跑双开场白
+    assert (
+        trigger.should_trigger(
+            room,
+            now_ms=10_000_000,
+            rundown_ready=True,
+            rundown_segment_talk=False,
+            in_game_lead=False,
+        )
+        is None
+    )
+    # 杂谈段或主播常驻主控（rundown_segment_talk=True）：照常放行 rundown_ready
+    assert (
+        trigger.should_trigger(
+            room,
+            now_ms=10_000_000,
+            rundown_ready=True,
+            rundown_segment_talk=True,
+            in_game_lead=False,
+        )
+        is TriggerKind.RUNDOWN
+    )
+
+
 def test_overdue_alarm_does_not_wake_streamer_in_game_lead_non_talk() -> None:
     """环节超时闹钟归当场主控：游戏主控态非杂谈段不唤醒主播 Planner，杂谈段与主播主控态照常触发。"""
     trigger = _trigger()

@@ -134,6 +134,10 @@ class RundownCoordinator:
         segment = self._state.current_segment
         return segment.mode if segment is not None else None
 
+    def is_finished(self) -> bool:
+        """当前流程单是否已推进至全部结束态（status == 'done'）。"""
+        return self._state.status == "done"
+
     def set_remaining_beats_provider(self, fn: Optional[Callable[[str, list[str]], list[str]]]) -> None:
         """向底层状态机注册未聊提纲要点查询回调（供防早退护栏使用）。"""
         self._state.set_remaining_beats_provider(fn)
@@ -160,12 +164,14 @@ class RundownCoordinator:
             return None
         next_seg_id = ""
         next_seg_title = ""
+        next_seg_mode: Optional[str] = None
         rundown = self._state.rundown
         next_index = self._state.index + 1
         if rundown is not None and 0 <= next_index < len(rundown.segments):
             next_seg = rundown.segments[next_index]
             next_seg_id = next_seg.id
             next_seg_title = next_seg.title
+            next_seg_mode = next_seg.mode
         return {
             "segment_id": str(current.get("id") or ""),
             "segment_title": str(current.get("title") or ""),
@@ -173,6 +179,7 @@ class RundownCoordinator:
             "expected_ms": int(current.get("expected_ms") or 0),
             "next_segment_id": next_seg_id,
             "next_segment_title": next_seg_title,
+            "next_segment_mode": next_seg_mode,
         }
 
     def is_active(self) -> bool:

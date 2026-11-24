@@ -453,3 +453,84 @@ async def test_signoff_round_hides_rundown_control_from_planner_tools() -> None:
     tools_sent = llm.generate.await_args.kwargs["tools"]
     tool_names = [t["name"] for t in tools_sent]
     assert "rundown_control" not in tool_names
+
+
+async def test_game_agent_cannot_finish_rundown_on_last_segment_while_streamer_and_mid_segments_allowed() -> None:
+    """非主播（游戏主控 Agent）在流程单末段调 next 被结构化拒绝，非末段/renew 与主播/人工通道均照常放行。"""
+    two_seg = Rundown(
+        rundown_id="two_play",
+        title="双游玩段单",
+        segments=[
+            RundownSegment(id="play_1", title="阶段一", task_description="建营地", expected_ms=600_000, mode="play"),
+            RundownSegment(id="play_2", title="阶段二", task_description="探矿洞", expected_ms=600_000, mode="play"),
+        ],
+    )
+    provider, clock = _provider(two_seg)
+    registry = ToolRegistry()
+    registry.register_provider(build_rundown_tool_provider(provider, lead_agent_provider=lambda: "minecraft"))
+
+    # 1) 非末段：游戏主控调用 next 正常推进到 play_2
+    mid_res = await registry.invoke(
+        ToolInvocation(
+            tool_name="rundown_control",
+            arguments={"action": "next"},
+            source="minecraft-react",
+            invoking_agent="minecraft",
+        )
+    )
+    assert mid_res.success is True
+    assert mid_res.structured_content["ok"] is True
+    assert mid_res.structured_content["rundown"]["current"]["id"] == "play_2"
+
+    # 2) 末段：游戏主控调用 next（按 invoking_agent 或仅按 source 识别）均被拒绝且状态机保持在 play_2
+    for inv in (
+        ToolInvocation(
+            tool_name="rundown_control",
+            arguments={"action": "next"},
+            source="minecraft-react",
+            invoking_agent="minecraft",
+        ),
+        ToolInvocation(
+            tool_name="rundown_control",
+            arguments={"action": "next"},
+            source="minecraft-react",
+        ),
+    ):
+        denied = await registry.invoke(inv)
+        assert denied.success is True
+        assert denied.structured_content["ok"] is False
+        assert denied.structured_content["reason"] == "game_agent_cannot_finish_rundown"
+        assert "renew" in denied.structured_content["error"]
+    assert provider._state.status == "running"
+    assert provider._state.current_segment_id == "play_2"
+
+    # 3) 末段：游戏主控调用 renew 续期照常成功
+    clock.advance(60_000)
+    renewed = await registry.invoke(
+        ToolInvocation(
+            tool_name="rundown_control",
+            arguments={"action": "renew"},
+            source="minecraft-react",
+            invoking_agent="minecraft",
+        )
+    )
+    assert renewed.structured_content["ok"] is True
+    assert renewed.structured_content["rundown"]["current"]["id"] == "play_2"
+
+    # 4) 末段：主播（invoking_agent="streamer"）调用 next 照常 finish
+    streamer_finish = await registry.invoke(
+        ToolInvocation(
+            tool_name="rundown_control",
+            arguments={"action": "next"},
+            source="planner-react",
+            invoking_agent="streamer",
+        )
+    )
+    assert streamer_finish.structured_content["ok"] is True
+    assert streamer_finish.structured_content["rundown"]["status"] == "done"
+
+    # 5) 人工通道（by="human"）在末段推进照常 finish
+    human_provider, _ = _provider(two_seg)
+    assert human_provider._state.next(by="human") is None
+    assert human_provider._state.next(by="human") is None
+    assert human_provider._state.status == "done"
