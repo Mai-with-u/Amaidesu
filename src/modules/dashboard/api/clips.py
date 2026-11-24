@@ -35,6 +35,8 @@ from src.modules.dashboard.schemas.clips import (
     RecordingRenameRequest,
     RecordingRenameResponse,
     RecordingTimeResponse,
+    OutputRevealRequest,
+    OutputRevealResponse,
     SegmentCreateRequest,
     SegmentListResponse,
     SegmentMutationResponse,
@@ -242,6 +244,17 @@ async def select_segments(live_session_id: int, service: ClippingDep) -> SelectR
         logger.error(f"场次 {live_session_id} AI 选段受理失败：{exc}", exc=exc)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"AI 选段失败：{exc}") from exc
     return SelectResponse(accepted=True)
+
+
+@router.post("/outputs/reveal", response_model=OutputRevealResponse)
+async def reveal_output(request: OutputRevealRequest, service: ClippingDep) -> OutputRevealResponse:
+    """在系统文件管理器里定位切片产物（路径须在输出/录播目录子树内，越界 422）。"""
+    try:
+        service.reveal_in_file_manager(request.path)
+    except Exception as exc:  # noqa: BLE001 - 越界/不存在转可读错误
+        logger.error(f"产物定位失败：{exc}", exc=exc)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    return OutputRevealResponse(opened=True)
 
 
 @router.get("/sessions/{live_session_id}/density", response_model=SessionDensityResponse)

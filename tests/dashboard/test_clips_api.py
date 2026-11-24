@@ -264,6 +264,36 @@ async def test_session_density_buckets_and_clamp(store, event_bus, tmp_path: Pat
     assert missing.status_code == 404
 
 
+async def test_reveal_output_validates_subtree(store, event_bus, tmp_path: Path, api, monkeypatch) -> None:
+    """产物定位：目录子树内且存在才调起文件管理器；越界/缺失 422。"""
+    calls: list[list[str]] = []
+    monkeypatch.setattr("src.modules.clipping.service.subprocess.Popen", lambda cmd, **kwargs: calls.append(cmd))
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    await store.sessions.insert_live_session(started_at_ms=started)
+    service = _service(store, event_bus, tmp_path)
+    output_file = service.output_dir / "切片-开场.mp4"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_bytes(b"clip")
+    client = await api(clipping_service=service)
+
+    ok_resp = await client.post("/api/v1/clips/outputs/reveal", json={"path": str(output_file)})
+    assert ok_resp.status_code == 200
+    assert ok_resp.json()["opened"] is True
+    assert calls and "切片-开场.mp4" in calls[0][-1]
+
+    outside = tmp_path.parent / "外面.mp4"
+    outside.write_bytes(b"x")
+    escape = await client.post("/api/v1/clips/outputs/reveal", json={"path": str(outside)})
+    assert escape.status_code == 422
+
+    missing = await client.post(
+        "/api/v1/clips/outputs/reveal",
+        json={"path": str(service.output_dir / "不存在.mp4")},
+    )
+    assert missing.status_code == 422
+    assert len(calls) == 1  # 两笔失败都没有调起文件管理器
+
+
 async def test_clips_endpoints_503_when_not_assembled(api) -> None:
     client = await api()  # 不挂 clipping_service
     resp = await client.get("/api/v1/clips/sessions")

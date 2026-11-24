@@ -215,6 +215,17 @@ export function useClips() {
     }
   }
 
+  /** 在系统文件管理器里定位一个产物文件（交付动线的最后一跳） */
+  async function revealOutput(path: string): Promise<boolean> {
+    try {
+      await clipsApi.revealOutput(path);
+      return true;
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error, '打开文件夹失败'));
+      return false;
+    }
+  }
+
   // ---- 预览（整场优先）：视频本体由 <video> 直连不走 axios 免超时 ----
   // 核对切点需要看切点前后的画面，所以核对入口一律优先整场直服（可自由拖动
   // 全场）；整场缓存未就绪才退到段级现转（只转起播点附近一段，秒级可播），
@@ -528,6 +539,7 @@ export function useClips() {
     updateSegment,
     deleteSegment,
     cutSegments,
+    revealOutput,
     openPreview,
     closePreview,
     preparePreviews,

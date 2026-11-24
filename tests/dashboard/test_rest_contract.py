@@ -498,6 +498,11 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         ("live_session_id", "bucket_ms", "started_at_ms", "counts"),
     ),
     (
+        "clipsApi.revealOutput → POST /clips/outputs/reveal",
+        clips_schemas.OutputRevealResponse,
+        ("opened",),
+    ),
+    (
         "clipsApi.cut → POST /clips/sessions/{id}/cut",
         clips_schemas.CutResponse,
         ("accepted",),

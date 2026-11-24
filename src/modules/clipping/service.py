@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 import asyncio
@@ -566,6 +568,33 @@ class ClippingService:
     def session_outputs_summary(self, outputs: Sequence[str]) -> List[str]:
         """产物路径串（多份换行分隔）摊平成列表（API 响应用）。"""
         return [line for text in outputs for line in text.splitlines() if line.strip()]
+
+    # ---------- 产物定位 ----------
+
+    def reveal_in_file_manager(self, path: str) -> None:
+        """在系统文件管理器中定位一个切片产物/录播文件（越界路径拒绝）。
+
+        WebUI 跑在本机，reveal 是运营拿走成片的最后一跳；路径必须落在输出
+        目录或录播目录子树内且存在，防目录越界暴露任意位置。
+        """
+        roots = [self.output_dir.resolve()]
+        recording_root = self._config.recording_dir.strip()
+        if recording_root:
+            roots.append(Path(recording_root).resolve())
+        try:
+            resolved = Path(path).resolve()
+        except OSError as exc:
+            raise ValueError(f"路径无法解析：{path}") from exc
+        if not any(resolved == root or root in resolved.parents for root in roots):
+            raise ValueError("路径不在输出目录或录播目录内")
+        if not resolved.is_file():
+            raise ValueError(f"文件不存在：{resolved.name}")
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", str(resolved)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(resolved)])
+        else:
+            subprocess.Popen(["xdg-open", str(resolved.parent)])
 
     # ---------- 密度 ----------
 

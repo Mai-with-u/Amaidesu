@@ -82,6 +82,18 @@ describe('核对工作流与播放器接线', () => {
     expect(sfcSource).toMatch(/function onReviewKeydown[\s\S]*?Enter[\s\S]*?onConfirmSegment/);
     expect(sfcSource).toMatch(/function onReviewKeydown[\s\S]*?'x'[\s\S]*?onDismissSegment/);
   });
+
+  it('状态过滤页签：默认聚焦待核对，列表渲染过滤结果，弃用段置灰', () => {
+    expect(sfcSource).toMatch(/const segmentFilter = ref<SegmentFilter>\('reviewable'\)/);
+    expect(sfcSource).toContain('v-for="segment in filteredSegments"');
+    expect(sfcSource).toContain("'is-dismissed': segment.status === 'dismissed'");
+    expect(sfcSource).toContain('value="reviewable"');
+  });
+
+  it('产物行有「打开文件夹」按钮接到 revealOutput', () => {
+    expect(sfcSource).toContain('@click="revealOutput(path)"');
+    expect(sfcSource).toContain('打开文件夹');
+  });
 });
 
 describe('播放器空态与页头细节', () => {

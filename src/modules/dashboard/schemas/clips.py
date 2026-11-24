@@ -120,6 +120,18 @@ class SegmentMutationResponse(BaseModel):
     deleted: bool = Field(default=False, description="是否删除成功")
 
 
+class OutputRevealRequest(BaseModel):
+    """在文件管理器中定位一个产物/录播文件的请求。"""
+
+    path: str = Field(..., description="文件绝对路径（须在输出目录或录播目录子树内）")
+
+
+class OutputRevealResponse(BaseModel):
+    """产物定位结果。"""
+
+    opened: bool = Field(..., description="是否已调起系统文件管理器")
+
+
 class SelectResponse(BaseModel):
     """AI 选段受理结果（LLM 调用在后台任务执行）。"""
 

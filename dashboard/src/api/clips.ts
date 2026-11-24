@@ -69,6 +69,9 @@ export const clipsApi = {
     api.delete<{ deleted: boolean }>(`/clips/segments/${segmentId}`),
   cut: (sessionId: number, segmentIds: number[]) =>
     api.post<{ accepted: number }>(`/clips/sessions/${sessionId}/cut`, { segment_ids: segmentIds }),
+  // 产物定位：在系统文件管理器里打开切片产物所在位置（越界路径后端 422）
+  revealOutput: (path: string) =>
+    api.post<{ opened: boolean }>('/clips/outputs/reveal', { path }),
   // 预览：status 轻量轮询就绪态；文件本体走 <video> 直连 /clips/preview（不走 axios，免超时）
   previewStatus: (path: string) =>
     api.get<{ ready: boolean; converting: boolean }>('/clips/preview/status', { params: { path } }),

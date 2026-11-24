@@ -234,13 +234,15 @@ defineExpose({ seekToWall, currentWallMs, togglePlay });
   margin-bottom: 8px;
 }
 
+/* 头部坐在卡片底色上（不是视频黑底上），用主题变量——浅色主题下硬编码
+   浅色文字会不可读 */
 .clip-player-head .el-button {
-  color: #e5eaf3;
+  color: var(--el-text-color-regular);
 }
 
 .clip-player-title {
   font-size: 13px;
-  color: #e5eaf3;
+  color: var(--el-text-color-regular);
 }
 
 .clip-player-shell .clip-player {
@@ -274,6 +276,8 @@ defineExpose({ seekToWall, currentWallMs, togglePlay });
   margin-right: 4px;
 }
 
+/* 空态不是视频区，走卡片底色；插槽文字样式（概览统计的白字）在页面侧，
+   这里给深底会让浅色主题突兀——统一卡片底色 */
 .clip-player-empty {
   flex: 1;
   min-height: 220px;
@@ -287,7 +291,8 @@ defineExpose({ seekToWall, currentWallMs, togglePlay });
   font-size: 13px;
   line-height: 1.8;
   color: var(--el-text-color-secondary);
-  background: #000;
+  background: var(--el-fill-color-lighter);
+  border: 1px dashed var(--el-border-color-lighter);
   border-radius: 4px;
 }
 </style>

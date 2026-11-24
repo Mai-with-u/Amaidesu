@@ -58,6 +58,7 @@ const {
   updateSegment,
   deleteSegment,
   cutSegments,
+  revealOutput,
 } = useClips();
 
 const selectedSessionId = ref<number | null>(null);
@@ -215,6 +216,25 @@ const cuttableSegments = computed(() =>
 const doneCount = computed(() => segments.value.filter(s => s.status === 'done').length);
 const failedCount = computed(() => segments.value.filter(s => s.status === 'failed').length);
 const dismissedCount = computed(() => segments.value.filter(s => s.status === 'dismissed').length);
+
+// ---- 段列表过滤：打开场次默认聚焦待核对（核对是第一任务），计数挂在页签上 ----
+type SegmentFilter = 'reviewable' | 'all' | 'done' | 'failed' | 'dismissed';
+const segmentFilter = ref<SegmentFilter>('reviewable');
+
+const filteredSegments = computed<ClipSegment[]>(() => {
+  switch (segmentFilter.value) {
+    case 'reviewable':
+      return segments.value.filter(s => isReviewable(s));
+    case 'all':
+      return segments.value;
+    case 'done':
+      return segments.value.filter(s => s.status === 'done');
+    case 'failed':
+      return segments.value.filter(s => s.status === 'failed');
+    case 'dismissed':
+      return segments.value.filter(s => s.status === 'dismissed');
+  }
+});
 
 /** 素材折叠条标题里的就绪数（mp4 视为恒就绪） */
 const readyCount = computed(
@@ -703,22 +723,43 @@ onBeforeUnmount(() => {
 
             <section class="clip-card clip-segments-col">
               <h3 class="clip-section-title">切片段（{{ segments.length }}）</h3>
+              <div class="clip-filter-row" @click.stop>
+                <el-radio-group v-model="segmentFilter" size="small">
+                  <el-radio-button value="reviewable">待核对 {{ cuttableSegments.length }}</el-radio-button>
+                  <el-radio-button value="all">全部 {{ segments.length }}</el-radio-button>
+                  <el-radio-button value="done">已出 {{ doneCount }}</el-radio-button>
+                  <el-radio-button v-if="failedCount" value="failed">失败 {{ failedCount }}</el-radio-button>
+                  <el-radio-button v-if="dismissedCount" value="dismissed">
+                    弃用 {{ dismissedCount }}
+                  </el-radio-button>
+                </el-radio-group>
+              </div>
               <div class="clip-segments-scroll">
                 <div v-if="segments.length === 0" class="clip-no-segments">
                   还没有切片段。点「AI
                   选段」让它读本场记录提议几段，或按住下方时间轴拖动框选手动建段。
                 </div>
+                <div v-else-if="filteredSegments.length === 0" class="clip-no-segments">
+                  这个筛选下没有切片段。
+                </div>
                 <div
-                  v-for="segment in segments"
+                  v-for="segment in filteredSegments"
                   :key="segment.id"
                   :ref="el => setSegmentRowEl(segment.id, el)"
                   class="clip-segment-row"
-                  :class="{ 'is-selected': segment.id === selectedSegmentId }"
+                  :class="{
+                    'is-selected': segment.id === selectedSegmentId,
+                    'is-dismissed': segment.status === 'dismissed',
+                  }"
                   @click="selectSegment(segment.id)"
                 >
                   <div class="clip-segment-main">
                     <div class="clip-segment-top">
-                      <el-tag size="small" :type="STATUS_TAG_TYPES[segment.status]">
+                      <el-tag
+                        size="small"
+                        :type="STATUS_TAG_TYPES[segment.status]"
+                        :class="{ 'is-cutting-tag': segment.status === 'cutting' }"
+                      >
                         {{ STATUS_LABELS[segment.status] }}
                       </el-tag>
                       <el-tag v-if="segment.origin === 'ai'" size="small" effect="plain">AI</el-tag>
@@ -760,7 +801,10 @@ onBeforeUnmount(() => {
                     </p>
                     <ul v-if="outputsOf(segment).length" class="clip-output-list">
                       <li v-for="path in outputsOf(segment)" :key="path" class="clip-output-item">
-                        {{ path }}
+                        <span class="clip-output-path" :title="path">{{ path }}</span>
+                        <el-button size="small" text type="primary" @click="revealOutput(path)"
+                          >打开文件夹</el-button
+                        >
                       </li>
                     </ul>
                   </div>
@@ -1003,10 +1047,10 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* 空态文案是父组件插槽内容，样式留在父作用域；容器与视频样式在 ClipPreviewPlayer */
+/* 空态文案是父组件插槽内容，样式留在父作用域；容器在 ClipPreviewPlayer（底色已换主题变量） */
 .clip-player-empty-stat {
   margin: 0;
-  color: #e5eaf3;
+  color: var(--el-text-color-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1032,6 +1076,24 @@ onBeforeUnmount(() => {
 @media (max-width: 1279px) {
   .clip-workspace {
     grid-template-columns: minmax(0, 1fr);
+    /* 单列堆叠后不再给工作区定高：播放器给固定高度，列表放开内层滚动，
+       让详情区外层统一滚动（双层滚动条打架） */
+    flex: initial;
+    min-height: 0;
+  }
+
+  .clip-player-col :deep(.clip-player) {
+    height: 280px;
+    flex: none;
+  }
+
+  .clip-player-col :deep(.clip-player-empty) {
+    min-height: 220px;
+    flex: none;
+  }
+
+  .clip-segments-scroll {
+    overflow-y: visible;
   }
 }
 
@@ -1251,6 +1313,15 @@ onBeforeUnmount(() => {
   background: var(--el-color-primary-light-9);
 }
 
+/* 已弃用段视觉降级：留在"全部"里可查，但不与待核对内容抢注意力 */
+.clip-segment-row.is-dismissed {
+  opacity: 0.55;
+}
+
+.clip-filter-row {
+  margin-bottom: 10px;
+}
+
 .clip-segment-main {
   flex: 1;
   min-width: 0;
@@ -1300,12 +1371,45 @@ onBeforeUnmount(() => {
 }
 
 .clip-output-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   font-family: monospace;
+  min-width: 0;
+}
+
+.clip-output-path {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 切割中：tag 前一枚旋转小圈，进度感不打断阅读 */
+.clip-tag-cutting::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: clip-spin 0.9s linear infinite;
+}
+
+@keyframes clip-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-tag-cutting::before {
+    animation: none;
+  }
 }
 
 /* 操作行收进卡片底部：横排小按钮，"更多"菜单靠右 */
