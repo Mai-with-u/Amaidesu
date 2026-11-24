@@ -1624,7 +1624,7 @@ export interface CommitmentItem {
   id: number;
   /** 动作标题（1..60 字） */
   what: string;
-  /** 她播出原句的逐字片段；运营者手建为空串 */
+  /** 她播出原句的逐字片段；手工登记的承诺为空串 */
   quote: string;
   /** 对某位观众（内部观众 ID）；null = 不针对具体人 */
   viewer_id: number | null;
@@ -1637,7 +1637,7 @@ export interface CommitmentItem {
   /** 那个存档给人看的名字（只显示） */
   save_name: string;
   status: CommitmentStatus;
-  /** 登记它的场次；运营者手建为 null */
+  /** 登记它的场次；手工登记的承诺为 null */
   created_session_id: number | null;
   /** 了结那句的原话 */
   close_quote: string | null;
@@ -1654,7 +1654,7 @@ export interface CommitmentListResponse {
   void_count: number;
 }
 
-/** 手建承诺请求体 */
+/** 手工登记承诺请求体 */
 export interface CommitmentCreatePayload {
   /** 动作标题（1..60 字） */
   what: string;
@@ -1664,12 +1664,12 @@ export interface CommitmentCreatePayload {
   game?: string | null;
 }
 
-/** 标了结请求体（了结依据原话可空） */
+/** 标为了结请求体（了结依据原话可空） */
 export interface CommitmentClosePayload {
   close_quote?: string;
 }
 
-/** 账本写操作统一回执（标了结 / 判误记 / 删除 / 删档案行 / 重新整理共用） */
+/** 账本写操作统一回执（标为了结 / 判误记 / 删除 / 删档案行 / 重新整理共用） */
 export interface LedgerMutationResponse {
   success: boolean;
   detail: string;
@@ -1867,7 +1867,7 @@ export interface CandidateApprovePayload {
   lasting?: boolean;
 }
 
-/** 整理时看懂了却没能登记的条目：留原话给运营者判断要不要手建 */
+/** 整理时看懂了却没能登记的条目：留原话给运营者判断要不要手工登记 */
 export interface UnregisteredItem {
   kind: UnregisteredKind;
   what: string;

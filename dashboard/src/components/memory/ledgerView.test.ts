@@ -53,8 +53,8 @@ describe('承诺对谁', () => {
     expect(commitmentTargetLabel({ viewer_id: 7, viewer_name: null })).toBe('观众 #7');
   });
 
-  it('没有具体对象时显示“对全场”', () => {
-    expect(commitmentTargetLabel({ viewer_id: null, viewer_name: null })).toBe('对全场');
+  it('对全场是默认态，返回 null 不显示', () => {
+    expect(commitmentTargetLabel({ viewer_id: null, viewer_name: null })).toBeNull();
   });
 });
 

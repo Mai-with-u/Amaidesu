@@ -57,11 +57,14 @@ export function commitmentStatusTagType(status: CommitmentStatus): 'warning' | '
   return 'warning';
 }
 
-/** 对谁：有观众昵称用昵称，没有具体对象就是"对全场" */
+/**
+ * 对谁：有具体观众才显示（昵称，读不到昵称用内部 ID 兜底）；对全场是默认态，
+ * 不标——逐行重复的相同标注会稀释状态标签的辨识度。
+ */
 export function commitmentTargetLabel(
   item: Pick<CommitmentItem, 'viewer_id' | 'viewer_name'>,
-): string {
-  if (item.viewer_id === null) return '对全场';
+): string | null {
+  if (item.viewer_id === null) return null;
   return item.viewer_name || `观众 #${item.viewer_id}`;
 }
 
@@ -84,7 +87,7 @@ export function validateCloseQuote(value: string): string | null {
 export type CommitmentQuoteState = 'quoted' | 'manual' | 'deleted';
 
 /**
- * 承诺原话状态：手建承诺没有来源场次（created_session_id 为空），本就没有原话；
+ * 承诺原话状态：手工登记的承诺没有来源场次（created_session_id 为空），本就没有原话；
  * 场次整理登记的承诺原话为空，只可能是引用它的那句台词被删了——承诺保留，
  * 页面显示"原句已删除"。
  */

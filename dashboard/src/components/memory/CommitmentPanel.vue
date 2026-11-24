@@ -1,15 +1,11 @@
 <template>
   <section class="panel commitment-panel" aria-label="承诺账本">
     <header class="panel-head">
-      <div class="head-text">
-        <div class="panel-title">承诺账本</div>
-        <p class="panel-hint">
-          她在直播里当众答应过的事。整理时逐字校验原话；“对全场”是不针对具体某位观众的约定。
-        </p>
-      </div>
+      <p class="panel-hint">
+        她在直播里当众答应过的事。整理时逐字校验原话；指定了观众的会写“对谁”，没写的对全场。
+      </p>
       <div class="head-actions">
-        <el-button size="small" :loading="loading" @click="reload()">刷新</el-button>
-        <el-button size="small" type="primary" @click="openCreate">手建承诺</el-button>
+        <el-button size="small" type="primary" @click="openCreate">手工登记</el-button>
       </div>
     </header>
 
@@ -21,7 +17,7 @@
         @update:model-value="onFilterChange"
       >
         <el-radio-button
-          v-for="option in STATUS_OPTIONS"
+          v-for="option in statusOptions"
           :key="option.value"
           :value="option.value"
           >{{ option.label }}</el-radio-button
@@ -45,22 +41,32 @@
             <el-tag size="small" :type="commitmentStatusTagType(item.status)">{{
               commitmentStatusLabel(item.status)
             }}</el-tag>
-            <span class="item-target">{{ commitmentTargetLabel(item) }}</span>
-            <el-tag v-if="item.game" size="small" type="info" effect="plain">{{
-              gameSaveLabel(item)
-            }}</el-tag>
+            <span v-if="commitmentTargetLabel(item)" class="item-target"
+              >对 {{ commitmentTargetLabel(item) }}</span
+            >
           </div>
           <blockquote v-if="item.quote" class="item-quote">“{{ item.quote }}”</blockquote>
-          <p v-else-if="commitmentQuoteState(item) === 'deleted'" class="item-quote is-empty">
+          <blockquote v-if="item.close_quote" class="item-quote is-close">
+            了结原话：“{{ item.close_quote }}”
+          </blockquote>
+          <p
+            v-if="!item.quote && commitmentQuoteState(item) === 'deleted'"
+            class="item-quote is-empty"
+          >
             原句已删除（引用它的那句台词已被删除，这条承诺保留）
           </p>
-          <p v-else class="item-quote is-empty">手工登记，没有原话</p>
+          <p
+            v-if="!item.quote && commitmentQuoteState(item) === 'manual'"
+            class="item-quote is-empty"
+          >
+            手工登记，没有原话
+          </p>
           <p class="item-meta mono">
             登记于 {{ formatDateTimeCn(item.created_at_ms) }}
             <template v-if="item.created_session_id !== null">
               · 场次 #{{ item.created_session_id }}
             </template>
-            <template v-if="item.close_quote"> · 了结原话 “{{ item.close_quote }}”</template>
+            <template v-if="gameSaveLabel(item)"> · {{ gameSaveLabel(item) }}</template>
           </p>
           <p v-if="rowErrors[item.id]" class="row-error">{{ rowErrors[item.id] }}</p>
         </div>
@@ -73,7 +79,7 @@
               :loading="busyId === item.id"
               :disabled="busyId !== null"
               @click="markClosed(item)"
-              >标了结</el-button
+              >标为了结</el-button
             >
             <el-button
               link
@@ -85,15 +91,19 @@
               >判误记</el-button
             >
           </template>
-          <el-button
-            link
-            size="small"
-            type="danger"
-            :loading="busyId === item.id"
-            :disabled="busyId !== null"
-            @click="remove(item)"
-            >删除</el-button
-          >
+          <el-tooltip content="删除" placement="top">
+            <el-button
+              link
+              size="small"
+              type="danger"
+              aria-label="删除承诺"
+              :loading="busyId === item.id"
+              :disabled="busyId !== null"
+              @click="remove(item)"
+            >
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </el-tooltip>
         </div>
       </article>
 
@@ -106,7 +116,7 @@
       </el-button>
     </div>
 
-    <el-dialog v-model="createVisible" title="手建一条承诺" width="520px">
+    <el-dialog v-model="createVisible" title="手工登记一条承诺" width="520px">
       <div class="form-field">
         <label class="form-label">她答应的事</label>
         <el-input
@@ -146,15 +156,17 @@
 /**
  * 承诺账本面板 —— 她答应过的事（未了结 / 已了结 / 误记）的查看与人工纠错
  *
- * 列表按状态筛选、按页续拉（加载更多）；行级操作只有 open 态才给"标了结"
- * "判误记"，删除任何状态都能做且必须二次确认。行操作失败（含 409：这条已
- * 被别的标签处理过或已不存在）只写该行行内提示，不打断整页；409 另重拉列表
- * 对齐最新状态但保留行内提示。列表请求带序号（筛选/刷新/行操作并发时只有最后
- * 发起的那次生效），行操作成功后按已加载条数重拉，不把分页打回第一页。
- * 手建对话框复用观众选择器，观众 ID 留空表示对全场。
+ * 默认筛"未了结"（这是运营者的工作集，已了结是档案），列表按页续拉（加载更多）。
+ * 行级操作只有 open 态才给"标为了结""判误记"，删除任何状态都能做且必须二次确认。
+ * 行操作失败（含 409：这条已被别的标签处理过或已不存在）只写该行行内提示，不打断
+ * 整页；409 另重拉列表对齐最新状态但保留行内提示。列表请求带序号（筛选/刷新/行操作
+ * 并发时只有最后发起的那次生效），行操作成功后按已加载条数重拉，不把分页打回第一页。
+ * 手工登记对话框复用观众选择器，观众 ID 留空表示对全场。行级写操作成功后向页面发
+ * changed，页面刷新 tab 徽标的未了结计数。
  */
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Delete } from '@element-plus/icons-vue';
 import type { CommitmentCreatePayload, CommitmentItem } from '@/types';
 import { ledgerApi } from '@/api';
 import ViewerPicker from '@/components/viewers/ViewerPicker.vue';
@@ -172,6 +184,8 @@ import {
   type CommitmentStatusFilter,
 } from './ledgerView';
 
+const emit = defineEmits<{ changed: [] }>();
+
 const PAGE_SIZE = 20;
 
 const STATUS_OPTIONS: Array<{ value: CommitmentStatusFilter; label: string }> = [
@@ -181,7 +195,16 @@ const STATUS_OPTIONS: Array<{ value: CommitmentStatusFilter; label: string }> = 
   { value: 'void', label: '误记' },
 ];
 
-const statusFilter = ref<CommitmentStatusFilter>('all');
+/** 筛选 tab 带计数：未了结与误记的计数接口随列表返回，可直接做进 tab 名（已了结无现成字段，不带数） */
+const statusOptions = computed(() =>
+  STATUS_OPTIONS.map(option => {
+    if (option.value === 'open') return { ...option, label: `未了结 ${openCount.value}` };
+    if (option.value === 'void') return { ...option, label: `误记 ${voidCount.value}` };
+    return option;
+  }),
+);
+
+const statusFilter = ref<CommitmentStatusFilter>('open');
 const items = ref<CommitmentItem[]>([]);
 const total = ref(0);
 const openCount = ref(0);
@@ -197,9 +220,7 @@ let requestSeq = 0;
 /** 「加载更多」独立序号（刷新会让在途的加载更多作废） */
 let moreSeq = 0;
 
-const summaryText = computed(
-  () => `未了结 ${openCount.value} · 误记 ${voidCount.value} · 当前筛选 ${total.value} 条`,
-);
+const summaryText = computed(() => `当前筛选 ${total.value} 条`);
 
 const emptyHint = computed(() => {
   switch (statusFilter.value) {
@@ -305,6 +326,7 @@ async function mutate(
   try {
     await run();
     ElMessage.success(doneText);
+    emit('changed');
     await reload({ limit: refreshLimit });
   } catch (error) {
     rowErrors.value = {
@@ -324,7 +346,7 @@ async function markClosed(item: CommitmentItem): Promise<void> {
   try {
     const { value } = await ElMessageBox.prompt(
       '已了结的承诺不能再改回未了结。可以留下她做完（或不做了）的那句原话。',
-      '标为已了结',
+      '标为了结',
       {
         confirmButtonText: '标为了结',
         cancelButtonText: '取消',
@@ -341,7 +363,7 @@ async function markClosed(item: CommitmentItem): Promise<void> {
   await mutate(
     item,
     () => ledgerApi.closeCommitment(item.id, { close_quote: closeQuote || undefined }),
-    '已标为完成',
+    '已标为了结',
   );
 }
 
@@ -369,7 +391,7 @@ async function remove(item: CommitmentItem): Promise<void> {
   await mutate(item, () => ledgerApi.deleteCommitment(item.id), '已删除承诺');
 }
 
-// ===== 手建承诺 =====
+// ===== 手工登记 =====
 
 const createVisible = ref(false);
 const creating = ref(false);
@@ -404,10 +426,11 @@ async function submitCreate(): Promise<void> {
   try {
     await ledgerApi.createCommitment(payload);
     ElMessage.success('已登记');
+    emit('changed');
     createVisible.value = false;
     // 新承诺一定是未了结态：停在“已了结/误记”筛选上会看不到刚建的那条
     if (statusFilter.value === 'closed' || statusFilter.value === 'void')
-      statusFilter.value = 'all';
+      statusFilter.value = 'open';
     await reload();
   } catch (error) {
     createError.value = getApiErrorMessage(error, '登记失败');
@@ -440,19 +463,10 @@ defineExpose({ reload });
   gap: var(--spacing-md);
 }
 
-.head-text {
+.panel-hint {
   flex: 1;
   min-width: 0;
-}
-
-.panel-title {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-
-.panel-hint {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
 }
@@ -486,6 +500,8 @@ defineExpose({ reload });
   display: flex;
   flex-direction: column;
   min-height: 40px;
+  /* 限制行宽让引文行长可读，也让行级操作不再悬到超宽屏远端 */
+  max-width: 1100px;
 }
 
 .commitment-item {
@@ -530,6 +546,11 @@ defineExpose({ reload });
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-regular);
+}
+
+/* 了结原话是“这条为什么算完成”的证据，样式与登记原话同构、用成功色区分来源 */
+.item-quote.is-close {
+  border-left-color: var(--color-success);
 }
 
 .item-quote.is-empty {
