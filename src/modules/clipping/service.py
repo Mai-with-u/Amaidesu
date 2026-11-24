@@ -87,6 +87,7 @@ class ClippingService:
         task_registry: Optional[BackgroundTaskRegistry] = None,
         cutter: Optional[ClipCutter] = None,
         override_store: Optional[RecordingOverrideStore] = None,
+        selector: Optional[ClipSelector] = None,
     ) -> None:
         self._event_bus = event_bus
         self._database = database
@@ -94,7 +95,9 @@ class ClippingService:
         self._task_registry = task_registry
         self._subscribed = False
         self._selector: Optional[ClipSelector] = None
-        if llm_manager is not None:
+        if selector is not None:
+            self._selector = selector
+        elif llm_manager is not None:
             self._selector = ClipSelector(
                 llm_manager,  # type: ignore[arg-type]
                 chat_repo=database.chat,
@@ -419,9 +422,24 @@ class ClippingService:
 
     # ---------- AI 选段 ----------
 
-    async def select_segments(self, *, live_session_id: int) -> int:
-        """对一场跑 AI 选段并整批替换该场的 AI 段，返回提议段数。"""
+    async def select_segments(self, *, live_session_id: int) -> None:
+        """受理 AI 选段：同步只校验装配态，LLM 调用转后台任务（HTTP 立即返回）。
+
+        LLM 读整场时间线耗时不可控，不能占住请求——完成后整批替换该场的
+        AI 段，前端经任务终态回读刷新段列表。
+        """
         if self._selector is None:
+            raise ClipSelectionError("LLM 未装配，无法 AI 选段")
+        spawn_background_task(
+            self._run_select(live_session_id=live_session_id),
+            logger=logger,
+            tasks=self._background_tasks,
+            label=f"clip-select-{live_session_id}",
+        )
+
+    async def _run_select(self, *, live_session_id: int) -> None:
+        """后台执行 AI 选段并整批替换该场的 AI 段（进度登记）。"""
+        if self._selector is None:  # 受理后装配被摘除的窗口；按失败登记而非崩溃
             raise ClipSelectionError("LLM 未装配，无法 AI 选段")
         registry = self._task_registry or get_registry()
         task_id = f"clip-select-{live_session_id}"
@@ -443,11 +461,11 @@ class ClippingService:
             count = await self._database.clips.replace_ai_segments(live_session_id=live_session_id, segments=segments)
             if registry is not None:
                 await registry.finish(task_id, success=True)
-            return count
         except Exception as exc:
             if registry is not None:
                 await registry.finish(task_id, success=False, failure_reason=str(exc))
             raise
+        logger.info(f"场次 {live_session_id} AI 选段完成：提议 {count} 段")
 
     # ---------- 切割 ----------
 

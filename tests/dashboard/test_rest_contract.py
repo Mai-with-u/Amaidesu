@@ -490,7 +490,7 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
     (
         "clipsApi.select → POST /clips/sessions/{id}/select",
         clips_schemas.SelectResponse,
-        ("suggestion_count",),
+        ("accepted",),
     ),
     (
         "clipsApi.cut → POST /clips/sessions/{id}/cut",

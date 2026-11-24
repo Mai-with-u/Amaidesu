@@ -234,13 +234,13 @@ async def restore_recording(
 
 @router.post("/sessions/{live_session_id}/select", response_model=SelectResponse)
 async def select_segments(live_session_id: int, service: ClippingDep) -> SelectResponse:
-    """触发/重跑 AI 选段（同步等待结果；耗时主要在 LLM 调用，进度看后台任务条）。"""
+    """受理 AI 选段（后台任务执行；完成后整批替换该场 AI 段，前端经任务终态刷新）。"""
     try:
-        count = await service.select_segments(live_session_id=live_session_id)
-    except Exception as exc:  # noqa: BLE001 - 选段失败（含模型输出解析失败）转 502 可读错误
-        logger.error(f"场次 {live_session_id} AI 选段失败：{exc}", exc=exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"AI 选段失败：{exc}") from exc
-    return SelectResponse(suggestion_count=count)
+        await service.select_segments(live_session_id=live_session_id)
+    except Exception as exc:  # noqa: BLE001 - 受理前的失败（LLM 未装配）转可读错误
+        logger.error(f"场次 {live_session_id} AI 选段受理失败：{exc}", exc=exc)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"AI 选段失败：{exc}") from exc
+    return SelectResponse(accepted=True)
 
 
 @router.get("/sessions/{live_session_id}/segments", response_model=SegmentListResponse)

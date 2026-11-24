@@ -6,10 +6,13 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
+from types import SimpleNamespace
+
 from src.modules.clipping.cutter import ClipCutError, CutPortion
 from src.modules.clipping.overrides import RecordingOverrideStore
 from src.modules.clipping.config_schema import ClippingConfigSchema
 from src.modules.clipping.service import ClippingService
+from tests.dashboard.fakes import FakeClipSelector
 
 
 def _recording_name(started_at_ms: int, title: str = "测试") -> str:
@@ -17,7 +20,9 @@ def _recording_name(started_at_ms: int, title: str = "测试") -> str:
     return f"录制-10000-{stamp.strftime('%Y%m%d-%H%M%S')}-{stamp.microsecond // 1000:03d}-{title}.flv"
 
 
-def _service(store, event_bus, recording_dir: Path, *, cutter=None, overrides: Path | None = None) -> ClippingService:
+def _service(
+    store, event_bus, recording_dir: Path, *, cutter=None, overrides: Path | None = None, selector=None
+) -> ClippingService:
     return ClippingService(
         event_bus=event_bus,
         database=store,
@@ -25,6 +30,7 @@ def _service(store, event_bus, recording_dir: Path, *, cutter=None, overrides: P
         config=ClippingConfigSchema(enabled=True, recording_dir=str(recording_dir)),
         cutter=cutter,
         override_store=RecordingOverrideStore(overrides) if overrides else None,
+        selector=selector,
     )
 
 
@@ -172,6 +178,56 @@ async def test_cut_accepts_immediately_and_runs_in_background(store, event_bus, 
         await asyncio.sleep(0.01)
     assert segments[0]["status"] == "failed"
     assert "假切割失败" in segments[0]["error_message"]
+
+
+async def test_select_accepts_immediately_and_replaces_in_background(store, event_bus, tmp_path: Path, api) -> None:
+    """AI 选段是受理制：HTTP 立即受理，LLM 在后台跑完后整批替换该场 AI 段。
+
+    同步等待形态会让 LLM 长调用占住请求、撞 HTTP 客户端超时（前端报失败但
+    后端照常落库，重试即段重复），此处锁"受理即返回、结果经任务终态暴露"。
+    """
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    session_id = await store.sessions.insert_live_session(started_at_ms=started)
+    suggestions = [
+        SimpleNamespace(start_ms=started + 10_000, end_ms=started + 40_000, title="开场", reason="开场白"),
+        SimpleNamespace(start_ms=started + 60_000, end_ms=started + 90_000, title="整活", reason="高潮段"),
+    ]
+    selector = FakeClipSelector(suggestions=suggestions)
+    service = _service(store, event_bus, tmp_path, selector=selector)
+    client = await api(clipping_service=service)
+
+    resp = await client.post(f"/api/v1/clips/sessions/{session_id}/select")
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] is True
+
+    for _ in range(200):
+        segments = (await client.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
+        if len(segments) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert [s["title"] for s in segments] == ["开场", "整活"]
+    assert all(s["origin"] == "ai" for s in segments)
+    assert selector.calls == [session_id]
+
+    # LLM 未装配 → 受理即 422 可读错误，不派任务
+    service2 = _service(store, event_bus, tmp_path)
+    client2 = await api(clipping_service=service2)
+    denied = await client2.post(f"/api/v1/clips/sessions/{session_id}/select")
+    assert denied.status_code == 422
+    assert "AI 选段" in denied.json()["detail"]
+
+    # 失败路径：受理成功，selector 抛错在后台暴露；既有段不被误删
+    failing = FakeClipSelector(error=RuntimeError("模型超时"))
+    service3 = _service(store, event_bus, tmp_path, selector=failing)
+    client3 = await api(clipping_service=service3)
+    accepted = await client3.post(f"/api/v1/clips/sessions/{session_id}/select")
+    assert accepted.status_code == 200
+    for _ in range(200):
+        if len(failing.calls) == 1:
+            break
+        await asyncio.sleep(0.01)
+    segments = (await client3.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
+    assert len(segments) == 2  # 替换未发生，段保持原状
 
 
 async def test_clips_endpoints_503_when_not_assembled(api) -> None:

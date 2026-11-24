@@ -121,9 +121,9 @@ class SegmentMutationResponse(BaseModel):
 
 
 class SelectResponse(BaseModel):
-    """AI 选段结果。"""
+    """AI 选段受理结果（LLM 调用在后台任务执行）。"""
 
-    suggestion_count: int = Field(..., description="提议段数（整批替换该场旧 AI 段）")
+    accepted: bool = Field(..., description="是否受理；完成后整批替换该场旧 AI 段")
 
 
 class CutRequest(BaseModel):
