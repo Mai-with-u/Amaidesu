@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
@@ -61,6 +62,8 @@ _MAX_HITS = 8
 _SNIPPET_RADIUS = 160
 # 折叠替身消息末尾附带保留原话时的段标题（通用层不绑定任何具体业务或游戏）
 _PRESERVED_LINES_HEADER = "[本段人类原话保留]"
+# 消息编号格式（如 m0397），用于解析折叠块覆盖的起止序号边界
+_MSG_REF_NUMBER_RE = re.compile(r"^m(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -103,10 +106,11 @@ class FoldBlock:
 
 @dataclass
 class FoldOutcome:
-    """一批折叠的结果：做成的块与逐条拒绝原因（拒绝不影响同批其他区间）。"""
+    """一批折叠的结果：做成的块、无需重复折叠的跳过说明与逐条拒绝原因（拒绝不影响同批其他区间）。"""
 
     blocks: List[FoldBlock] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
 
     @property
     def tokens_saved(self) -> int:
@@ -247,6 +251,16 @@ class ContextFolds:
         for request in requests:
             start, end, summary = request.start.strip(), request.end.strip(), request.summary.strip()
             first, last = positions.get(start), positions.get(end)
+            # 当起始标签是已有折叠块且终点已完全落在该折叠块覆盖范围内（如 b7 已折到 m0397，模型仍给 start=b7, end=m0397）：
+            # 属于无新增覆盖的幂等情形，记入 skipped 并跳过，避免误报为“起点在终点之后”或“编号不在历史里”。
+            # 真正的倒序传参（如 start=m0500, end=m0300 或终点位于起始折叠块之前且未被其覆盖）仍按错误拒收。
+            if (
+                last is None
+                or (first is not None and first > last)
+                or (first is not None and first == last and start == end)
+            ) and self._is_covered_by_start_block(start, end):
+                outcome.skipped.append(f"{start}–{end}：目标区间已被折叠块 {start} 完全覆盖，无需重复折叠")
+                continue
             error = ""
             if first is None or last is None:
                 error = "编号不在当前历史里（可能已被整理掉）"
@@ -448,6 +462,63 @@ class ContextFolds:
         self._next_block += 1
         return block_id
 
+    def _block_coverage(
+        self,
+        block_id: str,
+        *,
+        _visited: Optional[set[str]] = None,
+    ) -> Tuple[set[str], Optional[int], Optional[int]]:
+        """递归展开一个已折叠块所覆盖的全部标签（消息编号与被吞并子块号）及起止消息序号边界。"""
+        visited = set() if _visited is None else _visited
+        if block_id in visited:
+            return set(), None, None
+        block = self._blocks.get(block_id)
+        if block is None or block.kind != "fold":
+            return set(), None, None
+        visited.add(block_id)
+
+        labels: set[str] = {block.block_id}
+        for edge in (block.start, block.end):
+            if edge:
+                labels.add(edge)
+        for message in block.originals:
+            label = _label(message)
+            if label:
+                labels.add(label)
+
+        min_ref: Optional[int] = None
+        max_ref: Optional[int] = None
+        for label in list(labels):
+            ref_num = _parse_ref_number(label)
+            if ref_num is not None:
+                min_ref = ref_num if min_ref is None else min(min_ref, ref_num)
+                max_ref = ref_num if max_ref is None else max(max_ref, ref_num)
+            elif label != block_id and label in self._blocks:
+                sub_labels, sub_min, sub_max = self._block_coverage(label, _visited=visited)
+                labels.update(sub_labels)
+                if sub_min is not None:
+                    min_ref = sub_min if min_ref is None else min(min_ref, sub_min)
+                if sub_max is not None:
+                    max_ref = sub_max if max_ref is None else max(max_ref, sub_max)
+        return labels, min_ref, max_ref
+
+    def _is_covered_by_start_block(self, start: str, end: str) -> bool:
+        """判断请求的终点 ``end`` 是否已经被起始折叠块 ``start`` 完全覆盖。"""
+        block = self._blocks.get(start)
+        if block is None or block.kind != "fold":
+            return False
+        covered_labels, min_ref, max_ref = self._block_coverage(start)
+        if end == start or end in covered_labels:
+            return True
+        end_num = _parse_ref_number(end)
+        if end_num is not None and min_ref is not None and max_ref is not None:
+            return min_ref <= end_num <= max_ref
+        if end in self._blocks:
+            _end_labels, end_min, end_max = self._block_coverage(end)
+            if min_ref is not None and max_ref is not None and end_min is not None and end_max is not None:
+                return min_ref <= end_min and end_max <= max_ref
+        return False
+
     def _allowed_groups(
         self, messages: Sequence[Mapping[str, Any]], spans: Sequence[Tuple[int, int]], keep_recent: int
     ) -> List[bool]:
@@ -487,6 +558,12 @@ def _fit_summary(summary: str, max_chars: int, recall_hint: str) -> str:
     cut = _find_safe_cut(window, budget // 2)
     head = (window[:cut] if cut is not None else window).rstrip()
     return f"{head}\n{note}" if head else note
+
+
+def _parse_ref_number(label: str) -> Optional[int]:
+    """从消息编号（如 ``m0397``）解析整型序号；非消息编号返回 ``None``。"""
+    matched = _MSG_REF_NUMBER_RE.fullmatch(label.strip())
+    return int(matched.group(1)) if matched is not None else None
 
 
 def _label(message: Mapping[str, Any]) -> Optional[str]:

@@ -449,3 +449,96 @@ def test_apply_degrades_gracefully_when_preserved_line_extractor_fails(loguru_ca
     assert "[本段人类原话保留]" not in messages[2]["content"]
     assert outcome.blocks[0].preserved_lines == ()
     assert any(rec["level"] == "WARNING" and "保留原话" in rec["message"] for rec in loguru_capture.records)
+
+
+def test_apply_skips_range_already_covered_by_start_block_without_false_order_error() -> None:
+    """起始折叠块已完全覆盖终点（含嵌套吞并块）时，识别为无需重复折叠并进 skipped，不误报起点在终点之后。"""
+    folds = _folds()
+    messages = _history(rounds=8)
+    folds.number(messages)
+
+    # 先把 m0001–m0003 折成 b1，再让 b2 吞并 b1–m0004
+    first_out = folds.apply(
+        messages,
+        [FoldRequest("m0001", "m0003", "前三步勘察")],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+    assert not first_out.errors and len(first_out.blocks) == 1
+    second_out = folds.apply(
+        messages,
+        [FoldRequest("b1", "m0004", "前四步合并")],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+    assert not second_out.errors and len(second_out.blocks) == 1
+
+    before = [dict(message) for message in messages]
+    # 传入 start=b2 且终点是已被 b2 覆盖的末号 m0004、内含编号 m0002、被吞并子块 b1 或自身 b2：均记入 skipped，无 errors
+    covered_out = folds.apply(
+        messages,
+        [
+            FoldRequest("b2", "m0004", "重复摘要"),
+            FoldRequest("b2", "m0002", "重复摘要"),
+            FoldRequest("b2", "b1", "重复摘要"),
+            FoldRequest("b2", "b2", "重复摘要"),
+        ],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+    assert not covered_out.blocks
+    assert not covered_out.errors
+    assert len(covered_out.skipped) == 4
+    assert all("完全覆盖，无需重复折叠" in item for item in covered_out.skipped)
+    assert messages == before
+
+    # 同批混入一条已覆盖区间与一条真正新增区间：前一条跳过，后一条照常折叠，errors 仍为空
+    mixed_out = folds.apply(
+        messages,
+        [
+            FoldRequest("b2", "m0004", "已覆盖"),
+            FoldRequest("m0005", "m0006", "五六步新摘要"),
+        ],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+    assert not mixed_out.errors
+    assert len(mixed_out.skipped) == 1
+    assert len(mixed_out.blocks) == 1
+
+
+def test_apply_still_reports_reversed_error_when_end_is_before_and_not_covered_by_start_block() -> None:
+    """真正倒序传参（普通编号倒序，或终点位于起始折叠块之前且未被其覆盖）仍严格报“起点在终点之后”。"""
+    folds = _folds()
+    messages = _history(rounds=8)
+    folds.number(messages)
+
+    # 只折中段 m0002–m0004 为 b1，m0001 仍留在 b1 之前未被覆盖
+    out = folds.apply(
+        messages,
+        [FoldRequest("m0002", "m0004", "中段摘要")],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+    assert not out.errors and len(out.blocks) == 1
+
+    # b1 之前未被覆盖的 m0001 与普通编号倒序 m0006–m0005 都必须报“起点在终点之后”
+    reversed_out = folds.apply(
+        messages,
+        [
+            FoldRequest("b1", "m0001", "倒序"),
+            FoldRequest("m0006", "m0005", "倒序"),
+        ],
+        keep_recent=2,
+        min_tokens=100,
+        max_summary_chars=500,
+    )
+    assert not reversed_out.blocks
+    assert not reversed_out.skipped
+    assert len(reversed_out.errors) == 2
+    assert all("起点在终点之后" in err for err in reversed_out.errors)
