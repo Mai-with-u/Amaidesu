@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.replyer import Replyer
+from src.agents.streamer.replyer import COMMENTARY_EXTRA_CHARS, Replyer
 from src.agents.streamer.speech_guard import fit_to_budget, guard
 
 
@@ -344,3 +344,48 @@ async def test_paid_event_batch_keeps_viewer_name_on_shorten_without_game_compan
     shorten_text = llm.generate.await_args_list[1].args[0][0]["content"]
     assert "ViewerAlpha" in shorten_text
     assert "ViewerAlpha" in result["speech"]
+
+
+async def test_commentary_budget_and_single_sentence_grace_skip_unnecessary_shorten() -> None:
+    """游戏实况解说适度放宽预算，且单句略超宽容窗内跳过二次缩句重说，仅显著超长或多句时缩句并强调保真事实阶段与专有名词。"""
+    # 1) commentary=True 放宽无 target 时的 play 预算（30 + 25 = 55），45 字正常解说一次直出零缩句
+    draft_in_budget = "我正准备往西边河岸走，打算先收集几块黏土再回去把那套风车传动轴继续搭起来！"
+    replyer, llm, prompt = _modal_replyer(
+        Response(success=True, content=draft_in_budget, request_id="req_c1"),
+        speech_max_chars=30,
+    )
+    assert replyer.budget_for("play", has_target=False) == 30
+    assert replyer.budget_for("play", has_target=False, commentary=True) == 30 + COMMENTARY_EXTRA_CHARS
+    res1 = await replyer.generate(_plan(), [], speech_mode="play", commentary=True)
+    assert res1 == {"speech": draft_in_budget, "llm_request_id": "req_c1"}
+    assert llm.generate.await_count == 1
+    assert f"不超过 {30 + COMMENTARY_EXTRA_CHARS} 字" in _rendered(prompt, "amaidesu_replyer")["length_rule"]
+
+    # 2) 超过 55 字但处于单句宽容窗内（<= 70 字、无换行、单句）：跳过高风险 LLM 缩句，原样保留动作进行态与专有名词
+    single_sentence_grace = "刚才同伴触发了石器时代进度，我现在正顺着东边山坡一路往下探矿洞，打算先把包里的铁矿石、煤炭和火把都补齐再回去整理仓库！"
+    assert 55 < len(single_sentence_grace) <= 70
+    replyer2, llm2, _ = _modal_replyer(
+        Response(success=True, content=single_sentence_grace, request_id="req_c2"),
+        speech_max_chars=30,
+    )
+    res2 = await replyer2.generate(_plan(), [], speech_mode="play", commentary=True)
+    assert res2 == {"speech": single_sentence_grace, "llm_request_id": "req_c2"}
+    assert llm2.generate.await_count == 1
+
+    # 3) 多句超长解说：触发 _shorten，缩句指令明确要求原样保留动作阶段、事件性质与专有名称、不改变事实完成态
+    multi_long = (
+        "我现在正打算往东边矿洞走，还没开始挖呢，包里刚准备好了石镐和火把！"
+        "待会儿要是运气好碰到铁矿就顺手采一点带回工坊，顺便看看水车旁边还有没有空位可以扩建仓库！"
+    )
+    replyer3, llm3, _ = _modal_replyer(
+        Response(success=True, content=multi_long, request_id="req_c3_orig"),
+        Response(success=True, content="我刚备好石镐和火把，正打算去东边矿洞找铁矿呢！", request_id="req_c3_short"),
+        speech_max_chars=30,
+    )
+    res3 = await replyer3.generate(_plan(), [], speech_mode="play", commentary=True)
+    assert res3 == {"speech": "我刚备好石镐和火把，正打算去东边矿洞找铁矿呢！", "llm_request_id": "req_c3_short"}
+    assert llm3.generate.await_count == 2
+    shorten_instruction = llm3.generate.await_args_list[1].args[0][0]["content"]
+    assert "原样保留动作所处的阶段" in shorten_instruction
+    assert "专有名称" in shorten_instruction
+    assert "不改变事实完成态" in shorten_instruction

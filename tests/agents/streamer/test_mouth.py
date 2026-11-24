@@ -9,7 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.agents.streamer.config import StreamerMouthConfig, StreamerPersonaConfig
-from src.agents.streamer.mouth import Mouth, Trigger
+from src.agents.streamer.mouth import (
+    HIGH_RISK_ATTACKED_COOLDOWN_MS,
+    HIGH_RISK_ATTACKED_KEY,
+    Mouth,
+    Trigger,
+    is_high_risk_attacked,
+)
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
 from src.agents.streamer.speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT
@@ -651,3 +657,121 @@ async def test_normal_colon_clauses_and_player_names_are_never_stripped_as_emoti
 
     assert spoken == normal_line
     assert speech.calls[0]["emotion"] == "neutral"
+
+
+@pytest.mark.parametrize(
+    ("summary", "attacker", "hits", "expected"),
+    [
+        ("被苦力怕炸到一下，血掉了不少", "", 1, True),
+        ("突然着火了", "", 0, True),
+        ("掉进岩浆烫到了", "", 0, True),
+        ("正在被僵尸攻击", "minecraft:zombie", 1, True),
+        ("不知哪来的一阵暗箭打中好几下", "", 0, True),
+        ("连续受击", "", 2, True),
+        ("挨了一下，血快没了", "", 1, True),
+        ("挨了一下，掉了一大截血", "", 1, True),
+        ("摔了一下", "", 0, False),
+        ("从台阶上摔了一下，掉了点血", "", 1, False),
+        ("不知从哪射来箭打中一下，血掉了不少", "", 0, False),
+    ],
+)
+def test_is_high_risk_attacked_classifies_hazards_attackers_and_light_falls(
+    summary: str, attacker: str, hits: int, expected: bool
+) -> None:
+    """高危受击纯函数：爆炸/着火/岩浆/敌对攻击者/重伤/多连击放行，普通轻微摔伤静默。"""
+    assert is_high_risk_attacked(summary, attacker=attacker, hits=hits) is expected
+
+
+async def test_high_risk_attacked_uses_independent_long_cooldown_bucket_and_wakes_no_planner(prompts: Any) -> None:
+    """高危受击走独立长冷却桶（默认 50 秒下限）发出一句惊呼，不与目击桶互吞、不唤醒规划器；普通轻摔伤保持静默。"""
+    # 1) 真实 Mouth + 假时钟验证独立冷却桶：不显式传 cooldown_ms，交由 Mouth._cooldown_for 单点解析 50 秒下限
+    clock = _Clock()
+    llm = _LLM("scared：哇！怎么炸了！", "surprised：前面有监守者！", "scared：又着火了快灭！")
+    speech = _Speech()
+    mouth = _mouth(llm, speech, prompts, clock=clock, same_kind_cooldown_ms=15_000)
+
+    first = Trigger(
+        at_ms=clock.now,
+        key=HIGH_RISK_ATTACKED_KEY,
+        text="被苦力怕炸到一下",
+        kind="attacked",
+    )
+    assert await mouth.react_once([first]) == "哇！怎么炸了！"
+
+    # 20 秒后（已过普通 15 秒同类冷却，但仍在 50 秒高危受击独立冷却内）：受击不连发，强敌目击不受影响
+    clock.now += 20_000
+    second_blocked = Trigger(
+        at_ms=clock.now,
+        key=HIGH_RISK_ATTACKED_KEY,
+        text="正在被僵尸攻击",
+        kind="attacked",
+    )
+    assert await mouth.react_once([second_blocked]) is None
+    boss = Trigger(at_ms=clock.now, key="sighting:boss", text="眼前撞见了监守者", kind="rare_sighted")
+    assert await mouth.react_once([boss]) == "前面有监守者！"
+
+    # 距首次高危受击满 50 秒：重新放行
+    clock.now += HIGH_RISK_ATTACKED_COOLDOWN_MS - 20_000
+    third_ok = Trigger(
+        at_ms=clock.now,
+        key=HIGH_RISK_ATTACKED_KEY,
+        text="着火了",
+        kind="attacked",
+    )
+    assert await mouth.react_once([third_ok]) == "又着火了快灭！"
+
+    # 2) StreamerAgent 接线：高危受击触发 Mouth（省略 cooldown_ms 交由 Mouth._cooldown_for 统一解析，不置位 game_pending），普通轻摔伤不触发
+    mouth_stub = MagicMock()
+    reactions: List[tuple] = []
+    mouth_stub.react.side_effect = lambda key, text, **kw: reactions.append((key, text, kw))
+    agent = make_streamer_agent({"mouth": {"enabled": True}}, mouth=mouth_stub)
+
+    await agent._on_body_event(
+        "game.body.attacked",
+        BodyEventPayload(game="minecraft", kind="attacked", summary="摔了一下"),
+        "maicraft_attention",
+    )
+    assert reactions == []
+
+    await agent._on_body_event(
+        "game.body.attacked",
+        BodyEventPayload(
+            game="minecraft",
+            kind="attacked",
+            summary="正在被僵尸攻击",
+            attacker="minecraft:zombie",
+            hits=2,
+        ),
+        "maicraft_attention",
+    )
+    assert reactions == [
+        (
+            HIGH_RISK_ATTACKED_KEY,
+            "正在被僵尸攻击",
+            {"refresh_scene": False, "kind": "attacked"},
+        )
+    ]
+    assert agent._proactive_signals.game_pending is False
+
+
+async def test_high_risk_attacked_respects_larger_configured_same_kind_cooldown(prompts: Any) -> None:
+    """配置 same_kind_cooldown_ms 大于 50 秒下限（如 70 秒）时，高危受击遵循更大的全局同类冷却配置。"""
+    clock = _Clock()
+    llm = _LLM("scared：好痛炸到了！", "scared：又烧起来了！")
+    speech = _Speech()
+    configured_cooldown_ms = 70_000
+    assert configured_cooldown_ms > HIGH_RISK_ATTACKED_COOLDOWN_MS
+    mouth = _mouth(llm, speech, prompts, clock=clock, same_kind_cooldown_ms=configured_cooldown_ms)
+
+    first = Trigger(at_ms=clock.now, key=HIGH_RISK_ATTACKED_KEY, text="被苦力怕炸到一下", kind="attacked")
+    assert await mouth.react_once([first]) == "好痛炸到了！"
+
+    # 55 秒后：已超过 50 秒下限，但未满 70 秒全局同类冷却配置，仍拦截
+    clock.now += 55_000
+    blocked_at_55s = Trigger(at_ms=clock.now, key=HIGH_RISK_ATTACKED_KEY, text="掉进岩浆了", kind="attacked")
+    assert await mouth.react_once([blocked_at_55s]) is None
+
+    # 满 70 秒：放行
+    clock.now += configured_cooldown_ms - 55_000
+    allowed_at_70s = Trigger(at_ms=clock.now, key=HIGH_RISK_ATTACKED_KEY, text="着火了", kind="attacked")
+    assert await mouth.react_once([allowed_at_70s]) == "又烧起来了！"

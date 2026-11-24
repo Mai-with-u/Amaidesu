@@ -39,7 +39,16 @@ from .speech_dispatcher import SPEECH_PRIORITY_EMERGENCY, SPEECH_PRIORITY_HIGHLI
 from .speech_guard import VerbatimRepeat, WordFilter, find_verbatim_repeat, fit_to_budget, guard
 from .tools.reply_tool import coerce_emotion
 
-__all__ = ["MOUTH_BODY_KINDS", "MOUTH_TEMPLATE", "Mouth", "SCENE_CHANGING_BODY_KINDS", "Trigger"]
+__all__ = [
+    "HIGH_RISK_ATTACKED_COOLDOWN_MS",
+    "HIGH_RISK_ATTACKED_KEY",
+    "MOUTH_BODY_KINDS",
+    "MOUTH_TEMPLATE",
+    "Mouth",
+    "SCENE_CHANGING_BODY_KINDS",
+    "Trigger",
+    "is_high_risk_attacked",
+]
 
 MOUTH_TEMPLATE = "amaidesu_mouth"
 
@@ -47,6 +56,61 @@ MOUTH_TEMPLATE = "amaidesu_mouth"
 MOUTH_BODY_KINDS = frozenset({"rare_sighted", "died"})
 #: 现场一下子变了的遭遇：读到就立即重读一句话现场
 SCENE_CHANGING_BODY_KINDS = frozenset({"died"})
+
+#: 高危受击即时反应的独立冷却桶键名与默认冷却时长（毫秒：50 秒，防连续挨打刷屏）
+HIGH_RISK_ATTACKED_KEY = "body:attacked_high_risk"
+HIGH_RISK_ATTACKED_COOLDOWN_MS = 50_000
+
+#: 高危环境或致命威胁词（爆炸、着火、岩浆、雷击、窒息/溺水、凋零等）
+_HIGH_RISK_HAZARD_TERMS: Tuple[str, ...] = (
+    "炸",
+    "着火",
+    "起火",
+    "烧",
+    "岩浆",
+    "熔岩",
+    "雷劈",
+    "雷击",
+    "窒息",
+    "溺水",
+    "凋零",
+)
+#: 高伤害或多连击白话特征（与游戏侧白话化口径一致，不把普通“摔了一下”算高危）
+_HIGH_RISK_SEVERITY_TERMS: Tuple[str, ...] = (
+    "血快没了",
+    "掉了一大截血",
+    "残血",
+    "重伤",
+    "好几下",
+    "连着",
+    "连打",
+    "连击",
+)
+
+
+def is_high_risk_attacked(summary: str, *, attacker: str = "", hits: int = 0) -> bool:
+    """判定一条 ``game.body.attacked`` 遭遇是否属于高危受击（纯函数，供即时反应分级放行）。
+
+    触发条件（任一成立即为高危）：
+    1. 存在明确敌对攻击者（``attacker`` 非空，如生物/敌对实体袭击）；
+    2. 单次遭遇命中次数达到多连击（``hits >= 2``）；
+    3. 叙事文本包含高危环境/致命威胁特征（爆炸、着火、岩浆、雷击、窒息等）或重伤/多连击白话。
+
+    普通轻微摔伤（如“摔了一下”）或无攻击者的轻度单次刮擦返回 ``False``，继续保持静默只记背景。
+    """
+    if (attacker or "").strip():
+        return True
+    if int(hits or 0) >= 2:
+        return True
+    text = (summary or "").strip()
+    if not text:
+        return False
+    if any(term in text for term in _HIGH_RISK_HAZARD_TERMS):
+        return True
+    if any(term in text for term in _HIGH_RISK_SEVERITY_TERMS):
+        return True
+    return False
+
 
 #: 事件到了先等这么久再生成：同一瞬间连发的几条并成一个由头
 _DEBOUNCE_S = 0.3
@@ -172,7 +236,7 @@ class _Record:
 
 @dataclass(frozen=True)
 class Trigger:
-    """一个高光或突发由头：冷却按 ``key`` 分桶（如 ``sighting:boss`` / ``sighting:rare_ore`` / ``body:died``）。"""
+    """一个高光或突发由头：冷却按 ``key`` 分桶（如 ``sighting:boss`` / ``sighting:rare_ore`` / ``body:died`` / ``body:attacked_high_risk``）。"""
 
     at_ms: int
     key: str
@@ -180,6 +244,7 @@ class Trigger:
     urgent: bool = True
     refresh_scene: bool = False
     kind: str = ""
+    cooldown_ms: Optional[int] = None
 
 
 def _reaction_dispatch_level(triggers: Sequence[Trigger]) -> Tuple[int, bool]:
@@ -273,9 +338,10 @@ class Mouth:
         refresh_scene: bool = False,
         at_ms: Optional[int] = None,
         kind: str = "",
+        cooldown_ms: Optional[int] = None,
     ) -> None:
         """记一个高光或突发由头并唤醒生成循环；不阻塞调用方（事件回调里直接调）。"""
-        self._pending.append(Trigger(at_ms or self._clock(), key, text, urgent, refresh_scene, kind))
+        self._pending.append(Trigger(at_ms or self._clock(), key, text, urgent, refresh_scene, kind, cooldown_ms))
         self._wake.set()
 
     def reset(self) -> None:
@@ -319,18 +385,28 @@ class Mouth:
 
     # ---------------- 一次反应 ----------------
 
+    def _cooldown_for(self, trigger: Trigger) -> int:
+        """解析单条由头的有效冷却时长：显式冷却优先，其次高危受击独立桶默认，最后回落配置同类冷却。"""
+        if trigger.cooldown_ms is not None:
+            return max(0, int(trigger.cooldown_ms))
+        if trigger.key == HIGH_RISK_ATTACKED_KEY:
+            return max(self._config.same_kind_cooldown_ms, HIGH_RISK_ATTACKED_COOLDOWN_MS)
+        return self._config.same_kind_cooldown_ms
+
     async def react_once(self, triggers: Sequence[Trigger]) -> Optional[str]:
         """对一批由头生成一句并出声；返回说出口的台词，没说返回 None。"""
         if not self._is_live():
             return None
         now = self._clock()
-        cooldown = self._config.same_kind_cooldown_ms
-        fresh = [
-            trigger
-            for trigger in triggers
-            if now - trigger.at_ms <= _MAX_REACTION_AGE_MS
-            and now - self._last_reacted.get(trigger.key, -cooldown) >= cooldown
-        ]
+        fresh: List[Trigger] = []
+        for trigger in triggers:
+            if now - trigger.at_ms > _MAX_REACTION_AGE_MS:
+                continue
+            cooldown = self._cooldown_for(trigger)
+            last_at = self._last_reacted.get(trigger.key)
+            if last_at is not None and (now - last_at) < cooldown:
+                continue
+            fresh.append(trigger)
         if not fresh:
             return None
         for trigger in fresh:

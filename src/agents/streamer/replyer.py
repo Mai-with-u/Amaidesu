@@ -56,6 +56,10 @@ _DEFAULT_TALK_SPEECH_MAX_CHARS = 150
 # 接某位观众或玩家的话时篇幅多给这么多字：起手先把对方问的事顺口带出来让全场听清转场由头，再接回答，不挤掉正事
 TARGET_EXTRA_CHARS = 40
 _TARGET_EXTRA_CHARS = TARGET_EXTRA_CHARS
+# 游戏实况解说（无特定回应对象时）适度放宽的字数预算：承载动作进行态、处境变化与游戏专有名称，避免窄预算强压引发失真
+COMMENTARY_EXTRA_CHARS = 25
+# 游戏实况解说已是完整单句时跳过 LLM 缩句重说的宽容字数：单句略超预算时不冒险改写，仅在多句或显著超长时才缩句
+COMMENTARY_SHORTEN_GRACE_CHARS = 15
 
 # 说话方式那一条规矩：边玩边说一次只说一件事、说完就停（两个保留的边界：回答问话可以把回答
 # 讲完整；形容保留指代锚，指代说清楚话才自然）；杂谈像跟朋友唠嗑，围绕一个话头说两三句
@@ -250,6 +254,7 @@ class Replyer:
         speech_mode: str = "play",
         target_familiarity: str = "",
         keep_names: Sequence[str] = (),
+        commentary: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
@@ -281,7 +286,7 @@ class Replyer:
         # 汇总本轮必须硬保的观众/玩家称呼（支持多位进房观众合并称呼如 "A、B" 与显式 keep_names）
         required_names = _collect_keep_names(reply_to, explicit_keep_names)
         has_target = bool(plan.target or reply_to or required_names)
-        budget = self._budget_for(mode, has_target=has_target)
+        budget = self._budget_for(mode, has_target=has_target, commentary=commentary)
         system_prompt = self._render_system_prompt(mode)
         turn_input = self._render_turn_input(
             plan,
@@ -327,8 +332,13 @@ class Replyer:
             return None
         request_id = response.request_id or None
 
-        # 超出长度预算：先让模型重说成一句（同时硬保必须保留的称呼），仍超就截到预算内最后一个完整句子
-        if budget > 0 and len(speech) > budget:
+        # 超出长度预算：先让模型重说成一句（同时硬保必须保留的称呼），仍超就截到预算内最后一个完整句子；
+        # 游戏实况解说若已是无换行的单句且仅略超预算（处于宽容字数内），直接原样保留，避免为了压几个字改坏动作进行态或专有名词
+        if (
+            budget > 0
+            and len(speech) > budget
+            and self._should_trigger_shorten(speech, budget=budget, commentary=commentary)
+        ):
             speech, request_id = await self._shorten(
                 system_prompt,
                 speech,
@@ -407,7 +417,8 @@ class Replyer:
         instruction = (
             f"你刚想说的这段话有 {len(speech)} 字，太长了，像在写稿：\n{speech}\n\n"
             f"说短一点，像口头说话那样，不超过 {budget} 字，不分段。{hook_note}{names_note}"
-            "不要加原话里没有的事。只输出台词。"
+            "只删修饰和枝节，原样保留动作所处的阶段、事件性质以及游戏里的专有名称，不改变事实完成态，也不要加原话里没有的事。"
+            "只输出台词。"
         )
         shortened = ""
         shortened_request_id: Optional[str] = None
@@ -495,16 +506,35 @@ class Replyer:
 
     # ==================== prompt 渲染（人设注入核心） ====================
 
-    def budget_for(self, mode: str, *, has_target: bool) -> int:
+    def budget_for(self, mode: str, *, has_target: bool, commentary: bool = False) -> int:
         """只读查询本轮台词长度预算（复用内部 _budget_for 单一事实源；0 表示不限制）。"""
-        return self._budget_for(mode, has_target=has_target)
+        return self._budget_for(mode, has_target=has_target, commentary=commentary)
 
-    def _budget_for(self, mode: str, *, has_target: bool) -> int:
-        """本轮台词上限：按档位取基础上限，接某位观众或玩家的话时多给一点；0 = 不限制。"""
+    def _budget_for(self, mode: str, *, has_target: bool, commentary: bool = False) -> int:
+        """本轮台词上限：按档位取基础上限，接某位观众或玩家的话时多给一点，游戏实况解说亦适度放宽；0 = 不限制。"""
         base = self._talk_speech_max_chars if mode == "talk" else self._speech_max_chars
         if base <= 0:
             return 0
-        return base + _TARGET_EXTRA_CHARS if has_target else base
+        if has_target:
+            return base + _TARGET_EXTRA_CHARS
+        if commentary and mode == "play":
+            return base + COMMENTARY_EXTRA_CHARS
+        return base
+
+    @staticmethod
+    def _should_trigger_shorten(speech: str, *, budget: int, commentary: bool) -> bool:
+        """判定超预算台词是否需要触发二次 LLM 缩句重说。
+
+        常规路径超预算即缩句；游戏实况解说若初稿已是无换行的完整单句且仅略超预算
+        （在 ``COMMENTARY_SHORTEN_GRACE_CHARS`` 宽容窗内），直接保留原句，只在多句或
+        显著超长时才缩句，降低窄预算强压导致的事实完成态与专有名词失真风险。
+        """
+        if not commentary:
+            return True
+        if "\n" in speech or len(speech) > budget + COMMENTARY_SHORTEN_GRACE_CHARS:
+            return True
+        # 单句校验：fit_to_budget(speech, 1) 只留第一完整句；与原句一致说明本身就是一句完整话
+        return fit_to_budget(speech, 1) != speech.strip()
 
     def _game_enabled(self) -> bool:
         """当前是否挂有游戏（回调异常时按有游戏保底，不误删游戏规矩）。"""
