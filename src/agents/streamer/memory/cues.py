@@ -579,6 +579,9 @@ def _label(key: ItemKey) -> str:
     if kind == "player":
         # 只记玩家编号，不写名字（日志与记忆线索记录同口径）
         return f"玩家#{int(value)}"
+    if kind == "cross_channel":
+        # 只记统一人物主键，不写跨端昵称与外部账号
+        return f"跨端熟人#{int(value)}"
     return f"老梗「{value}」"
 
 
@@ -604,6 +607,7 @@ class MemoryCueProvider:
         game_player_repo: Optional["GamePlayerRepo"] = None,
         correction_repo: Optional["MemoryCorrectionRepo"] = None,
         social_fact_repo: Optional["SocialFactRepo"] = None,
+        cross_channel_person_lookup: Optional[Callable[[str, str], Optional[Tuple[int, str]]]] = None,
         min_session_ms: int = 0,
     ) -> None:
         """仓储与时钟注入；隐私服务缺失时不出遗忘回执（看不见遗忘命令）。
@@ -630,6 +634,7 @@ class MemoryCueProvider:
         self._players = game_player_repo
         self._corrections = correction_repo
         self._social_facts = social_fact_repo
+        self._cross_channel_person_lookup = cross_channel_person_lookup
         self._min_session_ms = max(0, int(min_session_ms))
         self._pool = RulePool(archive_repo=archive_repo, inside_jokes=inside_jokes, clock=clock)
         self._arrivals = PlaceArrivals()
@@ -709,6 +714,7 @@ class MemoryCueProvider:
         if replied is not None:
             await self._familiar_viewer_cards(senders, replied, state)
         await self._player_cards(sid, game_players, state)
+        await self._cross_channel_person_cards(senders, game_players, state)
         if self._passive_enabled:
             await self._pool.refresh_if_stale()
             await self._place_cards(situations or {}, state)
@@ -1795,6 +1801,76 @@ class MemoryCueProvider:
                     self._round_labels[int(item.id)] = player.name
             card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail=detail)
             self._push(state, card)
+
+    async def _cross_channel_person_cards(
+        self,
+        senders: Sequence[_Sender],
+        game_players: Sequence[Tuple[str, str]],
+        state: _Round,
+    ) -> None:
+        """对象开口扩到跨端显式绑定熟人：零网络查本地缓存，命中且未遗忘时补一条脱敏跨端线索。"""
+        lookup = self._cross_channel_person_lookup
+        if lookup is None or state.full:
+            return
+        for sender in senders:
+            if state.full:
+                return
+            if _forgetting(sender) or not sender.platform or not sender.external_id:
+                continue
+            matched = lookup(sender.platform, sender.external_id)
+            if matched is None:
+                continue
+            person_id, hint = matched
+            hint_text = (hint or "").strip()
+            if person_id <= 0 or not hint_text:
+                continue
+            key: ItemKey = ("cross_channel", int(person_id))
+            if self._skip(key, state, self._blocked(key, state)):
+                continue
+            self._push(
+                state,
+                _Card(
+                    key=key,
+                    text=f"【跨端熟人线索】{hint_text}",
+                    kind="cross_channel",
+                    sources=(SOURCE_DANMAKU,),
+                    detail={"person_id": int(person_id)},
+                ),
+            )
+
+        if not game_players or state.full:
+            return
+        for game, uuid in await self._filter_game_players("", game_players):
+            if state.full:
+                return
+            if self._players is not None:
+                try:
+                    player = await self._players.find_player(game=game, uuid=uuid)
+                    if player is not None and player.forget_requested_at_ms is not None:
+                        continue
+                except Exception as exc:  # noqa: BLE001 - 查不到玩家遗忘标志时谨慎跳过
+                    logger.warning(f"跨端线索核对玩家遗忘状态失败（跳过）: {exc}", exc=exc)
+                    continue
+            matched = lookup(game, uuid)
+            if matched is None:
+                continue
+            person_id, hint = matched
+            hint_text = (hint or "").strip()
+            if person_id <= 0 or not hint_text:
+                continue
+            key = ("cross_channel", int(person_id))
+            if self._skip(key, state, self._blocked(key, state)):
+                continue
+            self._push(
+                state,
+                _Card(
+                    key=key,
+                    text=f"【跨端熟人线索】{hint_text}",
+                    kind="cross_channel",
+                    sources=(SOURCE_PLAYER,),
+                    detail={"person_id": int(person_id)},
+                ),
+            )
 
     async def _place_cards(self, situations: Mapping[str, GameSituation], state: _Round) -> None:
         """游戏地点：刚走到记住的地点跟前，单推挂在那里的档案行与提到该地点的未搁置公开承诺。"""

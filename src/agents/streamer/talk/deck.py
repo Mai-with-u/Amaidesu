@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Callable, List, Optional, Protocol, Sequence
 
 from src.modules.logging import get_logger
@@ -68,24 +69,35 @@ class TopicDeck:
 
     def __init__(
         self,
-        store: TalkCardStore,
+        store: Optional[TalkCardStore],
         *,
         session_id_fn: Callable[[], Optional[int]],
         clock: Callable[[], int],
         preset_count: int = DEFAULT_PRESET_COUNT,
+        extra_cards_provider: Optional[Callable[[], Sequence[TalkCard]]] = None,
+        on_extra_card_used: Optional[Callable[[int], Any]] = None,
     ) -> None:
         self._store = store
         self._session_id_fn = session_id_fn
         self._clock = clock
         self._preset_count = max(1, int(preset_count))
+        self._extra_cards_provider = extra_cards_provider
+        self._on_extra_card_used = on_extra_card_used
         self._preset: List[TalkCard] = []
         self._logger = get_logger("TopicDeck")
 
     async def available_cards(self, *, kind: Optional[str] = None, limit: Optional[int] = None) -> List[TalkCard]:
-        """本场还没用过的启用卡，按卡种优先级、再按投递先后排序。"""
+        """本场还没用过的启用卡，按卡种优先级、再按投递先后排序；同时并入跨端注入的虚拟话题卡。"""
         session_id = self._session_id_fn()
-        cards = await self._store.list_cards(kind=kind, enabled_only=True)
+        cards = await self._store.list_cards(kind=kind, enabled_only=True) if self._store is not None else []
         fresh = [c for c in cards if not c.is_used_in(session_id)]
+        if self._extra_cards_provider is not None:
+            for extra in self._extra_cards_provider():
+                if not extra.enabled or extra.is_used_in(session_id):
+                    continue
+                if kind is not None and extra.kind != kind:
+                    continue
+                fresh.append(extra)
         fresh.sort(key=lambda c: (_KIND_PRIORITY.get(c.kind, 9), c.id))
         return fresh if limit is None else fresh[: max(0, int(limit))]
 
@@ -115,12 +127,29 @@ class TopicDeck:
     async def use_card(self, card_id: Any) -> Optional[TalkCard]:
         """她选用一张卡开话头：校验卡存在且启用，标为本场已用，返回该卡；无效 id 返回 None。
 
+        负数编号为跨端注入的虚拟卡，不落本地 SQLite 卡池，选用后触发跨端回调通知已消费。
         选用后从本回合预摆里拿掉，免得同一窗里再被看到。
         """
         try:
             cid = int(card_id)
         except (TypeError, ValueError):
             self._logger.warning(f"use_card_id 不是整数，忽略: {card_id!r}")
+            return None
+        if cid < 0:
+            extra_pool = list(self._preset)
+            if self._extra_cards_provider is not None:
+                extra_pool.extend(self._extra_cards_provider())
+            card = next((c for c in extra_pool if c.id == cid and c.enabled), None)
+            if card is None:
+                self._logger.warning(f"选用的跨端话题卡不存在或已用过，忽略: id={cid}")
+                return None
+            if self._on_extra_card_used is not None:
+                res = self._on_extra_card_used(cid)
+                if inspect.isawaitable(res):
+                    await res
+            self._preset = [c for c in self._preset if c.id != cid]
+            return card
+        if self._store is None:
             return None
         card = await self._store.get_card(cid)
         if card is None or not card.enabled:

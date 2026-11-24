@@ -354,6 +354,7 @@ class StreamerAgent(BaseAgent):
         mouth: Optional[Mouth] = None,
         memory_cues: Optional[MemoryCueProvider] = None,
         lead_coordinator: Optional[LeadCoordinator] = None,
+        maigo_bridge: Optional[Any] = None,
         events_dir: Optional[Path] = None,
         settle_wait_ms: int = _STREAM_END_SETTLE_WAIT_MS,
         enter_welcome_debounce_ms: int = _GAME_LEAD_ENTER_WELCOME_DEBOUNCE_MS,
@@ -461,6 +462,8 @@ class StreamerAgent(BaseAgent):
         self._tool_registry = tool_registry
         # 动态主从协调器（可选；由组合根注入，未注入时保持传统主播常驻主控行为）
         self._lead_coordinator: Optional[LeadCoordinator] = lead_coordinator
+        # MaiGO 跨端记忆交换桥（可选；未注入或关闭时保持原有单机记忆链路）
+        self._maigo_bridge: Optional[Any] = maigo_bridge
         self._lead_hooks_bound: bool = False
         self._live_start_in_progress: bool = False
         self._spoken_echo_registered: bool = False
@@ -589,10 +592,19 @@ class StreamerAgent(BaseAgent):
         # 2) 话头工作台：跟踪当前环节提纲要点进度与被打断尾句，并给流程单防早退护栏供数
         self._talk_workbench = TalkWorkbench()
         self._rundown_coord.set_remaining_beats_provider(self._talk_workbench.remaining_beats)
-        # 3) 自备话题匣：有话题卡仓储时按场次挑未用卡片预摆或供主动抽卡
+        # 3) 自备话题匣：有本地话题卡仓储或跨端同步注入时按场次挑未用卡片预摆或供主动抽卡
+        has_topic_source = talk_card_repo is not None or (
+            self._maigo_bridge is not None and bool(getattr(self._maigo_bridge, "inject_topic_cards", False))
+        )
         self._topic_deck: Optional[TopicDeck] = (
-            TopicDeck(talk_card_repo, session_id_fn=self._current_session_pk, clock=self._clock)
-            if talk_card_repo is not None
+            TopicDeck(
+                talk_card_repo,
+                session_id_fn=self._current_session_pk,
+                clock=self._clock,
+                extra_cards_provider=(self._maigo_bridge.virtual_cards if self._maigo_bridge is not None else None),
+                on_extra_card_used=(self._maigo_bridge.mark_card_used if self._maigo_bridge is not None else None),
+            )
+            if has_topic_source
             else None
         )
 
@@ -828,6 +840,11 @@ class StreamerAgent(BaseAgent):
         # 线索推送：每批按弹幕与开着的游戏算"这一批想起来的事"；状态只活在本场
         self._memory_cues: Optional[MemoryCueProvider] = memory_cues
         if memory_cues is None and commitments_repo is not None and chat_repo is not None:
+            cross_lookup = (
+                self._maigo_bridge.lookup_person_cue
+                if self._maigo_bridge is not None and bool(getattr(self._maigo_bridge, "inject_person_cues", False))
+                else None
+            )
             self._memory_cues = MemoryCueProvider(
                 commitments_repo=commitments_repo,
                 chat_repo=chat_repo,
@@ -840,6 +857,7 @@ class StreamerAgent(BaseAgent):
                 game_player_repo=game_player_repo,
                 correction_repo=self._memory_correction_repo,
                 social_fact_repo=social_fact_repo,
+                cross_channel_person_lookup=cross_lookup,
                 inside_jokes=config.persona.inside_jokes,
                 passive_enabled=self.typed_config.memory_passive_recall_enabled,
                 search=self._memory_search,
@@ -1541,6 +1559,11 @@ class StreamerAgent(BaseAgent):
             # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策回合自然重渲出
             # 新记忆摘要，这期间记忆摘要退化为更早一场的档案
             self._sync_current_saves()
+            if self._maigo_bridge is not None:
+                try:
+                    await self._maigo_bridge.ensure_checked_out(payload, save_id=self._primary_save_id())
+                except Exception as exc:  # noqa: BLE001 - 跨端签出失败不阻断开播主链路
+                    self._logger.warning(f"MaiGO 开播签出异常（降级为单机记忆）: {exc}", exc=exc)
             await self._refresh_memory_brief(kind=payload.kind, announce=True)
             self._settle_pending_before_brief()
             # 线索推送的计数与回执追踪只在本场内有效，开播先清零
@@ -2003,6 +2026,18 @@ class StreamerAgent(BaseAgent):
                 )
         # 概览排在清理之后：它的原料（话题摘要、游戏事件）不含观众昵称，不依赖遮名集合
         await self._write_session_overview(live_session_id)
+        if settle and self._maigo_bridge is not None:
+            try:
+                await self._maigo_bridge.push_settled_session(
+                    live_session_id,
+                    archive_repo=self._archive_repo,
+                    commitments_repo=self._commitments_repo,
+                    sessions_repo=self._sessions_repo,
+                    game_player_repo=self._game_player_repo,
+                    save_id=self._primary_save_id(),
+                )
+            except Exception as exc:  # noqa: BLE001 - 跨端签入失败不阻塞下播收尾
+                self._logger.warning(f"MaiGO 下播签入异常（场次 {live_session_id} 照常收尾）: {exc}", exc=exc)
 
     async def _write_session_overview(self, live_session_id: int) -> None:
         """给这一场写概览（给人看的这场发生了什么）；失败只记日志，不牵连任何账本。"""
@@ -2524,6 +2559,15 @@ class StreamerAgent(BaseAgent):
                 self._logger.info(f"{game} 从存档「{before.label}」换到「{save.label}」：清掉手头这个游戏的事")
             self._known_saves[game] = save
         self._current_saves = dict(saves)
+        if self._maigo_bridge is not None:
+            self._maigo_bridge.update_save_id(self._primary_save_id())
+
+    def _primary_save_id(self) -> Optional[str]:
+        """返回当前已知的第一个游戏存档标识，用于跨端签出、心跳与签入关联同一存档。"""
+        for save in self._current_saves.values():
+            if save.known and save.id:
+                return save.id
+        return None
 
     def _session_game_names(self) -> List[str]:
         """本场出现过事件的游戏（整场口径；下播整理取"本场玩过的游戏"用）。"""
@@ -2607,8 +2651,9 @@ class StreamerAgent(BaseAgent):
         前缀缓存仍命中；表变了（直播中纠错、上一场整理刚写完）或切进纯杂谈环节，下一窗就反映出来。
         ``announce`` 只在开播与启动善后打开：那条 info 日志带"上一场编号与播出台词数"，供运营者核对注入内容。
         """
+        extension = self._maigo_bridge.render_brief_extension().strip() if self._maigo_bridge is not None else ""
         if self._commitments_repo is None or self._archive_repo is None:
-            self._memory_brief_text = ""
+            self._memory_brief_text = extension
             self._memory_brief_ids = ()
             self._memory_brief_archive_ids = ()
             self._memory_used_archive_ids = ()
@@ -2635,13 +2680,19 @@ class StreamerAgent(BaseAgent):
             )
         except Exception as exc:  # noqa: BLE001 - 记忆摘要拼不出来只省这一段，不挡开播
             self._logger.warning(f"拼记忆摘要失败（本场省略记忆摘要段）: {exc}", exc=exc)
-            self._memory_brief_text = ""
+            self._memory_brief_text = extension
             self._memory_brief_ids = ()
             self._memory_brief_archive_ids = ()
             self._memory_used_archive_ids = ()
             return
         self._memory_brief_speaking_mode = resolved_mode
-        self._memory_brief_text = brief.text
+        base_text = brief.text.strip()
+        if extension and base_text:
+            self._memory_brief_text = f"{base_text}\n\n{extension}"
+        elif extension:
+            self._memory_brief_text = extension
+        else:
+            self._memory_brief_text = brief.text
         self._memory_brief_ids = brief.commitment_ids
         self._memory_brief_archive_ids = brief.archive_ids
         self._memory_used_archive_ids = brief.used_archive_ids

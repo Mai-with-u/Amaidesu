@@ -151,6 +151,8 @@ def instantiate_agent(
         streamer_kwargs["config"] = cfg_obj
         if _accepts_init_kwarg(StreamerAgent, "lead_coordinator"):
             streamer_kwargs["lead_coordinator"] = deps.lead_coordinator
+        if _accepts_init_kwarg(StreamerAgent, "maigo_bridge"):
+            streamer_kwargs["maigo_bridge"] = deps.maigo_bridge
         return StreamerAgent(**streamer_kwargs)
 
     if name == "minecraft":

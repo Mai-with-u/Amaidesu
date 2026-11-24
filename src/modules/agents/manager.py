@@ -87,6 +87,7 @@ class AgentManager:
         privacy_service: Optional[Any] = None,
         storage_ledger: Optional[Any] = None,
         lead_coordinator: Optional[Any] = None,
+        maigo_bridge: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
@@ -115,6 +116,7 @@ class AgentManager:
         self._privacy_service = privacy_service
         self._storage_ledger = storage_ledger
         self._lead_coordinator = lead_coordinator
+        self._maigo_bridge = maigo_bridge
         self._lock = asyncio.Lock()
         # ----- 守护（心跳巡检 + 自动重建 + 风暴保护）-----
         self._supervisor_config = supervisor_config if supervisor_config is not None else AgentSupervisorConfig()
@@ -298,6 +300,7 @@ class AgentManager:
             privacy_service=d.privacy_service if d.privacy_service is not None else self._privacy_service,
             storage_ledger=d.storage_ledger if d.storage_ledger is not None else self._storage_ledger,
             lead_coordinator=d.lead_coordinator if d.lead_coordinator is not None else self._lead_coordinator,
+            maigo_bridge=d.maigo_bridge if d.maigo_bridge is not None else self._maigo_bridge,
         )
 
     async def enable_agent(

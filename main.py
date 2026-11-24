@@ -77,6 +77,11 @@ from src.modules.maibot_sync import (
     MaiBotSyncConfigSchema,
     StorageTranscriptSource,
 )
+from src.modules.maigo_sync import (
+    HttpMaiGOClient,
+    MaiGOBridge,
+    MaiGOSyncConfigSchema,
+)
 from src.modules.storage.bootstrap import build_database, build_privacy_and_retention
 from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
@@ -339,6 +344,7 @@ class AppComponents:
     task_tracker: Optional[TaskTracker]
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder]
     maibot_sync_reporter: Optional[LiveStatusReporter]
+    maigo_bridge: Optional[MaiGOBridge] = None
     clipping_service: Optional["ClippingService"] = None
     # 与 MaiBot 共享的长期笔记（开了 [maibot_sync] 共享笔记才有；关停时停后台补发、关连接）
     # 面捕合成器（形象逐帧驱动；关停时在工具 Provider 收尾之后、事件总线清理之前停）
@@ -487,6 +493,8 @@ async def create_app_components(
     # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
     # streamer.recap.written 也能接住（整场记录随回顾一起补推）
     maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config, database=database)
+    # --- 跨端记忆与生活流交换（[maigo_sync]）---
+    maigo_bridge = _build_maigo_bridge(event_bus, config, database=database)
 
     # --- 直播切片（[clipping]）：AI 选段 + ffmpeg 切割（enabled 且配了录播目录才订阅下播事件）---
     clipping_service = _build_clipping_service(
@@ -632,6 +640,8 @@ async def create_app_components(
             # 生物名册与工作文档（Minecraft Agent 跨场次记得主播起的名字、谁死了，以及各存档的笔记与待办）
             creature_repo=database.game_creatures,
             work_docs_repo=database.game_work_docs,
+            lead_coordinator=None,
+            maigo_bridge=maigo_bridge,
             supervisor_config=supervisor_config,
         )
 
@@ -796,6 +806,7 @@ async def create_app_components(
                 task_tracker=task_tracker,
                 task_ledger=task_ledger,
                 lead_coordinator=lead_coordinator,
+                maigo_bridge=maigo_bridge,
             ),
         )
 
@@ -1087,6 +1098,7 @@ async def create_app_components(
         task_tracker=task_tracker if agents_config else None,
         tts_diagnostics_recorder=tts_diagnostics_recorder,
         maibot_sync_reporter=maibot_sync_reporter,
+        maigo_bridge=maigo_bridge,
         clipping_service=clipping_service,
         avatar_tracking=avatar_tracking,
         privacy_service=privacy_service,
@@ -1211,6 +1223,44 @@ def _build_maibot_sync_reporter(
         pushed += " / 整场记录"
     logger.info(f"直播近况同步已接线：{pushed} → {sync_config.url}")
     return reporter
+
+
+# 下播签入失败待补推队列文件名（放在库文件旁）
+_MAIGO_PENDING_CHECKIN_LOG = "maigo_checkin_pending.jsonl"
+
+
+def _build_maigo_bridge(
+    event_bus: EventBus,
+    config: Dict[str, Any],
+    *,
+    database: Optional[SQLiteDatabase] = None,
+) -> Optional[MaiGOBridge]:
+    """按 ``[maigo_sync]`` 装配跨端记忆同步桥；未启用或未配服务端地址时不装配。"""
+    raw = config.get("maigo_sync", {}) if isinstance(config, dict) else {}
+    sync_config = MaiGOSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiGOSyncConfigSchema()
+    if not sync_config.enabled:
+        logger.debug("[maigo_sync].enabled=false，不连接 MaiGO 跨端记忆交换服务")
+        return None
+    if not sync_config.url:
+        logger.warning("[maigo_sync] 已启用但 url 未设置，跳过装配 MaiGO 同步桥")
+        return None
+    pending_path = Path(database.db_path).with_name(_MAIGO_PENDING_CHECKIN_LOG) if database is not None else None
+    bridge = MaiGOBridge(
+        event_bus=event_bus,
+        client=HttpMaiGOClient(
+            base_url=sync_config.url,
+            token=sync_config.token,
+            timeout_ms=sync_config.request_timeout_ms,
+        ),
+        branch_id=sync_config.branch_id,
+        heartbeat_interval_ms=sync_config.heartbeat_interval_ms,
+        inject_topic_cards=sync_config.inject_topic_cards,
+        inject_person_cues=sync_config.inject_person_cues,
+        pending_log_path=pending_path,
+    )
+    bridge.setup()
+    logger.info(f"MaiGO 跨端记忆同步桥已接线: branch={sync_config.branch_id} -> {sync_config.url}")
+    return bridge
 
 
 def _build_clipping_service(
@@ -1626,6 +1676,7 @@ async def run_shutdown(
     task_tracker: Optional[TaskTracker] = components.task_tracker
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = components.tts_diagnostics_recorder
     maibot_sync_reporter: Optional[LiveStatusReporter] = components.maibot_sync_reporter
+    maigo_bridge: Optional[MaiGOBridge] = components.maigo_bridge
     clipping_service: Optional["ClippingService"] = components.clipping_service
 
     _saw_cancelled = False
@@ -1749,10 +1800,12 @@ async def run_shutdown(
         await safe_log(event_bus.cleanup(), "EventBus.cleanup")
         logger.info("EventBus 已清理")
 
-    # 直播近况上报器放在总线清理之后收尾：进程退出结账发出的 live.ended 由总线
-    # 等到处理完，"已下播"近况才推得出去；之后再退订、停心跳、关连接
+    # 直播近况上报器与跨端交换桥放在总线清理之后收尾：进程退出结账发出的
+    # live.ended 由总线等到处理完，再退订、停心跳、关连接
     if maibot_sync_reporter is not None:
         await safe_log(maibot_sync_reporter.stop(), "LiveStatusReporter.stop")
+    if maigo_bridge is not None:
+        await safe_log(maigo_bridge.stop(), "MaiGOBridge.stop")
     # 切片编排：摘除下播事件订阅（EventBus.off 幂等；在途切割任务随进程收口终止）
     if clipping_service is not None:
         await safe_log(clipping_service.stop_async(), "ClippingService.stop")

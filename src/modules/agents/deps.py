@@ -75,3 +75,5 @@ class AgentDeps:
     task_ledger: Optional[Any] = None
     # 动态主从协调器（组合根单例；主播与支持自主领航的游戏 Agent 按需接收并绑定回调）
     lead_coordinator: Optional[Any] = None
+    # MaiGO 跨端记忆交换桥（可选；enabled=false 或未配地址时为 None，单机照常运行）
+    maigo_bridge: Optional[Any] = None
