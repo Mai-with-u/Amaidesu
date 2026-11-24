@@ -16,8 +16,8 @@ import type {
   UnmatchedFileInfo,
 } from '@/types/clips';
 
-// `POST .../select` 同步等 AI 选段结果（耗时在 LLM 调用）；`POST .../cut`
-// 只受理任务，进度看后台任务条，逐段状态回填到段列表。
+// `POST .../select` 与 `POST .../cut` 都是受理制：HTTP 立即返回，LLM 调用 /
+// ffmpeg 执行在后台任务里跑，逐段状态回填到段列表（前端经任务终态回读刷新）。
 export const clipsApi = {
   // 配置读写：保存即免重启生效（后端写盘 + 运行期重装配），无需去设置页重启
   getConfig: () => api.get<ClipConfigState>('/clips/config'),
@@ -48,7 +48,7 @@ export const clipsApi = {
   renameRecording: (path: string, newName: string) =>
     api.post<{ path: string }>('/clips/recordings/rename', { path, new_name: newName }),
   select: (sessionId: number) =>
-    api.post<{ suggestion_count: number }>(`/clips/sessions/${sessionId}/select`),
+    api.post<{ accepted: boolean }>(`/clips/sessions/${sessionId}/select`),
   listSegments: (sessionId: number) =>
     api.get<{ live_session_id: number; segments: ClipSegment[] }>(
       `/clips/sessions/${sessionId}/segments`,

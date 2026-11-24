@@ -202,8 +202,26 @@ function isDirty(segment: ClipSegment): boolean {
   );
 }
 
-function resetDraft(segment: ClipSegment): void {
-  delete drafts.value[segment.id];
+// ---- 段的乐观更新：写操作只替换单行，不整表回读 ----
+// 整表回读会清掉其他行未保存的编辑草稿，也让连续微调每段都付一次全量刷新；
+// 单行替换以服务端回传的段为准，权威状态仍由任务终态回读与手动刷新兜底。
+function replaceSegmentLocal(updated: ClipSegment): void {
+  const index = segments.value.findIndex(s => s.id === updated.id);
+  if (index !== -1) segments.value.splice(index, 1, updated);
+  delete drafts.value[updated.id]; // 该行草稿作废，显示回服务端值
+}
+
+/** 按起点排序插到列表里（与后端列表排序一致），保持显示有序 */
+function insertSegmentLocal(created: ClipSegment): void {
+  const index = segments.value.findIndex(s => s.start_ms > created.start_ms);
+  if (index === -1) segments.value.push(created);
+  else segments.value.splice(index, 0, created);
+}
+
+function removeSegmentLocal(segmentId: number): void {
+  const index = segments.value.findIndex(s => s.id === segmentId);
+  if (index !== -1) segments.value.splice(index, 1);
+  delete drafts.value[segmentId];
 }
 
 /** 保存行内编辑：相对时刻解析失败/终点不大于起点都拦下并提示 */
@@ -220,15 +238,12 @@ async function saveRow(segment: ClipSegment): Promise<void> {
     ElMessage.warning('终点要晚于起点');
     return;
   }
-  const ok = await updateSegment(segment.id, {
+  const updated = await updateSegment(segment.id, {
     title: draft.title.trim(),
     start_ms: selectedSession.value.started_at_ms + startRel,
     end_ms: selectedSession.value.started_at_ms + endRel,
   });
-  if (ok) {
-    resetDraft(segment);
-    await openSessionSegments();
-  }
+  if (updated) replaceSegmentLocal(updated);
 }
 
 /** 拖动时间轴边界提交 */
@@ -240,8 +255,8 @@ async function onResize(segmentId: number, startMs: number, endMs: number): Prom
     ElMessage.warning('段太短了（至少 5 秒）');
     return;
   }
-  const ok = await updateSegment(segmentId, { start_ms: clampedStart, end_ms: clampedEnd });
-  if (ok) await openSessionSegments();
+  const updated = await updateSegment(segmentId, { start_ms: clampedStart, end_ms: clampedEnd });
+  if (updated) replaceSegmentLocal(updated);
 }
 
 /** 双击时间轴空白新建段 */
@@ -252,7 +267,10 @@ async function onCreate(startMs: number, endMs: number): Promise<void> {
     end_ms: clampMs(endMs, selectedSession.value.started_at_ms, sessionEndMs.value),
     title: '',
   });
-  if (created) selectedSegmentId.value = created.id;
+  if (created) {
+    insertSegmentLocal(created);
+    selectedSegmentId.value = created.id;
+  }
 }
 
 async function openSessionSegments(): Promise<void> {
@@ -271,8 +289,8 @@ async function onSelectSession(sessionId: number): Promise<void> {
 
 async function onRunSelection(): Promise<void> {
   if (!selectedSession.value) return;
-  const count = await runSelection(selectedSession.value.live_session_id);
-  if (count !== null) ElMessage.success(`AI 提议了 ${count} 段，可在时间轴上微调`);
+  const accepted = await runSelection(selectedSession.value.live_session_id);
+  if (accepted) ElMessage.success('AI 选段已受理，完成后段列表自动刷新');
 }
 
 async function onCut(segmentIds: number[]): Promise<void> {
@@ -303,17 +321,17 @@ async function onCutOne(segment: ClipSegment): Promise<void> {
 }
 
 async function onConfirmSegment(segment: ClipSegment): Promise<void> {
-  const ok = await updateSegment(segment.id, { status: 'confirmed' });
-  if (ok) {
-    await openSessionSegments();
+  const updated = await updateSegment(segment.id, { status: 'confirmed' });
+  if (updated) {
+    replaceSegmentLocal(updated);
     advanceToNextReviewable(segment.id);
   }
 }
 
 async function onDismissSegment(segment: ClipSegment): Promise<void> {
-  const ok = await updateSegment(segment.id, { status: 'dismissed' });
-  if (ok) {
-    await openSessionSegments();
+  const updated = await updateSegment(segment.id, { status: 'dismissed' });
+  if (updated) {
+    replaceSegmentLocal(updated);
     advanceToNextReviewable(segment.id);
   }
 }
@@ -341,7 +359,7 @@ async function onDeleteSegment(segment: ClipSegment): Promise<void> {
   const ok = await deleteSegment(segment.id);
   if (ok) {
     if (selectedSegmentId.value === segment.id) selectedSegmentId.value = null;
-    await openSessionSegments();
+    removeSegmentLocal(segment.id);
   }
 }
 

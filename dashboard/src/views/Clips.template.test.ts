@@ -50,7 +50,7 @@ describe('段卡片操作排布', () => {
 });
 
 describe('核对自动前进', () => {
-  it('确认与弃用成功回读后都调用前进逻辑', () => {
+  it('确认与弃用保存成功后都单行替换并调用前进逻辑', () => {
     const confirmFn = sfcSource.slice(
       sfcSource.indexOf('async function onConfirmSegment'),
       sfcSource.indexOf('async function onDeleteSegment'),
@@ -59,10 +59,21 @@ describe('核对自动前进', () => {
       sfcSource.indexOf('async function onDismissSegment'),
       sfcSource.indexOf('async function onDeleteSegment'),
     );
-    expect(confirmFn).toContain('openSessionSegments()');
+    expect(confirmFn).toContain('replaceSegmentLocal(updated)');
     expect(confirmFn).toContain('advanceToNextReviewable(segment.id)');
-    expect(dismissFn).toContain('openSessionSegments()');
+    expect(dismissFn).toContain('replaceSegmentLocal(updated)');
     expect(dismissFn).toContain('advanceToNextReviewable(segment.id)');
+  });
+
+  it('段编辑走单行乐观替换，不整表回读（整表回读会冲掉其他行未保存草稿）', () => {
+    for (const name of ['async function saveRow', 'async function onResize']) {
+      const fn = sfcSource.slice(
+        sfcSource.indexOf(name),
+        sfcSource.indexOf(name) + 900,
+      );
+      expect(fn).toContain('replaceSegmentLocal');
+      expect(fn).not.toContain('openSessionSegments');
+    }
   });
 
   it('前进目标是当前段之后第一个 suggested/confirmed 段，找不到给轻提示', () => {

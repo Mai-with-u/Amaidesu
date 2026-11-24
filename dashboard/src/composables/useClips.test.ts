@@ -88,25 +88,29 @@ describe('useClips', () => {
     expect(mocks.ElMessage.error).toHaveBeenCalled();
   });
 
-  it('runSelection 返回提议数并回读段列表；失败返回 null', async () => {
+  it('runSelection 受理后返回 true 并置进行中；失败返回 false 且不置进行中', async () => {
     const clips = useClips();
-    mocks.clipsApi.listRecordings.mockReturnValue(ok(RECORDINGS));
-    mocks.clipsApi.listSegments.mockReturnValue(ok(SEGMENTS));
-    await clips.openSession(7); // 回读守卫只认"当前打开的场次"
-    mocks.clipsApi.select.mockReturnValue(ok({ suggestion_count: 4 }));
-    expect(await clips.runSelection(7)).toBe(4);
-    expect(mocks.clipsApi.listSegments).toHaveBeenCalledWith(7);
+    mocks.clipsApi.select.mockReturnValue(ok({ accepted: true }));
+    expect(await clips.runSelection(7)).toBe(true);
+    expect(clips.selecting.value).toBe(true); // 任务终态（handleTaskChanged）负责关闭
 
+    const clips2 = useClips();
     mocks.clipsApi.select.mockRejectedValue(new Error('LLM 挂了'));
-    expect(await clips.runSelection(7)).toBeNull();
+    expect(await clips2.runSelection(7)).toBe(false);
+    expect(clips2.selecting.value).toBe(false);
   });
 
-  it('未打开的场次不回读段列表（防串场）', async () => {
+  it('reloadSegments 只认当前打开的场次（防串场）', async () => {
     const clips = useClips();
-    mocks.clipsApi.select.mockReturnValue(ok({ suggestion_count: 1 }));
     mocks.clipsApi.listSegments.mockReturnValue(ok(SEGMENTS));
-    expect(await clips.runSelection(7)).toBe(1);
-    expect(mocks.clipsApi.listSegments).not.toHaveBeenCalled(); // activeSessionId 为空
+    await clips.openSession(7);
+    mocks.clipsApi.listSegments.mockClear();
+
+    await clips.reloadSegments(8); // 别的场次：静默跳过
+    expect(mocks.clipsApi.listSegments).not.toHaveBeenCalled();
+
+    await clips.reloadSegments(7); // 当前场次：回读
+    expect(mocks.clipsApi.listSegments).toHaveBeenCalledWith(7);
   });
 
   it('cutSegments 成功弹受理提示并回读；失败返回 false', async () => {
@@ -121,13 +125,22 @@ describe('useClips', () => {
     expect(mocks.ElMessage.error).toHaveBeenCalled();
   });
 
-  it('createSegment 失败返回 null；updateSegment 失败返回 false', async () => {
+  it('createSegment/updateSegment 返回服务端回传的段且不回读列表；失败返回 null', async () => {
     const clips = useClips();
+    const created = { id: 9, title: '新段' };
+    mocks.clipsApi.createSegment.mockReturnValue(ok({ segment: created }));
+    expect(await clips.createSegment(7, { start_ms: 1, end_ms: 2, title: '新段' })).toEqual(created);
+    expect(mocks.clipsApi.listSegments).not.toHaveBeenCalled(); // 就地插入，不整表回读
+
+    const updated = { id: 5, title: '改名' };
+    mocks.clipsApi.updateSegment.mockReturnValue(ok({ segment: updated }));
+    expect(await clips.updateSegment(5, { title: '改名' })).toEqual(updated);
+
     mocks.clipsApi.createSegment.mockRejectedValue(new Error('x'));
     expect(await clips.createSegment(7, { start_ms: 1, end_ms: 2, title: '' })).toBeNull();
 
     mocks.clipsApi.updateSegment.mockRejectedValue(new Error('x'));
-    expect(await clips.updateSegment(5, { title: 'y' })).toBe(false);
+    expect(await clips.updateSegment(5, { title: 'y' })).toBeNull();
   });
 
   it('assignRecording 成功后回读录播与场次；失败弹错', async () => {

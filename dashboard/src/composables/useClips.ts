@@ -133,29 +133,25 @@ export function useClips() {
     }
   }
 
-  /** 触发/重跑 AI 选段；完成后回读段列表并返回提议数 */
-  async function runSelection(sessionId: number): Promise<number | null> {
-    selecting.value = true;
+  /** 受理 AI 选段（后台任务执行）；进行中状态由任务终态关闭，返回是否受理成功 */
+  async function runSelection(sessionId: number): Promise<boolean> {
     try {
-      const { data } = await clipsApi.select(sessionId);
-      await reloadSegments(sessionId);
-      return data.suggestion_count;
+      await clipsApi.select(sessionId);
+      selecting.value = true; // handleTaskChanged 收到 clip-select 终态时关闭
+      return true;
     } catch (error) {
-      ElMessage.error(getApiErrorMessage(error, 'AI 选段失败'));
-      return null;
-    } finally {
-      selecting.value = false;
+      ElMessage.error(getApiErrorMessage(error, '发起 AI 选段失败'));
+      return false;
     }
   }
 
-  /** 手建一段；返回新段（调用方滚动定位），失败返回 null */
+  /** 手建一段；返回新段（调用方就地插入列表），失败返回 null */
   async function createSegment(
     sessionId: number,
     body: { start_ms: number; end_ms: number; title: string },
   ): Promise<ClipSegment | null> {
     try {
       const { data } = await clipsApi.createSegment(sessionId, body);
-      await reloadSegments(sessionId);
       return data.segment;
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error, '新建切片段失败'));
@@ -163,17 +159,17 @@ export function useClips() {
     }
   }
 
-  /** 手调一段（起止/标题/状态） */
+  /** 手调一段（起止/标题/状态），返回服务端回传的更新后段（失败返回 null） */
   async function updateSegment(
     segmentId: number,
     body: Partial<{ start_ms: number; end_ms: number; title: string; status: string }>,
-  ): Promise<boolean> {
+  ): Promise<ClipSegment | null> {
     try {
-      await clipsApi.updateSegment(segmentId, body);
-      return true;
+      const { data } = await clipsApi.updateSegment(segmentId, body);
+      return data.segment;
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error, '保存切片段失败'));
-      return false;
+      return null;
     }
   }
 
@@ -432,6 +428,7 @@ export function useClips() {
     }
     const match = CLIP_TASK_RE.exec(task.task_id);
     if (match === null || task.state === 'running') return;
+    if (task.task_id.startsWith('clip-select-')) selecting.value = false;
     void reloadSegments(Number(match[1]));
   }
 
