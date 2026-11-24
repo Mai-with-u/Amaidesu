@@ -56,6 +56,7 @@ class GameChatPayload(BasePayload):
         private: 私聊——对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）
         truncated: 上游是否截断了过长的原话
         note: 采集器附的一句归属说明（无说明为空串）
+        detail: 补充说明文本（如成就或进度悬停描述；无补充为空串）
         mentions: 消息里点到的实体，按出现先后（死亡播报的死者与凶手等；玩家聊天文本提到主播的行由
           采集器补一条 ``type="self"`` 的自提及条目——事实标注，"说她"是否等于"跟她说话"由规划器分辨）
         message_key: 游戏给这条消息的模板编号（Minecraft 是翻译键；没有为空串）
@@ -89,6 +90,7 @@ class GameChatPayload(BasePayload):
     private: bool = Field(default=False, description="私聊：对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）")
     truncated: bool = Field(default=False, description="上游是否截断了过长的原话")
     note: str = Field(default="", description="采集器附的一句归属说明：谁说的、说的是谁（无说明为空串）")
+    detail: str = Field(default="", description="补充说明文本（如成就或进度悬停描述；无补充为空串）")
     mentions: List[GameChatMention] = Field(
         default_factory=list,
         description='消息里点到的实体，按出现先后（死亡播报的死者与凶手等；玩家聊天文本提到主播的行带 type="self" 的自提及条目）',

@@ -1584,3 +1584,114 @@ async def test_cross_game_switch_refusal_fallback_clears_commentary_round_dedup(
     finally:
         await mgr.stop_all()
         await bus.cleanup()
+
+
+async def test_publish_rundown_update_supports_notes_finish_and_legacy_signature(fake_clock: Any) -> None:
+    """publish_rundown_update 兼容旧签名子类，同时向新签名子类透传 segment_notes 与 rundown_finished 并重置超时节流。"""
+    mgr = AgentManager()
+    mgr.register(_StreamerStub())
+
+    # 1) 旧签名自主游戏 Agent（仅声明 4 个旧参数，不接收 segment_notes / rundown_finished）
+    legacy_game = _AutonomousGameAgent("legacy_game")
+
+    # 2) 新签名自主游戏 Agent（接收完整扩展参数并记录超时提醒）
+    class _ExtendedGameAgent(_AutonomousGameAgent):
+        def __init__(self) -> None:
+            super().__init__("extended_game")
+            self.extended_updates: List[Dict[str, Any]] = []
+            self.rundown_nudges: List[str] = []
+
+        def receive_rundown_update(
+            self,
+            *,
+            segment_id: str = "",
+            segment_title: str = "",
+            segment_goal: str = "",
+            expected_ms: int = 0,
+            segment_notes: str = "",
+            rundown_finished: bool = False,
+        ) -> None:
+            self.extended_updates.append(
+                {
+                    "segment_id": segment_id,
+                    "segment_title": segment_title,
+                    "segment_goal": segment_goal,
+                    "expected_ms": expected_ms,
+                    "segment_notes": segment_notes,
+                    "rundown_finished": rundown_finished,
+                }
+            )
+
+        def receive_rundown_nudge(self, *, segment_id: str = "", **_kwargs: Any) -> None:
+            self.rundown_nudges.append(segment_id)
+
+    ext_game = _ExtendedGameAgent()
+    mgr.register(legacy_game)
+    mgr.register(ext_game)
+    await mgr.start_all()
+
+    coord = LeadCoordinator(mgr, clock=fake_clock.now_ms)
+    try:
+        # 校验 LeadHandoverContext 新增字段默认值与显式赋值
+        default_ctx = LeadHandoverContext()
+        assert default_ctx.segment_notes == ""
+        assert default_ctx.rundown_finished is False
+
+        # 旧签名目标：传 segment_notes / rundown_finished 时按签名探测降级，不抛 TypeError
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_id="s1"), target="legacy_game") == "legacy_game"
+        )
+        coord.publish_rundown_update(
+            segment_id="s2",
+            segment_title="第二段",
+            segment_goal="继续探险",
+            expected_ms=600_000,
+            segment_notes="优先修好水车",
+            rundown_finished=False,
+        )
+        assert legacy_game.rundown_updates == [("s2", "第二段", "继续探险", 600_000)]
+
+        # 新签名目标：先发一次超时提醒建立节流，随后发送 rundown_finished=True 正常下发并重置节流锚点
+        rich_ctx = LeadHandoverContext(
+            segment_id="s1",
+            segment_title="主线推进",
+            segment_notes="先补照明再挖矿",
+            rundown_finished=False,
+        )
+        assert await coord.request_game_lead(rich_ctx, target="extended_game") == "extended_game"
+        assert ext_game.entered_contexts[-1].segment_notes == "先补照明再挖矿"
+        assert ext_game.entered_contexts[-1].rundown_finished is False
+
+        coord.publish_rundown_update(
+            segment_id="s2",
+            segment_title="阶段二",
+            segment_goal="探索峡谷",
+            expected_ms=900_000,
+            segment_notes="注意别掉岩浆",
+            rundown_finished=False,
+        )
+        assert ext_game.extended_updates[-1] == {
+            "segment_id": "s2",
+            "segment_title": "阶段二",
+            "segment_goal": "探索峡谷",
+            "expected_ms": 900_000,
+            "segment_notes": "注意别掉岩浆",
+            "rundown_finished": False,
+        }
+
+        assert coord.publish_rundown_nudge(segment_id="s2", min_interval_ms=300_000) is True
+        assert coord.publish_rundown_nudge(segment_id="s2", min_interval_ms=300_000) is False
+
+        # 流程单结束通知照常下发，且重置节流锚点（后续若再次触发同段提醒不再被旧节流拦住）
+        coord.publish_rundown_update(rundown_finished=True)
+        assert ext_game.extended_updates[-1] == {
+            "segment_id": "",
+            "segment_title": "",
+            "segment_goal": "",
+            "expected_ms": 0,
+            "segment_notes": "",
+            "rundown_finished": True,
+        }
+        assert coord.publish_rundown_nudge(segment_id="s2", min_interval_ms=300_000) is True
+    finally:
+        await mgr.stop_all()

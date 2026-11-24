@@ -68,6 +68,8 @@ class LeadHandoverContext(BaseModel):
     segment_id: str = ""
     segment_title: str = ""
     segment_goal: str = ""
+    segment_notes: str = ""
+    rundown_finished: bool = False
     expected_ms: int = 0
     save_name: str = ""
     memory_brief: str = ""
@@ -807,21 +809,41 @@ class LeadCoordinator:
         segment_title: str = "",
         segment_goal: str = "",
         expected_ms: int = 0,
+        segment_notes: str = "",
+        rundown_finished: bool = False,
     ) -> None:
-        """把最新流程单环节同步转发给当前主控游戏 Agent（异常隔离、零硬编码游戏名）。"""
+        """把最新流程单环节或结束通知同步转发给当前主控游戏 Agent（异常隔离、零硬编码游戏名）。
+
+        转发前通过 ``inspect.signature`` 探测接收方法签名，仅在目标声明接收对应可选参数
+        或 ``**kwargs`` 时透传 ``segment_notes`` 与 ``rundown_finished``，兼容旧签名自定义子类或假对象。
+        """
         if not self.is_game_lead or self._active_lead_agent is None:
             return
         agent: Optional[BaseAgent] = self._agent_manager.get_agent_by_name(self._active_lead_agent)
         if agent is None:
             return
+        kwargs: Dict[str, Any] = {
+            "segment_id": (segment_id or "").strip(),
+            "segment_title": (segment_title or "").strip(),
+            "segment_goal": (segment_goal or "").strip(),
+            "expected_ms": max(0, int(expected_ms)),
+        }
+        # 检测接收方法签名，仅向声明接收新可选参数或 **kwargs 的目标透传，保持对旧签名子类的向后兼容
         try:
-            agent.receive_rundown_update(
-                segment_id=(segment_id or "").strip(),
-                segment_title=(segment_title or "").strip(),
-                segment_goal=(segment_goal or "").strip(),
-                expected_ms=max(0, int(expected_ms)),
-            )
-            # 流程单切段或续期刷新后重置超时提醒节流状态，下一段超时时立即允许提醒
+            params = inspect.signature(agent.receive_rundown_update).parameters
+            has_var_kw = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+            accepts_notes = "segment_notes" in params or has_var_kw
+            accepts_finished = "rundown_finished" in params or has_var_kw
+        except (TypeError, ValueError):
+            accepts_notes = True
+            accepts_finished = True
+        if accepts_notes:
+            kwargs["segment_notes"] = (segment_notes or "").strip()
+        if accepts_finished:
+            kwargs["rundown_finished"] = bool(rundown_finished)
+        try:
+            agent.receive_rundown_update(**kwargs)
+            # 流程单切段、续期或结束刷新后重置超时提醒节流状态，避免旧锚点干扰后续提醒
             self._last_rundown_nudge_ms = None
             self._last_rundown_nudge_segment_id = ""
         except Exception as exc:  # noqa: BLE001 - 环节同步旁路异常隔离，不阻断流程单与主控主链

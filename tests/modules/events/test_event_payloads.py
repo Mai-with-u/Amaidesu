@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from src.modules.events import EVENT_REGISTRY, register_core_events
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
     UtteranceDroppedPayload,
@@ -108,3 +109,20 @@ def test_payload_roundtrip(payload) -> None:
 def test_event_name_registered_and_bound_to_payload_class(constant: str, name: str, payload_cls: type) -> None:
     assert constant == name
     assert EVENT_REGISTRY[name] is payload_cls and name in payload_cls._all_registered_names
+
+
+def test_game_chat_payload_detail_default_and_roundtrip() -> None:
+    """GameChatPayload.detail 默认为空串（向后兼容），填写补充描述后序列化往返保真。"""
+    plain = GameChatPayload(game="minecraft", kind="system", content="玩家甲 达成了进度 [石器时代]")
+    assert plain.detail == ""
+
+    with_detail = GameChatPayload(
+        game="minecraft",
+        kind="system",
+        content="玩家甲 达成了进度 [石器时代]",
+        detail="用你的新镐挖掘石头",
+        timestamp_ms=1700000000000,
+    )
+    restored = GameChatPayload.model_validate(with_detail.model_dump())
+    assert restored == with_detail
+    assert restored.detail == "用你的新镐挖掘石头"

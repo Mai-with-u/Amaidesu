@@ -350,13 +350,16 @@ class BaseAgent(abc.ABC):
         segment_title: str = "",
         segment_goal: str = "",
         expected_ms: int = 0,
+        segment_notes: str = "",
+        rundown_finished: bool = False,
     ) -> None:
         """接收流程单环节变更同步通知（纯同步旁路写入，默认空操作）。
 
-        触发条件：处于游戏自主主控期间流程单推进或续时，且新环节仍维持游戏主控时，
+        触发条件：处于游戏自主主控期间流程单推进、续时或推进至结束（``rundown_finished=True``）时，
         由动态主从协调器同步给当前主控游戏 Agent，防止游戏侧交接记忆摘要整场停留在旧环节。
+        ``segment_notes`` 承载当前环节的导演备注，``rundown_finished`` 标识整场流程单已结束。
         """
-        del segment_id, segment_title, segment_goal, expected_ms
+        del segment_id, segment_title, segment_goal, expected_ms, segment_notes, rundown_finished
         return None
 
     def receive_silence_nudge(self, *, silent_ms: int) -> None:
