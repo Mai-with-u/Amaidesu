@@ -11,7 +11,7 @@
  */
 import { onActivated, onDeactivated, onScopeDispose, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { clipsApi } from '@/api';
+import { clipsApi } from '@/api/clips';
 import { useWebSocketStore } from '@/stores';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { EVENT } from '@/types/events';

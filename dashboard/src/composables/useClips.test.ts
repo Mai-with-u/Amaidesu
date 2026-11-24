@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock('@/api', () => ({ clipsApi: mocks.clipsApi }));
+vi.mock('@/api/clips', () => ({ clipsApi: mocks.clipsApi }));
 vi.mock('element-plus', () => ({ ElMessage: mocks.ElMessage }));
 // websocket store 构造会 new WebSocketClient（依赖 window），node 环境下用替身
 vi.mock('@/api/websocket', () => ({
