@@ -347,6 +347,125 @@ async def test_receive_rundown_update_refreshes_pinned_handover_brief_and_notifi
         await agent.stop()
 
 
+async def test_receive_rundown_update_finish_clears_pinned_brief_and_passes_segment_notes() -> None:
+    """普通切段透传有效备注并滤掉占位模板；流程单 finish 绝不早退，清空固定层旧环节目标并切换为自由游玩。"""
+    server = FakeMaicraft()
+    agent, llm, _bus = await make_minecraft_agent(
+        server,
+        lambda _m: _resp("明白，继续游玩"),
+        live=True,
+    )
+    try:
+        assert (
+            await agent.enter_lead(
+                LeadHandoverContext(
+                    segment_id="seg-build",
+                    segment_title="营地扩建",
+                    segment_goal="搭好自动化仓库",
+                    expected_ms=1_800_000,
+                )
+            )
+            is True
+        )
+        await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+
+        # 切段附带真实备注：固定层与切换通知均包含本场备注/大方向
+        calls_before_notes = len(llm.seen)
+        agent.receive_rundown_update(
+            segment_id="seg-explore",
+            segment_title="下界探索",
+            segment_goal="找下界堡垒并带回烈焰棒",
+            segment_notes="本场大方向：推进主线进度并顺手搜集工业材料\n未填栏：______",
+            expected_ms=1_500_000,
+        )
+        await _wait_until(lambda: len(llm.seen) > calls_before_notes and not agent.batch_active)
+        after_notes = llm.seen[-1]
+        pinned_after_notes = [m for m in after_notes if m.get(INSTRUCTION_KEY)]
+        assert len(pinned_after_notes) == 1
+        assert "本场备注/大方向：本场大方向：推进主线进度并顺手搜集工业材料" in str(pinned_after_notes[0]["content"])
+        assert "______" not in str(pinned_after_notes[0]["content"])
+        assert "本场备注/大方向：" in _texts(after_notes)
+
+        # 切段仅带纯下划线占位备注：不把占位模板塞进固定层简报
+        calls_before_blank = len(llm.seen)
+        agent.receive_rundown_update(
+            segment_id="seg-closing",
+            segment_title="末段收尾",
+            segment_goal="整理成果准备下播",
+            segment_notes="______",
+            expected_ms=600_000,
+        )
+        await _wait_until(lambda: len(llm.seen) > calls_before_blank and not agent.batch_active)
+        pinned_closing = [m for m in llm.seen[-1] if m.get(INSTRUCTION_KEY)][0]
+        assert "末段收尾" in str(pinned_closing["content"])
+        assert "______" not in str(pinned_closing["content"])
+        assert "本场备注/大方向：" not in str(pinned_closing["content"])
+
+        # 流程单 finish（即使环节字段全空）：绝不早退，清空末段环节与目标并切为自由游玩简报
+        calls_before_finish = len(llm.seen)
+        agent.receive_rundown_update(rundown_finished=True)
+        await _wait_until(lambda: len(llm.seen) > calls_before_finish and not agent.batch_active)
+        latest_after_finish = llm.seen[-1]
+        pinned_after_finish = [m for m in latest_after_finish if m.get(INSTRUCTION_KEY)]
+        assert len(pinned_after_finish) == 1
+        pinned_text = str(pinned_after_finish[0]["content"])
+        assert "本场流程单已结束" in pinned_text
+        assert "自由游玩阶段" in pinned_text
+        assert "末段收尾" not in pinned_text
+        assert "整理成果准备下播" not in pinned_text
+        assert "当前环节：" not in pinned_text
+        assert "环节目标：" not in pinned_text
+        assert "[流程单切换] 本场流程单已结束" in _texts(latest_after_finish)
+
+        # 重复推送 finish 幂等，不再次唤醒
+        calls_after_finish = len(llm.seen)
+        agent.receive_rundown_update(rundown_finished=True)
+        for _ in range(4):
+            await asyncio.sleep(0)
+        assert len(llm.seen) == calls_after_finish
+    finally:
+        await agent.stop()
+
+
+async def test_system_chat_renders_advancement_detail_when_present() -> None:
+    """成就/进度等系统消息携带 detail 字段时，游戏侧拼成自然说明便于主控直接理解含义。"""
+    bus = EventBus(enable_stats=False)
+    server = FakeMaicraft()
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        lambda _m: _resp("看到成就了"),
+        bus=bus,
+        live=True,
+    )
+    try:
+        assert (
+            await agent.enter_lead(
+                LeadHandoverContext(segment_id="seg-1", segment_title="自由探索", segment_goal="探索周边")
+            )
+            is True
+        )
+        await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+        calls_before = len(llm.seen)
+
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="system",
+                content="Alex 达成了进度 [不是今天，谢谢]",
+                detail="使用盾牌格挡一次弹射物攻击",
+                message_key="chat.type.advancement.task",
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await _wait_until(lambda: len(llm.seen) > calls_before and not agent.batch_active)
+        assert "[系统提示] Alex 达成了进度 [不是今天，谢谢]（描述：使用盾牌格挡一次弹射物攻击）" in _texts(llm.seen[-1])
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
 async def test_receive_silence_nudge_dedupes_unread_and_wakes_background_goal_without_cancelling() -> None:
     """主控态收到直播间静默提醒时不堆积、不打断在跑后台目标，并可唤醒等待中的游戏侧顺手汇报进度。"""
     server = FakeMaicraft()
@@ -713,3 +832,6 @@ def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_
     assert "游戏公屏聊天栏空间狭小" in LEAD_MODE_PROMPT_SECTION
     assert "同伴已经明确放权交给你做的事项" in LEAD_MODE_PROMPT_SECTION
     assert "rundown_control" in LEAD_MODE_PROMPT_SECTION
+    assert "游玩段不必被闹钟催着收尾" in LEAD_MODE_PROMPT_SECTION
+    assert "由主播或运营者主导" in LEAD_MODE_PROMPT_SECTION
+    assert "严格区分“正在做/准备做”与“已做成”" in LEAD_MODE_PROMPT_SECTION

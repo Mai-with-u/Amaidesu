@@ -52,6 +52,21 @@ def fake_bus() -> MagicMock:
     return bus
 
 
+class ManualClock:
+    """可控假单调时钟（秒），供 Minecraft 测试显式推进时间而不依赖真实等待。"""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = float(start)
+
+    def advance(self, seconds: float) -> float:
+        """把假单调时钟向前推进指定秒数，并返回推进后的时刻。"""
+        self.now += float(seconds)
+        return self.now
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def ok(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "data": data}
 
@@ -475,6 +490,10 @@ class FakeMaicraft(BaseToolProvider):
         self._append(kind, -1, message)
         if fields:
             self.events[-1].update(fields)
+
+    def wake_events(self) -> None:
+        """唤醒当前挂起的长轮询事件页（不追加新事件，供测试在推进假时钟后立刻触发事件页巡检）。"""
+        self._new_event.set()
 
     def die(self) -> int:
         """角色死了：和 MaiCraft v1 一样先发 character_died，再挂一条死亡恢复决策（编号是负数）并发 asked。"""
