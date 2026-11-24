@@ -23,7 +23,7 @@ import pytest
 
 from src.agents.streamer.config import StreamerMouthConfig, StreamerProactiveConfig
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
-from src.agents.streamer.mouth import Mouth, Trigger
+from src.agents.streamer.mouth import HIGH_RISK_ATTACKED_KEY, Mouth, Trigger
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv, RoundOutcome
 from src.agents.streamer.proactive_trigger import ProactiveTrigger
 from src.agents.streamer.replyer import TARGET_EXTRA_CHARS, Replyer
@@ -2432,7 +2432,7 @@ async def test_game_lead_blocks_set_game_leaks_and_forwards_operator_prompt_as_s
 
 
 async def test_game_lead_rundown_overdue_pushes_throttled_nudge_without_waking_streamer(prompts: Any) -> None:
-    """游戏主控期非杂谈段超期：通过协调器节流推送超时提醒给主控游戏侧，且不越权唤醒主播 Planner。"""
+    """游戏主控期游玩段超期：下一段仍是游玩段时按节流推送提醒；下一段为收尾 talk 段或已是末段时不催促自动切段。"""
     clock = _FakeClock()
     bus = EventBus()
     manager = AgentManager()
@@ -2440,16 +2440,35 @@ async def test_game_lead_rundown_overdue_pushes_throttled_nudge_without_waking_s
     manager.register(game)
     await game.start()
 
+    multi_stage_rundown = Rundown(
+        rundown_id="multi_stage_play",
+        title="多阶段游玩流程单",
+        segments=[
+            RundownSegment(
+                id="opening_talk", title="开场热身", task_description="和观众打招呼", expected_ms=300_000, mode="talk"
+            ),
+            RundownSegment(
+                id="play_1", title="营地建设", task_description="建好基础工坊", expected_ms=1_800_000, mode="play"
+            ),
+            RundownSegment(
+                id="play_2", title="矿洞探险", task_description="下矿采集矿石", expected_ms=1_800_000, mode="play"
+            ),
+            RundownSegment(
+                id="closing", title="收尾闲聊", task_description="总结今晚并道别", expected_ms=300_000, mode="talk"
+            ),
+        ],
+    )
+
     lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
     round_exec = FakeRoundExecutor()
     agent = make_streamer_agent(
         {
-            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "rundown_id": multi_stage_rundown.rundown_id,
             "proactive": {"enabled": True, "rundown_overdue_interval_ms": 300_000},
         },
         prompt=prompts,
         event_bus=bus,
-        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        rundown_repo=_FakeRundownRepo(multi_stage_rundown),
         round_executor=round_exec,
         lead_coordinator=lead_coord,
         clock=clock,
@@ -2464,27 +2483,27 @@ async def test_game_lead_rundown_overdue_pushes_throttled_nudge_without_waking_s
             source="test",
         )
         await bus.wait_until_drained()
-        # 切入游戏段（main_play，expected_ms=3_600_000，下一段 closing）并进入游戏主控态
+        # 切入 play_1（expected_ms=1_800_000，下一段为 play_2 游玩段）并进入游戏主控态
         await agent.rundown_control("next", now_ms=clock())
         assert lead_coord.is_game_lead is True
         round_exec.calls.clear()
         game.rundown_nudges.clear()
 
         # 未超时不推送
-        clock.advance(3_600_000)
+        clock.advance(1_800_000)
         await agent._maybe_flush()
         assert game.rundown_nudges == []
         assert round_exec.calls == []
 
-        # 超期（> 3_600_000ms）触发首次推送给主控游戏侧，主播零越权唤醒
+        # 超期（> 1_800_000ms）且下一段为游玩段 -> 触发首次推送给主控游戏侧，主播零越权唤醒
         clock.advance(1_000)
         await agent._maybe_flush()
         assert len(game.rundown_nudges) == 1
         nudge = game.rundown_nudges[0]
-        assert nudge["segment_id"] == "main_play"
-        assert nudge["elapsed_ms"] == 3_601_000
-        assert nudge["expected_ms"] == 3_600_000
-        assert nudge["next_segment_id"] == "closing"
+        assert nudge["segment_id"] == "play_1"
+        assert nudge["elapsed_ms"] == 1_801_000
+        assert nudge["expected_ms"] == 1_800_000
+        assert nudge["next_segment_id"] == "play_2"
         assert round_exec.calls == []
 
         # 5 分钟节流期内不重复推送
@@ -2498,9 +2517,63 @@ async def test_game_lead_rundown_overdue_pushes_throttled_nudge_without_waking_s
         await agent._maybe_flush()
         assert len(game.rundown_nudges) == 2
         assert round_exec.calls == []
+
+        # 切入 play_2（下一段是 closing 收尾 talk 段）：超期不推送闹钟，把收尾切段权留给运营者或下播流程
+        await agent.rundown_control("next", now_ms=clock())
+        game.rundown_nudges.clear()
+        clock.advance(1_801_000)
+        await agent._maybe_flush()
+        assert game.rundown_nudges == []
+        assert round_exec.calls == []
     finally:
         await agent.stop()
         await game.stop()
+
+    # 单游玩末段（无下一段）：超期同样不推送超时闹钟催促游戏自动结束流程单
+    single_play_rundown = Rundown(
+        rundown_id="single_play_last",
+        title="单段自由游玩单",
+        segments=[
+            RundownSegment(
+                id="only_play", title="自由游玩", task_description="持续探险", expected_ms=1_200_000, mode="play"
+            )
+        ],
+    )
+    clock2 = _FakeClock()
+    bus2 = EventBus()
+    manager2 = AgentManager()
+    game2 = _FakeAutonomousGameAgent(ready=True)
+    manager2.register(game2)
+    await game2.start()
+    lead_coord2 = LeadCoordinator(manager2, event_bus=bus2, clock=clock2)
+    agent2 = make_streamer_agent(
+        {
+            "rundown_id": single_play_rundown.rundown_id,
+            "proactive": {"enabled": True, "rundown_overdue_interval_ms": 300_000},
+        },
+        prompt=prompts,
+        event_bus=bus2,
+        rundown_repo=_FakeRundownRepo(single_play_rundown),
+        round_executor=FakeRoundExecutor(),
+        lead_coordinator=lead_coord2,
+        clock=clock2,
+    )
+    manager2.register(agent2)
+    await agent2.start()
+    try:
+        await bus2.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=818, kind="live", started_at_ms=clock2()),
+            source="test",
+        )
+        await bus2.wait_until_drained()
+        assert lead_coord2.is_game_lead is True
+        clock2.advance(1_201_000)
+        await agent2._maybe_flush()
+        assert game2.rundown_nudges == []
+    finally:
+        await agent2.stop()
+        await game2.stop()
 
 
 async def test_signoff_and_ended_state_blocks_rundown_control_mutations(prompts: Any) -> None:
@@ -3033,3 +3106,535 @@ async def test_lead_switch_clears_streamer_commentary_buffer_and_debounce_anchor
         await agent.stop()
         await game_a.stop()
         await game_b.stop()
+
+
+async def test_live_start_in_progress_blocks_premature_sync_lead_and_proactive_round(prompts: Any) -> None:
+    """开播初始化卡在记忆摘要刷新期间，流程单 begin 不得抢跑派发后台切权，且主动发言轮也不得抢跑触发。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    registry = ToolRegistry()
+    registry.register_provider(_FakeGameToolProvider(game_name="adventure", save_name="二周目星海"))
+
+    brief_entered = asyncio.Event()
+    release_brief = asyncio.Event()
+
+    class _GatedArchiveRepo:
+        async def get_last_archived_session_id(self, **_kwargs: Any) -> Optional[int]:
+            return None
+
+        async def list_latest_snapshot(self, **_kwargs: Any) -> List[Any]:
+            return []
+
+    class _GatedCommitmentsRepo:
+        async def list_commitments(self, **_kwargs: Any) -> List[Any]:
+            brief_entered.set()
+            await release_brief.wait()
+            return []
+
+    play_first_rundown = Rundown(
+        rundown_id="play_first_race",
+        title="游玩首段竞态单",
+        segments=[
+            RundownSegment(
+                id="play_1",
+                title="直接开玩",
+                task_description="进存档继续修水车",
+                expected_ms=1_800_000,
+                mode="play",
+                notes="先检查仓库库存",
+            )
+        ],
+    )
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {"rundown_id": play_first_rundown.rundown_id, "lead_mode": "dynamic", "proactive": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        tool_registry=registry,
+        rundown_repo=_FakeRundownRepo(play_first_rundown),
+        archive_repo=_GatedArchiveRepo(),
+        commitments_repo=_GatedCommitmentsRepo(),
+        round_executor=round_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        live_task = asyncio.create_task(
+            agent._on_live_started(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(live_session_id=901, kind="live", started_at_ms=clock()),
+                "test",
+            )
+        )
+        await asyncio.wait_for(brief_entered.wait(), timeout=2.0)
+
+        # 等待事件总线排空并让出事件循环给任何可能误派的后台任务：初始化未完期间绝不可提前交权，也不得抢跑主动发言
+        await bus.wait_until_drained()
+        assert lead_coord.mode == "streamer"
+        assert game.enter_contexts == []
+        assert await agent._evaluate_proactive_round() is False
+        assert round_exec.calls == []
+
+        # 放行记忆摘要刷新：由 _on_live_started 末尾一次性交权，且拿到存档名与环节备注
+        release_brief.set()
+        await live_task
+        await bus.wait_until_drained()
+
+        assert lead_coord.is_game_lead is True
+        assert len(game.enter_contexts) == 1
+        assert game.enter_contexts[0].save_name == "二周目星海"
+        assert game.enter_contexts[0].segment_notes == "先检查仓库库存"
+        assert game.enter_contexts[0].rundown_finished is False
+        assert round_exec.calls == []
+    finally:
+        release_brief.set()
+        await agent.stop()
+        await game.stop()
+
+
+async def test_rundown_ready_blocked_in_dynamic_play_segment_but_allowed_in_streamer_only(prompts: Any) -> None:
+    """动态游戏主控的游玩段在未切权窗口内拦截 rundown_ready 防双开场白；streamer_only 游玩段照常允许。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    # 故意设为未就绪，稳定复现“开播后处于游玩段但尚未完成向游戏交权（in_game_lead=False）”的窗口
+    game = _FakeAutonomousGameAgent(ready=False)
+    manager.register(game)
+    await game.start()
+
+    play_first_rundown = Rundown(
+        rundown_id="play_ready_gate",
+        title="游玩首段门禁测试单",
+        segments=[
+            RundownSegment(id="play_1", title="主线游玩", task_description="建工坊", expected_ms=1_800_000, mode="play")
+        ],
+    )
+
+    # 1) dynamic 模式：in_game_lead=False 且处于 play 段，rundown_ready 不抢跑唤醒主播 Planner
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    dyn_exec = FakeRoundExecutor()
+    dyn_agent = make_streamer_agent(
+        {"rundown_id": play_first_rundown.rundown_id, "lead_mode": "dynamic", "proactive": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(play_first_rundown),
+        round_executor=dyn_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(dyn_agent)
+    await dyn_agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=902, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert lead_coord.is_game_lead is False
+        assert await dyn_agent._evaluate_proactive_round() is False
+        assert dyn_exec.calls == []
+    finally:
+        await dyn_agent.stop()
+
+    # 2) streamer_only 模式：同样处于 play 段，主播自主承接，rundown_ready 照常唤醒
+    solo_exec = FakeRoundExecutor()
+    solo_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    solo_agent = make_streamer_agent(
+        {"rundown_id": play_first_rundown.rundown_id, "lead_mode": "streamer_only", "proactive": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(play_first_rundown),
+        round_executor=solo_exec,
+        lead_coordinator=solo_coord,
+        clock=clock,
+    )
+    await solo_agent.start()
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=903, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert await solo_agent._evaluate_proactive_round() is True
+        assert any(call["trigger_cause"].kind is TriggerKind.RUNDOWN for call in solo_exec.calls)
+    finally:
+        await solo_agent.stop()
+        await game.stop()
+
+
+async def test_rundown_finish_and_segment_notes_sync_to_game_lead_and_handover(prompts: Any) -> None:
+    """交权与切段透传 segment_notes，且流程单推进至 finish（无当前环节）时向游戏主控显式下发 rundown_finished=True。"""
+
+    class _ExtendedAutonomousGame(_FakeAutonomousGameAgent):
+        def __init__(self) -> None:
+            super().__init__(ready=True)
+            self.ext_updates: List[Dict[str, Any]] = []
+
+        def receive_rundown_update(
+            self,
+            *,
+            segment_id: str = "",
+            segment_title: str = "",
+            segment_goal: str = "",
+            expected_ms: int = 0,
+            segment_notes: str = "",
+            rundown_finished: bool = False,
+        ) -> None:
+            super().receive_rundown_update(
+                segment_id=segment_id,
+                segment_title=segment_title,
+                segment_goal=segment_goal,
+                expected_ms=expected_ms,
+            )
+            self.ext_updates.append(
+                {
+                    "segment_id": segment_id,
+                    "segment_notes": segment_notes,
+                    "rundown_finished": rundown_finished,
+                }
+            )
+
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _ExtendedAutonomousGame()
+    manager.register(game)
+    await game.start()
+
+    two_play_rundown = Rundown(
+        rundown_id="two_play_notes",
+        title="带备注双游玩段单",
+        segments=[
+            RundownSegment(
+                id="play_1",
+                title="第一段",
+                task_description="搭营地",
+                expected_ms=1_200_000,
+                mode="play",
+                notes="营地靠河建",
+            ),
+            RundownSegment(
+                id="play_2",
+                title="第二段",
+                task_description="下矿",
+                expected_ms=1_200_000,
+                mode="play",
+                notes="优先找铁和红石",
+            ),
+        ],
+    )
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": two_play_rundown.rundown_id, "lead_mode": "dynamic"},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(two_play_rundown),
+        round_executor=FakeRoundExecutor(),
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=904, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert lead_coord.is_game_lead is True
+        assert game.enter_contexts[0].segment_notes == "营地靠河建"
+        assert game.enter_contexts[0].rundown_finished is False
+
+        # 切到第二段：同步 segment_notes 且 rundown_finished=False
+        ok_mid, _, _ = await agent.rundown_control("next", now_ms=clock())
+        assert ok_mid is True
+        assert game.ext_updates[-1] == {
+            "segment_id": "play_2",
+            "segment_notes": "优先找铁和红石",
+            "rundown_finished": False,
+        }
+
+        # 运营者手动在末段推进导致流程单 finish（segment is None）：显式发送 rundown_finished=True
+        ok_fin, _, _ = await agent.rundown_control("next", now_ms=clock())
+        assert ok_fin is True
+        assert game.ext_updates[-1] == {
+            "segment_id": "",
+            "segment_notes": "",
+            "rundown_finished": True,
+        }
+
+        # 流程单已结束后若重新交权（如收权再交权），LeadHandoverContext.rundown_finished 为 True
+        await lead_coord.reclaim_streamer_lead(reason="manual")
+        await agent.sync_lead_mode(reason="re_enter_after_finish")
+        assert game.enter_contexts[-1].rundown_finished is True
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_high_risk_attacked_triggers_mouth_in_game_lead_without_waking_planner(prompts: Any) -> None:
+    """游戏自主主控态下：高危 game.body.attacked 放行触发 Mouth（独立长冷却桶）且不唤醒 Planner；轻摔伤静默。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    mouth_stub = MagicMock()
+    mouth_stub.start = AsyncMock()
+    mouth_stub.stop = AsyncMock()
+    mouth_stub.reset = MagicMock()
+    mouth_stub.note_game = MagicMock()
+    mouth_stub.note_speech = MagicMock()
+    mouth_stub.react = MagicMock()
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "mouth": {"enabled": True}},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        round_executor=FakeRoundExecutor(),
+        mouth=mouth_stub,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=905, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 普通轻摔伤：只记背景不触发 Mouth
+        await bus.emit(
+            CoreEvents.GAME_BODY_ATTACKED,
+            BodyEventPayload(game="adventure", kind="attacked", summary="摔了一下"),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        mouth_stub.react.assert_not_called()
+
+        # 高危受击（爆炸）：放行触发 Mouth，走独立冷却桶且不置位 game_pending 唤醒 Planner
+        await bus.emit(
+            CoreEvents.GAME_BODY_ATTACKED,
+            BodyEventPayload(
+                game="adventure",
+                kind="attacked",
+                summary="被苦力怕炸到一下",
+                attacker="minecraft:creeper",
+                hits=1,
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        mouth_stub.react.assert_called_once_with(
+            HIGH_RISK_ATTACKED_KEY,
+            "被苦力怕炸到一下",
+            refresh_scene=False,
+            kind="attacked",
+        )
+        assert agent._proactive_signals.game_pending is False
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_rundown_replace_definition_deleting_current_segment_does_not_emit_finished(prompts: Any) -> None:
+    """运营者经 replace_definition 删除当前环节（index=-1 且未结束）时，不向游戏主控误发 rundown_finished=True。"""
+
+    class _RecordingGame(_FakeAutonomousGameAgent):
+        def __init__(self) -> None:
+            super().__init__(ready=True)
+            self.ext_updates: List[Dict[str, Any]] = []
+
+        def receive_rundown_update(
+            self,
+            *,
+            segment_id: str = "",
+            segment_title: str = "",
+            segment_goal: str = "",
+            expected_ms: int = 0,
+            segment_notes: str = "",
+            rundown_finished: bool = False,
+        ) -> None:
+            super().receive_rundown_update(
+                segment_id=segment_id,
+                segment_title=segment_title,
+                segment_goal=segment_goal,
+                expected_ms=expected_ms,
+            )
+            self.ext_updates.append(
+                {
+                    "segment_id": segment_id,
+                    "segment_notes": segment_notes,
+                    "rundown_finished": rundown_finished,
+                }
+            )
+
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _RecordingGame()
+    manager.register(game)
+    await game.start()
+
+    original_rundown = Rundown(
+        rundown_id="editable_play",
+        title="可编辑游玩流程单",
+        segments=[
+            RundownSegment(id="play_1", title="第一段", task_description="搭营地", expected_ms=1_200_000, mode="play"),
+            RundownSegment(id="play_2", title="第二段", task_description="探矿", expected_ms=1_200_000, mode="play"),
+        ],
+    )
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": original_rundown.rundown_id, "lead_mode": "dynamic"},
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(original_rundown),
+        round_executor=FakeRoundExecutor(),
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=906, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert lead_coord.is_game_lead is True
+        assert game.ext_updates == []
+
+        # 运营者编辑流程单并删除当前所在的 play_1：游标退回 index=-1、current_segment 为 None 但 is_finished 为 False
+        edited_rundown = Rundown(
+            rundown_id="editable_play",
+            title="可编辑游玩流程单",
+            segments=[
+                RundownSegment(
+                    id="play_2", title="第二段", task_description="探矿", expected_ms=1_200_000, mode="play"
+                ),
+            ],
+        )
+        ok, _, _ = await agent.apply_rundown_definition(edited_rundown.model_dump())
+        assert ok is True
+        await bus.wait_until_drained()
+        assert agent._rundown_coord.current_segment() is None
+        assert agent._rundown_coord.is_finished() is False
+        # 绝不能向游戏主控误发 rundown_finished=True
+        assert game.ext_updates == []
+        assert agent._proactive_signals.rundown_pending is False
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["streamer_only", "override_streamer", "no_candidates", "no_coordinator"],
+)
+async def test_rundown_change_to_play_segment_wakes_streamer_when_streamer_owns_lead(
+    prompts: Any,
+    scenario: str,
+) -> None:
+    """归主播承接的场次切到非 talk 段时（streamer_only / override==streamer / 无自主候选 / 未装配协调器），置位 rundown_pending 触发开场白。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game: Optional[_FakeAutonomousGameAgent] = None
+
+    if scenario in ("streamer_only", "override_streamer"):
+        game = _FakeAutonomousGameAgent(ready=True)
+        manager.register(game)
+        await game.start()
+
+    mixed_rundown = Rundown(
+        rundown_id=f"streamer_owned_{scenario}",
+        title="主播承接游玩段流程单",
+        segments=[
+            RundownSegment(
+                id="opening_talk", title="开场闲聊", task_description="打招呼", expected_ms=300_000, mode="talk"
+            ),
+            RundownSegment(
+                id="play_1", title="自由游玩", task_description="一起探险", expected_ms=1_200_000, mode="play"
+            ),
+        ],
+    )
+
+    lead_coord = None if scenario == "no_coordinator" else LeadCoordinator(manager, event_bus=bus, clock=clock)
+    if scenario == "override_streamer" and lead_coord is not None:
+        await lead_coord.set_override("streamer")
+
+    round_exec = FakeRoundExecutor()
+    agent = make_streamer_agent(
+        {
+            "rundown_id": mixed_rundown.rundown_id,
+            "lead_mode": "streamer_only" if scenario == "streamer_only" else "dynamic",
+            "proactive": {"enabled": True},
+        },
+        prompt=prompts,
+        event_bus=bus,
+        rundown_repo=_FakeRundownRepo(mixed_rundown),
+        round_executor=round_exec,
+        lead_coordinator=lead_coord,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=907, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        # 消费开场 talk 段的信号，清空调用记录，聚焦验证切入 play 段的行为
+        await agent._evaluate_proactive_round()
+        round_exec.calls.clear()
+        assert agent._proactive_signals.rundown_pending is False
+
+        ok, _, _ = await agent.rundown_control("next", now_ms=clock())
+        assert ok is True
+        await bus.wait_until_drained()
+
+        # 要么已置位 rundown_pending 等下一 tick 触发，要么后台循环已直接消费并产出 RUNDOWN 决策轮
+        triggered_in_bg = any(call["trigger_cause"].kind is TriggerKind.RUNDOWN for call in round_exec.calls)
+        if not triggered_in_bg:
+            assert agent._proactive_signals.rundown_pending is True
+            assert await agent._evaluate_proactive_round() is True
+            assert any(call["trigger_cause"].kind is TriggerKind.RUNDOWN for call in round_exec.calls)
+        if game is not None:
+            assert game.rundown_updates == []
+    finally:
+        await agent.stop()
+        if game is not None:
+            await game.stop()
