@@ -2,9 +2,8 @@
   <section class="panel announcement-panel" aria-label="直播间公告">
     <header class="panel-head">
       <div class="head-text">
-        <div class="panel-title">直播间公告</div>
         <p class="panel-hint">
-          按当前保留期配置拼好的告知文本，贴进直播间简介即可；保留期改了，点“刷新”会跟着变。
+          按当前保留期配置拼好的告知文本，贴进直播间简介即可；保留期改了，点页头的“刷新”会跟着变。
         </p>
       </div>
       <div class="head-actions">
@@ -14,7 +13,6 @@
           class="contact-input"
           placeholder="联系方式（会写进公告）"
         />
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
         <el-button size="small" type="primary" @click="copy">复制公告</el-button>
       </div>
     </header>
@@ -39,7 +37,8 @@
  * 文本口径固定（处理的信息种类、保存期限、删除与撤回方式），保留期从
  * 配置合并视图读取（raw_days / viewer_absence_days，0 = 不自动删除）；联系方式
  * 没有配置项，由运营者在输入框里补。文本变化只取决于配置与联系方式，不订阅
- * 事件、无定时器，不需要 keep-alive 生命周期处理。
+ * 事件、无定时器，不需要 keep-alive 生命周期处理。load 经 defineExpose 交给页面
+ * 头的“刷新”统一重拉。
  */
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -82,6 +81,8 @@ async function copy(): Promise<void> {
 onMounted(() => {
   void load();
 });
+
+defineExpose({ load });
 </script>
 
 <style scoped>
@@ -106,14 +107,8 @@ onMounted(() => {
   min-width: 0;
 }
 
-.panel-title {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-
 .panel-hint {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
 }

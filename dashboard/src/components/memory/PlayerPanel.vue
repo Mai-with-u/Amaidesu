@@ -2,16 +2,12 @@
   <section class="panel player-panel" aria-label="游戏里的人">
     <header class="panel-head">
       <div class="head-text">
-        <div class="panel-title">
-          游戏里的人
-          <el-tag v-if="items.length > 0" size="small" type="info">{{ items.length }} 位</el-tag>
-          <el-tag v-if="forgetPendingCount > 0" size="small" type="danger"
-            >{{ forgetPendingCount }} 位待删除</el-tag
-          >
-        </div>
         <p class="panel-hint">
           她在游戏里遇到过的玩家。玩家开口时她会看到一条玩家线索；可以手动维护纯游戏侧的常用称呼，帮助她在游戏公屏与记忆里认准同一人。
           这里的关联观众她看不到——确认“这位玩家就是直播间的某位观众”后，删这位观众、或任何一方发“忘了我”，两边一起删除；同名、名字像都不会自动关联。
+          <el-tag v-if="forgetPendingCount > 0" size="small" type="danger" class="hint-tag"
+            >{{ forgetPendingCount }} 位待删除</el-tag
+          >
         </p>
       </div>
       <div class="head-actions">
@@ -22,7 +18,6 @@
           class="search-input"
           placeholder="按名字、曾用名或常用称呼找"
         />
-        <el-button size="small" :loading="loading" @click="reload">刷新</el-button>
       </div>
     </header>
 
@@ -334,19 +329,14 @@ defineExpose({ reload });
   min-width: 0;
 }
 
-.panel-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-
 .panel-hint {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.hint-tag {
+  margin-left: var(--spacing-sm);
 }
 
 .head-actions {

@@ -2,7 +2,6 @@
   <section id="ledger-archive" class="panel archive-panel" aria-label="场次档案">
     <header class="panel-head">
       <div class="head-text">
-        <div class="panel-title">场次档案</div>
         <p class="panel-hint">
           每场正式场整理出的标题与原话，下一场开播回忆“上一场”时用。整理自动生效，这里事后审：
           改标题、标稳定会锁住这一行（之后的整理不能改它、删它），漏掉的事可以放回快照或从台词里新增。
@@ -343,14 +342,8 @@ defineExpose({ reload, selectSession });
   min-width: 0;
 }
 
-.panel-title {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-
 .panel-hint {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
 }

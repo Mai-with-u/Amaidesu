@@ -1,26 +1,17 @@
 <template>
   <section class="panel player-candidate-panel" aria-label="玩家自述">
     <header class="panel-head">
-      <div class="head-text">
-        <div class="panel-title">
-          玩家自述
-          <el-tag v-if="pendingCount > 0" size="small" type="warning"
-            >{{ pendingCount }} 条待审</el-tag
-          >
-        </div>
-        <p class="panel-hint">
-          游戏玩家在游戏公屏说的关于他自己的事（怎么称呼他、家或在盖的东西在哪、起了名的动物），她当场接住了。
-          批准前她看不到；批准后只在这位玩家在游戏里找她时写在他的玩家线索上，不进开播记忆摘要。待审的列出后
-          14 天没人审会自动删掉。
-        </p>
-      </div>
+      <p class="panel-hint">
+        游戏玩家在游戏公屏说的关于他自己的事（怎么称呼他、家或在盖的东西在哪、起了名的动物），她当场接住了。
+        批准前她看不到；批准后只在这位玩家在游戏里找她时写在他的玩家线索上，不进开播记忆摘要。待审的列出后
+        14 天没人审会自动删掉。
+      </p>
       <div class="head-actions">
         <el-radio-group v-model="status" size="small" @change="reload">
           <el-radio-button value="pending">待审</el-radio-button>
           <el-radio-button value="approved">已批</el-radio-button>
           <el-radio-button value="rejected">已驳回</el-radio-button>
         </el-radio-group>
-        <el-button size="small" :loading="loading" @click="reload">刷新</el-button>
       </div>
     </header>
 
@@ -105,7 +96,8 @@
  * 自述挂在他那句游戏公屏上：删除这位玩家或他发“忘了我”时一起删掉。批错了可以撤销批准（回到待审），
  * 哪种状态的都可以整条删掉。
  *
- * 不含定时器 / 订阅 / WebSocket，无 keep-alive 生命周期语义。
+ * 不含定时器 / 订阅 / WebSocket，无 keep-alive 生命周期语义。批准 / 驳回 / 撤销 / 删除
+ * 成功后发 changed，页面刷新 tab 徽标的待审计数。
  */
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -126,6 +118,8 @@ const actionError = ref('');
 const busyId = ref<number | null>(null);
 /** 每条待审自述的标题输入框（批准时交上去） */
 const titles = reactive<Record<number, string>>({});
+
+const emit = defineEmits<{ changed: [] }>();
 
 async function reload(): Promise<void> {
   loading.value = true;
@@ -189,6 +183,7 @@ async function mutate(
   try {
     await action();
     ElMessage.success(success);
+    emit('changed');
     await reload();
   } catch (err) {
     actionError.value = getApiErrorMessage(err, fallback);
@@ -221,22 +216,10 @@ defineExpose({ reload });
   gap: var(--spacing-md);
 }
 
-.head-text {
+.panel-hint {
   flex: 1;
   min-width: 0;
-}
-
-.panel-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-
-.panel-hint {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
 }

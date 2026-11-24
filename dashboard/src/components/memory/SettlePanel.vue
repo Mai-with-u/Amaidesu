@@ -1,16 +1,10 @@
 <template>
   <section class="panel settle-panel" aria-label="下播整理状态">
     <header class="panel-head">
-      <div class="head-text">
-        <div class="panel-title">下播整理</div>
-        <p class="panel-hint">
-          每场正式场收播后，主播会把这一场整理成承诺与档案；失败或想重做的场次可重新排队整理。
-          列表只列最近 20 场正式场，待整理数含更早的场次。
-        </p>
-      </div>
-      <div class="head-actions">
-        <el-button size="small" :loading="loading" @click="reload">刷新</el-button>
-      </div>
+      <p class="panel-hint">
+        每场正式场收播后，主播会把这一场整理成承诺与档案；失败或想重做的场次可重新排队整理。
+        列表只列最近 20 场正式场，待整理数含更早的场次。
+      </p>
     </header>
 
     <p v-if="loadError" class="panel-error">{{ loadError }}</p>
@@ -133,7 +127,7 @@
           class="unregistered"
         >
           <div class="unregistered-title">
-            未登记的条目（{{ row.settle_report.unregistered.length }} 条，可据此手建承诺）
+            未登记的条目（{{ row.settle_report.unregistered.length }} 条，可据此手工登记承诺）
           </div>
           <div
             v-for="(item, index) in row.settle_report.unregistered"
@@ -168,10 +162,11 @@
  *
  * 后端按场次给整理结果：已整理（settled_at_ms）或待整理，自动重试次数是否
  * 用满，失败原因，以及整理时看懂了却没能登记的条目（原话照原样显示，供运营者
- * 判断要不要手建）。"重新整理"清掉整理完成时刻与重试次数，下一次调度再挑到这一场；
+ * 判断要不要手工登记）。"重新整理"清掉整理完成时刻与重试次数，下一次调度再挑到这一场；
  * 已整理的场次也能重排（整场替换，不写重复行）。之后已有整理好的正式场时，确认框另外
  * 说明：只重算这一场的档案快照，之后几场不重放，要带到记忆摘要里得按时间顺序依次重新整理。
- * "查看该场档案"通过 view-archive 事件交给记忆页切到档案面板。
+ * "查看该场档案"通过 view-archive 事件交给记忆页切到档案 tab；重排成功发 changed 让
+ * 页面刷新 tab 徽标的待整理计数。
  */
 import { onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -192,7 +187,7 @@ import {
   unregisteredKindLabel,
 } from './ledgerView';
 
-const emit = defineEmits<{ 'view-archive': [liveSessionId: number] }>();
+const emit = defineEmits<{ 'view-archive': [liveSessionId: number]; changed: [] }>();
 
 const state = ref<SettleListResponse | null>(null);
 const loading = ref(false);
@@ -237,6 +232,7 @@ async function resettle(row: SettleSessionItem): Promise<void> {
   try {
     const response = await ledgerApi.resettle(row.live_session_id);
     ElMessage.success(response.data.detail || '已排进下一次整理');
+    emit('changed');
     await reload();
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, '重新整理失败'));
@@ -269,28 +265,12 @@ defineExpose({ reload });
   gap: var(--spacing-md);
 }
 
-.head-text {
+.panel-hint {
   flex: 1;
   min-width: 0;
-}
-
-.panel-title {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-
-.panel-hint {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-.head-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  flex-shrink: 0;
 }
 
 .panel-error {

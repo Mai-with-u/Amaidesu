@@ -1,26 +1,17 @@
 <template>
   <section class="panel candidate-panel" aria-label="观众候选">
     <header class="panel-head">
-      <div class="head-text">
-        <div class="panel-title">
-          观众候选
-          <el-tag v-if="pendingCount > 0" size="small" type="warning"
-            >{{ pendingCount }} 条待审</el-tag
-          >
-        </div>
-        <p class="panel-hint">
-          观众定下、她当场接受了却没自己复述的事，老观众主动说起的持续近况与喜好，以及她说“欠着”、账上却找不到的事。
-          批准前她完全看不到；标题可以先改再批，老观众近况批准后只进该老观众的场内线索。待审的列出后
-          14 天没人审会自动删掉。
-        </p>
-      </div>
+      <p class="panel-hint">
+        观众定下、她当场接受了却没自己复述的事，老观众主动说起的持续近况与喜好，以及她说“欠着”、账上却找不到的事。
+        批准前她完全看不到；标题可以先改再批，老观众近况批准后只进该老观众的场内线索。待审的列出后
+        14 天没人审会自动删掉。
+      </p>
       <div class="head-actions">
         <el-radio-group v-model="status" size="small" @change="reload">
           <el-radio-button value="pending">待审</el-radio-button>
           <el-radio-button value="approved">已批</el-radio-button>
           <el-radio-button value="rejected">已驳回</el-radio-button>
         </el-radio-group>
-        <el-button size="small" :loading="loading" @click="reload">刷新</el-button>
       </div>
     </header>
 
@@ -270,22 +261,10 @@ defineExpose({ reload });
   gap: var(--spacing-md);
 }
 
-.head-text {
+.panel-hint {
   flex: 1;
   min-width: 0;
-}
-
-.panel-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-
-.panel-hint {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
 }
