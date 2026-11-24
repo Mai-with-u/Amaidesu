@@ -10,14 +10,10 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn, formatTimeHM } from '@/utils/format';
-import {
-  clampMs,
-  formatLocalDateTime,
-  formatRelClock,
-  parseLocalDateTime,
-  parseRelClock,
-} from '@/utils/clipsTime';
+import { formatLocalDateTime, formatRelClock, parseLocalDateTime } from '@/utils/clipsTime';
 import { useClips } from '@/composables/useClips';
+import { useClipReview } from '@/composables/useClipReview';
+import ClipPreviewPlayer from '@/components/clips/ClipPreviewPlayer.vue';
 import SegmentTimeline from '@/components/clips/SegmentTimeline.vue';
 import type {
   ClipConfig,
@@ -64,7 +60,6 @@ const {
 } = useClips();
 
 const selectedSessionId = ref<number | null>(null);
-const selectedSegmentId = ref<number | null>(null);
 
 // ---- 页内配置卡：草稿独立于读面，保存后端免重启生效 ----
 const settingsVisible = ref(false);
@@ -124,6 +119,48 @@ const sessionEndMs = computed(() => {
   return selectedSession.value.ended_at_ms ?? Date.now();
 });
 
+// ---- 核对工作流（选中/草稿/单行替换/自动前进）收拢在 useClipReview ----
+const {
+  selectedSegmentId,
+  draftOf,
+  isDirty,
+  saveRow,
+  onResize,
+  onCreate,
+  onConfirmSegment,
+  onDismissSegment,
+  onDeleteSegment,
+  resetForSession,
+} = useClipReview({
+  segments,
+  session: computed(() => selectedSession.value),
+  sessionEndMs,
+  createSegment,
+  updateSegment,
+  deleteSegment,
+  previewSegment: segment => onPreviewSegment(segment),
+});
+
+// ---- 预览播放器：视频交互收拢在 ClipPreviewPlayer，页面只接播放头与就绪 ----
+const playerRef = ref<InstanceType<typeof ClipPreviewPlayer> | null>(null);
+/** 播放头位置（墙钟毫秒）；整场文件预览才有意义，段级现转/产物预览不显示 */
+const playheadMs = ref<number | null>(null);
+/** 预览源文件的起始墙钟毫秒（播放头映射依据；找不到文件时为 null） */
+const previewSourceStartMs = computed(() => {
+  const current = preview.value;
+  if (!current) return null;
+  return recordings.value.find(f => f.path === current.sourcePath)?.started_at_ms ?? null;
+});
+
+function onPlayhead(wallMs: number | null): void {
+  playheadMs.value = wallMs;
+}
+
+/** 元数据可读 = 片段/整场已可播（段级现转在此收尾） */
+function onPreviewReady(): void {
+  previewConverting.value = false;
+}
+
 const STATUS_LABELS: Record<ClipSegmentStatus, string> = {
   suggested: 'AI 建议',
   confirmed: '待切',
@@ -159,131 +196,16 @@ const readyCount = computed(
   () => recordings.value.filter(f => previewReadiness.value[f.path]).length,
 );
 
-// ---- 行内编辑草稿：segmentId → { title, startText, endText } ----
-// 草稿统一在 segments 变化时构建（渲染期不写状态）：已有的草稿保留（编辑中
-// 不被回读冲掉），新段按当前段值生成，消失的段连草稿一起清掉
-interface RowDraft {
-  title: string;
-  startText: string;
-  endText: string;
-}
-
-const drafts = ref<Record<number, RowDraft>>({});
-
-function makeDraft(segment: ClipSegment): RowDraft {
-  const start = selectedSession.value?.started_at_ms ?? 0;
-  return {
-    title: segment.title,
-    startText: formatRelClock(segment.start_ms - start),
-    endText: formatRelClock(segment.end_ms - start),
-  };
-}
-
-watch(segments, list => {
-  const next: Record<number, RowDraft> = {};
-  for (const segment of list) {
-    next[segment.id] = drafts.value[segment.id] ?? makeDraft(segment);
-  }
-  drafts.value = next;
-});
-
-function draftOf(segment: ClipSegment): RowDraft {
-  return drafts.value[segment.id] ?? makeDraft(segment);
-}
-
-function isDirty(segment: ClipSegment): boolean {
-  const draft = drafts.value[segment.id];
-  if (!draft) return false;
-  return (
-    draft.title !== segment.title ||
-    draft.startText !==
-      formatRelClock(segment.start_ms - (selectedSession.value?.started_at_ms ?? 0)) ||
-    draft.endText !== formatRelClock(segment.end_ms - (selectedSession.value?.started_at_ms ?? 0))
-  );
-}
-
-// ---- 段的乐观更新：写操作只替换单行，不整表回读 ----
-// 整表回读会清掉其他行未保存的编辑草稿，也让连续微调每段都付一次全量刷新；
-// 单行替换以服务端回传的段为准，权威状态仍由任务终态回读与手动刷新兜底。
-function replaceSegmentLocal(updated: ClipSegment): void {
-  const index = segments.value.findIndex(s => s.id === updated.id);
-  if (index !== -1) segments.value.splice(index, 1, updated);
-  delete drafts.value[updated.id]; // 该行草稿作废，显示回服务端值
-}
-
-/** 按起点排序插到列表里（与后端列表排序一致），保持显示有序 */
-function insertSegmentLocal(created: ClipSegment): void {
-  const index = segments.value.findIndex(s => s.start_ms > created.start_ms);
-  if (index === -1) segments.value.push(created);
-  else segments.value.splice(index, 0, created);
-}
-
-function removeSegmentLocal(segmentId: number): void {
-  const index = segments.value.findIndex(s => s.id === segmentId);
-  if (index !== -1) segments.value.splice(index, 1);
-  delete drafts.value[segmentId];
-}
-
-/** 保存行内编辑：相对时刻解析失败/终点不大于起点都拦下并提示 */
-async function saveRow(segment: ClipSegment): Promise<void> {
-  const draft = drafts.value[segment.id];
-  if (!draft || !selectedSession.value) return;
-  const startRel = parseRelClock(draft.startText);
-  const endRel = parseRelClock(draft.endText);
-  if (startRel === null || endRel === null) {
-    ElMessage.warning('时间格式不认识；用 m:ss 或 h:mm:ss，或裸秒数');
-    return;
-  }
-  if (endRel <= startRel) {
-    ElMessage.warning('终点要晚于起点');
-    return;
-  }
-  const updated = await updateSegment(segment.id, {
-    title: draft.title.trim(),
-    start_ms: selectedSession.value.started_at_ms + startRel,
-    end_ms: selectedSession.value.started_at_ms + endRel,
-  });
-  if (updated) replaceSegmentLocal(updated);
-}
-
-/** 拖动时间轴边界提交 */
-async function onResize(segmentId: number, startMs: number, endMs: number): Promise<void> {
-  if (!selectedSession.value) return;
-  const clampedStart = clampMs(startMs, selectedSession.value.started_at_ms, sessionEndMs.value);
-  const clampedEnd = clampMs(endMs, selectedSession.value.started_at_ms, sessionEndMs.value);
-  if (clampedEnd - clampedStart < 5000) {
-    ElMessage.warning('段太短了（至少 5 秒）');
-    return;
-  }
-  const updated = await updateSegment(segmentId, { start_ms: clampedStart, end_ms: clampedEnd });
-  if (updated) replaceSegmentLocal(updated);
-}
-
-/** 双击时间轴空白新建段 */
-async function onCreate(startMs: number, endMs: number): Promise<void> {
-  if (!selectedSession.value) return;
-  const created = await createSegment(selectedSession.value.live_session_id, {
-    start_ms: clampMs(startMs, selectedSession.value.started_at_ms, sessionEndMs.value),
-    end_ms: clampMs(endMs, selectedSession.value.started_at_ms, sessionEndMs.value),
-    title: '',
-  });
-  if (created) {
-    insertSegmentLocal(created);
-    selectedSegmentId.value = created.id;
-  }
-}
-
 async function openSessionSegments(): Promise<void> {
   if (selectedSessionId.value !== null) {
-    drafts.value = {};
+    resetForSession();
     await openSession(selectedSessionId.value);
   }
 }
 
 async function onSelectSession(sessionId: number): Promise<void> {
   selectedSessionId.value = sessionId;
-  selectedSegmentId.value = null;
-  drafts.value = {};
+  resetForSession();
   await openSession(sessionId);
 }
 
@@ -320,49 +242,6 @@ async function onCutOne(segment: ClipSegment): Promise<void> {
   await onCut([segment.id]);
 }
 
-async function onConfirmSegment(segment: ClipSegment): Promise<void> {
-  const updated = await updateSegment(segment.id, { status: 'confirmed' });
-  if (updated) {
-    replaceSegmentLocal(updated);
-    advanceToNextReviewable(segment.id);
-  }
-}
-
-async function onDismissSegment(segment: ClipSegment): Promise<void> {
-  const updated = await updateSegment(segment.id, { status: 'dismissed' });
-  if (updated) {
-    replaceSegmentLocal(updated);
-    advanceToNextReviewable(segment.id);
-  }
-}
-
-/** 核对自动前进：当前段处理完后跳到列表中下一个待核对的段并自动预览 */
-function advanceToNextReviewable(currentId: number): void {
-  const index = segments.value.findIndex(s => s.id === currentId);
-  const next = segments.value.slice(index + 1).find(s => isReviewable(s));
-  if (!next) {
-    ElMessage.info('待核对的段都过完了');
-    return;
-  }
-  selectedSegmentId.value = next.id;
-  onPreviewSegment(next);
-}
-
-/** 待核对 = AI 建议或已确认还没切的段（与"待切"口径一致） */
-function isReviewable(segment: ClipSegment): boolean {
-  return segment.status === 'suggested' || segment.status === 'confirmed';
-}
-
-async function onDeleteSegment(segment: ClipSegment): Promise<void> {
-  const confirmed = await confirmAction(`删除切片段「${segment.title || '未命名'}」？`, '删除');
-  if (!confirmed) return;
-  const ok = await deleteSegment(segment.id);
-  if (ok) {
-    if (selectedSegmentId.value === segment.id) selectedSegmentId.value = null;
-    removeSegmentLocal(segment.id);
-  }
-}
-
 /** 段卡片"更多"菜单：看产物 / 删除（删除走 confirmAction 二次确认） */
 function onSegmentMoreCommand(segment: ClipSegment, command: string): void {
   if (command === 'output') onPreviewOutput(segment);
@@ -397,44 +276,7 @@ function outputsOf(segment: ClipSegment): string[] {
   return segment.output_path ? segment.output_path.split('\n').filter(Boolean) : [];
 }
 
-// ---- 视频预览：源段（seek 到段起点、到段尾停）与已出片产物 ----
-const videoEl = ref<HTMLVideoElement | null>(null);
-/** 播放头位置（墙钟毫秒）；整场文件预览才有意义，段级现转/产物预览不显示 */
-const playheadMs = ref<number | null>(null);
-// 播放器重建序号：换源才换 key 重建 <video>；同源（同整场文件）保持复用，
-// 播放位置由下方 watch 直接改 currentTime——同源时 loadedmetadata 不会再触发，
-// 重建反而让画面闪一下且重新拉流
-const previewSeq = ref(0);
-watch(preview, (p, old) => {
-  if (!p) {
-    playheadMs.value = null;
-    return;
-  }
-  if (old && p.src === old.src) {
-    const player = videoEl.value;
-    if (player && player.readyState >= 1) {
-      player.currentTime = p.baseS;
-      void player.play().catch(() => undefined); // 自动播放可能被浏览器策略拦下，交给用户点播放
-    }
-  } else {
-    previewSeq.value += 1;
-  }
-});
-
-/** 把当前播放位置映射到场次时间轴（段级现转的视频起点不对应场次时刻，映射不了） */
-function updatePlayhead(): void {
-  const player = videoEl.value;
-  const current = preview.value;
-  const file =
-    current && !current.range
-      ? recordings.value.find(f => f.path === current.sourcePath)
-      : undefined;
-  if (!player || !file) {
-    playheadMs.value = null;
-    return;
-  }
-  playheadMs.value = file.started_at_ms + player.currentTime * 1000;
-}
+// ---- 视频预览入口与联动（视频交互本体在 ClipPreviewPlayer）----
 
 /** 打开一场后：预热整场预览缓存 + 刷新各文件的就绪态 */
 watch(recordings, list => {
@@ -480,25 +322,6 @@ function onPreviewOutput(segment: ClipSegment): void {
   );
 }
 
-function onPreviewMeta(): void {
-  const player = videoEl.value;
-  if (!player || !preview.value) return;
-  previewConverting.value = false; // 元数据可读 = 片段/整场已可播（段级现转在此收尾）
-  if (preview.value.baseS > 0) player.currentTime = preview.value.baseS;
-  void player.play().catch(() => undefined); // 自动播放可能被浏览器策略拦下，交给用户点播放
-  updatePlayhead();
-}
-
-function onPreviewTime(): void {
-  const player = videoEl.value;
-  const current = preview.value;
-  if (!player || !current) return;
-  if (current.durationS !== null && player.currentTime > current.baseS + current.durationS) {
-    player.pause();
-  }
-  updatePlayhead();
-}
-
 /** 时间轴跳转：同整场文件的预览直接改播放位置，否则打开整段素材预览并定位 */
 function seekPreviewTo(ms: number): void {
   const file = recordings.value[0]; // 常规单文件场；多文件场与段预览同一取法（见 onPreviewSegment）
@@ -507,7 +330,7 @@ function seekPreviewTo(ms: number): void {
     return;
   }
   const offsetS = Math.max(0, (ms - file.started_at_ms) / 1000);
-  const player = videoEl.value;
+  const player = playerRef.value?.videoEl ?? null;
   const current = preview.value;
   if (
     current &&
@@ -522,7 +345,6 @@ function seekPreviewTo(ms: number): void {
     current.title = `整段素材：${file.file_name}`;
     player.currentTime = offsetS;
     void player.play().catch(() => undefined);
-    updatePlayhead();
     return;
   }
   void openPreview(file.path, `整段素材：${file.file_name}`, offsetS, null);
@@ -808,49 +630,36 @@ onMounted(async () => {
         <template v-if="selectedSession && configState?.assembled">
           <div class="clip-workspace">
             <section class="clip-card clip-player-col">
-              <div class="clip-player-head">
-                <span class="clip-player-title">
-                  {{ previewConverting ? '预览准备中，就绪自动开播…' : preview?.title || '预览' }}
-                </span>
-                <el-button
-                  v-if="preview || previewConverting"
-                  size="small"
-                  text
-                  @click="closePreview"
-                  >关闭</el-button
-                >
-              </div>
-              <video
-                v-if="preview"
-                ref="videoEl"
-                :key="previewSeq"
-                class="clip-player"
-                :src="preview.src"
-                controls
-                preload="metadata"
-                @loadedmetadata="onPreviewMeta"
-                @timeupdate="onPreviewTime"
-              />
-              <div v-else class="clip-player-empty">
-                <template v-if="segments.length > 0">
-                  <p class="clip-player-empty-stat">
-                    本场 {{ formatRelClock(sessionEndMs - selectedSession.started_at_ms) }} · 待切
-                    {{ cuttableSegments.length }} · 已出 {{ doneCount
-                    }}<template v-if="failedCount"> · 失败 {{ failedCount }}</template>
+              <ClipPreviewPlayer
+                ref="playerRef"
+                :preview="preview"
+                :preview-converting="previewConverting"
+                :source-start-ms="previewSourceStartMs"
+                @playhead="onPlayhead"
+                @ready="onPreviewReady"
+                @close="closePreview"
+              >
+                <template #empty>
+                  <template v-if="segments.length > 0">
+                    <p class="clip-player-empty-stat">
+                      本场 {{ formatRelClock(sessionEndMs - selectedSession.started_at_ms) }} · 待切
+                      {{ cuttableSegments.length }} · 已出 {{ doneCount
+                      }}<template v-if="failedCount"> · 失败 {{ failedCount }}</template>
+                    </p>
+                    <el-button
+                      type="primary"
+                      plain
+                      size="small"
+                      @click="onPreviewSegment(segments[0])"
+                      >预览第一段</el-button
+                    >
+                  </template>
+                  <p v-else class="clip-player-empty-stat">
+                    还没有切片段，先点「AI 选段」或拖时间轴建段
                   </p>
-                  <el-button
-                    type="primary"
-                    plain
-                    size="small"
-                    @click="onPreviewSegment(segments[0])"
-                    >预览第一段</el-button
-                  >
+                  <p class="clip-player-empty-hint">播放器固定在这里，调段不用来回滚</p>
                 </template>
-                <p v-else class="clip-player-empty-stat">
-                  还没有切片段，先点「AI 选段」或拖时间轴建段
-                </p>
-                <p class="clip-player-empty-hint">播放器固定在这里，调段不用来回滚</p>
-              </div>
+              </ClipPreviewPlayer>
             </section>
 
             <section class="clip-card clip-segments-col">
@@ -1154,30 +963,7 @@ onMounted(async () => {
   min-height: 0;
 }
 
-.clip-player-col .clip-player {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  object-fit: contain;
-}
-
-.clip-player-empty {
-  flex: 1;
-  min-height: 220px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 16px 32px;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1.8;
-  color: var(--el-text-color-secondary);
-  background: #000;
-  border-radius: 4px;
-}
-
+/* 空态文案是父组件插槽内容，样式留在父作用域；容器与视频样式在 ClipPreviewPlayer */
 .clip-player-empty-stat {
   margin: 0;
   color: #e5eaf3;
@@ -1315,33 +1101,6 @@ onMounted(async () => {
   border: 1px solid var(--border-color-light);
   border-radius: var(--radius-lg, 8px);
   padding: 14px 18px;
-}
-
-.clip-player-card {
-  background: #000;
-  padding: 10px 12px;
-}
-
-.clip-player-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.clip-player-head .el-button {
-  color: #e5eaf3;
-}
-
-.clip-player-title {
-  font-size: 13px;
-  color: #e5eaf3;
-}
-
-.clip-player {
-  width: 100%;
-  border-radius: 4px;
-  background: #000;
 }
 
 .clip-file-list {

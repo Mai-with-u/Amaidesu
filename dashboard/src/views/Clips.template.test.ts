@@ -49,43 +49,28 @@ describe('段卡片操作排布', () => {
   });
 });
 
-describe('核对自动前进', () => {
-  it('确认与弃用保存成功后都单行替换并调用前进逻辑', () => {
-    const confirmFn = sfcSource.slice(
-      sfcSource.indexOf('async function onConfirmSegment'),
-      sfcSource.indexOf('async function onDeleteSegment'),
-    );
-    const dismissFn = sfcSource.slice(
-      sfcSource.indexOf('async function onDismissSegment'),
-      sfcSource.indexOf('async function onDeleteSegment'),
-    );
-    expect(confirmFn).toContain('replaceSegmentLocal(updated)');
-    expect(confirmFn).toContain('advanceToNextReviewable(segment.id)');
-    expect(dismissFn).toContain('replaceSegmentLocal(updated)');
-    expect(dismissFn).toContain('advanceToNextReviewable(segment.id)');
+describe('核对工作流与播放器接线', () => {
+  it('核对逻辑收拢在 useClipReview，预览联动接到页面播放器入口', () => {
+    expect(sfcSource).toContain('useClipReview({');
+    expect(sfcSource).toContain('previewSegment: segment => onPreviewSegment(segment)');
+    // 页面不再内联核对逻辑（草稿/前进已搬走，行为由 useClipReview.test.ts 锁定）
+    expect(sfcSource).not.toContain('function advanceToNextReviewable');
+    expect(sfcSource).not.toContain('interface RowDraft');
   });
 
-  it('段编辑走单行乐观替换，不整表回读（整表回读会冲掉其他行未保存草稿）', () => {
-    for (const name of ['async function saveRow', 'async function onResize']) {
-      const fn = sfcSource.slice(
-        sfcSource.indexOf(name),
-        sfcSource.indexOf(name) + 900,
-      );
-      expect(fn).toContain('replaceSegmentLocal');
-      expect(fn).not.toContain('openSessionSegments');
-    }
+  it('播放器交互收拢在 ClipPreviewPlayer，页面只接播放头/就绪/关闭', () => {
+    expect(sfcSource).toContain('<ClipPreviewPlayer');
+    expect(sfcSource).toContain('@playhead="onPlayhead"');
+    expect(sfcSource).toContain('@ready="onPreviewReady"');
+    expect(sfcSource).toContain('@close="closePreview"');
+    // <video> 本体已不在页面（事件绑定随之消失）
+    expect(sfcSource).not.toContain('onloadedmetadata');
   });
 
-  it('前进目标是当前段之后第一个 suggested/confirmed 段，找不到给轻提示', () => {
-    expect(sfcSource).toMatch(
-      /function advanceToNextReviewable[\s\S]*?slice\(index \+ 1\)[\s\S]*?status === 'suggested' \|\| [\s\S]*?status === 'confirmed'/,
-    );
-    expect(sfcSource).toMatch(
-      /advanceToNextReviewable[\s\S]*?ElMessage\.info\('待核对的段都过完了'\)/,
-    );
-    expect(sfcSource).toMatch(
-      /advanceToNextReviewable[\s\S]*?selectedSegmentId\.value = next\.id;[\s\S]*?onPreviewSegment\(next\)/,
-    );
+  it('时间轴的调界/建段事件接到 useClipReview 的同名处理函数', () => {
+    expect(sfcSource).toContain('@resize="onResize"');
+    expect(sfcSource).toContain('@create="onCreate"');
+    expect(sfcSource).toContain('@seek="seekPreviewTo"');
   });
 });
 
