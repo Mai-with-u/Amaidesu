@@ -12,6 +12,7 @@ from src.agents.streamer.memory.render import (
     BriefZoneSpec,
     MAX_BRIEF_ARCHIVE_LINES,
     MAX_BRIEF_COMMITMENTS,
+    MAX_KNOWN_PLAYERS_IN_BRIEF,
     MAX_PRESENCE_VIEWERS,
     PRESENCE_RECENT_MS,
     brief_archive_ids,
@@ -29,6 +30,7 @@ from src.agents.streamer.memory.render import (
     render_familiar_viewer_card,
     render_forget_notice,
     render_game_card,
+    render_known_players_block,
     render_player_card,
     render_presence_line,
     render_retract_notice,
@@ -884,3 +886,75 @@ def test_render_player_card_attaches_in_session_commitment_progress() -> None:
         commitment_progress={43: "已还 2 颗，还欠 1 颗"},
     )
     assert "你答应过他：补还 3 颗钻石（约#43）（本场进展：已还 2 颗，还欠 1 颗）。" in card
+
+
+def test_known_players_block_includes_unaliased_players_ordered_by_recent_activity() -> None:
+    """【游戏里的熟人】短表完整纳入无别名常驻玩家，按最近活跃优先并受上限约束，过滤已申请遗忘与空名。"""
+    players = [
+        GamePlayer(
+            id=1,
+            game="minecraft",
+            uuid="u-1",
+            name="AliasedOld",
+            names=["AliasedOld"],
+            aliases=["小阿"],
+            first_seen_ms=10,
+            last_seen_ms=1_000,
+        ),
+        GamePlayer(
+            id=2,
+            game="minecraft",
+            uuid="u-2",
+            name="PlainRecent",
+            names=["PlainRecent"],
+            aliases=[],
+            first_seen_ms=20,
+            last_seen_ms=5_000,
+        ),
+        GamePlayer(
+            id=3,
+            game="minecraft",
+            uuid="u-3",
+            name="ForgottenOne",
+            names=["ForgottenOne"],
+            aliases=["小忘"],
+            first_seen_ms=30,
+            last_seen_ms=9_000,
+            forget_requested_at_ms=9_500,
+        ),
+        GamePlayer(
+            id=4,
+            game="minecraft",
+            uuid="u-4",
+            name="   ",
+            names=[],
+            aliases=[],
+            first_seen_ms=40,
+            last_seen_ms=9_900,
+        ),
+    ]
+    block = render_known_players_block(players)
+    assert block[0].startswith("【游戏里的熟人】")
+    assert block[1:] == [
+        "- PlainRecent（直接叫账号名，无其他昵称）",
+        "- AliasedOld（常叫：小阿）",
+    ]
+
+    # 超过上限时按最近活跃时间截断，仅保留最新活跃的前 MAX_KNOWN_PLAYERS_IN_BRIEF 位
+    many = [
+        GamePlayer(
+            id=idx,
+            game="minecraft",
+            uuid=f"u-many-{idx}",
+            name=f"Resident{idx}",
+            names=[f"Resident{idx}"],
+            aliases=[],
+            first_seen_ms=idx,
+            last_seen_ms=idx * 100,
+        )
+        for idx in range(1, MAX_KNOWN_PLAYERS_IN_BRIEF + 5)
+    ]
+    capped = render_known_players_block(many)
+    assert len(capped) == 1 + MAX_KNOWN_PLAYERS_IN_BRIEF
+    assert capped[1] == f"- Resident{MAX_KNOWN_PLAYERS_IN_BRIEF + 4}（直接叫账号名，无其他昵称）"
+    assert not any("Resident1（" in line for line in capped)

@@ -415,10 +415,10 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
                     _call(
                         "framework_commentary",
                         {
-                            "summary": "同伴 ChangingSelf 刚把整箱铁锭搬回营地门口还摆好了熔炉",
+                            "summary": "同伴 PartnerA 刚把整箱铁锭搬回营地门口还摆好了熔炉",
                             "mood": "happy",
                             "urgency": "normal",
-                            "about_player": "ChangingSelf",
+                            "about_player": "PartnerA",
                         },
                         "c_comm_1",
                     )
@@ -427,8 +427,8 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
         return _resp("收到，继续推进手头进度")
 
     # 真实 Replyer 调用链：
-    # 第 1 次（解说首稿）返回 100+ 字多句长文（含 ChangingSelf），第 2 次（重说步）模拟失败触发 fit_to_budget + 外层 guard(70)；
-    # 第 3 次（观众弹幕回复）返回一句简短口播，验证 MinecraftAgent 空闲态收到 spoken echo 严格零唤醒
+    # 第 1 次（解说首稿）返回触发极端长文熔断的多句长文（含 PartnerA），确定性截断至 70 字内、零二次 LLM 呼叫；
+    # 第 2 次（观众弹幕回复）返回一句简短口播，验证 MinecraftAgent 空闲态收到 spoken echo 严格零唤醒
     replyer_turn = [0]
 
     def _replyer_handler(_messages: List[Dict[str, Any]], _system: str) -> Response:
@@ -437,15 +437,13 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
             return Response(
                 success=True,
                 content=(
-                    "哇 ChangingSelf 居然帮咱们把整箱铁锭都搬回营地门口啦！"
+                    "哇 PartnerA 居然帮咱们把整箱铁锭都搬回营地门口啦！"
                     "他还顺手把熔炉和工作台摆得整整齐齐超贴心！"
-                    "等会儿咱们去河边抓几只羊带回营地旁边一起搭个大牧场养着玩呀！"
-                    "晚上再去北边山坡插满火把防刷怪！"
+                    "等会儿咱们去河边抓几只羊带回营地旁边一起搭个大牧场养着玩呀，顺便把仓库里的储物箱、漏斗和传送带全整理一遍！"
+                    "晚上再去北边山坡插满火把防刷怪，顺便看看周围还有没有新的矿脉可以顺手采集带回来扩建工坊！"
                 ),
                 request_id="rep_long_1",
             )
-        if replyer_turn[0] == 2:
-            return Response(success=False, error="mock_shorten_fallback")
         return Response(success=True, content="谢谢观众提醒，晚点顺路去看看！", request_id="rep_viewer_1")
 
     planner_replied = [False]
@@ -494,7 +492,7 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
         assert len(rig.streamer_llm.planner_calls) == 0
         assert len(rig.speech_events) == 1
         commentary_text = rig.speech_events[0].text
-        assert "ChangingSelf" in commentary_text
+        assert "PartnerA" in commentary_text
         assert 30 < len(commentary_text) <= 70
         assert "北边山坡插满火把" not in commentary_text
 
@@ -530,8 +528,8 @@ async def test_e2e_commentary_budget_speech_and_zero_wakeup_spoken_echo(prompts:
             GameChatPayload(
                 game="minecraft",
                 kind="player",
-                sender="ChangingSelf",
-                sender_id="uuid-cs",
+                sender="PartnerA",
+                sender_id="uuid-pa",
                 sender_online=True,
                 sender_distance=6.0,
                 content="箱子已经整理好啦",

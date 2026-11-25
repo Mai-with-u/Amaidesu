@@ -408,6 +408,17 @@ async def test_player_aliases_anchor_card_and_brief_known_players_table(store: S
     with store.manager.transaction() as conn:
         conn.execute("UPDATE game_players SET forget_requested_at_ms=? WHERE id=?", (_NOW, gamma.id))
 
+    # 无别名的同存档最近活跃常驻玩家：必须一并进入【游戏里的熟人】短表，并显式标注直接叫账号名
+    await repo.meet_player(
+        game="minecraft",
+        uuid="uuid-delta",
+        name="DeltaPlayer",
+        live_session_id=before,
+        save_id="w1",
+        save_name="测试一档",
+        at_ms=_NOW - 80_000_000,
+    )
+
     # 1. 玩家线索卡抬头与正文同源带出常用称呼
     cues = await _provider(store, current, _Clock(), before).collect(
         batch=[], game_players=[("minecraft", "uuid-alpha")]
@@ -416,7 +427,7 @@ async def test_player_aliases_anchor_card_and_brief_known_players_table(store: S
     assert "[玩家·AlphaPlayer（常叫：小阿尔、阿法）]" in cues.text
     assert "AlphaPlayer（常叫：小阿尔、阿法；以前叫 OldAlpha） 在游戏里找你了。" in cues.text
 
-    # 2. 记忆摘要【游戏里的熟人】短表：只列当前存档且未申请遗忘的带别名玩家，纯杂谈无存档时省略
+    # 2. 记忆摘要【游戏里的熟人】短表：完整纳入当前存档活跃常驻玩家（含无别名者，按最近活跃优先），遵守存档与隐私隔离
     privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
     await privacy.initialize()
     try:
@@ -428,7 +439,9 @@ async def test_player_aliases_anchor_card_and_brief_known_players_table(store: S
             privacy_service=privacy,
         )
         assert "【游戏里的熟人】" in brief.text
+        assert "- DeltaPlayer（直接叫账号名，无其他昵称）" in brief.text
         assert "- AlphaPlayer（常叫：小阿尔、阿法）" in brief.text
+        assert brief.text.index("DeltaPlayer") < brief.text.index("AlphaPlayer"), "最近活跃玩家优先排在前列"
         assert "BetaPlayer" not in brief.text, "别的存档的熟人不串入当前存档短表"
         assert "GammaPlayer" not in brief.text, "已申请遗忘的玩家立即隔离"
 

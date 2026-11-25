@@ -60,8 +60,10 @@ from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+from src.modules.storage.models.game_players import GamePlayer
 from src.modules.storage.models.rundown import GAME_OPENING_TALK_RUNDOWN, Rundown, RundownSegment
 from src.modules.storage.models.social_facts import SocialFact
+from src.modules.storage.repos.viewers import ViewerPresenceStats
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
@@ -936,7 +938,7 @@ async def test_game_commentary_direct_to_replyer_debounce_speech_emit_and_spoken
         assert game.spoken_echoes[0][0] == "哎呀挖到一片亮晶晶的蓝矿石啦！"
         assert game.spoken_echoes[0][1] == "game_commentary"
 
-        # 2) 3 秒后再发普通解说（< 8s）：防抖压下，记入缓冲不调 LLM
+        # 2) 3 秒后再发普通解说（< 8s）：防抖压下，仅记游戏近况不调 LLM，也不把旧摘要堆积喂给后续回复器
         clock.advance(3_000)
         ack2 = await lead_coord.submit_commentary(
             "adventure",
@@ -945,7 +947,7 @@ async def test_game_commentary_direct_to_replyer_debounce_speech_emit_and_spoken
         assert ack2.accepted is True and ack2.spoken is False and ack2.reason == "throttled_recorded"
         assert len(llm_calls) == 1
 
-        # 3) 1 秒后发 high 紧急解说：绕过防抖立刻播出，并把刚缓冲的摘要合并进本轮 state_facts
+        # 3) 1 秒后发 high 紧急解说：绕过防抖立刻播出；送入 Replyer 的输入面已净化（不含陈旧节流堆积与过时流程单）
         clock.advance(1_000)
         ack3 = await lead_coord.submit_commentary(
             "adventure",
@@ -954,8 +956,11 @@ async def test_game_commentary_direct_to_replyer_debounce_speech_emit_and_spoken
         await bus.wait_until_drained()
         assert ack3.accepted is True and ack3.spoken is True and ack3.reason == "dispatched"
         assert len(llm_calls) == 2
-        assert "顺手又捡了两根火把" in llm_calls[1]["messages"][0]["content"]
-        assert "头顶碎石突然塌方砸下来" in llm_calls[1]["messages"][0]["content"]
+        prompt_text = llm_calls[1]["messages"][0]["content"]
+        assert "顺手又捡了两根火把" not in prompt_text
+        assert "头顶碎石突然塌方砸下来" in prompt_text
+        assert GAME_OPENING_TALK_RUNDOWN.segments[1].title not in prompt_text
+        assert "（当前无流程单）" in prompt_text
         assert len(speech_events) == 2 and speech_events[1].emotion == "scared"
         assert agent._room_state.last_speech_ms == clock()
         # 解说播出复位了冷场兜底计时器：40s 后仍不触发冷场兜底
@@ -1429,12 +1434,14 @@ async def test_game_commentary_with_about_player_enforces_target_budget_guard(pr
     manager.register(game)
     await game.start()
 
-    # 简易假 Replyer（故意不实现 budget_for 也不做内层截短）：专门检验 _handle_game_commentary 的外层 guard 兜底
+    # 简易假 Replyer（故意不实现 budget_for 也不做内层截短）：专门检验 _handle_game_commentary 的外层极端长文熔断兜底
     canned_speeches = iter(
         [
-            # 1) 约 105 字的多句超长台词：带 about_player（默认 30 + 40 = 70）应截到前两句（<= 70 且 > 30）
-            "刚才小伙伴小羊把整箱铁锭顺手搬到门口啦！他还顺便帮我们把工作台和熔炉都码得整整齐齐的！后面咱们再去河边看看有没有羊群可以顺路带回营地一起养着玩呀！最后还要去山坡上把灯插满！",
-            # 2) 55 字两句台词：带 about_player 时超过 30 但未超 70，应完整保留不误截到 30
+            # 1) 超过熔断阈值（budget=70, runaway_limit=140）的多句失控长文：应由外层熔断截到 <= 70 字（> 30）
+            "刚才小伙伴小羊把整箱铁锭顺手搬到门口啦！他还顺便帮我们把工作台和熔炉都码得整整齐齐的！"
+            "后面咱们再去河边看看有没有羊群可以顺路带回营地一起养着玩呀，顺便把牧场栅栏、水车传动轴、漏斗、传送带和仓库储物箱全部重新规划整理一遍！"
+            "晚上再去北边山坡把灯插满顺便检查一下周围有没有新矿脉可以挖，顺路再多带几组木头和圆石回来扩建工坊吧！",
+            # 2) 55 字两句台词：远低于熔断阈值且无换行，应完整保留不误截
             "刚才小伙伴小羊把铁锭搬到门口了！他还顺便帮我们把熔炉和工作台都码得整整齐齐的呢！",
         ]
     )
@@ -1738,7 +1745,8 @@ async def test_game_lead_enter_welcome_batches_unwelcomed_viewers_via_replyer_wi
         assert len(replyer_calls) == 1
         assert replyer_calls[0]["reply_to"] == ""
         assert list(replyer_calls[0]["keep_names"]) == ["小明", "小红", "小蓝"]
-        assert "小明、小红、小蓝" in replyer_calls[0]["state_facts"]
+        assert "刚进直播间待欢迎的观众：小明、小红、小蓝" in replyer_calls[0]["state_facts"]
+        assert "新观众" not in replyer_calls[0]["state_facts"]
         assert len(speech_events) == 1
         assert speech_events[0].text == "欢迎小明和小红来直播间坐坐呀！"
 
@@ -2747,16 +2755,17 @@ async def test_enter_welcome_with_real_replyer_never_renders_game_companion_and_
     manager.register(game)
     await game.start()
 
-    # 首稿超长触发缩句，缩句故意丢掉观众昵称，验证真实 Replyer 仍完整保留 ViewerA 与 ViewerB
+    # 首稿触发极端长文熔断（> max(65*2, 120) = 130）：纯确定性截断，零二次 LLM 呼叫，仍完整保留 ViewerA 与 ViewerB
     long_draft = (
         "欢迎ViewerA和ViewerB来到直播间一起玩呀！"
-        "今天咱们在工坊旁边搭水车和齿轮箱，刚刚还在研究怎么把传送带接起来，顺便把箱子里的矿石整理干净呢！"
+        "今天咱们在工坊旁边搭水车、齿轮箱和矿车轨道，刚刚还在研究怎么把传送带和漏斗全都接起来，顺便把仓库箱子里的铁矿、煤炭和红石全部分类整理干净呢！"
+        "待会儿还要去东边河岸继续探索新矿洞看看有没有新发现，晚上再去北边山坡插满火把呀！"
     )
+    assert len(long_draft) > 130
     llm_calls: List[Dict[str, Any]] = []
     responses = iter(
         [
             Response(success=True, content=long_draft, request_id="req_w_orig"),
-            Response(success=True, content="欢迎新来的朋友们进来一起看造水车呀！", request_id="req_w_short"),
         ]
     )
 
@@ -2811,14 +2820,15 @@ async def test_enter_welcome_with_real_replyer_never_renders_game_companion_and_
         await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
         await bus.wait_until_drained()
 
-        assert len(llm_calls) == 2
+        assert len(llm_calls) == 1
         initial_prompt = llm_calls[0]["messages"][0]["content"]
         assert "提及的游戏同伴" not in initial_prompt
         assert "刚在游戏里找过她" not in initial_prompt
+        assert "刚进直播间待欢迎的观众：ViewerA、ViewerB" in initial_prompt
+        assert "待欢迎的新观众" not in initial_prompt and "每一位新观众" not in initial_prompt
         assert "ViewerA" in initial_prompt and "ViewerB" in initial_prompt
-        shorten_prompt = llm_calls[1]["messages"][0]["content"]
-        assert "ViewerA" in shorten_prompt and "ViewerB" in shorten_prompt
         assert len(speech_events) == 1
+        assert speech_events[0].text == "欢迎ViewerA和ViewerB来到直播间一起玩呀！"
         assert "ViewerA" in speech_events[0].text and "ViewerB" in speech_events[0].text
     finally:
         await agent.stop()
@@ -2957,8 +2967,8 @@ async def test_framework_commentary_same_round_dedupes_without_blocking_cross_ro
         await game.stop()
 
 
-async def test_lead_switch_clears_streamer_commentary_buffer_and_debounce_anchors(prompts: Any) -> None:
-    """切入新游戏主控与收回主播主控时，主播侧同步清空解说缓冲与同轮防抖锚点，不串旧要点也不误拦同轮号。"""
+async def test_lead_switch_clears_streamer_commentary_debounce_anchors(prompts: Any) -> None:
+    """切入新游戏主控与收回主播主控时，主播侧同步清空同轮与短间隔防抖锚点，不串旧要点也不误拦同轮号。"""
     clock = _FakeClock()
     bus = EventBus()
 
@@ -3041,7 +3051,7 @@ async def test_lead_switch_clears_streamer_commentary_buffer_and_debounce_anchor
         )
         await bus.wait_until_drained()
 
-        # 1) 缓冲已清：短间隔内乙游戏发 high 解说时，state_facts 不得带出甲游戏的旧缓冲要点
+        # 1) 切入乙游戏后发 high 解说：输入面干净，只带乙号本轮摘要，不带甲号被节流旧要点与过时流程单
         clock.advance(1_000)
         ack_b_high = await lead_coord.submit_commentary(
             "builder",
@@ -3049,8 +3059,10 @@ async def test_lead_switch_clears_streamer_commentary_buffer_and_debounce_anchor
         )
         await bus.wait_until_drained()
         assert ack_b_high.spoken is True
-        assert "乙号突发高光时刻" in replyer_calls[-1]["state_facts"]
-        assert "甲号滞留缓冲旧要点" not in replyer_calls[-1]["state_facts"]
+        assert replyer_calls[-1]["plan"].topic_summary == "乙号突发高光时刻"
+        assert replyer_calls[-1]["state_facts"] == ""
+        assert replyer_calls[-1]["rundown"] is None
+        assert "甲号滞留缓冲旧要点" not in replyer_calls[-1]["plan"].topic_summary
 
         # 2) 同轮锚点已清：过最小间隔后乙游戏使用与甲游戏相同的 round_id="round_1" 不被误拦
         clock.advance(9_000)
@@ -3078,7 +3090,7 @@ async def test_lead_switch_clears_streamer_commentary_buffer_and_debounce_anchor
         assert ack_a_after_switch.spoken is False
         assert ack_a_after_switch.reason == "throttled_recorded"
 
-        # 4) 收回主播主控（payload.previous_lead != self.name）：清空缓冲与全部防抖锚点
+        # 4) 收回主播主控（payload.previous_lead != self.name）：清空全部防抖锚点
         clock.advance(9_000)
         ack_before_reclaim = await lead_coord.submit_commentary(
             "adventure",
@@ -3092,13 +3104,12 @@ async def test_lead_switch_clears_streamer_commentary_buffer_and_debounce_anchor
         clock.advance(2_000)
         ack_buffered_before_reclaim = await lead_coord.submit_commentary(
             "adventure",
-            CommentaryRequest(game="adventure", summary="收权前滞留缓冲要点", urgency="normal", round_id="round_buf"),
+            CommentaryRequest(game="adventure", summary="收权前滞留要点", urgency="normal", round_id="round_buf"),
         )
         assert ack_buffered_before_reclaim.reason == "throttled_recorded"
 
         await lead_coord.reclaim_streamer_lead(reason="rundown_changed")
         await bus.wait_until_drained()
-        assert list(agent._commentary_buffer) == []
         assert agent._last_commentary_round_id == ""
         assert agent._last_commentary_summary == ""
         assert agent._last_commentary_spoken_ms is None
@@ -3638,3 +3649,206 @@ async def test_rundown_change_to_play_segment_wakes_streamer_when_streamer_owns_
         await agent.stop()
         if game is not None:
             await game.stop()
+
+
+async def test_enter_welcome_stays_neutral_for_unknown_and_annotates_verified_viewer_and_player_facts(
+    prompts: Any,
+) -> None:
+    """轻量进房欢迎移除硬编码「新观众」假前提：未知观众保持中性，仅查到真实到访记录或玩家别名时才附注真实身份。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_emitted = asyncio.Event()
+
+    async def _on_speech(_name: str, _payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_emitted.set()
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _on_speech, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    replyer_calls: List[Dict[str, Any]] = []
+
+    class _RecordingReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode
+            return 70 if has_target else 30
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            replyer_calls.append(dict(kwargs))
+            names = "、".join(kwargs.get("keep_names") or ())
+            return {"speech": f"欢迎{names}来直播间坐坐呀！", "llm_request_id": f"req_ev_{len(replyer_calls)}"}
+
+    class _FakeViewerRepo:
+        def __init__(self, stats_by_id: Dict[str, ViewerPresenceStats]) -> None:
+            self._stats = stats_by_id
+
+        async def resolve_presence_stats(
+            self, *, external_id: str = "", user_name: str = "", current_session_id: Optional[int] = None
+        ) -> Optional[ViewerPresenceStats]:
+            del user_name, current_session_id
+            return self._stats.get(external_id)
+
+    class _FakePlayerRepo:
+        def __init__(self, players: List[GamePlayer]) -> None:
+            self._players = players
+
+        async def list_players(self, *, limit: int = 200) -> List[GamePlayer]:
+            return self._players[:limit]
+
+    class _FakePrivacyService:
+        def __init__(self, forgotten_external_ids: set[str]) -> None:
+            self._forgotten_external_ids = forgotten_external_ids
+
+        async def is_player_forgotten(self, *, game: str, uuid: str) -> bool:
+            del game, uuid
+            return False
+
+        async def is_external_id_forgotten(self, *, id_kind: str, external_id: str) -> bool:
+            del id_kind
+            return external_id in self._forgotten_external_ids
+
+    viewer_repo = _FakeViewerRepo(
+        {
+            "u_old": ViewerPresenceStats(
+                primary_viewer_id=10,
+                cluster_viewer_ids=(10,),
+                user_name="老友甲",
+                earlier_sessions=4,
+                prev_seen_ms=clock() - 86_400_000,
+                forget_requested_at_ms=None,
+                replied_count=2,
+            ),
+            "u_forget": ViewerPresenceStats(
+                primary_viewer_id=11,
+                cluster_viewer_ids=(11,),
+                user_name="已忘乙",
+                earlier_sessions=8,
+                prev_seen_ms=clock() - 86_400_000,
+                forget_requested_at_ms=clock() - 10_000,
+                replied_count=6,
+            ),
+            # 申请遗忘的观众昵称与活跃游戏玩家同名：必须阻断跨表穿透，绝不附注游戏熟人身份
+            "u_forget_same_name": ViewerPresenceStats(
+                primary_viewer_id=12,
+                cluster_viewer_ids=(12,),
+                user_name="PlayerAlpha",
+                earlier_sessions=5,
+                prev_seen_ms=clock() - 86_400_000,
+                forget_requested_at_ms=clock() - 20_000,
+                replied_count=3,
+            ),
+        }
+    )
+    player_repo = _FakePlayerRepo(
+        [
+            GamePlayer(
+                id=1,
+                game="adventure",
+                uuid="uuid-p1",
+                name="PlayerAlpha",
+                names=["PlayerAlpha"],
+                aliases=["阿法"],
+                first_seen_ms=100,
+                last_seen_ms=200,
+            ),
+            GamePlayer(
+                id=2,
+                game="adventure",
+                uuid="uuid-p2",
+                name="ForgottenPlayer",
+                names=["ForgottenPlayer"],
+                aliases=["小忘"],
+                first_seen_ms=100,
+                last_seen_ms=300,
+                forget_requested_at_ms=clock() - 5_000,
+            ),
+        ]
+    )
+    privacy_service = _FakePrivacyService({"u_forget_list_alias"})
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "proactive": {"enabled": True}},
+        prompt=prompts,
+        replyer=_RecordingReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        viewer_repo=viewer_repo,
+        game_player_repo=player_repo,
+        privacy_service=privacy_service,
+        enter_welcome_debounce_ms=0,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=908, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 无历史记录的陌生观众 + 已申请遗忘的观众（含与游戏玩家同名与命中不记录名单者）-> 全程零身份附注、绝不跨表穿透
+        for uid, uname in (
+            ("u_unknown", "路人丙"),
+            ("u_forget", "已忘乙"),
+            ("u_forget_same_name", "PlayerAlpha"),
+            ("u_forget_list_alias", "阿法"),
+        ):
+            await bus.emit(
+                CoreEvents.ROOM_MESSAGE_ENTER,
+                RoomMessagePayload(
+                    message_type="enter",
+                    message_id=f"enter_{uid}",
+                    content="",
+                    user=RoomMessageUser(id=uid, name=uname),
+                    timestamp_ms=clock(),
+                ),
+                source="test",
+            )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        facts_neutral = replyer_calls[-1]["state_facts"]
+        assert "刚进直播间待欢迎的观众：路人丙、已忘乙、PlayerAlpha、阿法" in facts_neutral
+        assert "新观众" not in facts_neutral
+        assert "已核实的观众身份事实" not in facts_neutral
+        assert "游戏里的熟人" not in facts_neutral
+
+        # 复位本批名字的已欢迎状态后再测未遗忘老观众与游戏玩家别名命中
+        agent._room_state.reset_session()
+        speech_emitted.clear()
+        for uid, uname in (("u_old", "老友甲"), ("u_alias", "阿法"), ("u_fp", "小忘")):
+            await bus.emit(
+                CoreEvents.ROOM_MESSAGE_ENTER,
+                RoomMessagePayload(
+                    message_type="enter",
+                    message_id=f"enter_{uid}",
+                    content="",
+                    user=RoomMessageUser(id=uid, name=uname),
+                    timestamp_ms=clock(),
+                ),
+                source="test",
+            )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        facts_verified = replyer_calls[-1]["state_facts"]
+        assert "新观众" not in facts_verified
+        assert "老友甲：来过多次的老观众" in facts_verified
+        assert "阿法：游戏里的熟人（账号 PlayerAlpha，常叫：阿法）" in facts_verified
+        assert "ForgottenPlayer" not in facts_verified and "小忘：" not in facts_verified
+    finally:
+        await agent.stop()
+        await game.stop()
