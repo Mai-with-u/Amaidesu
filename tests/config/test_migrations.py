@@ -14,6 +14,7 @@ import pytest
 import tomlkit
 from pydantic import ValidationError
 
+from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.model_schemas import LLMModelConfig
 from src.modules.config.multi_file_loader import generate_default_configs, get_config_version, load_config_dir
 from src.modules.config.upgrade import (
@@ -23,6 +24,7 @@ from src.modules.config.upgrade import (
     _name_match_off_by_default,
     _upgrade_builder_scene_transport,
     _upgrade_minecraft_context_tokens,
+    _version_tuple,
     advance_file_versions,
 )
 from tests.config.helpers import read_doc, rewind_and_append, tail_version, write_doc
@@ -91,6 +93,147 @@ def _check_window_threshold(d: Path) -> None:
     assert "window_event_threshold" not in read_doc(d, "agents.toml")["agents"]["streamer"]["background"]
 
 
+def _seed_replyer_style(value: str) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "agents.toml", "2.0.44")
+        doc["agents"]["streamer"]["persona"]["style_constraints"] = value
+        write_doc(d, "agents.toml", doc)
+
+    return seed
+
+
+def _check_replyer_style(expected: str) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        assert read_doc(d, "agents.toml")["agents"]["streamer"]["persona"]["style_constraints"] == expected
+
+    return check
+
+
+def _seed_live_frame_gates(d: Path) -> None:
+    doc = _rewound(d, "agents.toml", "2.0.45")
+    live_frame = doc["agents"]["streamer"]["live_frame"]
+    live_frame["max_age_ms"] = 15_000
+    live_frame["min_interval_ms"] = 15_000
+    doc["agents"]["streamer"]["proactive"]["min_interval_ms"] = 120_000
+    write_doc(d, "agents.toml", doc)
+
+
+def _check_live_frame_gates(d: Path) -> None:
+    streamer = read_doc(d, "agents.toml")["agents"]["streamer"]
+    live_frame = streamer["live_frame"]
+    assert "max_age_ms" not in live_frame and "min_interval_ms" not in live_frame
+    assert live_frame["stale_warn_ms"] == 60_000
+    # 其他段的 min_interval_ms 属活跃配置，不受迁移误伤
+    assert streamer["proactive"]["min_interval_ms"] == 120_000
+
+
+def _seed_recent_intents_window(value: int) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "agents.toml", "2.0.46")
+        doc["agents"]["streamer"]["planner_recent_intents_max"] = value
+        write_doc(d, "agents.toml", doc)
+
+    return seed
+
+
+def _check_recent_intents_window(expected: int) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        assert read_doc(d, "agents.toml")["agents"]["streamer"]["planner_recent_intents_max"] == expected
+
+    return check
+
+
+def _seed_streamer_narrative(d: Path) -> None:
+    doc = _rewound(d, "agents.toml", "2.0.47")
+    narrative = tomlkit.table()
+    narrative["game_ttl_ms"] = 900_000
+    narrative["body_max_items"] = 10
+    doc["agents"]["streamer"]["narrative"] = narrative
+    write_doc(d, "agents.toml", doc)
+
+
+def _check_streamer_narrative(d: Path) -> None:
+    assert "narrative" not in read_doc(d, "agents.toml")["agents"]["streamer"]
+
+
+def _seed_background_cold_timeout(d: Path) -> None:
+    doc = _rewound(d, "agents.toml", "2.0.48")
+    doc["agents"]["streamer"]["background"]["cold_timeout_ms"] = 60_000
+    write_doc(d, "agents.toml", doc)
+
+
+def _check_background_cold_timeout(d: Path) -> None:
+    streamer = read_doc(d, "agents.toml")["agents"]["streamer"]
+    assert "cold_timeout_ms" not in streamer["background"]
+    assert "cold_timeout_ms" in streamer["proactive"]  # proactive 同名字段不受影响
+
+
+def _seed_audience_salutation(d: Path) -> None:
+    doc = _rewound(d, "agents.toml", "2.0.49")
+    doc["agents"]["streamer"]["persona"]["audience_salutation"] = "大家"
+    write_doc(d, "agents.toml", doc)
+
+
+def _check_audience_salutation(d: Path) -> None:
+    assert "audience_salutation" not in read_doc(d, "agents.toml")["agents"]["streamer"]["persona"]
+
+
+def _seed_streamer_memory(d: Path) -> None:
+    doc = _rewound(d, "agents.toml", "2.0.50")
+    doc["agents"]["streamer"]["memory"] = {"recap_enabled": True, "long_memory_max_chars": 4000}
+    write_doc(d, "agents.toml", doc)
+
+
+def _check_streamer_memory(d: Path) -> None:
+    assert "memory" not in read_doc(d, "agents.toml")["agents"]["streamer"]
+
+
+def _seed_speech_gate(budget: int | None) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "agents.toml", "2.0.51")
+        streamer = doc["agents"]["streamer"]
+        streamer["speech_gate_window"] = 10
+        streamer["speech_gate_ratio"] = 0.5
+        if budget is None:
+            streamer.pop("speech_max_chars", None)
+        else:
+            streamer["speech_max_chars"] = budget
+        write_doc(d, "agents.toml", doc)
+
+    return seed
+
+
+def _check_speech_gate(expected_budget: int | None) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        streamer = read_doc(d, "agents.toml")["agents"]["streamer"]
+        assert "speech_gate_window" not in streamer and "speech_gate_ratio" not in streamer
+        if expected_budget is not None:
+            assert streamer["speech_max_chars"] == expected_budget
+        else:
+            # 未落盘预算键时钩子不写入该键，后续由 Schema 默认值物化补齐
+            assert streamer["speech_max_chars"] > 0 and streamer["speech_max_chars"] != 40
+
+    return check
+
+
+def _seed_game_lead_idle_fallback(fallback_ms: int) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "agents.toml", "2.0.52")
+        doc["agents"]["streamer"]["game_lead_idle_fallback_ms"] = fallback_ms
+        write_doc(d, "agents.toml", doc)
+
+    return seed
+
+
+def _check_game_lead_idle_fallback(expected_ms: int) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        streamer = read_doc(d, "agents.toml")["agents"]["streamer"]
+        assert streamer["game_lead_idle_fallback_ms"] == expected_ms
+        assert streamer["game_lead_silence_nudge_ms"] == 75_000
+
+    return check
+
+
 # infra.toml
 
 
@@ -136,6 +279,62 @@ def _check_maibot_sync_transcript(d: Path) -> None:
     section = read_doc(d, "infra.toml")["maibot_sync"]
     assert section["send_transcript"] is False  # 整场记录推送降为可选：旧默认改写为关
     assert "share_notes" not in section  # 共享笔记同步已随旧记忆退役，这一版把键一并删掉
+
+
+def _seed_maibot_sync_share_notes(d: Path) -> None:
+    rewind_and_append(d, "infra.toml", "2.0.44", "\nshare_notes = true\nsend_recap = true\n")
+
+
+def _check_maibot_sync_share_notes(d: Path) -> None:
+    section = read_doc(d, "infra.toml")["maibot_sync"]
+    assert "share_notes" not in section and "send_recap" not in section
+
+
+def _seed_tts_max_queue(max_queue: int) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "infra.toml", "2.0.45")
+        doc["tts"]["max_queue"] = max_queue
+        write_doc(d, "infra.toml", doc)
+
+    return seed
+
+
+def _check_tts_max_queue(expected: int) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        assert read_doc(d, "infra.toml")["tts"]["max_queue"] == expected
+
+    return check
+
+
+def _seed_tools_memory_section(d: Path) -> None:
+    doc = _rewound(d, "tools.toml", "2.0.40")
+    doc["tools"]["memory"] = {"enabled": False, "config": {}}
+    doc["tools"]["vision"]["enabled"] = True
+    write_doc(d, "tools.toml", doc)
+
+
+def _check_tools_memory_section(d: Path) -> None:
+    tools = read_doc(d, "tools.toml")["tools"]
+    assert "memory" not in tools and tools["vision"]["enabled"] is True
+
+
+def _seed_web_search_bing_entry(base_url: str) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "tools.toml", "2.0.45")
+        web = doc["tools"]["web"]
+        if "search" not in web:
+            web["search"] = {"enabled": True, "config": {}}
+        web["search"]["config"]["base_url"] = base_url
+        write_doc(d, "tools.toml", doc)
+
+    return seed
+
+
+def _check_web_search_bing_entry(expected_url: str) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        assert read_doc(d, "tools.toml")["tools"]["web"]["search"]["config"]["base_url"] == expected_url
+
+    return check
 
 
 def _seed_name_match_window(value: int | None) -> Callable[[Path], None]:
@@ -614,6 +813,69 @@ CASES = [
     Case("name-match-old-default", ("storage.toml",), _seed_name_match_window(90), _check_name_match_window(0)),
     Case("name-match-explicit-days", ("storage.toml",), _seed_name_match_window(30), _check_name_match_window(30)),
     Case("name-match-missing-key", ("storage.toml",), _seed_name_match_window(None), _check_name_match_window(0)),
+    # 收口自单钩子迁移微文件：保持全量写回与幂等双检
+    Case(
+        "replyer-style-emoji-old-default",
+        ("agents.toml",),
+        _seed_replyer_style("口语化，使用网络流行语，避免机械式回复，适当使用emoji"),
+        _check_replyer_style("口语化，使用网络流行语，避免机械式回复"),
+    ),
+    Case(
+        "replyer-style-emoji-user-kept",
+        ("agents.toml",),
+        _seed_replyer_style("简短、犀利，带点方言味"),
+        _check_replyer_style("简短、犀利，带点方言味"),
+    ),
+    Case("live-frame-gates-retire", ("agents.toml",), _seed_live_frame_gates, _check_live_frame_gates),
+    Case(
+        "recent-intents-window-old-default",
+        ("agents.toml",),
+        _seed_recent_intents_window(6),
+        _check_recent_intents_window(60),
+    ),
+    Case(
+        "recent-intents-window-user-kept",
+        ("agents.toml",),
+        _seed_recent_intents_window(12),
+        _check_recent_intents_window(12),
+    ),
+    Case("streamer-narrative-retire", ("agents.toml",), _seed_streamer_narrative, _check_streamer_narrative),
+    Case("background-cold-timeout", ("agents.toml",), _seed_background_cold_timeout, _check_background_cold_timeout),
+    Case("audience-salutation-retire", ("agents.toml",), _seed_audience_salutation, _check_audience_salutation),
+    Case("streamer-memory-retire", ("agents.toml",), _seed_streamer_memory, _check_streamer_memory),
+    Case("speech-gate-retire-old-default", ("agents.toml",), _seed_speech_gate(40), _check_speech_gate(60)),
+    Case("speech-gate-retire-user-kept", ("agents.toml",), _seed_speech_gate(25), _check_speech_gate(25)),
+    Case("speech-gate-retire-missing-budget", ("agents.toml",), _seed_speech_gate(None), _check_speech_gate(None)),
+    Case(
+        "game-lead-idle-fallback-old-default",
+        ("agents.toml",),
+        _seed_game_lead_idle_fallback(50_000),
+        _check_game_lead_idle_fallback(0),
+    ),
+    Case(
+        "game-lead-idle-fallback-user-kept",
+        ("agents.toml",),
+        _seed_game_lead_idle_fallback(120_000),
+        _check_game_lead_idle_fallback(120_000),
+    ),
+    Case(
+        "maibot-sync-share-notes-retire", ("infra.toml",), _seed_maibot_sync_share_notes, _check_maibot_sync_share_notes
+    ),
+    Case("tts-max-queue-old-default", ("infra.toml",), _seed_tts_max_queue(3), _check_tts_max_queue(6)),
+    Case("tts-max-queue-user-kept", ("infra.toml",), _seed_tts_max_queue(8), _check_tts_max_queue(8)),
+    Case("tools-memory-section-retire", ("tools.toml",), _seed_tools_memory_section, _check_tools_memory_section),
+    Case(
+        "web-search-bing-entry-old-default",
+        ("tools.toml",),
+        _seed_web_search_bing_entry("https://cn.bing.com/search"),
+        _check_web_search_bing_entry("https://www.bing.com/search"),
+    ),
+    Case(
+        "web-search-bing-entry-custom-kept",
+        ("tools.toml",),
+        _seed_web_search_bing_entry("https://mirror.example.com/search"),
+        _check_web_search_bing_entry("https://mirror.example.com/search"),
+    ),
 ]
 
 
@@ -647,18 +909,25 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "widget_drop_html_page": ("case", "widget-html-page"),
     "maibot_sync_transcript_optional": ("case", "maibot-sync-transcript-optional"),
     "name_match_off_by_default": ("case", "name-match-old-default"),
+    "drop_tools_memory_section": ("case", "tools-memory-section-retire"),
+    "web_search_bing_entry_default_swap": ("case", "web-search-bing-entry-old-default"),
+    "replyer_style_drop_emoji": ("case", "replyer-style-emoji-old-default"),
+    "retire_live_frame_gates": ("case", "live-frame-gates-retire"),
+    "widen_recent_intents_window": ("case", "recent-intents-window-old-default"),
+    "retire_streamer_narrative": ("case", "streamer-narrative-retire"),
+    "drop_background_cold_timeout": ("case", "background-cold-timeout"),
+    "drop_persona_audience_salutation": ("case", "audience-salutation-retire"),
+    "drop_streamer_memory_section": ("case", "streamer-memory-retire"),
+    "drop_maibot_sync_share_notes": ("case", "maibot-sync-share-notes-retire"),
+    "retire_speech_gate_and_widen_budget": ("case", "speech-gate-retire-old-default"),
+    "disable_game_lead_idle_fallback": ("case", "game-lead-idle-fallback-old-default"),
+    "widen_tts_max_queue": ("case", "tts-max-queue-old-default"),
     # 具名测试函数覆盖
     "builder_scene_transport": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
     "drop_minecraft_builder_section": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
-    "drop_minecraft_max_steps": (
-        "test",
-        "test_minecraft_step_limit_migration.py#test_step_limit_removal_is_written_back_only_to_agents",
-    ),
+    "drop_minecraft_max_steps": ("test", "test_migrations.py#test_minecraft_step_limit_is_removed_from_agents_only"),
     "normalize_llm_model_cache_mode": ("test", "test_migrations.py#test_llm_model_cache_switch_normalized_to_enum"),
-    "minecraft_context_tokens": (
-        "test",
-        "test_minecraft_context_tokens_migration.py#test_char_budget_converted_and_written_back",
-    ),
+    "minecraft_context_tokens": ("test", "test_migrations.py#test_minecraft_context_chars_become_tokens"),
     "drop_generation_limits": (
         "test",
         "test_remove_llm_limits.py#test_legacy_limits_removed_from_disk_only_for_affected_file",
@@ -678,58 +947,6 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_memory_injection_limit": (
         "test",
         "test_remove_llm_limits.py#test_legacy_limits_removed_from_disk_only_for_affected_file",
-    ),
-    "drop_tools_memory_section": (
-        "test",
-        "test_tools_memory_section_migration.py#test_tools_memory_section_dropped_and_written_back",
-    ),
-    "web_search_bing_entry_default_swap": (
-        "test",
-        "test_web_search_bing_entry_migration.py#test_old_default_entry_rewritten_and_version_advanced",
-    ),
-    "replyer_style_drop_emoji": (
-        "test",
-        "test_replyer_style_emoji_migration.py#test_old_default_rewritten_and_version_advanced",
-    ),
-    "retire_live_frame_gates": (
-        "test",
-        "test_live_frame_gates_retire_migration.py#test_live_frame_gates_removed_and_written_back",
-    ),
-    "widen_recent_intents_window": (
-        "test",
-        "test_recent_intents_window_migration.py#test_old_default_rewritten_and_written_back",
-    ),
-    "retire_streamer_narrative": (
-        "test",
-        "test_streamer_narrative_retire_migration.py#test_narrative_section_removed_and_written_back",
-    ),
-    "drop_background_cold_timeout": (
-        "test",
-        "test_background_cold_timeout_migration.py#test_background_cold_timeout_dropped_and_written_back",
-    ),
-    "drop_persona_audience_salutation": (
-        "test",
-        "test_audience_salutation_retire_migration.py#test_persona_audience_salutation_dropped_and_written_back",
-    ),
-    "drop_streamer_memory_section": (
-        "test",
-        "test_memory_retire_migration.py#test_streamer_memory_section_removed_and_written_back",
-    ),
-    "drop_maibot_sync_share_notes": (
-        "test",
-        "test_memory_retire_migration.py#test_maibot_sync_share_notes_removed_and_written_back",
-    ),
-    "retire_speech_gate_and_widen_budget": (
-        "test",
-        "test_speech_gate_retire_migration.py#test_gate_keys_removed_and_old_default_budget_rewritten",
-    ),
-    "disable_game_lead_idle_fallback": (
-        "test",
-        "test_game_lead_idle_fallback_migration.py#test_old_default_rewritten_and_written_back",
-    ),
-    "widen_tts_max_queue": (
-        "test",
-        "test_tts_max_queue_migration.py#test_old_default_rewritten_and_written_back",
     ),
 }
 
@@ -759,19 +976,14 @@ def test_every_registered_upgrade_hook_is_covered_by_a_case_or_named_test() -> N
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.id)
 def test_old_layout_is_migrated_written_back_and_versions_advance_to_chain_tail(case: Case, tmp_path: Path) -> None:
+    """旧布局迁移落盘、版本推进到本文件钩子链尾，且二次加载零漂移零写回（幂等）。"""
     generate_default_configs(tmp_path)
     case.seed(tmp_path)
     load_config_dir(tmp_path)
     case.check(tmp_path)
     for file_name in case.files:  # 版本流按文件独立：只推进到本文件钩子链尾，不随其他文件前进
         assert get_config_version(tmp_path, file_name) == tail_version(file_name)
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.id)
-def test_second_load_has_no_drift_and_rewrites_nothing(case: Case, tmp_path: Path) -> None:
-    generate_default_configs(tmp_path)
-    case.seed(tmp_path)
-    load_config_dir(tmp_path)
+    # 二次加载同目录做字节级幂等校验，省去每条 Case 重复生成与首轮迁移的磁盘开销
     snapshot = {path.name: path.read_bytes() for path in tmp_path.glob("*.toml")}
     _, report = load_config_dir(tmp_path)
     assert not report.has_drift
@@ -914,3 +1126,24 @@ def test_llm_model_cache_switch_normalized_to_enum(
 
     with pytest.raises(ValidationError, match="配置矛盾"):  # 声明 none 却填缓存价：分段不生效，加载期硬错
         LLMModelConfig(name="m", cache="none", cache_price_in=0.1)
+
+
+def test_file_hook_chain_tail_is_above_baseline() -> None:
+    """每个文件的钩子链尾（最大 target）高于生成基线，避免新生成文件天然越过全部钩子。"""
+    baseline = _version_tuple(CONFIG_BASELINE_VERSION)
+    assert _FILE_HOOKS, "升级钩子注册表为空"
+    for file_name in _FILE_HOOKS:
+        tail = _version_tuple(tail_version(file_name))
+        assert tail > baseline, f"{file_name} 的钩子链尾 {tail} 不高于基线 {CONFIG_BASELINE_VERSION}"
+
+
+def test_memory_section_unknown_after_migration(tmp_path: Path) -> None:
+    """已在链尾版本的 tools.toml 手写退役段 [tools.memory] 时，加载期按未知段硬错拦截。"""
+    generate_default_configs(tmp_path)
+    load_config_dir(tmp_path)
+    doc = read_doc(tmp_path, "tools.toml")
+    doc["tools"]["memory"] = {"enabled": True}
+    write_doc(tmp_path, "tools.toml", doc)
+
+    with pytest.raises(Exception, match="memory"):
+        load_config_dir(tmp_path)
