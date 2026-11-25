@@ -323,6 +323,13 @@ class SettleReport(BaseModel):
 
     failure_reason: Optional[str] = Field(default=None, description="整理失败的原因；成功时为 None")
     unregistered: List[UnregisteredItem] = Field(default_factory=list, description="没能登记、要人看一眼的条目")
+    quote_rescues: List[str] = Field(
+        default_factory=list,
+        description=(
+            "行号引错但引文逐字正确、经全场台词检索收档的条目留痕（每条注明引文实际所在行）；"
+            "大量命中说明模型给的行号已系统性错位"
+        ),
+    )
     input_note: Optional[str] = Field(
         default=None, description="整理原料被裁剪的说明（台词超出模型窗口时）；未裁剪为 None"
     )

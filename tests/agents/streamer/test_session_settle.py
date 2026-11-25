@@ -238,6 +238,132 @@ async def test_quote_must_be_verbatim_else_reported(store: SQLiteDatabase, promp
     assert "逐字片段" in report["unregistered"][0]["reason"]
 
 
+async def test_quote_with_wrong_line_number_is_rescued_by_full_search(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """行号引错一行但引文逐字对：全场检索兜底收档，档案行记到引文实际所在的台词上，
+    整理报告留痕注明实际所在行（行号系统性错位的绊线）。"""
+    session_id = await _ended_session(store)
+    chat_id = await _speech(store, session_id, "广场过去一看，都铺到南边了，石砖一块没缺，白操心", timestamp_ms=1_100)
+    await _speech(store, session_id, "明天接着去北边铺广场", timestamp_ms=1_200)
+    llm = _reply(
+        '{"archive": [{"line": 2, "title": "广场铺完了", "quote": "石砖一块没缺，白操心"}]}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [(line.text, line.quote, line.evidence_chat_id) for line in lines] == [
+        ("广场铺完了", "石砖一块没缺，白操心", chat_id)
+    ]
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert len(report.quote_rescues) == 1
+    assert "第 1 行" in report.quote_rescues[0] and "非所引第 2 行" in report.quote_rescues[0]
+
+
+async def test_quote_not_found_in_any_line_stays_rejected(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """引文在哪一行都锚不回（转述的原话）照旧拒：全场检索兜底不放行伪造的引文。"""
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "广场过去一看，都铺到南边了，石砖一块没缺，白操心")
+    llm = _reply(
+        '{"archive": [{"line": 1, "title": "改写过的话", "quote": "广场已经全都铺好了"}]}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    assert await store.archive.list_lines(live_session_id=session_id) == []
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert report.unregistered and report.quote_rescues == []
+
+
+async def test_quote_over_length_limit_stays_rejected(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """超过长度上限的引文即使逐字存在于台词里也照旧拒：长度上限不因兜底放宽。"""
+    session_id = await _ended_session(store)
+    long_line = "广场过去一看，都铺到南边了，石砖一块没缺，白操心" + "沿路还数了一遍砖缝，" * 6
+    assert len(long_line) > 80
+    await _speech(store, session_id, long_line)
+    llm = _reply(
+        f'{{"archive": [{{"line": 1, "title": "整句全抄", "quote": "{long_line}"}}]}}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    assert await store.archive.list_lines(live_session_id=session_id) == []
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert report.unregistered and "逐字片段" in report.unregistered[0].reason
+    assert report.quote_rescues == []
+
+
+async def test_question_quote_found_in_another_line_stays_rejected(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """疑问句引文即使全场检索兜底找得到也照旧拒：疑问句守卫在兜底之后照常生效。"""
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "你们说我该不该去北边看看呢？", timestamp_ms=1_100)
+    await _speech(store, session_id, "算了今天先不去", timestamp_ms=1_200)
+    llm = _reply(
+        '{"archive": [{"line": 2, "title": "想去北边", "quote": "该不该去北边看看呢？"}]}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    assert await store.archive.list_lines(live_session_id=session_id) == []
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert report.unregistered and "疑问句或猜测句" in report.unregistered[0].reason
+    assert report.quote_rescues == []
+
+
+async def test_replacement_with_wrong_line_number_is_rescued_by_full_search(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """替换旧行的新行行号引错但引文逐字对：兜底放行，替换成功并在报告留痕。"""
+    await _previous_archive(store)
+    session_id = await _ended_session(store, started_at_ms=5_000_000)
+    chat_id = await _speech(store, session_id, "炉子点上火了，海带烤上啦", timestamp_ms=5_000_100)
+    await _speech(store, session_id, "海带真香", timestamp_ms=5_000_200)
+    llm = _reply(
+        '{"previous": ['
+        ' {"old": 1, "op": "keep"},'
+        ' {"old": 2, "op": "keep"},'
+        ' {"old": 3, "op": "replace", "line": 2, "title": "Minecraft：炉子点火烤海带", "quote": "炉子点上火了"}],'
+        ' "archive": []}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+
+    (replacement,) = await store.archive.list_lines(live_session_id=session_id)
+    assert (replacement.text, replacement.quote, replacement.evidence_chat_id) == (
+        "Minecraft：炉子点火烤海带",
+        "炉子点上火了",
+        chat_id,
+    )
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    assert [item.line.text for item in snapshot.lines] == [
+        "Minecraft：炉子点火烤海带",
+        "Minecraft：女仆取名团子",
+        "Minecraft：菜地围好了",
+    ]
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert len(report.quote_rescues) == 1 and "非所引第 2 行" in report.quote_rescues[0]
+
+
 async def test_game_outside_session_is_dropped(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
     session_id = await _ended_session(store)
     await _speech(store, session_id, "等我把屋顶盖完就请大家来参观")

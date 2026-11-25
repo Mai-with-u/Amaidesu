@@ -69,6 +69,7 @@ from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.storage.models.chat import SettleSpeechLine
 from src.modules.storage.models.events import GamePlaceMark
+from src.modules.storage.models.game_players import GameChatLine
 from src.modules.storage.models.memory import (
     ArchiveSnapshot,
     Commitment,
@@ -127,15 +128,14 @@ from src.modules.utils.time_utils import now_ms
 
 
 if TYPE_CHECKING:
-    from src.modules.storage.repos.archive import ArchiveRepo
-    from src.modules.storage.repos.chat import ChatRepo
-    from src.modules.storage.repos.commitments import CommitmentRepo
     from src.modules.storage.models.game_players import (
-        GameChatLine,
         GamePlayer,
         PendingPlayerCandidate,
         PendingPlayerInteraction,
     )
+    from src.modules.storage.repos.archive import ArchiveRepo
+    from src.modules.storage.repos.chat import ChatRepo
+    from src.modules.storage.repos.commitments import CommitmentRepo
     from src.modules.storage.models.social_facts import NewSocialFact
     from src.modules.storage.repos.events import EventRepo
     from src.modules.storage.repos.game_players import GamePlayerRepo
@@ -306,6 +306,8 @@ class SettleOutcome:
     commitments: List[PendingCommitment] = field(default_factory=list)
     closures: List[CommitmentClosure] = field(default_factory=list)
     unregistered: List[UnregisteredItem] = field(default_factory=list)
+    # 行号引错但引文逐字对、经全场检索兜底救回的条目留痕（给整理报告，兼作行号系统性错位的绊线）
+    quote_rescues: List[str] = field(default_factory=list)
     input_note: Optional[str] = None
     # 观众候选（人批准才进记忆）与因个人信息丢掉的条数（含玩家自述）
     viewer_candidates: List[PendingViewerCandidate] = field(default_factory=list)
@@ -559,13 +561,14 @@ async def _after_archive_step(
 ) -> Tuple[Any, List[Any], List[Any]]:
     """档案那笔的收尾：校验输出结构，过了才落断点（坏输出留成断点会卡住续跑）。
 
-    返回（挑行计划, 新档案行, 未登记清单）给 ``_extract`` 后续步骤用。
+    返回（挑行计划, 新档案行, 未登记清单, 引文兜底留痕）给 ``_extract`` 后续步骤用。
     """
     archive_rows = data.get("archive")
     if archive_rows is None:
         archive_rows = []
     if not isinstance(archive_rows, list):
         raise SettleError("模型输出的 archive 不是列表")
+    quote_rescues: List[str] = []
     # 旧行只挑不改写：没列出的保留，去掉要本场证据，替换出的新行过同一个校验器
     try:
         plan = plan_from_ops(
@@ -573,15 +576,15 @@ async def _after_archive_step(
             material.previous.lines if material.previous is not None else [],
             session_started_at_ms=material.started_at_ms,
             line_of=lambda raw: owner._line_of(raw, material),
-            validate_new=lambda raw: owner._validate_archive([raw], material),
+            validate_new=lambda raw: owner._validate_archive([raw], material, rescue_notes=quote_rescues),
             correction_of=lambda raw: owner._correction_evidence_of(raw, material),
         )
     except ValueError as exc:
         raise SettleError(str(exc)) from exc
-    new_lines, archive_misses = owner._validate_archive(archive_rows, material)
+    new_lines, archive_misses = owner._validate_archive(archive_rows, material, rescue_notes=quote_rescues)
     if cache_missing:
         await owner._save_checkpoint_json(material.live_session_id, "archive", fingerprint, data)
-    return (plan, new_lines, archive_misses)
+    return (plan, new_lines, archive_misses, quote_rescues)
 
 
 async def _after_social_step(
@@ -1066,6 +1069,7 @@ class SessionSettler:
             listed["player_self"] = len(outcome.player_candidates)
         report = SettleReport(
             unregistered=outcome.unregistered,
+            quote_rescues=outcome.quote_rescues,
             input_note=outcome.input_note,
             snapshot_changes=outcome.snapshot_changes,
             candidates_listed=listed,
@@ -1077,6 +1081,7 @@ class SessionSettler:
         )
         has_report = bool(
             outcome.unregistered
+            or outcome.quote_rescues
             or outcome.input_note
             or outcome.snapshot_changes
             or listed
@@ -1885,7 +1890,7 @@ class SessionSettler:
                 if step.after is not None:
                     step_extras[step.key] = extra
 
-        plan, new_lines, archive_misses = step_extras["archive"]
+        plan, new_lines, archive_misses, quote_rescues = step_extras["archive"]
         archive_data = step_data["archive"]
         commitment_data = step_data["commitment"]
         commitment_rows = _list_field(commitment_data, "commitments")
@@ -1893,7 +1898,7 @@ class SessionSettler:
         social_check = step_extras.get("social")
         # 先认了结、再认新承诺：一行台词点名了某条旧承诺时，那条旧承诺本场有没有了结，
         # 决定这一行里的新答应是"换了个做法"（照常登记）还是"又提了一遍旧事"（不登记、进报告）
-        closures, closure_misses = self._validate_closures(closure_rows, material)
+        closures, closure_misses = self._validate_closures(closure_rows, material, rescue_notes=quote_rescues)
         closed_set = {closure.commitment_id for closure in closures}
         same_as_mentioned: Set[int] = set()
         commitments, commitment_misses = self._validate_commitments(
@@ -1901,6 +1906,7 @@ class SessionSettler:
             material,
             closed_ids=closed_set,
             mentioned_out=same_as_mentioned,
+            rescue_notes=quote_rescues,
         )
         open_id_set = {int(row.id) for row in material.open_commitments}
         mentioned_ids = sorted(((material.mentioned_ref_ids | same_as_mentioned) & open_id_set) - closed_set)
@@ -1933,6 +1939,7 @@ class SessionSettler:
                 *(social_check.missed if social_check is not None else []),
             ],
             input_note=material.speech_note,
+            quote_rescues=quote_rescues,
             viewer_candidates=[*candidates.candidates, *claimed.candidates],
             candidates_personal_dropped=(
                 candidates.personal_dropped + claimed.personal_dropped + player_check.personal_dropped
@@ -2222,6 +2229,54 @@ class SessionSettler:
             return text
         return text if text in " ".join(content.split()) else None
 
+    def _quote_found_anywhere(
+        self,
+        quote: Any,
+        material: SettleMaterial,
+        *,
+        include_game_chats: bool = False,
+    ) -> Optional[Tuple[Union[SettleSpeechLine, "GameChatLine"], str]]:
+        """全场检索兜底：所引行没过逐字校验时，在本场台词行里逐字检索这条引文。
+
+        找到就返回（那一行, 校验过的引文），后续按实际所在行取时刻与存档——引文锚得回
+        真实台词即算过，行号从必须精确降为优先依据；哪一行都锚不回则返回 None，照旧拒。
+        承诺的行宇宙还含她在游戏公屏打的行（与该处校验可及的行同一套）。
+        超过 MAX_QUOTE_CHARS 的引文逐行校验自带长度上限，同样拒。
+        """
+        candidates: List[Union[SettleSpeechLine, "GameChatLine"]] = list(material.lines_by_number.values())
+        if include_game_chats:
+            candidates.extend(material.players.lines_by_number.values())
+        for candidate in candidates:
+            verified = self._verified_quote(candidate, quote)
+            if verified is not None:
+                return candidate, verified
+        return None
+
+    def _quote_rescue_note(
+        self,
+        material: SettleMaterial,
+        what: str,
+        requested: Any,
+        found: Union[SettleSpeechLine, "GameChatLine"],
+    ) -> str:
+        """兜底救回的条目在整理报告的留痕文案：引文逐字对但行号引错，注明实际落在哪一行。
+
+        运营者可见之外兼作绊线：哪天大量命中，说明模型给的行号已系统性错位。
+        """
+        where: Optional[str] = None
+        for number, line in material.lines_by_number.items():
+            if int(line.id) == int(found.id):
+                where = f"第 {number} 行"
+                break
+        if where is None:
+            for number, chat in material.players.lines_by_number.items():
+                if int(chat.id) == int(found.id):
+                    where = f"游戏公屏 {number}"
+                    break
+        note = f"「{what}」的引文实际落在{where or '本场的其他台词'}，非所引第 {requested} 行"
+        logger.info(f"场次 {material.live_session_id}：{note}")
+        return note
+
     @staticmethod
     def _checkpoint_fingerprint(template: str, prompt: str) -> str:
         """计算某一步模型输入（模板名 + 用户提示词）的 SHA-256 指纹：输入变化时自动使旧断点失效重跑。"""
@@ -2345,7 +2400,11 @@ class SessionSettler:
         return misses, dispositions
 
     def _validate_archive(
-        self, rows: List[Any], material: SettleMaterial
+        self,
+        rows: List[Any],
+        material: SettleMaterial,
+        *,
+        rescue_notes: Optional[List[str]] = None,
     ) -> Tuple[List[PendingArchiveLine], List[UnregisteredItem]]:
         """本场新写的档案行的校验：逐字引文 + 至多 8 行；没通过的连同原话进未登记清单。
 
@@ -2353,6 +2412,7 @@ class SessionSettler:
         ``lasting`` 只认布尔真值（名字、住处、关系这类稳定的事，快照取舍时先留）。
         触发词与地点由代码核对（见 ``settle_cues``），对不上的丢掉、行照写；地点只给挂了游戏的行。
         替换旧行的新行也走这里，与新事同一个口径。
+        ``rescue_notes`` 收行号引错但全场检索兜底救回的留痕（给整理报告），不传就不留。
         """
         written: List[PendingArchiveLine] = []
         missed: List[UnregisteredItem] = []
@@ -2360,6 +2420,8 @@ class SessionSettler:
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
+            # 兜底救回的留痕先记着所引行号，条目过了后面全部守卫、真收档时才写进报告
+            rescued_requested: Any = None
             if len(written) >= MAX_ARCHIVE_LINES:
                 break
             title = _clip(str(raw.get("title") or ""), MAX_TITLE_CHARS)
@@ -2375,15 +2437,21 @@ class SessionSettler:
                 continue
             verified = self._verified_quote(line, quote)
             if verified is None:
-                missed.append(
-                    UnregisteredItem(
-                        kind="archive",
-                        what=title,
-                        quote=quote,
-                        reason=f"原话不是第 {raw.get('line')} 行的逐字片段（或超过 {MAX_QUOTE_CHARS} 字）",
+                # 行号引错但引文逐字对是模型的常见失误：全场检索兜底，后续按实际所在行取时刻与存档
+                found = self._quote_found_anywhere(quote, material)
+                if found is None:
+                    missed.append(
+                        UnregisteredItem(
+                            kind="archive",
+                            what=title,
+                            quote=quote,
+                            reason=f"原话不是第 {raw.get('line')} 行的逐字片段（或超过 {MAX_QUOTE_CHARS} 字）",
+                        )
                     )
-                )
-                continue
+                    continue
+                rescued_line, verified = found
+                line = rescued_line
+                rescued_requested = raw.get("line")
             if _is_question_or_guess_quote(verified):
                 missed.append(
                     UnregisteredItem(
@@ -2424,6 +2492,8 @@ class SessionSettler:
                     at_ms=int(line.timestamp_ms),
                     save_id=save.id,
                 )
+            if rescue_notes is not None and rescued_requested is not None:
+                rescue_notes.append(self._quote_rescue_note(material, title, rescued_requested, line))
             written.append(
                 PendingArchiveLine(
                     text=mark_unverified(title) if unverified else title,
@@ -2447,6 +2517,7 @@ class SessionSettler:
         *,
         closed_ids: AbstractSet[int] = frozenset(),
         mentioned_out: Optional[Set[int]] = None,
+        rescue_notes: Optional[List[str]] = None,
     ) -> Tuple[List[PendingCommitment], List[UnregisteredItem]]:
         """新承诺的校验：逐字引文、所属游戏、对谁、不重复。
 
@@ -2466,6 +2537,8 @@ class SessionSettler:
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
+            # 兜底救回的留痕先记着所引行号，条目过了后面全部守卫、真登记时才写进报告
+            rescued_requested: Any = None
             what = _clip(str(raw.get("what") or ""), MAX_TITLE_CHARS)
             quote = str(raw.get("quote") or "").strip()
             line = self._line_of(raw.get("line"), material)
@@ -2540,15 +2613,25 @@ class SessionSettler:
                 continue
             verified = self._verified_quote(line if line is not None else chat, quote)
             if verified is None:
-                missed.append(
-                    UnregisteredItem(
-                        kind="commitment",
-                        what=what,
-                        quote=quote,
-                        reason=f"原话不是{where}的逐字片段（或超过 {MAX_QUOTE_CHARS} 字）",
+                # 行号引错但引文逐字对是模型的常见失误：全场检索兜底（行宇宙含她在游戏公屏打的行），
+                # 后续按实际所在行认对谁、去重
+                found = self._quote_found_anywhere(quote, material, include_game_chats=True)
+                if found is None:
+                    missed.append(
+                        UnregisteredItem(
+                            kind="commitment",
+                            what=what,
+                            quote=quote,
+                            reason=f"原话不是{where}的逐字片段（或超过 {MAX_QUOTE_CHARS} 字）",
+                        )
                     )
-                )
-                continue
+                    continue
+                rescued_line, verified = found
+                if isinstance(rescued_line, GameChatLine):
+                    line, chat = None, rescued_line
+                else:
+                    line, chat = rescued_line, None
+                rescued_requested = raw.get("line")
             target = str(raw.get("to") or "").strip().lower()
             viewer_id: Optional[int] = None
             player_id: Optional[int] = None
@@ -2610,6 +2693,8 @@ class SessionSettler:
                 game_name = _game_of(raw.get("game"), material)
                 save = material.saves.save_at(game_name, int(line.timestamp_ms))
                 save_id, save_name = save.id, save.name
+            if rescue_notes is not None and rescued_requested is not None:
+                rescue_notes.append(self._quote_rescue_note(material, what, rescued_requested, line or chat))
             written.append(
                 PendingCommitment(
                     what=what,
@@ -2656,7 +2741,11 @@ class SessionSettler:
         return infer_proof_for_claim(text, material.game_records, game=game, at_ms=at_ms) is not None
 
     def _validate_closures(
-        self, rows: List[Any], material: SettleMaterial
+        self,
+        rows: List[Any],
+        material: SettleMaterial,
+        *,
+        rescue_notes: Optional[List[str]] = None,
     ) -> Tuple[List[CommitmentClosure], List[UnregisteredItem]]:
         """了结的校验：只能了结本场之前就有的未了结承诺，且引文逐字。"""
         written: List[CommitmentClosure] = []
@@ -2667,6 +2756,8 @@ class SessionSettler:
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
+            # 兜底救回的留痕先记着所引行号，条目过了后面全部守卫、真了结时才写进报告
+            rescued_requested: Any = None
             commitment_id_raw = raw.get("id")
             commitment_id = _as_commitment_ref(commitment_id_raw)
             quote = str(raw.get("quote") or "").strip()
@@ -2703,15 +2794,22 @@ class SessionSettler:
                 continue
             verified = self._verified_quote(line, quote)
             if verified is None:
-                missed.append(
-                    UnregisteredItem(
-                        kind="commitment",
-                        what=f"了结 #{commitment_id}",
-                        quote=quote,
-                        reason="原话不是所引那一行的逐字片段",
+                # 行号引错但引文逐字对是模型的常见失误：全场检索兜底，了结记到实际所在行上
+                found = self._quote_found_anywhere(quote, material)
+                if found is None:
+                    missed.append(
+                        UnregisteredItem(
+                            kind="commitment",
+                            what=f"了结 #{commitment_id}",
+                            quote=quote,
+                            reason="原话不是所引那一行的逐字片段",
+                        )
                     )
-                )
-                continue
+                    continue
+                rescued_line, verified = found
+                line = rescued_line
+                # 留痕先记着所引行号，条目过了后面全部守卫、真了结时才写进报告
+                rescued_requested = raw.get("line")
             # 挂了游戏的承诺说"做完了"：必须显式引一条撑得住的游戏记录编号（不靠语义兜底结案）；说做不到、不做了的不用
             game = open_by_id[int(commitment_id)].game
             if game and not self._proven(raw, verified, material, game, line, allow_infer=False):
@@ -2721,6 +2819,10 @@ class SessionSettler:
                     )
                 )
                 continue
+            if rescue_notes is not None and rescued_requested is not None:
+                rescue_notes.append(
+                    self._quote_rescue_note(material, f"了结 #{commitment_id}", rescued_requested, line)
+                )
             written.append(
                 CommitmentClosure(commitment_id=int(commitment_id), close_chat_id=int(line.id), close_quote=verified)
             )

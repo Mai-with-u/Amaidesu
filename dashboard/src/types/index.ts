@@ -1902,6 +1902,8 @@ export interface SettleReport {
   candidates_personal_dropped?: number;
   /** 写进档案、标了“游戏记录里没核实到”的完成说法几条（她说游戏里做成了，记录里对不上） */
   unverified_claims?: number;
+  /** 行号引错但引文逐字正确、经全场台词检索收档的条目留痕（大量命中说明行号已系统性错位） */
+  quote_rescues?: string[];
   /** 这一场的唠叨指标；本场没点名旧事也没推卡时为 null */
   side_effects?: SideEffectStats | null;
 }

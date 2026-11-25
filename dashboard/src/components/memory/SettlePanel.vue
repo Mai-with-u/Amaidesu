@@ -91,6 +91,23 @@
         <p v-if="sideEffectText(row.settle_report?.side_effects)" class="settle-meta">
           唠叨指标：{{ sideEffectText(row.settle_report?.side_effects) }}
         </p>
+        <!-- 行号引错但引文逐字对、兜底救回的条目：正常收档，留在这里供人看；大量命中说明行号系统性错位 -->
+        <div
+          v-if="row.settle_report && (row.settle_report.quote_rescues ?? []).length > 0"
+          class="unregistered"
+        >
+          <div class="unregistered-title">
+            行号引错被救回的条目（{{ row.settle_report.quote_rescues?.length }}
+            条，引文实际落在别的台词行，已按实际行收档）
+          </div>
+          <div
+            v-for="(note, index) in row.settle_report.quote_rescues"
+            :key="index"
+            class="unregistered-item"
+          >
+            <span class="unregistered-reason">{{ note }}</span>
+          </div>
+        </div>
         <p v-if="row.settle_report?.failure_reason" class="settle-failure">
           失败原因：{{ row.settle_report?.failure_reason }}
         </p>
