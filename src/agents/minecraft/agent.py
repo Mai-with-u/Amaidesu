@@ -66,7 +66,7 @@ from src.agents.minecraft.goal_ledger import (
     pause_notice,
     use_air_misuse_hint,
 )
-from src.agents.minecraft.wait_progress import Coords, WaitProgress, self_coords, watchdog_wakeup_notice
+from src.agents.minecraft.wait_progress import ActiveTimer, Coords, WaitProgress, self_coords, watchdog_wakeup_notice
 from src.agents.minecraft.glance import (
     RememberedPlacesCache,
     glance_brief,
@@ -438,6 +438,16 @@ def _mutates_known_places(ability: str, arguments: Optional[Mapping[str, Any]] =
 
 # 游戏公屏单条消息温和提醒的字数阈值（非阻断）：超过该字数时在 maicraft_execute 返回的 notes 附轻提醒
 PUBLIC_CHAT_SOFT_LENGTH_LIMIT = 45
+# 游戏公屏自动按句界拆发的阈值、单段期望宽度与最大分片数（<= MaiCraft CutIns 排队上限 4，留出 1 槽余量）
+PUBLIC_CHAT_SPLIT_THRESHOLD = 55
+PUBLIC_CHAT_CHUNK_TARGET_CHARS = 42
+PUBLIC_CHAT_MAX_CHUNKS = 3
+PUBLIC_CHAT_MIN_CHUNK_CHARS = 8
+# 宿主自动拆发附加提示的识别前缀（用于避免外层吸收阶段重复追加普通超长提醒）
+_PUBLIC_CHAT_SPLIT_NOTE_MARKER = "宿主已按句界拆成"
+# 强句末标点与次级停顿标点（按自然语流切分超长游戏公屏，零额外 LLM 成本）
+_STRONG_SENTENCE_SPLIT_RE = re.compile(r"[^\n。！？!?…]+(?:[。！？!?…]+[”’」』）)\]]*)?|\n+")
+_SECONDARY_CLAUSE_SPLIT_RE = re.compile(r"[^；;，,、：:]+(?:[；;，,、：:]+[”’」』）)\]]*)?")
 # MaiCraft ChatTask 仅在非命令普通公屏消息实际提交成功后才写入 attempts 的固定标识
 _CHAT_SUBMITTED_ATTEMPT_TRIED = "提交聊天"
 # 已记账 sequence 目标的去重保留上限（防止回复与事件流两头重复提取同一 sequence 的公屏发言）
@@ -448,9 +458,23 @@ _MAX_FOLDED_ATTEMPTS_PAGES = 20
 _MAX_SEQUENCE_GOAL_DEPTH = 8
 
 
+def _read_chat_goal_message(goal: Mapping[str, Any]) -> Optional[str]:
+    """从 ``chat`` 目标中读取消息文本：优先 ``parameters.message``，缺失时兼容顶层快捷字段 ``goal.message``。"""
+    params = goal.get("parameters")
+    if isinstance(params, Mapping):
+        raw_param_msg = params.get("message")
+        if isinstance(raw_param_msg, str):
+            return raw_param_msg
+    raw_shortcut = goal.get("message")
+    if isinstance(raw_shortcut, str):
+        return raw_shortcut
+    return None
+
+
 def _extract_public_chat_messages_from_goal(goal: Any, *, _depth: int = 0) -> List[str]:
     """从 ``maicraft_execute`` 的 goal 参数提取待发普通游戏公屏正文（支持直接 chat 与 sequence 内嵌 chat）。
 
+    同时兼容 ``parameters.message`` 与顶层快捷字段 ``goal.message``；
     排除对指定实体说话（携带非空 ``target``）、空白文本以及以 ``/`` 开头的游戏命令或私聊命令，
     只覆盖普通游戏公屏消息。
     """
@@ -461,11 +485,8 @@ def _extract_public_chat_messages_from_goal(goal: Any, *, _depth: int = 0) -> Li
         # 给了 target（如对女仆说话）不进游戏公屏
         if goal.get("target"):
             return []
-        params = goal.get("parameters")
-        if not isinstance(params, Mapping):
-            return []
-        raw_message = params.get("message")
-        if not isinstance(raw_message, str):
+        raw_message = _read_chat_goal_message(goal)
+        if raw_message is None:
             return []
         message = raw_message.strip()
         if not message or message.startswith("/"):
@@ -480,6 +501,227 @@ def _extract_public_chat_messages_from_goal(goal: Any, *, _depth: int = 0) -> Li
             found.extend(_extract_public_chat_messages_from_goal(step, _depth=_depth + 1))
         return found
     return []
+
+
+def _split_long_clause_safely(clause: str, *, max_len: int) -> List[str]:
+    """对没有任何标点断口的极长片段按字宽安全分段，尽量避免在连续 ASCII 词或数字中间切断。"""
+    text = clause.strip()
+    if len(text) <= max_len:
+        return [text] if text else []
+    parts: List[str] = []
+    start = 0
+    total = len(text)
+    while start < total:
+        remaining = total - start
+        if remaining <= max_len:
+            piece = text[start:].strip()
+            if piece:
+                parts.append(piece)
+            break
+        cut = start + max_len
+        # 优先在切点前找空白符；若无空白且切点落在 ASCII 字母数字中间，向前回退避开断词
+        space_pos = text.rfind(" ", start + max(1, max_len // 2), cut + 1)
+        if space_pos > start:
+            cut = space_pos
+        elif (
+            cut < total
+            and text[cut - 1].isascii()
+            and text[cut - 1].isalnum()
+            and text[cut].isascii()
+            and text[cut].isalnum()
+        ):
+            back = cut - 1
+            while back > start + max(1, max_len // 2) and text[back - 1].isascii() and text[back - 1].isalnum():
+                back -= 1
+            if back > start + max(1, max_len // 2):
+                cut = back
+        piece = text[start:cut].strip()
+        if piece:
+            parts.append(piece)
+        start = cut
+        while start < total and text[start].isspace():
+            start += 1
+    return parts
+
+
+def _pack_chat_units(units: Sequence[str], *, target_len: int, max_chunks: int) -> List[str]:
+    """按目标宽度贪心合并相邻短句，控制在 max_chunks 段以内且尽量避免末尾碎句。"""
+    cleaned_units = [u.strip() for u in units if u and u.strip()]
+    if not cleaned_units:
+        return []
+    chunks: List[str] = []
+    current = ""
+    for unit in cleaned_units:
+        if not current:
+            current = unit
+            continue
+        if len(current) + len(unit) <= target_len or len(chunks) >= max_chunks - 1:
+            current = f"{current}{unit}"
+        else:
+            chunks.append(current)
+            current = unit
+    if current:
+        chunks.append(current)
+    # 若末段过短且前面至少还有一段，把过短尾句并回前一段以保证观感自然
+    if len(chunks) >= 2 and len(chunks[-1]) < PUBLIC_CHAT_MIN_CHUNK_CHARS:
+        chunks[-2] = f"{chunks[-2]}{chunks[-1]}"
+        chunks.pop()
+    return chunks[:max_chunks]
+
+
+def split_public_chat_message(
+    text: str,
+    *,
+    threshold: int = PUBLIC_CHAT_SPLIT_THRESHOLD,
+    max_chunks: int = PUBLIC_CHAT_MAX_CHUNKS,
+) -> List[str]:
+    """确定性按中文标点/句界把超长普通游戏公屏消息拆成 2–3 条自然短句（零额外 LLM 成本）。
+
+    规则：
+    - 空白返回空列表；以 ``/`` 开头（命令）或长度不超过 ``threshold`` 时原样返回单条；
+    - 优先按换行与强句末标点（。！？!?…）切分，再对仍超宽的原子句按逗号/分号/顿号等次级标点细分；
+    - 合并成不超过 ``max_chunks`` 条的均衡短句，保证完整不丢字、不改写原意。
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("/") or len(raw) <= threshold or max_chunks <= 1:
+        return [raw]
+
+    # 先按换行与强句末标点提取自然原子句
+    strong_units: List[str] = []
+    for match in _STRONG_SENTENCE_SPLIT_RE.finditer(raw):
+        piece = match.group(0).strip()
+        if piece:
+            strong_units.append(piece)
+    if not strong_units:
+        strong_units = [raw]
+
+    # 对仍然偏长的原子句，按次级停顿标点进一步细拆，避免单段过宽
+    desired_chunks = min(
+        max_chunks, max(2, (len(raw) + PUBLIC_CHAT_CHUNK_TARGET_CHARS - 1) // PUBLIC_CHAT_CHUNK_TARGET_CHARS)
+    )
+    target_len = max(PUBLIC_CHAT_CHUNK_TARGET_CHARS, (len(raw) + desired_chunks - 1) // desired_chunks)
+    refined_units: List[str] = []
+    for unit in strong_units:
+        if len(unit) <= target_len:
+            refined_units.append(unit)
+            continue
+        sub_units = [m.group(0).strip() for m in _SECONDARY_CLAUSE_SPLIT_RE.finditer(unit) if m.group(0).strip()]
+        if len(sub_units) >= 2:
+            for sub in sub_units:
+                if len(sub) > threshold:
+                    refined_units.extend(_split_long_clause_safely(sub, max_len=target_len))
+                else:
+                    refined_units.append(sub)
+        else:
+            refined_units.extend(_split_long_clause_safely(unit, max_len=target_len))
+
+    chunks = _pack_chat_units(refined_units, target_len=target_len, max_chunks=max_chunks)
+    if len(chunks) <= 1 and len(raw) > threshold:
+        # 极端场景（单段无标点合并后仍未拆开）：按安全字宽强制均分
+        forced = _split_long_clause_safely(raw, max_len=target_len)
+        chunks = _pack_chat_units(forced, target_len=target_len, max_chunks=max_chunks)
+    return chunks or [raw]
+
+
+def _normalize_chat_goal_with_message(goal: Mapping[str, Any], message: str) -> Dict[str, Any]:
+    """基于原 chat 目标拷贝生成携带规范 ``parameters.message`` 的单条游戏公屏目标（移除顶层快捷 message）。"""
+    cloned: Dict[str, Any] = deepcopy(dict(goal))
+    cloned.pop("message", None)
+    raw_params = cloned.get("parameters")
+    params: Dict[str, Any] = dict(raw_params) if isinstance(raw_params, Mapping) else {}
+    params["message"] = message
+    cloned["parameters"] = params
+    return cloned
+
+
+def _expand_sequence_chat_steps(
+    goal: Mapping[str, Any],
+    *,
+    threshold: int = PUBLIC_CHAT_SPLIT_THRESHOLD,
+    _depth: int = 0,
+) -> Tuple[Dict[str, Any], int]:
+    """把 ``sequence`` 内嵌的超长普通游戏公屏 chat 步骤原地展开为连续短句步骤，返回 ``(新目标, 拆出的总句数)``。"""
+    cloned: Dict[str, Any] = deepcopy(dict(goal))
+    if _depth > _MAX_SEQUENCE_GOAL_DEPTH:
+        return cloned, 0
+    steps = cloned.get("steps")
+    if not isinstance(steps, list):
+        return cloned, 0
+    new_steps: List[Any] = []
+    expanded_total = 0
+    for step in steps:
+        if not isinstance(step, Mapping):
+            new_steps.append(step)
+            continue
+        short = _ability_short_name(str(step.get("ability") or ""))
+        if short == "chat" and not step.get("target"):
+            raw_msg = _read_chat_goal_message(step)
+            cleaned = raw_msg.strip() if isinstance(raw_msg, str) else ""
+            if cleaned and not cleaned.startswith("/") and len(cleaned) > threshold:
+                chunks = split_public_chat_message(cleaned, threshold=threshold)
+                if len(chunks) >= 2:
+                    expanded_total += len(chunks)
+                    for chunk in chunks:
+                        new_steps.append(_normalize_chat_goal_with_message(step, chunk))
+                    continue
+        elif short == "sequence":
+            sub_goal, sub_expanded = _expand_sequence_chat_steps(step, threshold=threshold, _depth=_depth + 1)
+            if sub_expanded > 0:
+                expanded_total += sub_expanded
+                new_steps.append(sub_goal)
+                continue
+        new_steps.append(step)
+    cloned["steps"] = new_steps
+    return cloned, expanded_total
+
+
+def _plan_public_chat_split_arguments(
+    arguments: Mapping[str, Any],
+    *,
+    threshold: int = PUBLIC_CHAT_SPLIT_THRESHOLD,
+) -> Tuple[List[Dict[str, Any]], int, int]:
+    """检查 ``maicraft_execute`` 是否需要宿主自动拆发超长普通游戏公屏，返回 ``(调用参数列表, 原字数, 拆出句数)``。
+
+    - 顶层普通游戏公屏 ``chat``（无 target、非 ``/`` 命令、长度超阈）：拆为 2–3 次独立 ``chat`` 调用依次下发
+      （保持 ``CUTS_IN`` 插队语义，绝不改写为 ``sequence`` 以免打断当前在跑的主目标）；若带 ``request_key``
+      则按分片派生独立幂等键，防止 Mod 侧把后续分片当重复请求吞掉。
+    - ``sequence`` 内嵌超长普通游戏公屏 ``chat``：原地展开为多步 ``chat``，不改变外层序列语义。
+    - ``dry_run=True`` 或未超阈时原样返回单次调用且拆出句数为 0。
+    """
+    base_args = dict(arguments)
+    if base_args.get("dry_run") is True:
+        return [base_args], 0, 0
+    goal = base_args.get("goal")
+    if not isinstance(goal, Mapping):
+        return [base_args], 0, 0
+    short = _ability_short_name(str(goal.get("ability") or ""))
+    if short == "chat" and not goal.get("target"):
+        raw_msg = _read_chat_goal_message(goal)
+        cleaned = raw_msg.strip() if isinstance(raw_msg, str) else ""
+        if cleaned and not cleaned.startswith("/") and len(cleaned) > threshold:
+            chunks = split_public_chat_message(cleaned, threshold=threshold)
+            if len(chunks) >= 2:
+                raw_req_key = base_args.get("request_key")
+                req_key = str(raw_req_key).strip() if isinstance(raw_req_key, str) and raw_req_key.strip() else ""
+                planned: List[Dict[str, Any]] = []
+                for idx, chunk in enumerate(chunks, start=1):
+                    part_args = dict(base_args)
+                    part_args["goal"] = _normalize_chat_goal_with_message(goal, chunk)
+                    if req_key:
+                        part_args["request_key"] = f"{req_key}#part-{idx}"
+                    else:
+                        part_args.pop("request_key", None)
+                    planned.append(part_args)
+                return planned, len(cleaned), len(chunks)
+    if short == "sequence":
+        expanded_goal, expanded_count = _expand_sequence_chat_steps(goal, threshold=threshold)
+        if expanded_count > 0:
+            rewritten = dict(base_args)
+            rewritten["goal"] = expanded_goal
+            return [rewritten], 0, expanded_count
+    return [base_args], 0, 0
 
 
 def _public_chat_length_note(arguments: Mapping[str, Any], *, limit: int = PUBLIC_CHAT_SOFT_LENGTH_LIMIT) -> str:
@@ -1421,6 +1663,7 @@ class MinecraftAgent(BaseAgent):
         self._shown_commitment_ledger.clear()
         self._commitment_ledger_dirty = False
         self._clear_known_places_state()
+        self._wait_progress.clear_timers()
         self._release_epoch += 1
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
@@ -1479,6 +1722,7 @@ class MinecraftAgent(BaseAgent):
         self._commitment_ledger_dirty = False
         self._clear_known_places_state()
         self._wait_progress.resume()
+        self._wait_progress.clear_timers()
         self._furnace_waits.clear()
         self._set_open_question("")
         self._wake_queue.clear()
@@ -1781,6 +2025,9 @@ class MinecraftAgent(BaseAgent):
         if not (self._in_lead_mode and self._live_active):
             return
         if self._batch_active or not self._lead_idle_waiting or self._lead_idle_wakeup_at is None:
+            return
+        if self._wait_progress.active_timers():
+            # 仍有未到点的活跃计时器在等待 [计时] 通知，不触发短休眠误唤醒
             return
         if self._clock() < self._lead_idle_wakeup_at:
             return
@@ -2189,6 +2436,7 @@ class MinecraftAgent(BaseAgent):
             self._goal_ledger.forget(gid)
             self._solo_pacing.forget_goal(gid)
         self._wait_progress.resume()
+        self._wait_progress.clear_timers()
         self._furnace_waits.clear()
         self._set_open_question("")
         self._task_finished = True
@@ -2635,7 +2883,10 @@ class MinecraftAgent(BaseAgent):
             if self._in_lead_mode and all_commentary_only and commentary_succeeded and not self._message_queue:
                 tracked = self._goals.tracked_ids()
                 has_bg_work = (
-                    bool(tracked) or self._drawing_builder.in_progress() or bool(self._furnace_waits.waiting())
+                    bool(tracked)
+                    or self._drawing_builder.in_progress()
+                    or bool(self._furnace_waits.waiting())
+                    or bool(self._wait_progress.active_timers())
                 )
                 if has_bg_work:
                     if tracked:
@@ -2814,13 +3065,16 @@ class MinecraftAgent(BaseAgent):
         """游戏主控态下模型未调用工具时的收尾逻辑：绝不发 undelivered，防空转死循环烧 LLM。
 
         决策顺序：
-        1. 有在跑目标 / 图纸生成中 / 烧炉等待 -> 静默让出等待对应事件唤醒（空转计数清零）。
+        1. 有在跑目标 / 图纸生成中 / 烧炉等待 / 未到点活跃计时器（且无待回答或暂停目标）->
+           静默让出等待对应事件唤醒（空转计数清零）。
         2. 有待回答/暂停目标或未完成待办 -> 低于防空转上限时提醒继续自主推进；达上限则挂起等外部事件。
         3. 确实无未完成待办且无在跑目标 -> 进入有界短休眠/挂起等外部事件（游戏公屏/身体事件/观众建议）；
            连续空轮达上限后停止定时自醒，严格零空转。
         """
         pending = self._goals.tracked_ids()
         cooking = self._furnace_waits.waiting()
+        active_timers = self._wait_progress.active_timers()
+        actionable = self._goal_ledger.actionable_goal_ids()
         if pending:
             await self._stand_for_goals(pending)
             self._lead_empty_turns = 0
@@ -2834,8 +3088,19 @@ class MinecraftAgent(BaseAgent):
             self._lead_empty_turns = 0
             self._logger.info(f"主控批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
             return False
+        if active_timers and not actionable:
+            # 角色主动挂了未到期的 maicraft:timer 且本轮明确选择不调工具等待：
+            # 纳入合法等待态，清零空转计数与短休眠唤醒，等 [计时] 到点通知自然唤醒，不触发 [自主推进] 误催
+            self._lead_empty_turns = 0
+            self._lead_idle_waiting = False
+            self._lead_idle_wakeup_at = None
+            next_rem_s = active_timers[0].remaining_seconds(self._clock())
+            self._logger.info(
+                f"主控批次自然终止（{steps} 步），{len(active_timers)} 个活跃计时器等待中"
+                f"（最近约 {next_rem_s:.0f}s 后到点），静默让出"
+            )
+            return False
 
-        actionable = self._goal_ledger.actionable_goal_ids()
         if actionable or self._unfinished_todos():
             if self._lead_empty_turns < self._lead_max_empty_turns:
                 self._lead_empty_turns += 1
@@ -2893,11 +3158,12 @@ class MinecraftAgent(BaseAgent):
             self._logger.info(f"回应互动后收尾（{steps} 步），任务状态原样留着")
             return False
         pending = self._goals.tracked_ids()
-        # obtain 装好炉先走、回炉计时还没响：东西在炉子里烧着，到点会叫醒模型回去取。
+        # obtain 装好炉先走、回炉计时还没响，或主动挂了未到期的 maicraft:timer：到点会发 [计时] 叫醒模型。
         # 这时不调工具结束一轮和后台目标在跑一样是在等——不催、不挂起上报主播，也不代发成"停了没交付"
         cooking = self._furnace_waits.waiting()
+        active_timers = self._wait_progress.active_timers()
         actionable = self._goal_ledger.actionable_goal_ids()
-        if actionable or (not pending and not cooking and self._unfinished_todos()):
+        if actionable or (not pending and not cooking and not active_timers and self._unfinished_todos()):
             return await self._continue_after_no_progress(
                 messages, reminded, "仍有目标在等你回答或被暂停，或还有未完成待办"
             )
@@ -2907,10 +3173,16 @@ class MinecraftAgent(BaseAgent):
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(pending)} 个后台目标在跑，静默让出")
         elif self._drawing_builder.in_progress() or self._drawing_builder.has_unconsumed_notice():
             # 图纸在后台生成（或刚完成、通知还没进对话）：完成/失败会以 [系统] 通知叫醒，
-            # 不能判成"停了没交付"（§5 设计定案）
+            # 不能判成"停了没交付"
             self._logger.info(f"任务批次自然终止（{steps} 步），图纸生成中，静默让出等通知")
         elif cooking:
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
+        elif active_timers:
+            next_rem_s = active_timers[0].remaining_seconds(self._clock())
+            self._logger.info(
+                f"任务批次自然终止（{steps} 步），{len(active_timers)} 个活跃计时器等待中"
+                f"（最近约 {next_rem_s:.0f}s 后到点），静默让出"
+            )
         elif not self._task_reported and not self._delegations.finished_ids:
             # 这一批不在做哪件委派（交付后被计时到点、Mod 挂出的决策叫醒开的新任务，或没经委派的指令）：
             # 没有可结算的委派，安静收尾；代发"停了没交付"会把已经交付的那件改写成没交付
@@ -2967,7 +3239,7 @@ class MinecraftAgent(BaseAgent):
             return
         if self._goals.tracked_ids():
             return
-        if self._unfinished_todos() or self._furnace_waits.waiting():
+        if self._unfinished_todos() or self._furnace_waits.waiting() or self._wait_progress.active_timers():
             return
         finished = self._delegations.finished_ids
         if not finished:
@@ -3027,6 +3299,15 @@ class MinecraftAgent(BaseAgent):
             refusal = self._picture_budget.refusal()
             if refusal:
                 return {"ok": False, "error": {"code": "picture_limit", "message": refusal}}
+        if name == EXECUTE:
+            planned_calls, raw_len, split_count = _plan_public_chat_split_arguments(arguments)
+            if split_count > 0:
+                return await self._execute_split_public_chat(
+                    planned_calls,
+                    raw_len=raw_len,
+                    split_count=split_count,
+                    round_id=round_id,
+                )
         result = await self._tool_registry.invoke(
             ToolInvocation(
                 tool_name=name,
@@ -3057,6 +3338,78 @@ class MinecraftAgent(BaseAgent):
             absorb_result_images(self._transient_images, self._llm, MINECRAFT_PROFILE, name, result)
             return observation
         return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
+
+    async def _execute_split_public_chat(
+        self,
+        planned_calls: Sequence[Dict[str, Any]],
+        *,
+        raw_len: int,
+        split_count: int,
+        round_id: str,
+    ) -> Dict[str, Any]:
+        """执行宿主按句界拆出的多条普通游戏公屏消息（零额外 LLM 成本）。
+
+        - 顶层普通游戏公屏拆出的多条独立 ``chat``（保持 ``CUTS_IN`` 插队语义，不打断在跑主目标）：
+          按顺序依次下发；前 N-1 条下发后立刻同步吸收回复并冲刷自发聊天队列（登记目标跟踪与去重），
+          最后一条交由主循环统一吸收；任一条失败即中止后续分片并向模型如实回报进度。
+        - ``sequence`` 内嵌超长游戏公屏原地展开为多步 ``chat`` 后为单次调用，直接执行并附提示。
+        """
+        assert self._tool_registry is not None
+        if len(planned_calls) == 1:
+            # sequence 内嵌超长游戏公屏原地展开：一次下发，结束时由 attempts 逐句提取登记去重
+            result = await self._tool_registry.invoke(
+                ToolInvocation(
+                    tool_name=EXECUTE,
+                    arguments=planned_calls[0],
+                    source="minecraft-react",
+                    round_id=round_id,
+                    caller_profile=MINECRAFT_PROFILE,
+                    invoking_agent="minecraft",
+                )
+            )
+            obs = dict(reply_of(result).raw)
+            if obs.get("ok") is True:
+                _append_observation_note(
+                    obs,
+                    f"sequence 内含较长游戏公屏发言，{_PUBLIC_CHAT_SPLIT_NOTE_MARKER} {split_count} 条短句顺序发送。",
+                )
+            return obs
+
+        total_parts = len(planned_calls)
+        sent_parts = 0
+        last_obs: Dict[str, Any] = {}
+        for idx, part_args in enumerate(planned_calls):
+            result = await self._tool_registry.invoke(
+                ToolInvocation(
+                    tool_name=EXECUTE,
+                    arguments=part_args,
+                    source="minecraft-react",
+                    round_id=round_id,
+                    caller_profile=MINECRAFT_PROFILE,
+                    invoking_agent="minecraft",
+                )
+            )
+            part_obs = dict(reply_of(result).raw)
+            last_obs = part_obs
+            if part_obs.get("ok") is not True:
+                if sent_parts > 0:
+                    _append_observation_note(
+                        part_obs,
+                        f"{_PUBLIC_CHAT_SPLIT_NOTE_MARKER} {total_parts} 条短句，前 {sent_parts} 条已下发，"
+                        f"第 {idx + 1} 条未受理，剩余分片已停止下发。",
+                    )
+                return part_obs
+            sent_parts += 1
+            if idx < total_parts - 1:
+                # 前序分片立即走吸收与自发聊天冲刷，避免延迟滞留或遗漏前几句去重与目标跟踪
+                self._absorb_reply(EXECUTE, part_args, part_obs, skip_chat_length_note=True)
+                await self._flush_self_chats()
+        _append_observation_note(
+            last_obs,
+            f"这条游戏公屏消息有 {raw_len} 字，{_PUBLIC_CHAT_SPLIT_NOTE_MARKER} {total_parts} 条短句依次发送；"
+            "游戏聊天栏较窄，下次直接发更简短的句子即可。",
+        )
+        return last_obs
 
     async def _absorb_picture(
         self, arguments: Dict[str, Any], reply: MaicraftReply, result: ToolExecutionResult
@@ -3098,7 +3451,14 @@ class MinecraftAgent(BaseAgent):
         )
         return reply_of(result)
 
-    def _absorb_reply(self, name: str, arguments: Dict[str, Any], observation: Dict[str, Any]) -> None:
+    def _absorb_reply(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        observation: Dict[str, Any],
+        *,
+        skip_chat_length_note: bool = False,
+    ) -> None:
         """从 observe / execute / goal 的回复里同步坐标基线与目标运行：没结束的开始跟踪，状态变化记下，结束的收起。"""
         if observation.get("ok") is not True:
             return
@@ -3134,11 +3494,17 @@ class MinecraftAgent(BaseAgent):
             return
         if name not in (EXECUTE, GOAL):
             return
-        if name == EXECUTE:
-            # 普通游戏公屏单条超过 45 字时附温和非阻断轻提醒（不拦截、不报错，兼容直接 chat 与 sequence 内嵌 chat）
-            length_note = _public_chat_length_note(arguments)
-            if length_note:
-                _append_observation_note(observation, length_note)
+        if name == EXECUTE and not skip_chat_length_note:
+            # 已被宿主自动按句界拆发的调用不再重复追加普通超长提醒
+            raw_notes = observation.get("notes")
+            already_split = isinstance(raw_notes, list) and any(
+                isinstance(item, str) and _PUBLIC_CHAT_SPLIT_NOTE_MARKER in item for item in raw_notes
+            )
+            if not already_split:
+                # 普通游戏公屏单条超过 45 字时附温和非阻断轻提醒（不拦截、不报错，兼容直接 chat 与 sequence 内嵌 chat）
+                length_note = _public_chat_length_note(arguments)
+                if length_note:
+                    _append_observation_note(observation, length_note)
         if name == GOAL and arguments.get("operation") == "list":
             for item in data.get("goals") or []:
                 listed = goal_run_of(item) if isinstance(item, dict) else None
@@ -3211,8 +3577,9 @@ class MinecraftAgent(BaseAgent):
                 run.result_status or ("cancelled" if arguments.get("operation") == "cancel" else ""),
             )
             self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
-            # 模型先于结束事件读到结束的 obtain：装好炉先走的回炉计时从这里记上（同一个计时只记一次）
+            # 模型先于结束事件读到结束的 obtain/timer：同步回炉计时与活跃计时器对账
             self._furnace_waits.absorb(run)
+            self._wait_progress.absorb_timer(run)
             if run.finished:
                 # 模型先于结束事件经 goal(get) 读到已结束的 chat/sequence：同步提取已交出的公屏发言防漏记
                 self._queue_self_chats_from_reply(run)
@@ -5081,7 +5448,7 @@ class MinecraftAgent(BaseAgent):
         if payload.kind != "system":
             return
 
-        # 先尝试生物名册死讯识别（死亡翻译键或无键系统播报均参与匹配）
+        # 先尝试生物名册死讯识别（死亡翻译键或无键系统播报均参与匹配；命中已登记宠物/女仆/村民仍优先走名册里程碑）
         is_death_key = bool(payload.message_key and payload.message_key.startswith("death."))
         if not payload.message_key or is_death_key:
             victim = next(
@@ -5102,10 +5469,9 @@ class MinecraftAgent(BaseAgent):
                     return
             except Exception as exc:  # noqa: BLE001 - 认不出死讯不影响聊天流本身
                 self._logger.warning(f"按名册认死讯失败（原话：{payload.content}）", exc=exc)
-        if is_death_key:
-            return
 
-        # 非死亡服务器反馈：仅在开播且处于游戏主控态或活跃委派任务期间放行，空闲严格零消耗
+        # 服务器系统消息与未命中生物名册的死亡播报（如在线玩家死讯）：
+        # 仅在开播且处于游戏主控态或活跃委派任务期间放行并走去重节流，空闲态严格零消耗忽略
         if not (self._live_active and (self._in_lead_mode or not self._task_finished)):
             return
         content = " ".join((payload.content or "").split())
@@ -5310,8 +5676,9 @@ class MinecraftAgent(BaseAgent):
         self._task_finished = kind == "delivery"
         self._task_suspended = kind == "escalation"
         if kind == "delivery":
-            # 交付了：卡住时问过的问题随这件事一起了结
+            # 交付了：卡住时问过的问题与本单遗留计时器随这件事一起了结
             self._set_open_question("")
+            self._wait_progress.clear_timers()
             self._delegations.finish("succeeded", summary=f"{kind}: {content}")
         else:
             # 报卡住：这次问的就是在等主播回答的问题（叫醒后遇到新卡点再报，就换成新的问题）
@@ -5634,17 +6001,23 @@ class MinecraftAgent(BaseAgent):
         return list(self._message_queue)
 
     @property
+    def active_timers(self) -> List[ActiveTimer]:
+        """当前尚未到点的活跃 ``maicraft:timer`` 列表（只读观察者）。"""
+        return self._wait_progress.active_timers()
+
+    @property
     def batch_active(self) -> bool:
         """本批 ReAct 是否正在跑（只读只读观察者）。"""
         return self._batch_active
 
     def observation(self) -> Dict[str, Any]:
-        """任务推进状态快照（只读只读观察者）：批状态、任务状态、站桩计时、身体故障说法、本批身体事件与攒着的互动通知数。"""
+        """任务推进状态快照（只读只读观察者）：批状态、任务状态、站桩计时、活跃计时器数、身体故障说法、本批身体事件与攒着的互动通知数。"""
         return {
             "batch_active": self._batch_active,
             "in_lead_mode": self._in_lead_mode,
             "lead_empty_turns": self._lead_empty_turns,
             "lead_idle_waiting": self._lead_idle_waiting,
+            "active_timer_count": len(self._wait_progress.active_timers()),
             "spoken_echo_count": len(self._spoken_echo_buffer),
             "task_finished": self._task_finished,
             "task_suspended": self._task_suspended,

@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.agents.minecraft.furnace_wait import TIMER_ABILITY
 from src.agents.minecraft.maicraft import GoalRun
 
 __all__ = [
+    "ActiveTimer",
     "POSITION_PROGRESS_BLOCKS",
     "USER_TIMER_SLACK_S",
     "WAIT_PROGRESS_LIMIT_S",
@@ -45,6 +47,20 @@ USER_TIMER_SLACK_S = 15.0
 
 #: 维度 + 三维坐标
 Coords = Tuple[str, float, float, float]
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveTimer:
+    """一条由 ``maicraft:timer`` 登记、尚未到期的活跃等待计时器。"""
+
+    timer_id: int
+    due_at: float
+    note: str = ""
+
+    def remaining_seconds(self, now: float) -> float:
+        """距离预计到点时刻还剩多少秒（单调时钟域，下限 0）。"""
+        return max(0.0, self.due_at - now)
+
 
 _TIMER_DUE_ID = re.compile(r"计时\s*(\d+)\s*到点")
 _STEP_NUMBER = re.compile(r"第\s*(\d+)\s*步")
@@ -114,8 +130,8 @@ class WaitProgress:
         # 连续叫醒退避：同一组目标在无新进展下连续被叫醒时翻倍，换目标或有进展归零
         self._alert_goals: Tuple[int, ...] = ()
         self._consecutive_alerts: int = 0
-        # 游戏 Agent 主动设定的 maicraft:timer 到期时刻（timer_id -> 单调时钟秒）
-        self._user_timers: Dict[int, float] = {}
+        # 游戏 Agent 主动设定的 maicraft:timer 活跃计时器（timer_id -> ActiveTimer）
+        self._user_timers: Dict[int, ActiveTimer] = {}
         self._synthetic_timer_seq: int = -1
 
     @property
@@ -199,7 +215,11 @@ class WaitProgress:
     # ---- 自设计时器（maicraft:timer）跟踪 ----
 
     def absorb_timer(self, run: GoalRun, arguments: Optional[Mapping[str, Any]] = None) -> None:
-        """吸收一次 ``maicraft:timer`` 执行结果，同步当前挂着的自设计时器预计到期时刻。"""
+        """吸收一次 ``maicraft:timer`` 执行结果，同步当前挂着的自设计时器预计到期时刻。
+
+        优先使用 Mod 回执里权威的 ``details.pending`` 全量对账（覆盖 set/cancel/list 与回炉计时）；
+        老版本或无 ``pending`` 时回退按调用参数（兼容 ``goal.parameters`` 与顶层 ``goal`` 快捷字段）登记或核销。
+        """
         if run.ability != TIMER_ABILITY or run.result_status not in ("done", ""):
             return
         now = self._clock()
@@ -207,31 +227,42 @@ class WaitProgress:
         details = result.get("details") if isinstance(result.get("details"), Mapping) else {}
         pending = details.get("pending")
         if isinstance(pending, list):
-            updated: Dict[int, float] = {}
+            # 收到 Mod 回传的完整 pending 清单：以 Mod 权威列表重建本地活跃计时器集合
+            updated: Dict[int, ActiveTimer] = {}
             for item in pending:
                 if not isinstance(item, Mapping):
                     continue
                 tid = item.get("timer_id")
                 rem = item.get("remaining_seconds")
                 if isinstance(tid, int) and not isinstance(tid, bool) and isinstance(rem, (int, float)):
-                    updated[tid] = now + max(0.0, float(rem))
+                    rem_s = float(rem)
+                    if rem_s <= 0:
+                        continue
+                    note = str(item.get("note") or "").strip()
+                    updated[tid] = ActiveTimer(timer_id=tid, due_at=now + rem_s, note=note)
             self._user_timers = updated
             return
         goal_arg = (arguments or {}).get("goal") if isinstance(arguments, Mapping) else None
-        params = goal_arg.get("parameters") if isinstance(goal_arg, Mapping) else None
-        if not isinstance(params, Mapping):
+        if not isinstance(goal_arg, Mapping):
             return
-        op = str(params.get("operation") or "set")
+        raw_params = goal_arg.get("parameters")
+        params: Mapping[str, Any] = raw_params if isinstance(raw_params, Mapping) else {}
+        op = str(params.get("operation") or goal_arg.get("operation") or "set").strip().lower()
         if op == "set":
             after_s = params.get("after_seconds")
+            if after_s is None:
+                after_s = goal_arg.get("after_seconds")
+            note = str(params.get("note") or goal_arg.get("note") or details.get("note") or "").strip()
             tid = details.get("timer_id")
             if isinstance(after_s, (int, float)) and not isinstance(after_s, bool) and after_s > 0:
                 if not isinstance(tid, int) or isinstance(tid, bool):
                     tid = self._synthetic_timer_seq
                     self._synthetic_timer_seq -= 1
-                self._user_timers[tid] = now + float(after_s)
+                self._user_timers[tid] = ActiveTimer(timer_id=tid, due_at=now + float(after_s), note=note)
         elif op == "cancel":
             tid = params.get("timer_id")
+            if tid is None:
+                tid = goal_arg.get("timer_id")
             if isinstance(tid, int) and not isinstance(tid, bool):
                 self._user_timers.pop(tid, None)
 
@@ -245,17 +276,33 @@ class WaitProgress:
             self._user_timers.pop(tid, None)
         else:
             now = self._clock()
-            self._user_timers = {k: due for k, due in self._user_timers.items() if due > now}
+            self._user_timers = {k: timer for k, timer in self._user_timers.items() if timer.due_at > now}
         self.note_progress()
 
     def clear_timers(self) -> None:
-        """换存档时 Mod 已清空全部计时器，本地同步清空。"""
+        """换存档、退出主控或收手时清空本地维护的自设计时器集合。"""
         self._user_timers.clear()
+
+    def active_timers(self) -> List[ActiveTimer]:
+        """返回此刻仍未到点的活跃自设计时器列表（按到期先后排序）。
+
+        到期后立刻不再视为合法等待态，避免 ``timer_due`` 意外丢失时永久静默挂起；
+        超出宽限期的过期项同步清理，避免内部字典堆积。
+        """
+        now = self._clock()
+        self._user_timers = {
+            tid: timer for tid, timer in self._user_timers.items() if timer.due_at + USER_TIMER_SLACK_S > now
+        }
+        active = [timer for timer in self._user_timers.values() if timer.due_at > now]
+        active.sort(key=lambda item: (item.due_at, item.timer_id))
+        return active
 
     def suppressed_by_timer(self, goal_doings: Optional[Mapping[int, str]] = None) -> bool:
         """是否存在仍在有效期内的自设计时器（且在跑目标未全部卡在第 0 步被生存急事堵死）。"""
         now = self._clock()
-        self._user_timers = {tid: due for tid, due in self._user_timers.items() if due + USER_TIMER_SLACK_S > now}
+        self._user_timers = {
+            tid: timer for tid, timer in self._user_timers.items() if timer.due_at + USER_TIMER_SLACK_S > now
+        }
         if not self._user_timers:
             return False
         source = goal_doings if goal_doings is not None else self._goal_doings

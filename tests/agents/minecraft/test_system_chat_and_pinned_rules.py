@@ -202,7 +202,7 @@ async def test_system_chat_throttles_burst_within_15s_and_merges_count_while_kee
         assert "First position set to (99, 64, 20)" in agent.queued_messages[2][1]
         assert "合并 3 次" in agent.queued_messages[2][1]
 
-        # 死亡翻译键不会误当 [系统提示] 入队，且已入册生物的死讯仍正常触发里程碑
+        # 未命中生物名册的死亡翻译键（如在线玩家或未登记实体死讯）在主控态走 [系统提示] 入队，不发名册里程碑
         await bus.emit(
             CoreEvents.GAME_CHAT_RECEIVED,
             GameChatPayload(
@@ -215,9 +215,111 @@ async def test_system_chat_throttles_burst_within_15s_and_merges_count_while_kee
             source="test",
         )
         await bus.wait_until_drained()
-        assert len(agent.queued_messages) == 3
+        assert len(agent.queued_messages) == 4
+        assert agent.queued_messages[3][1] == "[系统提示] 某个陌生村民死了"
         assert milestones == []
         assert len(llm.seen) == calls_before
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_player_death_chat_routes_by_control_state_and_preserves_creature_milestone() -> None:
+    """玩家 death.* 在主控态与活跃委派态走 [系统提示]，空闲态零消耗忽略，已登记宠物仍优先走名册里程碑。"""
+    now_s = [250.0]
+    bus = EventBus(enable_stats=False)
+    milestones: List[GamePayload] = []
+
+    async def _on_milestone(_name: str, payload: GamePayload, _src: str) -> None:
+        milestones.append(payload)
+
+    bus.on(CoreEvents.GAME_MILESTONE, _on_milestone, model_class=GamePayload)
+    server = FakeMaicraft()
+    # 场景里放一只属于角色自己的命名驯服狼，经公开 minecraft_glance 自动登记进生物名册
+    server.scene_view["entities"] = [
+        {
+            "id": "e10",
+            "type": "minecraft:wolf",
+            "name": "小灰",
+            "uuid": "wolf-uuid-1",
+            "traits": {"驯服": "你的"},
+            "direction": "前方",
+            "distance": 4,
+            "hostile": False,
+        }
+    ]
+    registry = ToolRegistry()
+    agent, llm, _ = await make_minecraft_agent(
+        server,
+        lambda _m: _resp("收到死讯"),
+        bus=bus,
+        registry=registry,
+        live=True,
+        clock=lambda: now_s[0],
+    )
+    try:
+        # 通过公开工具 minecraft_glance 读一眼场景，使生物名册自动建档“小灰”
+        glance_result = await registry.invoke(ToolInvocation(tool_name="minecraft_glance", arguments={"what": "scene"}))
+        assert glance_result.success is True
+
+        # 空闲态：玩家 death.* 严格零消耗忽略，不入队也不唤醒模型
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="system",
+                content="PartnerA 试图在岩浆里游泳",
+                message_key="death.attack.lava",
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert agent.queued_messages == []
+        assert len(llm.seen) == 0
+
+        # 进入游戏主控态并消费完开局简报
+        assert (
+            await agent.enter_lead(
+                LeadHandoverContext(segment_id="seg-death", segment_title="联机探险", segment_goal="探索下界")
+            )
+            is True
+        )
+        await _wait_until(lambda: len(llm.seen) >= 1 and not agent.batch_active)
+        calls_before = len(llm.seen)
+
+        # 主控态下在线玩家 death.* 经 _enqueue_system_chat_notice 注入 [系统提示] 并唤醒游戏侧推理
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="system",
+                content="PartnerA 试图在岩浆里游泳",
+                message_key="death.attack.lava",
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await _wait_until(lambda: len(llm.seen) > calls_before and not agent.batch_active)
+        assert "[系统提示] PartnerA 试图在岩浆里游泳" in _texts(llm.seen[-1])
+        assert milestones == []
+
+        # 已登记宠物死讯仍优先命中生物名册并上报里程碑，不再重复当普通 [系统提示] 唤醒游戏侧
+        calls_after_player_death = len(llm.seen)
+        await bus.emit(
+            CoreEvents.GAME_CHAT_RECEIVED,
+            GameChatPayload(
+                game="minecraft",
+                kind="system",
+                content="小灰 被僵尸杀死了",
+                message_key="death.attack.mob",
+                mentions=[GameChatMention(name="小灰", type="minecraft:wolf", id="wolf-uuid-1")],
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert len(milestones) == 1
+        assert "小灰" in milestones[0].message
+        assert len(llm.seen) == calls_after_player_death
     finally:
         await agent.stop()
         await bus.cleanup()
