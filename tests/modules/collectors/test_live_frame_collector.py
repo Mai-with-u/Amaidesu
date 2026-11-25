@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 from types import SimpleNamespace
 from typing import List, Optional
 
@@ -123,9 +124,10 @@ def test_config_defaults_are_constructible() -> None:
 
 
 class _FakeObsClient:
-    """ObsClient 替身：记录调用，按需在截图时失败。"""
+    """ObsClient 替身：记录调用，按需在握手连接或截图请求阶段失败。"""
 
     instances: List["_FakeObsClient"] = []
+    fail_connect: Optional[Exception] = None
     fail_screenshot: Optional[Exception] = None
 
     def __init__(self, *, host: str, port: int, password: str, timeout: int) -> None:
@@ -135,6 +137,8 @@ class _FakeObsClient:
         _FakeObsClient.instances.append(self)
 
     def connect(self) -> None:
+        if _FakeObsClient.fail_connect is not None:
+            raise _FakeObsClient.fail_connect
         return None
 
     def call(self, request: object) -> object:
@@ -176,6 +180,7 @@ class _FakeObsClient:
 @pytest.fixture
 def fake_obs(monkeypatch: pytest.MonkeyPatch) -> type:
     _FakeObsClient.instances = []
+    _FakeObsClient.fail_connect = None
     _FakeObsClient.fail_screenshot = None
     monkeypatch.setattr(obs_client, "ObsClient", _FakeObsClient)
     return _FakeObsClient
@@ -205,13 +210,57 @@ async def test_obs_grabber_drops_client_on_failure_and_reconnects(fake_obs: type
 
 
 def test_obs_errors_are_translated_to_fixes() -> None:
-    """常见失败翻译成照着改的原因：没开、要密码、密码不对、找不到来源。"""
+    """常见失败翻译成照着改的原因：没开、要密码、密码不对、已连接后 OBS 关机断连、找不到来源。"""
 
-    def describe(error: BaseException) -> str:
-        return describe_live_frame_obs_error(error, host="localhost", port=4455, source="游戏画面")
+    def describe(error: BaseException, *, connected: bool = False) -> str:
+        return describe_live_frame_obs_error(error, host="localhost", port=4455, source="游戏画面", connected=connected)
+
+    closed_exc = type("WebSocketConnectionClosedException", (Exception,), {})("Connection is already closed.")
 
     assert "启用 WebSocket 服务器" in describe(ConnectionRefusedError())
     assert "obs_password" in describe(Exception("Empty response to Identify, password may be inconnect."))
     assert "密码不一致" in describe(Exception("failed to identify client with the server"))
+    assert "密码不一致" in describe(closed_exc, connected=False)
+    assert "连接断开了：OBS 关闭或重启过" in describe(closed_exc, connected=True)
+    assert "密码不一致" not in describe(closed_exc, connected=True)
+    assert "连接断开了：OBS 关闭或重启过" in describe(json.JSONDecodeError("Expecting value", "", 0), connected=True)
     assert "找不到要截的场景或来源「游戏画面」" in describe(OBSRequestError("GetSourceScreenshot", 600, "x"))
     assert "超时" in describe(TimeoutError())
+
+
+async def test_obs_grabber_distinguishes_handshake_auth_failure_from_connected_shutdown(fake_obs: type) -> None:
+    """ObsFrameGrabber 区分握手阶段密码被拒与已连接后 OBS 正常关机断连，重连回握手阶段自动复位 connected=False。"""
+    closed_exc = type("WebSocketConnectionClosedException", (Exception,), {})("Connection is already closed.")
+    grabber = ObsFrameGrabber(host="localhost", port=4455, password="pw", source="游戏画面", max_width=768)
+
+    # 1) 握手阶段被 OBS 断开 -> 识别为身份验证密码不一致
+    fake_obs.fail_connect = closed_exc
+    with pytest.raises(type(closed_exc)) as handshake_err:
+        await grabber.grab()
+    handshake_msg = grabber.describe(handshake_err.value)
+    assert "密码不一致" in handshake_msg and "obs_password" in handshake_msg
+
+    # 2) 连接成功并正常截帧后，OBS 关机在请求阶段抛 WebSocketConnectionClosedException -> 识别为连接断开而非密码不一致
+    fake_obs.fail_connect = None
+    assert await grabber.grab() is not None
+    fake_obs.fail_screenshot = closed_exc
+    with pytest.raises(type(closed_exc)) as shutdown_err:
+        await grabber.grab()
+    shutdown_msg = grabber.describe(shutdown_err.value)
+    assert "连接断开了：OBS 关闭或重启过" in shutdown_msg
+    assert "密码不一致" not in shutdown_msg
+
+    # 3) 已连接后 OBS 关机发关闭帧导致 JSONDecodeError -> 同样识别为连接断开
+    fake_obs.fail_screenshot = None
+    assert await grabber.grab() is not None
+    fake_obs.fail_screenshot = json.JSONDecodeError("Expecting value", "", 0)
+    with pytest.raises(json.JSONDecodeError) as json_err:
+        await grabber.grab()
+    assert "连接断开了：OBS 关闭或重启过" in grabber.describe(json_err.value)
+
+    # 4) 断连后下次重连若在握手阶段再次认证失败 -> 自动复位为 connected=False，准确报密码不一致
+    fake_obs.fail_screenshot = None
+    fake_obs.fail_connect = closed_exc
+    with pytest.raises(type(closed_exc)) as reconnect_err:
+        await grabber.grab()
+    assert "密码不一致" in grabber.describe(reconnect_err.value)

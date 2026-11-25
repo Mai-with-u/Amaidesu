@@ -83,11 +83,18 @@ def frame_change(previous: Optional[List[int]], current: List[int]) -> float:
     return sum(abs(a - b) for a, b in zip(previous, current, strict=True)) / (255 * len(current))
 
 
-def describe_live_frame_obs_error(error: BaseException, *, host: str, port: int, source: str) -> str:
+def describe_live_frame_obs_error(
+    error: BaseException,
+    *,
+    host: str,
+    port: int,
+    source: str,
+    connected: bool = False,
+) -> str:
     """把 OBS 取帧失败翻译成能照着改的原因（采集器告警与诊断脚本共用）。
 
-    配置项一律指向 ``collectors.toml`` 的 ``[live_frame]``；采集器取帧时不区分连接与请求阶段
-    （断了就丢掉客户端、下次重连），连接被关闭按握手阶段理解为身份验证被拒。
+    配置项一律指向 ``collectors.toml`` 的 ``[live_frame]``；``connected`` 区分握手阶段
+    身份验证被拒（``False``）与已连接后 OBS 正常关闭/重启导致的断连（``True``）。
     """
     return describe_obs_error(
         error,
@@ -98,6 +105,7 @@ def describe_live_frame_obs_error(error: BaseException, *, host: str, port: int,
             f"OBS 里找不到要截的场景或来源「{source or '当前节目场景'}」："
             "检查 [live_frame].obs_source 的拼写（区分大小写），留空则截当前节目场景"
         ),
+        connected=connected,
     )
 
 
@@ -119,6 +127,8 @@ class ObsFrameGrabber:
         self._client: Any = None
         self._height = 0
         self._format = "jpg"
+        # 记录最近一次取帧失败是否发生在握手已通过之后，避免 OBS 正常关机断连被误报成密码不一致
+        self._last_error_connected = False
         self._logger = get_logger("LiveFrameCollector")
         silence_third_party_logger("obswebsocket")
 
@@ -131,7 +141,13 @@ class ObsFrameGrabber:
             await asyncio.to_thread(self._disconnect, client)
 
     def describe(self, error: BaseException) -> str:
-        return describe_live_frame_obs_error(error, host=self._host, port=self._port, source=self._source)
+        return describe_live_frame_obs_error(
+            error,
+            host=self._host,
+            port=self._port,
+            source=self._source,
+            connected=self._last_error_connected,
+        )
 
     def _disconnect(self, client: Any) -> None:
         try:
@@ -145,6 +161,7 @@ class ObsFrameGrabber:
         from src.modules.studio.obs.obs_client import ObsClient, obs_requests
 
         client = ObsClient(host=self._host, port=self._port, password=self._password or "", timeout=3)
+        # 握手与认证阶段失败保持 _last_error_connected=False，使连接关闭按密码认证失败翻译
         client.connect()
         try:
             version = client.call(obs_requests.GetVersion())
@@ -154,6 +171,8 @@ class ObsFrameGrabber:
             )
             video = client.call(obs_requests.GetVideoSettings())
         except Exception:
+            # 握手已通过，后续初始化请求阶段断连说明 OBS 关闭或重启
+            self._last_error_connected = True
             self._disconnect(client)
             raise
         try:
@@ -169,6 +188,8 @@ class ObsFrameGrabber:
         # 同 _connect：obs-websocket-py 为可选重型依赖，取帧路径按需加载
         from src.modules.studio.obs.obs_client import obs_requests
 
+        # 每次取帧前先重置连接态标志：若本次需要新建连接且在握手期失败，describe() 收到 connected=False
+        self._last_error_connected = False
         if self._client is None:
             self._client = self._connect()
         try:
@@ -186,7 +207,8 @@ class ObsFrameGrabber:
                 )
             )
         except Exception:
-            # 连接断了（OBS 重启等）或来源名不对：丢掉客户端，下次取帧重连
+            # 连接已建立后的请求阶段失败（OBS 关闭/重启或来源名不对）：标记已连接态后丢掉客户端，下次取帧重连
+            self._last_error_connected = True
             client, self._client = self._client, None
             self._disconnect(client)
             raise
