@@ -150,6 +150,70 @@ def test_delegation_turn_not_in_batch() -> None:
     assert batch.events == () and batch.facts_text == ""
 
 
+def test_throttle_drops_milestone_after_free_count() -> None:
+    """同类压制：milestone 前 2 条照常入账，第 3 条起丢弃且返回空串。"""
+    ledger = GameLedger()
+    assert ledger.record_event("minecraft", "milestone", "采集完成：8 个橡木原木进了背包", 1000)
+    assert ledger.record_event("minecraft", "milestone", "采集完成：4 个圆石进了背包", 2000)
+    assert ledger.record_event("minecraft", "milestone", "采集完成：2 个铁矿进了背包", 3000) == ""
+    batch = ledger.drain()
+    assert len(batch.events) == 2
+    assert "铁矿" not in batch.events[0] + batch.events[1]
+
+
+def test_notable_milestone_never_throttled() -> None:
+    """高光里程碑不受同类压制：免费条数用完仍照常入账。"""
+    ledger = GameLedger()
+    ledger.record_event("minecraft", "milestone", "采集完成：8 个橡木原木", 1000)
+    ledger.record_event("minecraft", "milestone", "采集完成：4 个圆石", 2000)
+    assert ledger.record_event("minecraft", "milestone", "开箱发现附魔金苹果", 3000, notable=True)
+    assert len(ledger.drain().events) == 3
+
+
+def test_throttle_exempt_types_not_counted() -> None:
+    """压制只及名单内类型：report 连发多条不丢、也不占 milestone 的免费条数。"""
+    ledger = GameLedger()
+    for i in range(5):
+        assert ledger.record_event("minecraft", "report", f"交付 {i} 号", 1000 + i)
+    assert len(ledger.drain().events) == 5
+
+
+def test_throttle_counts_reset_on_session_boundary() -> None:
+    """场次边界清零重计：reset 后同类型重新享有免费条数。"""
+    ledger = GameLedger()
+    ledger.record_event("minecraft", "milestone", "采集完成：8 个橡木原木", 1000)
+    ledger.record_event("minecraft", "milestone", "采集完成：4 个圆石", 2000)
+    assert ledger.record_event("minecraft", "milestone", "采集完成：2 个铁矿", 3000) == ""
+    ledger.reset()
+    assert ledger.record_event("minecraft", "milestone", "采集完成：6 个煤矿", 4000)
+    assert ledger.record_event("minecraft", "milestone", "采集完成：3 个金矿", 5000)
+    assert ledger.record_event("minecraft", "milestone", "采集完成：1 个钻石", 6000) == ""
+
+
+def test_throttle_independent_per_type_and_game() -> None:
+    """压制计数按行标签独立：不同类型、不同游戏互不占对方的免费条数。"""
+    ledger = GameLedger()
+    assert ledger.record_event("minecraft", "milestone", "采集完成：8 个橡木原木", 1000)
+    assert ledger.record_event("minecraft", "milestone", "采集完成：4 个圆石", 2000)
+    assert ledger.record_event("factorio", "milestone", "组装机完工", 3000)
+    assert ledger.record_event("minecraft", "milestone", "采集完成：2 个铁矿", 4000) == ""
+    assert ledger.record_event("factorio", "milestone", "传送带铺好", 5000)
+    batch = ledger.drain()
+    assert len(batch.events) == 4
+    assert any("铁矿" not in event and "橡木" in event for event in batch.events)
+    assert sum("factorio" in event for event in batch.events) == 2
+
+
+def test_fold_still_works_within_free_count() -> None:
+    """压制与同摘要折叠共存：免费条数内同摘要连发照旧并入只记数。"""
+    ledger = GameLedger()
+    ledger.record_event("minecraft", "milestone", "采集完成：8 个橡木原木进了背包", 1000)
+    ledger.record_event("minecraft", "milestone", "采集完成：8 个橡木原木进了背包", 2000)
+    batch = ledger.drain()
+    assert len(batch.events) == 1
+    assert "另 1 次相同" in batch.events[0]
+
+
 def test_tool_receipt_key_fields_appended() -> None:
     """带工具回执：glance 形态回执的身体/背包/工作要点各成一行；场景列表不进。"""
     facts = GameLedger.compose_facts("", [("glance", _RECEIPT)])

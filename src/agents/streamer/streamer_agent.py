@@ -3262,7 +3262,13 @@ class StreamerAgent(BaseAgent):
         try:
             self._note_game_activity(payload.game)
             event_ts = payload.timestamp_ms or self._clock()
-            message = self._game_ledger.record_event(payload.game, payload.event_type, payload.message, event_ts)
+            message = self._game_ledger.record_event(
+                payload.game,
+                payload.event_type,
+                payload.message,
+                event_ts,
+                notable=payload.notable,
+            )
             if payload.event_type in ("milestone", "report") and message:
                 self._note_latest_game_activity(message, at_ms=event_ts)
             if self._mouth is not None and payload.event_type != "error" and message:

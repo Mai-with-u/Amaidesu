@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import Any, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 from src.modules.utils.time_utils import now_ms
 
@@ -32,6 +32,14 @@ _GAME_EVENT_FOLD_WINDOW_MS = 90_000
 
 # 待入账队列上限（条）。决策回合长期不发生时防无界增长；溢出丢最旧
 _PENDING_GAME_EVENTS_MAX = 200
+
+# 场次内同类事件压制名单：叙事价值低、一晚重复几十次的游戏进展类型，免费条数用完后不再入账。
+# milestone 收录步进完成、换存档、生物倒下这类"干成了小事"的上报——头几条照常是新闻，之后不再逐条
+# 进时间线；开箱发现稀罕宝物带 notable 高光标记，永不压制。实战发现新的高频低价值类型再加进本集合。
+_THROTTLED_EVENT_TYPES = frozenset({"milestone"})
+
+# 同类型事件免费入账条数：达到后的同类条目直接丢弃（不进待入账队列）；场次边界清零重计
+_REPEAT_EVENT_FREE_COUNT = 2
 
 #: 状态跃迁类事件种类：身体遭遇线（game.body.*）的死亡/重生/临时任务开始与结束，
 #: 游戏进展线（game.*）的交付/升级上报（任务结束或卡住待定夺）
@@ -170,10 +178,13 @@ class GameLedger:
 
     def __init__(self) -> None:
         self._pending: List[_PendingEntry] = []
+        # 场次内各事件类型已免费入账的条数（键=行标签，跨游戏各自计）
+        self._type_counts: Dict[str, int] = {}
 
     def reset(self) -> None:
-        """清空待入账队列（场次开关边界：上一场的未出账条目不带入下一场）。"""
+        """清空待入账队列与类型计数（场次开关边界：上一场的未出账条目不带入下一场）。"""
         self._pending.clear()
+        self._type_counts.clear()
 
     def pending_lines(self) -> List[str]:
         """待入账事件行的只读快照（已脱敏的行原文；出账经 ``drain``，本方法只看不取）。"""
@@ -221,10 +232,19 @@ class GameLedger:
 
     # ==================== 入账 ====================
 
-    def record_event(self, game: str, event_type: str, message: str, timestamp_ms: int) -> str:
-        """游戏进展事件（game.*）入账，返回脱敏后的正文供嘴部喂料复用。"""
+    def record_event(
+        self, game: str, event_type: str, message: str, timestamp_ms: int, *, notable: bool = False
+    ) -> str:
+        """游戏进展事件（game.*）入账，返回脱敏后的正文供嘴部喂料复用。
+
+        ``notable`` 是高光里程碑（如开箱发现稀罕宝物）：不受同类压制，恒入账。
+        压制名单内的类型在免费条数用完后返回空串且不入账——调用方以空串判断
+        这条不值得再喂给嘴部。
+        """
         message = sanitize_internal_terms(message)
         label = self.game_label(game, event_type)
+        if self._throttled(label, notable):
+            return ""
         self._stage(note_turn(label, message, timestamp_ms or now_ms()), label=label, body=message)
         return message
 
@@ -305,6 +325,20 @@ class GameLedger:
     def record_delegation(self, agent: str, instruction: str) -> TimelineTurn:
         """Planner 受理委派：构造"我在哪个游戏里开始做什么"的时间线行（直写时间线用）。"""
         return note_turn(self.delegation_label(agent), sanitize_internal_terms(instruction), now_ms())
+
+    def _throttled(self, label: str, notable: bool) -> bool:
+        """该条是否已被同类压制：名单内类型、非高光，免费条数用完后不再入账。
+
+        只判游戏进展行（``游戏·<game>·<type>``）——名单收事件类型，遭遇行的
+        kind 与它同名时不受牵连。未到压制线时顺带递增免费计数；被压的条目不计数。
+        """
+        if notable or not label.startswith("游戏·") or label.split("·")[-1] not in _THROTTLED_EVENT_TYPES:
+            return False
+        seen = self._type_counts.get(label, 0)
+        if seen >= _REPEAT_EVENT_FREE_COUNT:
+            return True
+        self._type_counts[label] = seen + 1
+        return False
 
     def _stage(
         self,
