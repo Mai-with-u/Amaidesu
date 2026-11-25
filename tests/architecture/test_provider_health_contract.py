@@ -9,13 +9,14 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
+from functools import lru_cache
 
 import pytest
 
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider
 from src.modules.mcp.provider import McpToolProvider
 from src.modules.tools.provider import BaseToolProvider
+from tests.architecture._ast_cache import SRC_ROOT as SRC, parsed_py_files
 
 EXPECTED_HEALTH_CHECK_PROVIDERS: list[type] = [McpToolProvider, VTSProvider]
 
@@ -37,26 +38,22 @@ PENDING_HEALTH_CHECK_PROVIDERS: dict[str, str] = {
     "AvatarActProvider": "委托面捕合成器执行身体动作，不维护外部连接，基类默认探活语义成立",
 }
 
-SRC = Path(__file__).resolve().parents[2] / "src"
 # 子类判定认可的基类名（含连接态中间层 ConnectionToolProvider 的传递子类）
 _BASE_CLASS_NAMES = {"BaseToolProvider", "ConnectionToolProvider"}
 
 
-def _named_provider_subclasses() -> list[tuple[str, str]]:
+@lru_cache(maxsize=1)
+def _named_provider_subclasses() -> tuple[tuple[str, str], ...]:
     """AST 扫描 src/ 下 BaseToolProvider 的具名子类（类名 → 相对文件路径）"""
     found: list[tuple[str, str]] = []
-    for path in sorted(SRC.rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in parsed_py_files(SRC):
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef) or node.name.startswith("_") or node.name in _BASE_CLASS_NAMES:
                 continue
             base_names = {base.id for base in node.bases if isinstance(base, ast.Name)}
             if base_names & _BASE_CLASS_NAMES:
                 found.append((node.name, str(path.relative_to(SRC.parent))))
-    return found
+    return tuple(found)
 
 
 @pytest.mark.parametrize("cls", EXPECTED_HEALTH_CHECK_PROVIDERS, ids=lambda c: c.__name__)

@@ -22,9 +22,8 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-TESTS = Path(__file__).resolve().parents[1]
+from tests.architecture._ast_cache import TESTS_ROOT as TESTS, parsed_py_files
 
 # 允许名单："相对路径:行号 → 棘轮键（被 patch 目标的规范表示）→ 理由"
 # 行号随代码漂移会使条目失效（本测试红），届时按新位置更新或随存量清理删除。
@@ -142,11 +141,7 @@ def _current_violations() -> tuple[dict[str, str], set[str]]:
     """返回 (违规清单: 键→棘轮键, 名单中被实际命中的键集合)"""
     violations: dict[str, str] = {}
     matched: set[str] = set()
-    for path in sorted(TESTS.rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in parsed_py_files(TESTS):
         finder = _PrivatePatchFinder()
         finder.visit(tree)
         rel = path.relative_to(TESTS).as_posix()

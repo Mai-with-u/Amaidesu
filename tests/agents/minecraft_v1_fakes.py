@@ -124,7 +124,8 @@ class FakeMaicraft(BaseToolProvider):
     category = "mcp"
     name = "maicraft"
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Optional[ManualClock] = None) -> None:
+        self._clock = clock
         self.goals: Dict[int, Dict[str, Any]] = {}
         # 结束了的目标里折起来的试过的办法：默认结果里不给，按路径 /attempts 读回。
         self.folded_attempts: Dict[int, List[Dict[str, Any]]] = {}
@@ -395,13 +396,18 @@ class FakeMaicraft(BaseToolProvider):
             status, after = "stream_changed", 0
         wait_s = int(arguments.get("wait_ms") or 0) / 1000
         if wait_s and not any(event["cursor"] > after for event in self.events):
-            self._new_event.clear()
-            # 真实服务端最多等 wait_ms，有新事件立刻返回；测试里最多等 1.5 秒，比宿主的空转下限长。
-            with_timeout = min(wait_s, 1.5)
-            try:
-                await asyncio.wait_for(self._new_event.wait(), timeout=with_timeout)
-            except asyncio.TimeoutError:
-                pass
+            if self._clock is not None:
+                # 注入假时钟时直接推进虚拟单调时间并让出事件循环，消除长轮询超时测试里的真实等待
+                self._clock.advance(wait_s)
+                await asyncio.sleep(0)
+            else:
+                self._new_event.clear()
+                # 真实服务端最多等 wait_ms，有新事件立刻返回；测试里最多等 1.5 秒，比宿主的空转下限长。
+                with_timeout = min(wait_s, 1.5)
+                try:
+                    await asyncio.wait_for(self._new_event.wait(), timeout=with_timeout)
+                except asyncio.TimeoutError:
+                    pass
         page = [event for event in self.events if event["cursor"] > after]
         cursor = page[-1]["cursor"] if page else (self.events[-1]["cursor"] if self.events else 0)
         cursor = max(cursor, after) if status == "valid" else cursor

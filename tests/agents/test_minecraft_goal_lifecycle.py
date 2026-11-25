@@ -55,7 +55,7 @@ async def test_a_background_goal_wakes_the_task_with_its_result() -> None:
     await _wait_until(lambda: agent.tracked_goal_ids == [1])
     await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
     calls_while_waiting = len(llm.seen)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.05)
     assert len(llm.seen) == calls_while_waiting, "等待期间不调用模型"
 
     server.finish(1, summary="砍了 5 块原木")
@@ -184,7 +184,7 @@ async def test_polling_a_running_goal_is_folded_into_waiting() -> None:
     agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
     await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.05)
 
     assert len(llm.seen) == 3, "第二次轮询后并入等待"
     assert "只在读取信息" in _texts(llm.seen[2])
@@ -204,7 +204,7 @@ async def test_pure_read_rounds_without_advancing_are_folded_into_waiting() -> N
     agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
     await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.05)
 
     assert len(llm.seen) == 3, "第二次纯读轮后并入等待"
     assert "只在读取信息" in _texts(llm.seen[2])
@@ -230,7 +230,7 @@ async def test_read_only_streak_without_tracked_goals_does_not_yield() -> None:
 
     agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.tracked_goal_ids == [1] and agent.batch_active is False)
     server.finish(1, summary="砍完了")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
@@ -285,11 +285,16 @@ async def test_execute_finishing_inline_still_lands_in_the_ledger() -> None:
     await _wait_until(lambda: len(_reports(bus)) == 1)
     assert "maicraft-goal-1" not in ledger, "终态条目已按约定移除"
 
-    changed = [
-        call.args[1]
-        for call in ledger_bus.emit.await_args_list
-        if call.args and getattr(call.args[1], "task_id", "") == "maicraft-goal-1"
-    ]
+    # 账本变化事件通过后台任务发出：等两条事件（accepted + succeeded）真正到达再断言
+    def _goal_events() -> List[Any]:
+        return [
+            call.args[1]
+            for call in ledger_bus.emit.await_args_list
+            if call.args and getattr(call.args[1], "task_id", "") == "maicraft-goal-1"
+        ]
+
+    await _wait_until(lambda: len(_goal_events()) >= 2)
+    changed = _goal_events()
     # 受理与终态各一条：只读观察者靠这两条才推得出这次调用的起点与时长
     assert [payload.status for payload in changed] == ["accepted", "succeeded"], "受理与终态各广播一次 task.changed"
     assert agent.tracked_goal_ids == [], "当场完成的目标不进跟踪名单"
@@ -405,21 +410,34 @@ async def test_a_failed_goal_notes_the_batch_delegations_without_settling() -> N
     )
     agent.receive_delegation(instruction="去挖坑壁后面的矿", task_id="d-1")
     await _wait_until(lambda: "maicraft-goal-1" in ledger)
-    await _wait_until(lambda: ledger.get("d-1") is not None and ledger.get("d-1").status == "running")
+    await _wait_until(
+        lambda: ledger.get("d-1") is not None and ledger.get("d-1").status == "running" and agent.batch_active is False
+    )
 
     server.finish(1, status="failed", summary="坑壁有缺口，够不着")
     await _wait_until(lambda: "maicraft-goal-2" in ledger, timeout=15.0)
     await _wait_until(
-        lambda: ledger.get("d-1") is not None and bool((ledger.get("d-1").snapshot or {}).get("game_progress_notes"))
+        lambda: ledger.get("d-1") is not None
+        and bool((ledger.get("d-1").snapshot or {}).get("game_progress_notes"))
+        and agent.batch_active is False
     )
     # 目标终态不结账：委派还在途，快照带游戏侧进展备注
     record = ledger.get("d-1")
     assert record is not None and record.status == "running"
     assert any("游戏目标 1（maicraft:gather）failed" in note for note in record.snapshot["game_progress_notes"])
 
-    # LLM 的交付上报是四条终态路径之一：此时才结账 succeeded
+    # LLM 的交付上报是四条终态路径之一：此时才结账 succeeded（等后台 task.changed 发出再断言）
     server.finish(2, status="done", summary="补挖完成")
-    await _wait_until(lambda: ledger.get("d-1") is None, timeout=15.0)
+    await _wait_until(
+        lambda: ledger.get("d-1") is None
+        and any(
+            call.args
+            and getattr(call.args[1], "task_id", "") == "d-1"
+            and getattr(call.args[1], "status", "") == "succeeded"
+            for call in ledger_bus.emit.await_args_list
+        ),
+        timeout=15.0,
+    )
     changed = [
         call.args[1]
         for call in ledger_bus.emit.await_args_list
@@ -583,7 +601,17 @@ async def test_all_batch_goals_terminal_settles_delegation_without_delivery() ->
     await _wait_until(lambda: agent.batch_active is False)
 
     server.finish(1, status="done", summary="砍了 5 块原木")
-    await _wait_until(lambda: "d-1" not in ledger, timeout=15.0)
+    # 账本终态通知走后台任务发出：等到 d-1 终态事件落到总线后再断言
+    await _wait_until(
+        lambda: "d-1" not in ledger
+        and any(
+            call.args
+            and getattr(call.args[1], "task_id", "") == "d-1"
+            and getattr(call.args[1], "status", "") == "succeeded"
+            for call in ledger_bus.emit.await_args_list
+        ),
+        timeout=15.0,
+    )
     changed = [
         call.args[1]
         for call in ledger_bus.emit.await_args_list
@@ -622,7 +650,16 @@ async def test_a_failed_goal_in_the_batch_settles_the_delegation_as_failed() -> 
     await _wait_until(lambda: agent.batch_active is False)
 
     server.finish(1, status="partial", summary="只砍到 2 块")
-    await _wait_until(lambda: "d-1" not in ledger, timeout=15.0)
+    await _wait_until(
+        lambda: "d-1" not in ledger
+        and any(
+            call.args
+            and getattr(call.args[1], "task_id", "") == "d-1"
+            and getattr(call.args[1], "status", "") == "failed"
+            for call in ledger_bus.emit.await_args_list
+        ),
+        timeout=15.0,
+    )
     changed = [
         call.args[1]
         for call in ledger_bus.emit.await_args_list
@@ -660,8 +697,17 @@ async def test_a_cancelled_goal_leaves_the_settlement_to_the_existing_paths() ->
 
     server.finish(1, status="cancelled", summary="不砍了")
     await _wait_until(lambda: "maicraft-goal-1" not in ledger, timeout=15.0)
-    # 不自动收账：走"停了没交付"的既有路径收场（不记成成功或失败）
-    await _wait_until(lambda: "d-1" not in ledger, timeout=15.0)
+    # 不自动收账：走"停了没交付"的既有路径收场（不记成成功或失败）；等后台终态事件到达再断言
+    await _wait_until(
+        lambda: "d-1" not in ledger
+        and any(
+            call.args
+            and getattr(call.args[1], "task_id", "") == "d-1"
+            and getattr(call.args[1], "status", "") == "undelivered"
+            for call in ledger_bus.emit.await_args_list
+        ),
+        timeout=15.0,
+    )
     changed = [
         call.args[1]
         for call in ledger_bus.emit.await_args_list

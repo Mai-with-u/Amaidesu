@@ -9,9 +9,9 @@ src/agents，tests/modules 镜像 src/modules）。Agent 框架与服务层测�
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-TESTS = Path(__file__).resolve().parents[1]
+from tests.architecture._ast_cache import TESTS_ROOT as TESTS, parsed_py_files
+
 MODULES_TREE = TESTS / "modules"
 
 # 允许 import src.agents 的例外文件（相对 tests/ 的路径）→ 理由
@@ -26,12 +26,8 @@ ALLOWED_AGENT_FIXTURE_FILES: dict[str, str] = {
 }
 
 
-def _imported_src_agents(path: Path) -> list[str]:
+def _imported_src_agents(tree: ast.Module) -> list[str]:
     """返回文件内引用的 src.agents 包名列表（import 与 from-import 都算）"""
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (SyntaxError, UnicodeDecodeError):
-        return []
     hits: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -44,9 +40,9 @@ def _imported_src_agents(path: Path) -> list[str]:
 def test_modules_tree_tests_do_not_import_src_agents() -> None:
     violations: list[str] = []
     matched_allow_keys: set[str] = set()
-    for path in sorted(MODULES_TREE.rglob("*.py")):
+    for path, tree in parsed_py_files(MODULES_TREE):
         rel = path.relative_to(TESTS).as_posix()
-        if _imported_src_agents(path):
+        if _imported_src_agents(tree):
             if rel in ALLOWED_AGENT_FIXTURE_FILES:
                 matched_allow_keys.add(rel)
             else:

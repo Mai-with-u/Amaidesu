@@ -30,7 +30,14 @@ from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
-from .minecraft_v1_fakes import FakeMaicraft, assemble_minecraft_agent, fake_bus, make_minecraft_agent, offline_config
+from .minecraft_v1_fakes import (
+    FakeMaicraft,
+    ManualClock,
+    assemble_minecraft_agent,
+    fake_bus,
+    make_minecraft_agent,
+    offline_config,
+)
 from .minecraft_v1_fakes import _resp as v1_resp
 
 
@@ -353,8 +360,8 @@ async def test_report_delivery_stops_batch_after_same_round_tools(start_agent) -
     bus = fake_bus()
     agent = await start_agent(_llm(fake), bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="干活", source="test")
-    await _wait_until(lambda: calls == 1)
-    await asyncio.sleep(0.15)
+    await _wait_until(lambda: calls == 1 and not agent.batch_active)
+    await asyncio.sleep(0.02)
 
     assert calls == 1
     assert [r.report_kind for r in _game_events(bus, "report")] == ["delivery"]
@@ -367,8 +374,8 @@ async def test_report_escalation_stops_and_waits_for_next_prompt(start_agent) ->
     bus = fake_bus()
     agent = await start_agent(llm, bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="遇到困难的任务", source="test")
-    await _wait_until(lambda: llm.generate.await_count == 1)
-    await asyncio.sleep(0.15)
+    await _wait_until(lambda: llm.generate.await_count == 1 and not agent.batch_active)
+    await asyncio.sleep(0.02)
     assert llm.generate.await_count == 1
     assert [r.report_kind for r in _game_events(bus, "report")] == ["escalation"]
 
@@ -507,7 +514,7 @@ async def test_pause_freezes_loop_and_resume_continues(start_agent) -> None:
     await _wait_until(lambda: call_count >= 1)
     await agent.pause()
     frozen = call_count
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.05)
     assert call_count == frozen
     await agent.resume()
     await _wait_until(lambda: call_count > frozen)
@@ -546,7 +553,7 @@ async def test_unusable_llm_emits_single_error(start_agent, error: str | None) -
 async def test_idle_costs_nothing(start_agent) -> None:
     llm = _llm(AsyncMock())
     await start_agent(llm)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.03)
     llm.generate.assert_not_awaited()
 
 
@@ -602,7 +609,7 @@ async def test_prompt_during_task_reaches_next_inference(start_agent) -> None:
 
     agent = await start_agent(_llm(fake))
     agent.receive_prompt(content="初始任务", source="test")
-    await asyncio.sleep(0.15)
+    await _wait_until(lambda: len(seen) >= 1 and not agent.batch_active)
     agent.receive_prompt(content="追加指令", source="test")
     await _wait_until(lambda: len(seen) >= 2)
     assert any("追加指令" in m["content"] for m in seen[1] if m["role"] == "user")
@@ -998,7 +1005,12 @@ async def test_send_streamer_chat_reports_unconfirmed_send() -> None:
     server.chat_instant = False
     agent, _llm, bus = await make_minecraft_agent(server=server, llm=None)
     try:
-        result = await agent._send_streamer_chat("来啦")
+        # 下达聊天目标 -> 等目标建立 -> 模拟目标收场但未回报 submitted=True（如打字中途被打断）
+        send_task = asyncio.create_task(agent._send_streamer_chat("来啦"))
+        await _wait_until(lambda: bool(server.goals))
+        run_id = max(server.goals)
+        server.finish(run_id, status="cancelled", summary="打字被打断", details={"submitted": False})
+        result = await asyncio.wait_for(send_task, timeout=5)
         assert result["success"] is False and "未确认" in result["error"]
         assert not [c for c in bus.emit.await_args_list if isinstance(c.args[1], GameSelfChattedPayload)]
     finally:
@@ -1011,16 +1023,13 @@ async def test_send_streamer_chat_waits_for_late_finish() -> None:
     server.chat_instant = False
     agent, _llm, bus = await make_minecraft_agent(server=server, llm=None)
     try:
-        # 模拟 Mod 侧异步完成：下达后 0.5 秒目标才结束（结果细节带已提交）
+        # 模拟 Mod 侧异步完成：下达后等目标登记并进入等待，再发结束事件（结果细节带已提交）
         send_task = asyncio.create_task(agent._send_streamer_chat("来啦"))
-        for _ in range(50):
-            if server.goals:
-                break
-            await asyncio.sleep(0.02)
+        await _wait_until(lambda: bool(server.goals))
         run_id = max(server.goals)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0)
         server.finish(run_id, status="done", summary="说了这句话", details={"submitted": True, "message": "来啦"})
-        result = await asyncio.wait_for(send_task, timeout=20)
+        result = await asyncio.wait_for(send_task, timeout=5)
         assert result == {"success": True, "message": "来啦"}
         chatted = [c.args[1] for c in bus.emit.await_args_list if isinstance(c.args[1], GameSelfChattedPayload)]
         assert [p.message for p in chatted] == ["来啦"]
@@ -1030,9 +1039,11 @@ async def test_send_streamer_chat_waits_for_late_finish() -> None:
 
 async def test_send_streamer_chat_reports_timeout_without_finishing() -> None:
     """等待期结束目标还没收场：报"没等到结果"（发送与否未知），不自动当成功或失败。"""
-    server = FakeMaicraft()
+    # 注入假时钟：长轮询事件页直接推进虚拟时间，立刻走完 12 秒确认窗超时逻辑
+    clock = ManualClock()
+    server = FakeMaicraft(clock=clock)
     server.chat_instant = False
-    agent, _llm, bus = await make_minecraft_agent(server=server, llm=None)
+    agent, _llm, bus = await make_minecraft_agent(server=server, llm=None, clock=clock)
     try:
         result = await agent._send_streamer_chat("来啦")
         assert result["success"] is False and "没有回报这句话的结果" in result["error"]

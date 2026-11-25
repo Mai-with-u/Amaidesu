@@ -8,9 +8,8 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[2] / "src"
+from tests.architecture._ast_cache import SRC_ROOT as SRC, parsed_py_files
 
 
 def _unannotated_args(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
@@ -25,11 +24,7 @@ def _unannotated_args(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]
 
 def test_all_src_functions_are_fully_annotated() -> None:
     violations: list[str] = []
-    for path in sorted(SRC.rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in parsed_py_files(SRC):
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pytest
+
 from src.agents.streamer.memory.side_effects import compute_side_effects
 from src.modules.storage.models.chat import SettleSpeechLine
 from src.modules.storage.models.memory import CueLogEntry
@@ -137,6 +139,7 @@ def test_cards_by_kind_used_self_triggered_and_per_player() -> None:
     assert stats.mentions == 0 and stats.unprompted_per_hour == 0.0
 
 
+@pytest.mark.slow
 def test_live_side_effects_script_self_check_passes() -> None:
     """直播库复算脚本（scripts/memory_eval/live_side_effects.py）和整理报告用同一个函数：
     取料口的列名或口径跟不上，补出来的旧场次基线就和报告对不上。"""

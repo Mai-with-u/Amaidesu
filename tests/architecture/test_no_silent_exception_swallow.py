@@ -10,9 +10,8 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[2] / "src"
+from tests.architecture._ast_cache import SRC_ROOT as SRC, parsed_py_files
 
 # 豁免清单："相对路径:行号" → 豁免理由（逐项注明；行号随代码漂移时本测试红，需同步更新）
 # 现无豁免：历史两处宽捕获空体已改为记 debug 日志（schema_generator 默认值填充、
@@ -39,11 +38,7 @@ class _BroadSilentExceptFinder(ast.NodeVisitor):
 def test_no_broad_silent_exception_handlers() -> None:
     violations: list[str] = []
     matched_exempt_keys: set[str] = set()
-    for path in sorted(SRC.rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in parsed_py_files(SRC):
         finder = _BroadSilentExceptFinder()
         finder.visit(tree)
         for lineno in finder.hits:

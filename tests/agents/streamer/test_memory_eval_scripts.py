@@ -6,6 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+# 本文件全部用例均拉起独立 Python 子进程执行评测脚本自检，归入 slow 分层
+pytestmark = pytest.mark.slow
+
 
 def _run_selftest(script_name: str) -> None:
     """跑一个评测脚本的 --selftest，失败时把输出带进断言消息。"""

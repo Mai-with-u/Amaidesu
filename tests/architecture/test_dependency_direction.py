@@ -8,12 +8,12 @@ TYPE_CHECKING 块与函数/类体内的局部 import 不计（duck-typed Protoco
 """
 
 import ast
-from pathlib import Path
 from typing import Dict, List
 
 import pytest
 
-SRC = Path(__file__).resolve().parents[2] / "src"
+from tests.architecture._ast_cache import SRC_ROOT as SRC, parsed_py_files
+
 LAYER_ROOTS = {"input": SRC / "modules" / "collectors", "agent": SRC / "agents", "tool": SRC / "modules" / "tools"}
 IMPORT_PREFIX_LAYER = {"src.agents": "agent", "src.modules.collectors": "input", "src.modules.tools": "tool"}
 
@@ -60,11 +60,7 @@ def _target_layer(module: str) -> str | None:
 
 def _violations(source_layer: str, target_layer: str) -> List[str]:
     found = []
-    for path in sorted(LAYER_ROOTS[source_layer].rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in parsed_py_files(LAYER_ROOTS[source_layer]):
         visitor = _TopLevelImports()
         visitor.visit(tree)
         found.extend(

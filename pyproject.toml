@@ -122,6 +122,7 @@ python_files = ["test_*.py"]
 python_functions = ["test_*"]
 markers = [
     "characterization: tests that pin current behavior before refactoring",
+    "slow: subprocess self-checks and heavy tests (skip locally with -m 'not slow')",
 ]
 
 [build-system]

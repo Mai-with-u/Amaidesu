@@ -6,14 +6,13 @@ Agent 域订阅行为流之外只允许场次生命周期 / 游戏事件族 / �
 """
 
 import ast
-from pathlib import Path
 from typing import Dict, List
 
 import pytest
 
 from src.modules.events.names import CoreEvents
+from tests.architecture._ast_cache import SRC_ROOT as SRC, parsed_py_files
 
-SRC = Path(__file__).resolve().parents[2] / "src"
 DOMAIN_ROOTS = {"agent": SRC / "agents", "tool": SRC / "modules" / "tools"}
 # room.message.* 语义事件扇出的唯一收口：message_type → 事件名映射只允许存在于
 # BaseCollector（publish_room_message），各采集器模块不得自带私有映射表
@@ -63,11 +62,7 @@ def _event_name(arg: ast.AST) -> str | None:
 
 def _subscriptions(domain: str) -> List[Dict]:
     found = []
-    for path in DOMAIN_ROOTS[domain].rglob("*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except SyntaxError:
-            continue
+    for path, tree in parsed_py_files(DOMAIN_ROOTS[domain]):
         for node in ast.walk(tree):
             is_subscribe = (
                 isinstance(node, ast.Call)
@@ -83,12 +78,8 @@ def _describe(violations: List[Dict]) -> str:
     return "\n".join(f"  - {v['where']} subscribes to {v['event']}" for v in violations)
 
 
-def _core_events_references(path: Path) -> List[str]:
+def _core_events_references(tree: ast.Module) -> List[str]:
     """AST 扫描一个文件里引用的 ``CoreEvents.X`` 常量名。"""
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except SyntaxError:
-        return []
     names = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "CoreEvents":
@@ -110,10 +101,10 @@ _FANOUT_EVENT_ATTRS = {
 def test_room_message_fanout_mapping_lives_only_in_base_collector() -> None:
     """采集器模块不得自带 message_type→事件名映射表，扇出统一走 BaseCollector。"""
     violations: List[Dict] = []
-    for path in COLLECTOR_ROOT.rglob("*.py"):
+    for path, tree in parsed_py_files(COLLECTOR_ROOT):
         if path == COLLECTOR_FANOUT_OWNER:
             continue
-        if attrs := [a for a in _core_events_references(path) if a in _FANOUT_EVENT_ATTRS]:
+        if attrs := [a for a in _core_events_references(tree) if a in _FANOUT_EVENT_ATTRS]:
             violations.append({"where": str(path.relative_to(SRC.parent)), "events": attrs})
     assert not violations, (
         "room.message.* 扇出已收口到 BaseCollector.publish_room_message，"
@@ -157,11 +148,7 @@ def test_all_src_event_call_sites_use_core_event_names() -> None:
     """
     violations: List[Dict] = []
     core_values = set(CORE_EVENT_VALUES.values())
-    for path in sorted(SRC.rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in parsed_py_files(SRC):
         for node in ast.walk(tree):
             is_event_call = (
                 isinstance(node, ast.Call)

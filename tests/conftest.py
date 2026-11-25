@@ -1,9 +1,11 @@
 """跨测试域共享的 fixtures；只在某个子域使用的放该子域的 conftest.py。"""
 
+from contextvars import ContextVar
 import os
 import sqlite3
 from pathlib import Path
 from typing import Any, AsyncGenerator, Iterator, List, Optional
+import uuid
 
 import pytest
 from loguru import logger as _loguru_logger
@@ -13,6 +15,41 @@ from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.subtitle.backends.tk_gui_service import SubtitleGuiService
 from tests.helpers import FakeClock
+
+# 子进程评测自检后缀：本地可用 `-m "not slow"` 跳过，CI 全量仍会执行
+_SLOW_SELF_CHECK_SUFFIXES = (
+    "_script_self_check_passes",
+    "_eval_dry_self_check_passes",
+)
+
+# 必须走真实全量迁移/建库路径的存储测试文件特征（不走模板克隆，确保迁移与存储引擎契约真跑）
+_REAL_DB_INIT_STEM_KEYWORDS = (
+    "migration",
+    "schema",
+    "sqlite_store",
+    "storage_bootstrap",
+    "connection",
+)
+
+# 按用例控制是否允许 SQLiteDatabase.initialize() 克隆预迁移模板库
+_ALLOW_SQLITE_TEMPLATE_CLONE: ContextVar[bool] = ContextVar("allow_sqlite_template_clone", default=True)
+
+
+def pytest_collection_modifyitems(items: List[pytest.Item]) -> None:
+    """为拉起独立 Python 子进程的评测自检用例统一补挂 slow 标记。"""
+    slow_marker = pytest.mark.slow
+    for item in items:
+        if item.name.endswith(_SLOW_SELF_CHECK_SUFFIXES) and not item.get_closest_marker("slow"):
+            item.add_marker(slow_marker)
+
+
+def _needs_real_db_init(node_path: Path) -> bool:
+    """判断该测试文件是否属于迁移/表结构/底层存储引擎测试（需要真实跑完整建库迁移）。"""
+    posix = node_path.as_posix()
+    if "/tests/modules/storage/" not in posix and not posix.startswith("tests/modules/storage/"):
+        return False
+    stem = node_path.stem.lower()
+    return any(keyword in stem for keyword in _REAL_DB_INIT_STEM_KEYWORDS)
 
 
 def _sqlite_file(database: Any) -> Optional[Path]:
@@ -45,6 +82,70 @@ def _forbid_project_database() -> Iterator[None]:
     with pytest.MonkeyPatch.context() as patcher:
         patcher.setattr(sqlite3, "connect", guarded_connect)
         yield
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _sqlite_template_cloning(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """每 worker 仅做一次完整建库迁移生成干净模板字节，普通测试新建空库时毫秒级克隆落盘。
+
+    触发条件：当前用例未命中迁移/存储引擎专项测试、``auto_apply_schema=True``、
+    目标为非项目真实库且文件尚不存在。已有旧库文件、``:memory:``、或迁移/建库专项测试
+    一律回退真实 ``SQLiteDatabase.initialize``，保持强隔离且零削弱迁移验证。
+    """
+    project_db = DEFAULT_DB_PATH.resolve()
+    real_initialize = SQLiteDatabase.initialize
+    template_dir = tmp_path_factory.mktemp("sqlite_template")
+    template_bytes: Optional[bytes] = None
+
+    async def _build_template_bytes() -> bytes:
+        # 首次按需构造单文件干净模板：真跑完整 DDL + 全部迁移 -> 关闭连接 -> 刷净 WAL 并切回 DELETE 模式
+        tpl_path = template_dir / f"template_{uuid.uuid4().hex}.db"
+        tpl_db = SQLiteDatabase(tpl_path)
+        await real_initialize(tpl_db)
+        await tpl_db.close()
+        conn = sqlite3.connect(str(tpl_path))
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            conn.close()
+        return tpl_path.read_bytes()
+
+    async def _fast_initialize(self: SQLiteDatabase) -> None:
+        nonlocal template_bytes
+        if self.initialized:
+            return
+        db_file = _sqlite_file(self.db_path)
+        can_clone = (
+            _ALLOW_SQLITE_TEMPLATE_CLONE.get()
+            and getattr(self, "_auto_apply_schema", True)
+            and db_file is not None
+            and db_file != project_db
+            and not self.db_path.exists()
+        )
+        if can_clone:
+            if template_bytes is None:
+                template_bytes = await _build_template_bytes()
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.db_path.write_bytes(template_bytes)
+            self._initialized = True
+            return
+        await real_initialize(self)
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(SQLiteDatabase, "initialize", _fast_initialize)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _sqlite_template_scope(request: pytest.FixtureRequest) -> Iterator[None]:
+    """按当前测试文件切换是否允许 SQLite 模板克隆（迁移/存储引擎测试强制走真实迁移）。"""
+    allow = not _needs_real_db_init(Path(request.node.path))
+    token = _ALLOW_SQLITE_TEMPLATE_CLONE.set(allow)
+    try:
+        yield
+    finally:
+        _ALLOW_SQLITE_TEMPLATE_CLONE.reset(token)
 
 
 @pytest.fixture(autouse=True, scope="session")
