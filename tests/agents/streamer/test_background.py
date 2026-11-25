@@ -17,8 +17,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
-from src.modules.storage.models.chat import LiveChatMessage, SuperChatRecord
 from src.agents.streamer.config import StreamerBackgroundConfig
+from src.agents.streamer.room_state import RoomState
+from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.chat import LiveChatMessage, SuperChatRecord
+from tests.agents.streamer.helpers import stub_prompt
 
 
 def _make_maintainer(
@@ -256,3 +259,92 @@ class TestSummaryMinMessages:
         assert maintainer._summary_retry_after_ms == 0
         await maintainer._maybe_summarize(now_ms=11_000)
         assert maintainer._compress_queue.qsize() == 1
+
+
+class _FakeSessionManager:
+    """可控场次主键解析替身，供观众数心跳与话题摘要落库测试共用。"""
+
+    def __init__(self, pk: int | None = 777, *, raises: Exception | None = None) -> None:
+        self._pk = pk
+        self._raises = raises
+
+    async def resolve_pk(self) -> int | None:
+        if self._raises is not None:
+            raise self._raises
+        return self._pk
+
+
+def _make_stats_maintainer(
+    repo: MagicMock,
+    session_manager: Optional[_FakeSessionManager],
+    *,
+    audience_total: int = 0,
+) -> BackgroundMaintainer:
+    room_state = RoomState()
+    if audience_total:
+        room_state.set_audience_total(audience_total, now_ms=1_000)
+    return BackgroundMaintainer(
+        StreamerBackgroundConfig(),
+        room_state=room_state,
+        sessions_repo=repo,
+        session_manager=session_manager,
+        prompt_manager=MagicMock(),
+    )
+
+
+@pytest.mark.parametrize("audience_total", [1234, 0], ids=["after_push", "before_any_push"])
+async def test_write_live_session_persists_audience_total(audience_total: int) -> None:
+    """心跳写入快照累计观看人次（推送未到过时为 0 = 未知）。"""
+    repo = MagicMock()
+    repo.update_live_session_stats = AsyncMock(return_value=True)
+    await _make_stats_maintainer(repo, _FakeSessionManager(777), audience_total=audience_total)._write_live_session(
+        now_ms=2_000
+    )
+
+    kwargs = repo.update_live_session_stats.await_args.kwargs
+    # open-live 无当前在线推送，viewer_count 无数据源
+    assert (kwargs["live_session_id"], kwargs["audience_total"], kwargs["viewer_count"]) == (777, audience_total, 0)
+
+
+@pytest.mark.parametrize(
+    "session_manager", [None, _FakeSessionManager(raises=RuntimeError("boom"))], ids=["no_manager", "resolve_fails"]
+)
+async def test_write_live_session_skips_without_session(session_manager: Optional[_FakeSessionManager]) -> None:
+    """场次管理器缺失或归属解析失败：降级跳过，不阻断轻循环。"""
+    repo = MagicMock()
+    repo.update_live_session_stats = AsyncMock(return_value=True)
+    await _make_stats_maintainer(repo, session_manager)._write_live_session(now_ms=2_000)
+    repo.update_live_session_stats.assert_not_awaited()
+
+
+async def test_persist_appends_timeline_and_refreshes_topic_snapshot(store: SQLiteDatabase) -> None:
+    """话题摘要落库：timeline_summary 追加历史，topics 仅保留最新一轮快照投影。"""
+    room_state = RoomState()
+    room_state.set_topic_summary("占位", now_ms=1)
+    maintainer = BackgroundMaintainer(
+        StreamerBackgroundConfig(summary_interval_ms=60_000),
+        room_state=room_state,
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        topic_repo=store.topics,
+        session_manager=_FakeSessionManager(777),
+        prompt_manager=stub_prompt(),
+    )
+    await maintainer._persist_topic_snapshot("第一轮摘要", now_ms=60_000, previous_summary_ms=0)
+    await maintainer._persist_topic_snapshot("第二轮摘要", now_ms=120_000, previous_summary_ms=60_000)
+
+    timeline = await store.execute("SELECT * FROM timeline_summary ORDER BY id")
+    rows = [(t["live_session_id"], t["start_ms"], t["end_ms"], t["summary"]) for t in timeline]
+    assert rows == [(777, 0, 60_000, "第一轮摘要"), (777, 60_000, 120_000, "第二轮摘要")]
+
+    (topic,) = await store.execute("SELECT * FROM topics")
+    assert (topic["source"], topic["label"]) == ("summary", "第二轮摘要")
+    assert topic["score"] == pytest.approx(1.0)
+
+
+async def test_persist_skipped_without_topic_repo() -> None:
+    """未注入 topic_repo 时静默跳过落库。"""
+    maintainer = BackgroundMaintainer(
+        StreamerBackgroundConfig(), room_state=RoomState(), topic_repo=None, prompt_manager=stub_prompt()
+    )
+    await maintainer._persist_topic_snapshot("摘要", now_ms=1_000, previous_summary_ms=0)

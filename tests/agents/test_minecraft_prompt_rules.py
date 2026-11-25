@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.agents.minecraft.tools import build_notebook_spec
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 
 _SKILL = Path(__file__).parents[2] / "src" / "agents" / "minecraft" / "skills" / "streaming" / "streaming_policy.md"
@@ -59,3 +60,15 @@ def test_game_prompt_covers_station_registration_and_three_way_memory_tool_bound
     assert "minecraft_notebook" in game
     assert "minecraft_skill" in game
     assert "scope=world" in game and "scope=global" in game
+
+
+def test_notebook_boundary_excludes_changing_numbers_across_prompt_tool_and_skill() -> None:
+    """笔记只写跨批次还成立的信息：提示词、笔记工具说明、直播策略技能三处口径保持一致。"""
+    changing_numbers = "背包里现在有多少、身上穿的装备、身体此刻在哪、血量多少"
+    game = _game_prompt()
+    assert "只写跨批次之后还站得住的信息" in game and changing_numbers in game and "当场 `observe(self)`" in game
+
+    description = build_notebook_spec().description
+    assert "只写跨批次之后还站得住的信息" in description and changing_numbers in description
+
+    assert changing_numbers in _SKILL.read_text(encoding="utf-8")
