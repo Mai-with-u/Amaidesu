@@ -46,7 +46,7 @@ _VIDEO_EXTS = {".flv", ".mp4", ".mkv", ".mov", ".ts", ".avi"}
 
 @dataclass
 class RecordingFile:
-    """一个解析成功的录播文件：文件系统事实 + 文件名里的开始时刻。"""
+    """一个解析成功的录播文件：文件系统事实 + 开始时刻与它的来源。"""
 
     path: Path
     room_id: str
@@ -55,6 +55,10 @@ class RecordingFile:
     # 同刻分片的先后序号（OBS 手动切分 "(2)" 等；无分片为 0）。只用于排序，
     # 不参与时刻换算——分片没有各自的开始时刻
     sort_index: int = 0
+    # 开始时刻来源：filename=文件名解析；metadata=容器 creation_time（元数据
+    # 兜底）；inferred=修改时间−时长推算（置信最低，界面上标"按时间推断"）。
+    # 人工指派的时刻不落这个字段（人工表态高于一切来源）
+    started_at_source: str = "filename"
 
 
 @dataclass

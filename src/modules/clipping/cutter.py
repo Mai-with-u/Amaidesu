@@ -32,6 +32,14 @@ class ClipCutError(Exception):
     """切割失败（ffmpeg 非零退出、超时被杀等），携带可读原因。"""
 
 
+@dataclass(frozen=True)
+class ClipMediaTimeInfo:
+    """一次 ffprobe 读出的容器时间信息；容器缺对应字段时各自为 None。"""
+
+    creation_time_ms: Optional[int]
+    duration_s: Optional[float]
+
+
 @dataclass
 class CutPortion:
     """一个切片段在某文件上的切割任务：文件内偏移与时长（秒）。"""
@@ -250,6 +258,15 @@ class ClipCutter:
 
     async def probe_creation_time_ms(self, source: Path) -> Optional[int]:
         """读容器元数据里的录制时刻（ffprobe creation_time；缺失/解析失败返回 None）。"""
+        info = await self.probe_media_info(source)
+        return info.creation_time_ms if info is not None else None
+
+    async def probe_media_info(self, source: Path) -> Optional[ClipMediaTimeInfo]:
+        """一次 ffprobe 读容器的录制时刻与时长（探测失败返回 None，字段缺失各自为 None）。
+
+        时长供"修改时间 − 时长"推算录制时间窗：creation_time 缺失（FLV、被
+        转码剥掉标签的文件）时这是唯一的归属线索，只用于展示与预填，不自动归场。
+        """
         args = [
             self._ffprobe_path(),
             "-v",
@@ -257,7 +274,7 @@ class ClipCutter:
             "-print_format",
             "json",
             "-show_entries",
-            "format_tags=creation_time",
+            "format=duration:format_tags=creation_time",
             str(source),
         ]
         try:
@@ -271,17 +288,23 @@ class ClipCutter:
         try:
             payload = json.loads(stdout.decode("utf-8", errors="replace"))
             raw = payload["format"]["tags"]["creation_time"]
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            logger.debug(f"元数据里没有可用的 creation_time：{exc}")
-            return None
+            raw_duration = payload["format"]["duration"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return ClipMediaTimeInfo(creation_time_ms=None, duration_s=None)
+        creation: Optional[int] = None
         try:
             moment = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                moment = moment.astimezone(timezone.utc).astimezone()  # 无时区标记按 UTC 存储的惯例解读
+            creation = int(moment.timestamp() * 1000)
         except ValueError:
             logger.debug(f"creation_time 无法解析：{raw!r}")
-            return None
-        if moment.tzinfo is None:
-            moment = moment.astimezone(timezone.utc).astimezone()  # 无时区标记按 UTC 存储的惯例解读
-        return int(moment.timestamp() * 1000)
+        duration: Optional[float] = None
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            logger.debug(f"duration 无法解析：{raw_duration!r}")
+        return ClipMediaTimeInfo(creation_time_ms=creation, duration_s=duration)
 
     @staticmethod
     async def _terminate(proc: asyncio.subprocess.Process) -> None:

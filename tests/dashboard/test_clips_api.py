@@ -7,7 +7,7 @@ from pathlib import Path
 
 from types import SimpleNamespace
 
-from src.modules.clipping.cutter import ClipCutError, CutPortion
+from src.modules.clipping.cutter import ClipCutError, ClipMediaTimeInfo, CutPortion
 from src.modules.clipping.overrides import RecordingOverrideStore
 from src.modules.clipping.config_schema import ClippingConfigSchema
 from src.modules.clipping.service import ClippingService
@@ -38,8 +38,8 @@ def _service(
 class _FakeCutter:
     """受控切割替身：记录调用，按 fail 开关决定出片还是抛错；含预览重封装替身。
 
-    creation_ms / creation_by_name 控制元数据兜底探测（文件名解析失败的文件
-    自动 ffprobe 读 creation_time）的返回；probe_calls 记录探测过的文件名。
+    media_info / media_by_name 控制自动识别探测（文件名解析失败的文件
+    ffprobe 读 creation_time 与时长）的返回；probe_calls 记录探测过的文件名。
     """
 
     def __init__(
@@ -47,15 +47,15 @@ class _FakeCutter:
         *,
         fail: bool = False,
         remux_fail: bool = False,
-        creation_ms: int | None = None,
-        creation_by_name: dict[str, int] | None = None,
+        media_info: ClipMediaTimeInfo | None = None,
+        media_by_name: dict[str, ClipMediaTimeInfo] | None = None,
     ) -> None:
         self.calls: list[Path] = []
         self.remux_calls: list[Path] = []
         self.fail = fail
         self.remux_fail = remux_fail
-        self.creation_ms = creation_ms
-        self.creation_by_name = creation_by_name or {}
+        self.media_info = media_info
+        self.media_by_name = media_by_name or {}
         self.probe_calls: list[str] = []
 
     async def cut(self, portion: CutPortion, output: Path, *, log_dir: Path) -> Path:
@@ -84,11 +84,15 @@ class _FakeCutter:
         self.remux_calls.append(output)
         return output
 
-    async def probe_creation_time_ms(self, source: Path) -> int | None:
+    async def probe_media_info(self, source: Path) -> ClipMediaTimeInfo | None:
         self.probe_calls.append(source.name)
-        if source.name in self.creation_by_name:
-            return self.creation_by_name[source.name]
-        return self.creation_ms
+        if source.name in self.media_by_name:
+            return self.media_by_name[source.name]
+        return self.media_info
+
+    async def probe_creation_time_ms(self, source: Path) -> int | None:
+        info = await self.probe_media_info(source)
+        return info.creation_time_ms if info is not None else None
 
 
 async def test_clips_sessions_lists_matched(store, event_bus, tmp_path: Path, api) -> None:
@@ -311,7 +315,9 @@ async def test_metadata_fallback_recovers_custom_named_recording(store, event_bu
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 3600_000)
     custom_name = "我的OBS录像 20261104-200500-杂鱼命名.mkv"
     (tmp_path / custom_name).write_bytes(b"x")  # 文件名解析不出时刻
-    cutter = _FakeCutter(creation_by_name={custom_name: started + 300_000})
+    cutter = _FakeCutter(
+        media_by_name={custom_name: ClipMediaTimeInfo(creation_time_ms=started + 300_000, duration_s=None)}
+    )
     service = _service(store, event_bus, tmp_path, cutter=cutter)
     client = await api(clipping_service=service)
 
@@ -322,12 +328,57 @@ async def test_metadata_fallback_recovers_custom_named_recording(store, event_bu
     detail = (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings")).json()
     assert [f["file_name"] for f in detail["files"]] == [custom_name]
     assert detail["files"][0]["started_at_ms"] == started + 300_000
+    assert detail["files"][0]["started_at_source"] == "metadata"
     assert detail["unmatched_files"] == []
     assert cutter.probe_calls == [custom_name]
 
     # 文件没变：第二次扫描命中内存缓存，不再跑 ffprobe
     (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings"))
     assert cutter.probe_calls == [custom_name]
+
+
+async def test_inferred_fallback_recovers_by_mtime_minus_duration(store, event_bus, tmp_path: Path, api) -> None:
+    """容器没有 creation_time 但有时长：修改时间−时长 推算开始，唯一落进某场
+    时间窗就自动归场（标 inferred）；推算落窗外的保持待归档并附推断信息。"""
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    session_id = await store.sessions.insert_live_session(started_at_ms=started)
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 7200_000)
+
+    rec_name = "自定义命名-能推断.mkv"
+    rec_path = tmp_path / rec_name
+    rec_path.write_bytes(b"x")
+    duration_s = 1800.0  # 推算开始 = mtime − 30 分钟；把 mtime 拨到场次窗内
+    in_window_mtime = started + 3600_000 + int(duration_s * 1000)
+    import os
+
+    os.utime(rec_path, (in_window_mtime / 1000, in_window_mtime / 1000))
+
+    out_name = "自定义命名-推算落窗外.mkv"
+    out_path = tmp_path / out_name
+    out_path.write_bytes(b"x")
+    out_mtime = started + 7200_000 + 3600_000 * 24 * 30  # 场次结束 30 天后
+    os.utime(out_path, (out_mtime / 1000, out_mtime / 1000))
+
+    cutter = _FakeCutter(
+        media_by_name={
+            rec_name: ClipMediaTimeInfo(creation_time_ms=None, duration_s=duration_s),
+            out_name: ClipMediaTimeInfo(creation_time_ms=None, duration_s=1800.0),
+        }
+    )
+    service = _service(store, event_bus, tmp_path, cutter=cutter)
+    client = await api(clipping_service=service)
+
+    detail = (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings")).json()
+    assert [f["file_name"] for f in detail["files"]] == [rec_name]
+    assert detail["files"][0]["started_at_source"] == "inferred"
+    assert detail["files"][0]["started_at_ms"] == in_window_mtime - int(duration_s * 1000)
+    # 推算落窗外：留待归档，附推断信息供选择器展示
+    assert [u["file_name"] for u in detail["unmatched_files"]] == [out_name]
+    candidate = detail["unmatched_files"][0]
+    assert candidate["duration_s"] == 1800.0
+    assert candidate["mtime_ms"] == out_mtime
+    assert candidate["inferred_start_ms"] == out_mtime - 1800_000
+    assert candidate["inferred_end_ms"] == out_mtime
 
 
 async def test_metadata_fallback_keeps_unmatched_and_zero_match_session_visible(
@@ -340,7 +391,7 @@ async def test_metadata_fallback_keeps_unmatched_and_zero_match_session_visible(
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 3600_000)
     (tmp_path / "手工改名.flv").write_bytes(b"x")
     service = _service(
-        store, event_bus, tmp_path, overrides=tmp_path / "overrides.json", cutter=_FakeCutter(creation_ms=None)
+        store, event_bus, tmp_path, overrides=tmp_path / "overrides.json", cutter=_FakeCutter(media_info=None)
     )
     client = await api(clipping_service=service)
 
@@ -370,7 +421,8 @@ async def test_metadata_fallback_skips_manually_assigned_files(store, event_bus,
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 3600_000)
     custom_name = "不合规命名.mp4"
     (tmp_path / custom_name).write_bytes(b"x")
-    cutter = _FakeCutter(creation_ms=started + 999_999)  # 若被兜底会拿到这个错误时刻
+    # 若被兜底会拿到这个错误时刻（推算开始在场次结束后 30 天，必然落窗外）
+    cutter = _FakeCutter(media_info=ClipMediaTimeInfo(creation_time_ms=None, duration_s=1800.0))
     service = _service(store, event_bus, tmp_path, overrides=tmp_path / "overrides.json", cutter=cutter)
     client = await api(clipping_service=service)
 
@@ -383,6 +435,50 @@ async def test_metadata_fallback_skips_manually_assigned_files(store, event_bus,
     detail = (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings")).json()
     assert detail["files"][0]["started_at_ms"] == started + 60_000  # 人工时刻，不是兜底时刻
     assert custom_name not in cutter.probe_calls  # 兜底探测根本没跑它
+
+
+async def test_recording_catalog_lists_all_videos_with_ownership(store, event_bus, tmp_path: Path, api) -> None:
+    """目录清单：合法命名与自定义命名都在列，带识别状态与场次归属（选择器数据源）。"""
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    session_id = await store.sessions.insert_live_session(started_at_ms=started)
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 3600_000)
+    (tmp_path / _recording_name(started)).write_bytes(b"x")
+    custom_name = "自定义命名-没识别.mkv"
+    (tmp_path / custom_name).write_bytes(b"x")
+    service = _service(
+        store,
+        event_bus,
+        tmp_path,
+        overrides=tmp_path / "overrides.json",
+        cutter=_FakeCutter(media_by_name={custom_name: ClipMediaTimeInfo(creation_time_ms=None, duration_s=1800.0)}),
+    )
+    client = await api(clipping_service=service)
+
+    resp = await client.get("/api/v1/clips/recordings/catalog")
+    assert resp.status_code == 200
+    catalog = {entry["file_name"]: entry for entry in resp.json()}
+    assert len(catalog) == 2
+
+    matched = catalog[_recording_name(started)]
+    assert matched["started_at_ms"] == started
+    assert matched["started_at_source"] == "filename"
+    assert matched["matched_session_ids"] == [session_id]
+    assert matched["assigned_session_id"] is None
+    assert matched["duration_s"] is None  # 合法名文件不被兜底探测（识别已成功）
+
+    unidentified = catalog[custom_name]
+    assert unidentified["started_at_ms"] is None
+    assert unidentified["matched_session_ids"] == []
+    assert unidentified["duration_s"] == 1800.0
+    assert unidentified["inferred_start_ms"] == unidentified["mtime_ms"] - 1800_000
+
+    # 人工指派后：归属翻正
+    await client.post(
+        f"/api/v1/clips/sessions/{session_id}/recordings/assign",
+        json={"path": str(tmp_path / custom_name), "start_ms": started + 60_000},
+    )
+    catalog = {entry["file_name"]: entry for entry in (await client.get("/api/v1/clips/recordings/catalog")).json()}
+    assert catalog[custom_name]["assigned_session_id"] == session_id
 
 
 async def test_clips_endpoints_503_when_not_assembled(api) -> None:

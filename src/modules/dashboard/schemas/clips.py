@@ -11,19 +11,46 @@ from src.modules.storage.models.clipping import ClipSegment, ClipSegmentStatus
 
 
 class RecordingFileInfo(BaseModel):
-    """一个匹配到的录播文件（含文件名解析出的开始时刻）。"""
+    """一个匹配到的录播文件（含开始时刻与它的识别来源）。"""
 
     path: str = Field(..., description="文件绝对路径")
     file_name: str = Field(..., description="文件名")
-    started_at_ms: int = Field(..., description="录制开始时刻（墙钟 Unix epoch 毫秒，来自文件名）")
+    started_at_ms: int = Field(..., description="录制开始时刻（墙钟 Unix epoch 毫秒）")
     title: str = Field(default="", description="录播姬文件名里的标题段")
+    started_at_source: str = Field(
+        default="filename",
+        description="开始时刻识别来源：filename=文件名解析 / metadata=容器元数据 / inferred=修改时间−时长推断",
+    )
 
 
 class UnmatchedFileInfo(BaseModel):
-    """一个解析不了录播姬命名的视频文件（可被运营手动指定）。"""
+    """一个自动识别不出的视频文件（待归档候选，附判断归属的推断信息）。"""
 
     path: str = Field(..., description="文件绝对路径")
     file_name: str = Field(..., description="文件名")
+    size_bytes: int = Field(..., description="文件大小（字节）")
+    mtime_ms: int = Field(..., description="文件修改时间（墙钟 Unix epoch 毫秒，≈录制停止时刻）")
+    duration_s: Optional[float] = Field(default=None, description="视频时长（秒；ffprobe 读不到为 None）")
+    inferred_start_ms: Optional[int] = Field(
+        default=None, description="推算录制开始时刻（修改时间−时长；读不到时长为 None）"
+    )
+    inferred_end_ms: Optional[int] = Field(default=None, description="推算录制结束时刻（=修改时间）")
+
+
+class CatalogEntryInfo(BaseModel):
+    """录播目录视频清单一行（"匹配录播文件"选择器数据源）。"""
+
+    path: str = Field(..., description="文件绝对路径")
+    file_name: str = Field(..., description="文件名")
+    size_bytes: int = Field(..., description="文件大小（字节）")
+    mtime_ms: int = Field(..., description="文件修改时间（墙钟 Unix epoch 毫秒）")
+    duration_s: Optional[float] = Field(default=None, description="视频时长（秒）")
+    inferred_start_ms: Optional[int] = Field(default=None, description="推算录制开始时刻（修改时间−时长）")
+    inferred_end_ms: Optional[int] = Field(default=None, description="推算录制结束时刻（=修改时间）")
+    started_at_ms: Optional[int] = Field(default=None, description="识别出的开始时刻（无任何识别为 None）")
+    started_at_source: Optional[str] = Field(default=None, description="识别来源：filename/metadata/inferred/None")
+    matched_session_ids: List[int] = Field(default_factory=list, description="自动匹配到的场次 ID")
+    assigned_session_id: Optional[int] = Field(default=None, description="人工指派申报的场次 ID")
 
 
 class ClippedSessionItem(BaseModel):

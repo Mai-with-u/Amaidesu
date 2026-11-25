@@ -24,11 +24,18 @@ import time as time_module
 
 from src.modules.background.registry import BackgroundTaskRegistry, get_registry
 from src.modules.clipping.config_schema import ClippingConfigSchema
-from src.modules.clipping.cutter import ClipCutError, ClipCutter, output_filename_for, plan_portions
+from src.modules.clipping.cutter import (
+    ClipCutError,
+    ClipCutter,
+    ClipMediaTimeInfo,
+    output_filename_for,
+    plan_portions,
+)
 from src.modules.clipping.recording_matcher import (
     RecordingFile,
     RecordingScan,
     SessionWindow,
+    file_covers_session_start,
     match_files_to_sessions,
     parse_any_recording_filename,
     scan_recording_dir,
@@ -59,6 +66,44 @@ class SessionDensityData(NamedTuple):
     bucket_ms: int
     started_at_ms: int
     counts: List[int]
+
+
+@dataclass
+class UnmatchedCandidate:
+    """一个解析不出时刻的录播文件，附判断归属用的推断信息。
+
+    推算 = 文件修改时间 − 时长（mtime≈录制停止时刻）；mtime 会被复制/同步
+    重置，推断窗只用于展示与人工指派预填，不自动归场。
+    """
+
+    path: Path
+    file_name: str
+    size_bytes: int
+    mtime_ms: int
+    duration_s: Optional[float]
+    inferred_start_ms: Optional[int]
+    inferred_end_ms: Optional[int]
+
+
+@dataclass
+class CatalogEntry:
+    """录播目录视频清单的一行（"匹配录播文件"选择器的数据源）。"""
+
+    path: Path
+    file_name: str
+    size_bytes: int
+    mtime_ms: int
+    duration_s: Optional[float]
+    inferred_start_ms: Optional[int]
+    inferred_end_ms: Optional[int]
+    # 文件名/元数据/推断识别出的开始时刻；人工指派的按 override.start_ms；
+    # 都没有为 None（纯待归档）
+    started_at_ms: Optional[int]
+    started_at_source: Optional[str]
+    # 自动匹配到的场次（时间窗命中；可能多个理论上不存在，留列表兜底）
+    matched_session_ids: List[int]
+    # 人工指派申报的场次（无人工指派为 None）
+    assigned_session_id: Optional[int]
 
 
 # 下播自动选段排队等本场记忆整理跑完的上限与轮询间隔（秒）：切片排在下播整理之后，避免抢占同一模型配额
@@ -132,9 +177,9 @@ class ClippingService:
         self._preview_inflight: set = set()
         # 归属人工覆盖（本地 JSON，不入库）
         self._overrides = override_store if override_store is not None else RecordingOverrideStore()
-        # 元数据兜底探测缓存：（路径, mtime 毫秒, 大小）→ 容器 creation_time 毫秒
-        # （None = 探过但容器没有该标记，同样缓存避免反复跑 ffprobe）
-        self._creation_time_cache: Dict[Tuple[str, int, int], Optional[int]] = {}
+        # 自动识别探测缓存：（路径, mtime 毫秒, 大小）→ ffprobe 媒体时间信息
+        # （None = 探过但容器没有可用标记，同样缓存避免反复跑 ffprobe）
+        self._creation_time_cache: Dict[Tuple[str, int, int], Optional[ClipMediaTimeInfo]] = {}
         # 段级预览的并发锁（同一段并发请求共享同一次重封装，不并发写同一缓存文件）
         self._range_locks: Dict[str, asyncio.Lock] = {}
 
@@ -262,13 +307,13 @@ class ClippingService:
 
     async def _scan(self) -> RecordingScan:
         """扫描录播目录（排除切片输出目录，避免把产物当素材），并对文件名
-        解析失败的文件做元数据兜底识别。
+        解析失败的文件做自动识别。
 
-        兜底 = ffprobe 读容器 creation_time 当作录制开始时刻，让 OBS 等自定义
-        命名的录制文件不用改名也能自动归场；容器没有该标记（FLV 就没有）的
-        文件留在未识别名单走人工指派。人工覆盖登记过的文件不参与兜底（人工
-        表态优先：assign 按人工给的时刻，见 _apply_overrides）。探测结果按
-        （路径, mtime, 大小）缓存在内存，文件没变不重复跑 ffprobe。
+        自动识别两级：容器 creation_time 直接当录制开始时刻；没有该标记
+        （FLV、被转码剥掉标签）则用 修改时间−时长 推算，推算开始唯一落进
+        某个场次时间窗才归场（窗口歧义或落窗外的留待人工）。人工覆盖登记过
+        的文件不参与自动识别（人工表态优先，见 _apply_overrides）。探测结果
+        按（路径, mtime, 大小）缓存在内存，文件没变不重复跑 ffprobe。
         """
         scan = scan_recording_dir(Path(self._config.recording_dir.strip()), exclude_dirs=[self.output_dir])
         if not scan.unmatched:
@@ -277,20 +322,39 @@ class ClippingService:
         candidates = [p for p in scan.unmatched if str(p) not in overridden]
         if not candidates:
             return scan
+        windows = await self._session_windows()
         semaphore = asyncio.Semaphore(4)
 
         async def probe_one(path: Path) -> Optional[RecordingFile]:
             key = self._creation_time_cache_key(path)
             if key is not None and key in self._creation_time_cache:
-                moment = self._creation_time_cache[key]
+                info = self._creation_time_cache[key]
             else:
                 async with semaphore:
-                    moment = await self._cutter.probe_creation_time_ms(path)
+                    info = await self._cutter.probe_media_info(path)
                 if key is not None:
-                    self._creation_time_cache[key] = moment
-            if moment is None:
+                    self._creation_time_cache[key] = info
+            if info is None or (info.creation_time_ms is None and info.duration_s is None):
                 return None
-            return RecordingFile(path=path, room_id="", started_at_ms=moment, title="")
+            # 第一级：容器 creation_time 是录制软件写入的开始时刻，直接归场
+            if info.creation_time_ms is not None:
+                return RecordingFile(
+                    path=path, room_id="", started_at_ms=info.creation_time_ms, title="", started_at_source="metadata"
+                )
+            # 第二级：修改时间 − 时长 推算开始；唯一落进某场时间窗才自动归场
+            # （多窗歧义或落窗外说明推算不可信，留待人工）
+            try:
+                mtime_ms = int(path.stat().st_mtime * 1000)
+            except OSError:
+                return None
+            inferred_start = mtime_ms - int(info.duration_s * 1000)
+            probe_file = RecordingFile(path=path, room_id="", started_at_ms=inferred_start, title="")
+            hits = [w for w in windows if file_covers_session_start(probe_file, w)]
+            if len(hits) != 1:
+                return None
+            return RecordingFile(
+                path=path, room_id="", started_at_ms=inferred_start, title="", started_at_source="inferred"
+            )
 
         recovered = await asyncio.gather(*(probe_one(path) for path in candidates))
         for info in recovered:
@@ -308,6 +372,15 @@ class ClippingService:
         except OSError:  # 文件在扫描间隙被移动/删除：不缓存不兜底
             return None
         return (str(path), int(stat.st_mtime * 1000), stat.st_size)
+
+    async def _media_info_cached(self, path: Path) -> Optional[ClipMediaTimeInfo]:
+        """查兜底缓存的探测结果；未命中共探一次（未识别文件的时长/推算展示用）。"""
+        key = self._creation_time_cache_key(path)
+        if key is None:
+            return None
+        if key not in self._creation_time_cache:
+            self._creation_time_cache[key] = await self._cutter.probe_media_info(path)
+        return self._creation_time_cache.get(key)
 
     async def _session_windows(self) -> List[SessionWindow]:
         """全部场次的匹配时间窗（历史场次 + 进行中场次，按开始时间倒序）。"""
@@ -478,12 +551,16 @@ class ClippingService:
 
     async def get_session_recordings(
         self, live_session_id: int
-    ) -> Tuple[List[RecordingFile], List[RecordingFile], List[Path]]:
-        """单场录播文件三组：生效文件 / 被人工移出的文件（可恢复）/ 未识别候选（可指派）。"""
+    ) -> Tuple[List[RecordingFile], List[RecordingFile], List[UnmatchedCandidate]]:
+        """单场录播文件三组：生效文件 / 被人工移出的文件（可恢复）/ 待归档候选。
+
+        待归档候选附推断信息（大小/时长/推算录制窗）供"匹配录播文件"选择器
+        判断归属；自动识别成功的文件不会出现在这一组。
+        """
         scan = await self._scan()
         session = await self._database.sessions.get_live_session(live_session_id=live_session_id)
         if session is None:
-            return [], [], scan.unmatched
+            return [], [], []
         matched = match_files_to_sessions(
             scan.parsed,
             [
@@ -495,7 +572,72 @@ class ClippingService:
         effective, detached = self._apply_overrides(live_session_id, scan, matched.get(live_session_id, []))
         assigned_paths = {o.path for o in self._overrides.for_session(live_session_id) if o.action == "assign"}
         unmatched = [p for p in scan.unmatched if str(p) not in assigned_paths]
-        return effective, detached, unmatched
+        candidates = [
+            candidate for candidate in [await self._unmatched_candidate(p) for p in unmatched] if candidate is not None
+        ]
+        return effective, detached, candidates
+
+    async def _unmatched_candidate(self, path: Path) -> Optional[UnmatchedCandidate]:
+        """把一个未识别路径装配成带推断信息的候选；文件已消失返回 None。"""
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        info = await self._media_info_cached(path)
+        duration_s = info.duration_s if info is not None else None
+        mtime_ms = int(stat.st_mtime * 1000)
+        inferred_start = mtime_ms - int(duration_s * 1000) if duration_s is not None else None
+        return UnmatchedCandidate(
+            path=path,
+            file_name=path.name,
+            size_bytes=stat.st_size,
+            mtime_ms=mtime_ms,
+            duration_s=duration_s,
+            inferred_start_ms=inferred_start,
+            inferred_end_ms=mtime_ms,
+        )
+
+    async def recording_catalog(self) -> List[CatalogEntry]:
+        """录播目录全部视频清单（"匹配录播文件"选择器的数据源）。
+
+        每行带识别出的开始时刻（含来源）与推断录制窗（解析不出时刻的文件），
+        以及自动匹配/人工指派的场次归属，供按场次挑文件时判断。
+        """
+        scan = await self._scan()
+        windows = await self._session_windows()
+        matched = match_files_to_sessions(scan.parsed, windows)
+        assigned: Dict[str, int] = {o.path: o.live_session_id for o in self._overrides.load() if o.action == "assign"}
+        entries: List[CatalogEntry] = []
+        for path in sorted({f.path for f in scan.parsed} | set(scan.unmatched)):
+            parsed = next((f for f in scan.parsed if f.path == path), None)
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            info = await self._media_info_cached(path)
+            duration_s = info.duration_s if info is not None else None
+            mtime_ms = int(stat.st_mtime * 1000)
+            inferred_start = mtime_ms - int(duration_s * 1000) if duration_s is not None else None
+            assigned_session = assigned.get(str(path))
+            entries.append(
+                CatalogEntry(
+                    path=path,
+                    file_name=path.name,
+                    size_bytes=stat.st_size,
+                    mtime_ms=mtime_ms,
+                    duration_s=duration_s,
+                    inferred_start_ms=inferred_start,
+                    inferred_end_ms=mtime_ms,
+                    started_at_ms=parsed.started_at_ms if parsed is not None else None,
+                    started_at_source=parsed.started_at_source if parsed is not None else None,
+                    matched_session_ids=sorted(
+                        sid for sid, files in matched.items() if any(f.path == path for f in files)
+                    ),
+                    assigned_session_id=assigned_session,
+                )
+            )
+        entries.sort(key=lambda e: e.mtime_ms, reverse=True)
+        return entries
 
     # ---------- AI 选段 ----------
 

@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, TYPE_CHECKING
+from typing import Annotated, List, TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -30,6 +30,7 @@ from src.modules.dashboard.schemas.clips import (
     PreviewPrepareRequest,
     PreviewPrepareResponse,
     RecordingAssignRequest,
+    CatalogEntryInfo,
     RecordingDetachRequest,
     RecordingFileInfo,
     RecordingRenameRequest,
@@ -142,6 +143,7 @@ def _file_info(file: RecordingFile) -> RecordingFileInfo:
         file_name=file.path.name,
         started_at_ms=file.started_at_ms,
         title=file.title,
+        started_at_source=file.started_at_source,
     )
 
 
@@ -167,14 +169,47 @@ async def list_sessions(service: ClippingDep, limit: int = 100) -> ClippedSessio
 
 @router.get("/sessions/{live_session_id}/recordings", response_model=SessionRecordingsResponse)
 async def list_session_recordings(live_session_id: int, service: ClippingDep) -> SessionRecordingsResponse:
-    """单场录播文件：生效（自动+人工指派）/ 被移出（可恢复）/ 未识别（可指派）三组。"""
+    """单场录播文件：生效（自动+人工指派）/ 被移出（可恢复）/ 待归档候选三组。"""
     files, detached, unmatched = await service.get_session_recordings(live_session_id=live_session_id)
     return SessionRecordingsResponse(
         live_session_id=live_session_id,
         files=[_file_info(file) for file in files],
         detached_files=[_file_info(file) for file in detached],
-        unmatched_files=[UnmatchedFileInfo(path=str(path), file_name=path.name) for path in unmatched],
+        unmatched_files=[
+            UnmatchedFileInfo(
+                path=str(candidate.path),
+                file_name=candidate.file_name,
+                size_bytes=candidate.size_bytes,
+                mtime_ms=candidate.mtime_ms,
+                duration_s=candidate.duration_s,
+                inferred_start_ms=candidate.inferred_start_ms,
+                inferred_end_ms=candidate.inferred_end_ms,
+            )
+            for candidate in unmatched
+        ],
     )
+
+
+@router.get("/recordings/catalog", response_model=List[CatalogEntryInfo])
+async def recordings_catalog(service: ClippingDep) -> List[CatalogEntryInfo]:
+    """录播目录全部视频清单（"匹配录播文件"选择器数据源，含识别状态与场次归属）。"""
+    entries = await service.recording_catalog()
+    return [
+        CatalogEntryInfo(
+            path=str(entry.path),
+            file_name=entry.file_name,
+            size_bytes=entry.size_bytes,
+            mtime_ms=entry.mtime_ms,
+            duration_s=entry.duration_s,
+            inferred_start_ms=entry.inferred_start_ms,
+            inferred_end_ms=entry.inferred_end_ms,
+            started_at_ms=entry.started_at_ms,
+            started_at_source=entry.started_at_source,
+            matched_session_ids=entry.matched_session_ids,
+            assigned_session_id=entry.assigned_session_id,
+        )
+        for entry in entries
+    ]
 
 
 @router.post("/sessions/{live_session_id}/recordings/assign", response_model=SegmentMutationResponse)
