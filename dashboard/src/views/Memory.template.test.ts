@@ -1,14 +1,14 @@
 // Memory.vue 页内 tab 信息架构的源码结构守护测试
 //
-// 项目无组件挂载测试环境（无 jsdom 环境下的 vue 插件），按既有惯例降级为源码
-// 结构断言。
+// 这里只做读源码的结构断言；跨面板联动的实际行为（哪个面板在何时被重拉）由
+// 挂载页面的 Memory.test.ts 验证。
 //
 // 守护的语义：七个 tab 的顺序是运营者的动线（承诺 → 观众候选 → 整理 → 档案 →
 // 玩家 → 自述 → 公告），顺序与 pageTabs 键表一致；tab 全部惰性挂载，保证首屏
 // 只拉当前面板；?tab= 深链必须经 resolveMemoryTab 白名单解析（未知值回退默认
-// tab，外链拼错不落空白页）；跨面板联动（候选决定 → 承诺/档案标脏，整理状态
-// → 切档案 tab 切场）必须存在——删掉任一处，批准候选后承诺/档案的过期数据或
-// "查看该场档案"入口就会无声失效。
+// tab，外链拼错不落空白页）；跨面板联动必须存在——四个会报告改动的面板都接到
+// 同一个处理入口，改动会把全部 tab 记进待重拉集合，进入 tab 时据此重拉并移出；
+// 整理状态的"查看该场档案"切到档案 tab 并选中那一场。
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -38,9 +38,14 @@ describe('记忆页 tab 信息架构', () => {
     expect(sfcSource).toContain('router.replace({ query: { ...route.query, tab: key } })');
   });
 
-  it('跨面板联动存在：候选决定标脏、切 tab 消化脏标记、查看该场档案切档案 tab', () => {
-    expect(sfcSource).toContain('staleAfterCandidate.commitment = true');
-    expect(sfcSource).toContain('staleAfterCandidate.archive = true');
+  it('跨面板联动存在：面板改动把 tab 记进待重拉集合、进入 tab 重拉并移出、查看该场档案切档案 tab 并选中那一场', () => {
+    // 会报告改动的面板有四个：承诺、观众候选、整理状态、玩家自述
+    expect(sfcSource.match(/@changed="onPanelChanged"/g)).toHaveLength(4);
+    // 面板改动把全部七个 tab 记进集合；进入 tab 时在集合里才重拉并移出
+    expect(sfcSource).toContain('for (const key of MEMORY_TAB_KEYS) tabsToReload.add(key)');
+    expect(sfcSource).toContain('if (!tabsToReload.has(key)) return;');
+    expect(sfcSource).toContain('tabsToReload.delete(key)');
+    expect(sfcSource).toContain('PANEL_RELOAD_BY_TAB[key]()');
     expect(sfcSource).toContain("activeTab.value = 'archive'");
     expect(sfcSource).toContain('archivePanel.value?.selectSession(liveSessionId)');
   });
