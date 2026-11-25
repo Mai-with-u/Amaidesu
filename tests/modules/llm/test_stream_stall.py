@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.modules.llm.client import BaseLLMClient
+from src.modules.llm.clients import _CLIENT_DISPATCH
+from src.modules.llm.engine import LLMManager
 from src.modules.llm.errors import LLMTimeoutError
+from src.modules.llm.payload import GenerateRequest, Response
 from src.modules.llm.stall import DEFAULT_STALL_TIMEOUT_MS, StreamStallGuard
 from tests.helpers import FakeClock
 from tests.modules.llm.fakes import fake_stall_waiter
@@ -52,3 +57,33 @@ async def test_output_resets_the_stall_countdown() -> None:
     guard.note_output()
     assert guard.remaining_ms() == DEFAULT_STALL_TIMEOUT_MS
     assert guard.idle_ms() == 0
+
+
+async def test_on_delta_fires_before_call_completes() -> None:
+    """流式增量直通：增量在整次调用结束前即送达调用方，Engine 不缓冲。"""
+    received_event = asyncio.Event()
+    received: list[str] = []
+
+    class TypewriterFakeClient(BaseLLMClient):
+        async def generate(self, request: GenerateRequest, *, model: str, on_delta: Any = None, **kw: Any) -> Response:
+            on_delta("content", "第一个增量")
+            await asyncio.wait_for(received_event.wait(), timeout=5.0)
+            return Response(success=True, content="完整回复", model=model)
+
+    def consumer(kind: str, text: str) -> None:
+        del kind
+        received.append(text)
+        received_event.set()
+
+    config = {
+        "llm_providers": [{"name": "fake", "client_type": "typewriter", "max_retries": 0}],
+        "llm_models": [{"name": "m1", "model_identifier": "fake-1", "api_provider": "fake"}],
+        "llm_profiles": {"planner": {"model_list": ["m1"]}},
+    }
+    with patch.dict(_CLIENT_DISPATCH, {"typewriter": TypewriterFakeClient}):
+        with patch("src.modules.llm.call_observer.record_call_outcome", new_callable=AsyncMock):
+            manager = LLMManager(llm_repo=object())
+            await manager.setup(config)
+            response = await manager.generate("你好", profile="planner", on_delta=consumer)
+
+    assert response.success is True and received == ["第一个增量"]

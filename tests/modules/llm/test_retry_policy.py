@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,6 +12,7 @@ from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.engine import LLMManager
 from src.modules.llm.errors import FatalError, LLMInterruptedError, LLMTimeoutError, RetryableError
 from src.modules.llm.payload import GenerateRequest, Response
+from tests.modules.llm.fakes import FakeStream, make_openai_client, sdk_reply
 
 # provider 显式 max_retries：Retryable 分类下每模型的调用上限
 RETRY_LIMIT = 3
@@ -78,3 +79,25 @@ async def test_interrupted_aborts_whole_call() -> None:
         with pytest.raises(LLMInterruptedError):
             await manager.generate("你好", profile="planner")
     assert manager._provider_clients["fake"].calls == ["fake-1"]
+
+
+async def test_completed_empty_stream_does_not_multiply_engine_retries() -> None:
+    """空响应经真实客户端和引擎传播时，三次重试只发三次请求且不伪造成功输出。"""
+    client, sdk = make_openai_client()
+
+    async def respond(**arguments: Any) -> Any:
+        return FakeStream([]) if arguments.get("stream") else sdk_reply(content="")
+
+    sdk.chat.completions.create.side_effect = respond
+    config = _policy_config()
+    config["llm_profiles"]["planner"]["model_list"] = ["m1"]
+    manager = LLMManager()
+    with patch.dict(_CLIENT_DISPATCH, {"policyfake": MagicMock(return_value=client)}):
+        await manager.setup(config)
+        try:
+            result = await manager.generate("继续当前任务", profile="planner", on_delta=lambda kind, text: None)
+        finally:
+            await manager.cleanup()
+    assert not result.success and "响应内容为空" in result.error
+    assert sdk.chat.completions.create.await_count == RETRY_LIMIT
+    assert all(call.kwargs.get("stream") for call in sdk.chat.completions.create.call_args_list)

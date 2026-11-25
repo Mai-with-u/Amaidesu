@@ -4,7 +4,7 @@ import pytest
 
 from src.modules.simulator.config_schema import SimulatorConfigSchema
 from src.modules.simulator.gift_generator import GiftGenerator
-from src.modules.simulator.seed_data import seed_simulator_data
+from src.modules.simulator.seed_data import DEBUT_PERSONAS, seed_debut_personas, seed_simulator_data
 from src.modules.simulator.types import GiftItem, StreamerContextSnapshot
 from src.modules.storage.database import SQLiteDatabase
 
@@ -58,3 +58,11 @@ async def test_catalog_crud_writes_through_to_database(seeded: SQLiteDatabase) -
 
     reloaded = {g.gift_id: g for g in (await _generator(seeded)).list_gifts()}  # 新实例重新加载，确认已落库
     assert reloaded["small_heart"].weight == 99 and "custom_1" not in reloaded
+
+
+async def test_seed_debut_personas_is_idempotent(store: SQLiteDatabase) -> None:
+    """出道场彩排观众种子：补进常驻人设、重复调用幂等。"""
+    assert await seed_debut_personas(store.sim) == len(DEBUT_PERSONAS)
+    assert await seed_debut_personas(store.sim) == 0
+    ids = {p.user_id for p in await store.sim.list_sim_personas(include_inactive=True)}
+    assert {item["user_id"] for item in DEBUT_PERSONAS} <= ids
