@@ -8,7 +8,13 @@
         --llm logs/llm_requests/2026-10-15/21.jsonl \
         --since 21:20 --until 21:49
 
-时间过滤按本地时钟的 HH:MM 圈窗口（跨零点的场次请拆两次跑）。只依赖标准库。
+时间窗口用 --since/--until 圈定，两种写法：
+
+- 完整的日期时间（YYYY-MM-DDTHH:MM:SS）：按时刻比较，跨零点的场次用这种写法，边界取
+  session_export.py 在 summary.md 里给出的命令；
+- 只有 HH:MM：按当日时钟比较，起点晚于终点时按跨零点处理（起点之后，或次日终点之前）。
+
+只依赖标准库。
 """
 
 from __future__ import annotations
@@ -16,11 +22,16 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import re
 import statistics
 import tomllib
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+# 窗口边界的两种写法：带日期的完整时刻，或只有时分（可带秒）的当日时钟
+_DATE_BOUND = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$")
+_CLOCK_BOUND = re.compile(r"^\d{2}:\d{2}(:\d{2})?$")
 
 # 生命周期时间线要单列的事件；warn/error 无论类型都单列
 _LIFECYCLE_EVENTS = {
@@ -60,13 +71,29 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _in_window(ms: int, since: Optional[str], until: Optional[str]) -> bool:
-    hhmm = _local_hhmm(ms)
-    if since is not None and hhmm < since:
-        return False
-    if until is not None and hhmm > until:
-        return False
-    return True
+def _parse_bound(value: Optional[str]) -> Optional[str | int]:
+    """把窗口边界解析成比较用的值：带日期的返回 epoch 毫秒，当日时钟返回规范化的时间字符串。"""
+    text = (value or "").strip()
+    if not text:
+        return None
+    if _DATE_BOUND.match(text):
+        return int(datetime.fromisoformat(text.replace("T", " ")).timestamp() * 1000)
+    if _CLOCK_BOUND.match(text):
+        return text if len(text) == 8 else f"{text}:00"
+    raise SystemExit(f"窗口边界无法识别：{value!r}；请写 HH:MM、HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS")
+
+
+def _in_window(ms: int, since: Optional[str | int], until: Optional[str | int]) -> bool:
+    """两个边界都是时刻时按毫秒比较；都是当日时钟时按时钟比较，起点晚于终点按跨零点处理。"""
+    if since is None and until is None:
+        return True
+    if isinstance(since, int) or isinstance(until, int):
+        return (since is None or ms >= since) and (until is None or ms <= until)
+    has_seconds = any(isinstance(bound, str) and len(bound) == 8 for bound in (since, until))
+    clock = _local_hhms(ms) if has_seconds else _local_hhmm(ms)
+    if since is not None and until is not None and since > until:
+        return clock >= since or clock <= until
+    return (since is None or clock >= since) and (until is None or clock <= until)
 
 
 def _print_lifecycle(events: list[dict[str, Any]]) -> None:
@@ -127,10 +154,18 @@ def _print_session_stats(events: list[dict[str, Any]]) -> None:
         if isinstance(data.get("planner_duration_ms"), (int, float)):
             planner_ms.append(int(data["planner_duration_ms"]))
     print(f"决策 {len(decisions)} 轮：{dict(triggers)}；其中开口 {replied} 轮 / 沉默 {len(decisions) - replied} 轮")
-    if emotions:
+    speech_emotions: collections.Counter[str] = collections.Counter(
+        str((e.get("data") or {}).get("emotion") or "?") for e in speeches
+    )
+    if speech_emotions:
         # 情绪分布要和当场遭遇（死亡/受伤次数）对照读：正向占比过高是情绪轴与事件轴脱钩的线索
-        positive = sum(emotions[name] for name in ("happy", "smug", "excited"))
-        print(f"情绪分布：{dict(emotions.most_common())}；正向(happy/smug/excited) {positive / len(decisions):.0%}")
+        positive = sum(speech_emotions[name] for name in ("happy", "smug", "excited"))
+        print(
+            f"发言情绪分布：{dict(speech_emotions.most_common())}；正向(happy/smug/excited) {positive / len(speeches):.0%}"
+        )
+    if emotions:
+        # 游戏主控期间发言由游戏 Agent 的解说驱动，规划器每场只有收播等少数几轮，它的情绪不代表全场
+        print(f"规划器情绪分布：{dict(emotions.most_common())}")
     if planner_ms:
         planner_ms.sort()
         print(
@@ -144,7 +179,10 @@ def _print_session_stats(events: list[dict[str, Any]]) -> None:
 
 
 def _print_llm_usage(
-    paths: list[Path], since: Optional[str], until: Optional[str], prices: Optional[dict[str, dict[str, Any]]] = None
+    paths: list[Path],
+    since: Optional[str | int],
+    until: Optional[str | int],
+    prices: Optional[dict[str, dict[str, Any]]] = None,
 ) -> None:
     print("== LLM 用量（按请求全文统计）==")
     if not paths:
@@ -222,8 +260,8 @@ def main() -> None:
         action="append",
         help="LLM 请求全文 JSONL（可选，可多次给；给出来才统计缓存命中率）",
     )
-    parser.add_argument("--since", help="窗口起点，本地 HH:MM")
-    parser.add_argument("--until", help="窗口终点，本地 HH:MM")
+    parser.add_argument("--since", help="窗口起点：HH:MM（当日时钟）或 YYYY-MM-DDTHH:MM:SS（完整时刻）")
+    parser.add_argument("--until", help="窗口终点：写法同 --since，两个边界要用同一种写法")
     parser.add_argument(
         "--config",
         type=Path,
@@ -231,6 +269,9 @@ def main() -> None:
         help="model.toml 路径（给出来才统计费用；价格表每百万 token，与 observation.calculate_cost 同口径）",
     )
     args = parser.parse_args()
+    since, until = _parse_bound(args.since), _parse_bound(args.until)
+    if isinstance(since, int) != isinstance(until, int):
+        raise SystemExit("--since 与 --until 要用同一种写法：都写 HH:MM，或都写完整的日期时间")
     prices: Optional[dict[str, dict[str, Any]]] = None
     if args.config is not None:
         with args.config.open("rb") as handle:
@@ -241,8 +282,8 @@ def main() -> None:
     for events_path in args.events:
         event_rows.extend(read_jsonl(events_path))
     event_rows.sort(key=lambda row: int(row.get("timestamp_ms") or 0))
-    if args.since or args.until:
-        event_rows = [e for e in event_rows if _in_window(int(e.get("timestamp_ms") or 0), args.since, args.until)]
+    if since is not None or until is not None:
+        event_rows = [e for e in event_rows if _in_window(int(e.get("timestamp_ms") or 0), since, until)]
     if not event_rows:
         raise SystemExit("窗口内没有事件——检查 --events 路径与 --since/--until")
 
@@ -256,7 +297,7 @@ def main() -> None:
 
     _print_lifecycle(event_rows)
     _print_session_stats(event_rows)
-    _print_llm_usage(args.llm or [], args.since, args.until, prices)
+    _print_llm_usage(args.llm or [], since, until, prices)
 
 
 if __name__ == "__main__":
