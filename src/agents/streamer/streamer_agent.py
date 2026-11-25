@@ -146,7 +146,7 @@ from .planner_context import age_text
 from .paid_viewers import PaidViewerLookup
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
-from .replyer import COMMENTARY_EXTRA_CHARS, TARGET_EXTRA_CHARS, Replyer
+from .replyer import TARGET_EXTRA_CHARS, Replyer, is_runaway_speech
 from .room_state import ENTER_RENDER_CAP, RoomState
 from .scene_card import brief_of
 from .speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT, SPEECH_PRIORITY_NORMAL, SpeechDispatcher
@@ -467,9 +467,8 @@ class StreamerAgent(BaseAgent):
         self._lead_hooks_bound: bool = False
         self._live_start_in_progress: bool = False
         self._spoken_echo_registered: bool = False
-        # 实况解说串行锁与被防抖压下的解说摘要缓冲（避免短时间内两笔解说同时调 Replyer 撞词）
+        # 实况解说串行锁与同轮/短间隔防抖锚点（避免短时间内两笔解说同时调 Replyer 撞词）
         self._commentary_lock = asyncio.Lock()
-        self._commentary_buffer: deque[str] = deque(maxlen=12)
         self._last_commentary_round_id: str = ""
         self._last_commentary_summary: str = ""
         self._last_commentary_spoken_ms: Optional[int] = None
@@ -3618,7 +3617,7 @@ class StreamerAgent(BaseAgent):
             pass
 
     async def _run_enter_welcome_loop(self) -> None:
-        """游戏主控态进房合批欢迎循环：等待短合并窗后将同批新观众交由 Replyer 合为一句播报。"""
+        """游戏主控态进房合批欢迎循环：等待短合并窗后将同批刚进房观众交由 Replyer 合为一句播报。"""
         current_task = asyncio.current_task()
         try:
             while self._pending_enter_welcomes and self._should_use_game_lead_enter_welcome():
@@ -3653,6 +3652,110 @@ class StreamerAgent(BaseAgent):
             if self._enter_welcome_task is current_task:
                 self._enter_welcome_task = None
 
+    async def _describe_enter_viewer_facts(self, entries: Sequence[Tuple[str, str]]) -> List[str]:
+        """按已注入的观众仓储与游戏常驻玩家表核查刚进房观众的真实身份事实；无记录或已申请遗忘时不附注。"""
+        notes: List[str] = []
+        current_session_id = self._current_session_pk()
+
+        # 预加载当前存档未申请遗忘的游戏玩家（用于按账号名/常用称呼精确匹配熟人，绝不读取删除专用对号表）
+        players_by_key: Dict[str, List[Any]] = {}
+        if self._game_player_repo is not None and hasattr(self._game_player_repo, "list_players"):
+            try:
+                rows = await self._game_player_repo.list_players(limit=200)
+            except Exception as exc:  # noqa: BLE001 - 玩家表读不到不影响进房欢迎主链
+                self._logger.warning(f"轻量进房欢迎读取游戏玩家列表失败（已省略熟人附注）: {exc}", exc=exc)
+                rows = []
+            for player in rows:
+                if getattr(player, "forget_requested_at_ms", None) is not None:
+                    continue
+                player_name = str(getattr(player, "name", "") or "").strip()
+                if not player_name:
+                    continue
+                if self._current_saves:
+                    active_save = self._current_saves.get(getattr(player, "game", ""))
+                    if active_save is None:
+                        continue
+                    saves = getattr(player, "saves", ()) or ()
+                    if active_save.known and saves and not any(item.save_id == active_save.id for item in saves):
+                        continue
+                if self._privacy_service is not None:
+                    try:
+                        if await self._privacy_service.is_player_forgotten(game=player.game, uuid=player.uuid):
+                            continue
+                    except Exception as exc:  # noqa: BLE001 - 隐私核查失败时保守跳过
+                        self._logger.warning(
+                            f"轻量进房欢迎核对玩家 #{player.id} 遗忘名单失败（已跳过）: {exc}", exc=exc
+                        )
+                        continue
+                keys = {player_name.lower()}
+                effective_fn = getattr(player, "effective_aliases", None)
+                aliases = list(effective_fn()) if callable(effective_fn) else []
+                for alias in aliases:
+                    cleaned = str(alias or "").strip()
+                    if cleaned:
+                        keys.add(cleaned.lower())
+                for key in keys:
+                    players_by_key.setdefault(key, []).append(player)
+
+        for uid, uname in entries:
+            cleaned_name = (uname or "").strip()
+            if not cleaned_name:
+                continue
+
+            # 隐私不记录名单先闸：命中遗忘名单的观众立即跳过全部身份附注，杜绝跨表穿透匹配游戏玩家
+            if uid and self._privacy_service is not None and hasattr(self._privacy_service, "is_external_id_forgotten"):
+                try:
+                    if await self._privacy_service.is_external_id_forgotten(
+                        id_kind="account", external_id=uid
+                    ) or await self._privacy_service.is_external_id_forgotten(id_kind="open", external_id=uid):
+                        continue
+                except Exception as exc:  # noqa: BLE001 - 查不了遗忘名单时保守跳过，避免误附注隐私身份
+                    self._logger.warning(
+                        f"轻量进房欢迎核对观众 {cleaned_name!r} 遗忘名单失败（已跳过附注）: {exc}", exc=exc
+                    )
+                    continue
+
+            facts: List[str] = []
+
+            # 查真实历史到访记录：已申请遗忘的观众立即跳过全部附注，仅对未遗忘且有真实过往场次的观众附注熟度
+            if self._viewer_repo is not None and hasattr(self._viewer_repo, "resolve_presence_stats"):
+                try:
+                    stats = await self._viewer_repo.resolve_presence_stats(
+                        external_id=uid,
+                        user_name=cleaned_name,
+                        current_session_id=current_session_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 观众历史查询失败不阻断进房欢迎
+                    self._logger.warning(
+                        f"轻量进房欢迎查询观众 {cleaned_name!r} 到访记录失败（已省略）: {exc}", exc=exc
+                    )
+                    stats = None
+                if stats is not None and stats.forget_requested_at_ms is not None:
+                    continue
+                if stats is not None:
+                    tier = stats.familiarity_tier
+                    if tier == "close":
+                        facts.append("常来的老熟人")
+                    elif tier == "regular":
+                        facts.append("来过多次的老观众")
+                    elif stats.earlier_sessions >= 1:
+                        facts.append("之前来过直播间的熟面孔")
+
+            # 仅在唯一命中某位常驻游戏玩家的账号名或常用称呼时附注熟人身份，避免重名误认
+            matched_players = players_by_key.get(cleaned_name.lower(), [])
+            if len(matched_players) == 1:
+                player = matched_players[0]
+                effective_fn = getattr(player, "effective_aliases", None)
+                aliases = list(effective_fn()) if callable(effective_fn) else []
+                if aliases:
+                    facts.append(f"游戏里的熟人（账号 {player.name}，常叫：{'、'.join(aliases)}）")
+                else:
+                    facts.append(f"游戏里的熟人（账号 {player.name}）")
+
+            if facts:
+                notes.append(f"{cleaned_name}：{'，'.join(facts)}")
+        return notes
+
     async def _speak_enter_welcome_batch(self, entries: Sequence[Tuple[str, str]]) -> None:
         """把一批刚进房的未欢迎观众直通 Replyer 生成一句点名欢迎并播报，播后仅核销确实点到名的观众。"""
         names = [uname for _uid, uname in entries if uname]
@@ -3662,10 +3765,15 @@ class StreamerAgent(BaseAgent):
             if not self._should_use_game_lead_enter_welcome():
                 return
             joined_names = "、".join(names)
-            state_facts = (
-                f"刚进直播间待欢迎的新观众：{joined_names}\n"
-                "请用自然热情的口语逐一点名欢迎以上每一位新观众，不要漏掉任何人的昵称，不要展开讲游戏操作。"
-            )
+            viewer_notes = await self._describe_enter_viewer_facts(entries)
+            fact_lines = [
+                f"刚进直播间待欢迎的观众：{joined_names}",
+                "请用自然热情的口语逐一点名欢迎以上每一位观众，不要漏掉任何人的昵称，不要展开讲游戏操作。",
+                "未附注身份说明的观众只按刚进直播间自然招呼，不凭空猜测对方是不是第一次来。",
+            ]
+            if viewer_notes:
+                fact_lines.append("已核实的观众身份事实：" + "；".join(viewer_notes))
+            state_facts = "\n".join(fact_lines)
             reply_guidance = f"顺口逐一点名欢迎刚进直播间的观众（{joined_names}），一两句热情自然的短话就好"
             plan = DecisionPlan(
                 should_reply=True,
@@ -3759,41 +3867,30 @@ class StreamerAgent(BaseAgent):
         reply_to: str,
         required_names: Sequence[str] = (),
         log_label: str,
-        commentary: bool = False,
     ) -> Optional[str]:
-        """对直通 Replyer 的输出做外层预算与敏感词兜底；真实 Replyer 已保名补全时不因二次截断误丢称呼。"""
+        """对直通 Replyer 的输出做外层极端长文熔断与敏感词兜底；常规短话直接放行、不硬裁。"""
         has_target = bool(reply_to or required_names)
         budget_fn = getattr(self._replyer, "budget_for", None)
         if callable(budget_fn):
-            try:
-                params = inspect.signature(budget_fn).parameters
-                accepts_commentary = "commentary" in params or any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-                )
-            except (TypeError, ValueError):
-                accepts_commentary = False
-            if accepts_commentary:
-                budget = int(budget_fn("play", has_target=has_target, commentary=commentary))
-            else:
-                budget = int(budget_fn("play", has_target=has_target))
+            budget = int(budget_fn("play", has_target=has_target))
         else:
             base_budget = int(self.typed_config.speech_max_chars)
             if base_budget <= 0:
                 budget = 0
             elif has_target:
                 budget = base_budget + TARGET_EXTRA_CHARS
-            elif commentary:
-                budget = base_budget + COMMENTARY_EXTRA_CHARS
             else:
                 budget = base_budget
 
-        verdict = guard(raw_speech, speech_max_chars=budget, word_filter=self._word_filter)
+        # 与 Replyer 内层复用同一极端长文熔断判据：正常一两句不硬裁，仅失控长文或超预算分段时截到 budget 内
+        cut_limit = budget if is_runaway_speech(raw_speech, budget) else 0
+        verdict = guard(raw_speech, speech_max_chars=cut_limit, word_filter=self._word_filter)
         if verdict.text is None:
             self._logger.info(f"{log_label}台词命中敏感词过滤，整条丢弃")
             return None
         candidate = verdict.text.strip()
 
-        # 真实 Replyer 内层已完成预算控制与保名补回：若外层再次按 budget 切句把原本保住的称呼切丢，
+        # 真实 Replyer 内层已完成熔断与保名补回：若外层截句把原本保住的称呼切丢，
         # 仅保留敏感词净化后的完整保名句，避免多观众欢迎或带同伴解说被二次截断丢名
         if (
             isinstance(self._replyer, Replyer)
@@ -4598,8 +4695,7 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"刷新 streamer_memory_correct 可见名单失败: {exc}", exc=True)
 
     def _reset_commentary_state(self) -> None:
-        """清空主播侧实况解说缓冲与同轮防抖锚点，供开播、下播及主控切换共用。"""
-        self._commentary_buffer.clear()
+        """清空主播侧实况解说同轮与短间隔防抖锚点，供开播、下播及主控切换共用。"""
         self._last_commentary_round_id = ""
         self._last_commentary_summary = ""
         self._last_commentary_spoken_ms = None
@@ -4729,8 +4825,8 @@ class StreamerAgent(BaseAgent):
         """受理主控游戏侧发来的实况解说素材，直通轻量 Replyer 润色并送入统一发言管线（严禁走重型 Planner）。
 
         执行顺序：校验摘要 -> 串行锁保护 -> 同轮二连发与短间隔重复摘要防抖 -> 记入游戏近况
-        -> normal 档按最小出声间隔防抖入缓冲 -> high 档或间隔满足时合并近期缓冲构造轻量 DecisionPlan
-        -> Replyer.generate -> speech_guard -> SpeechDispatcher.dispatch
+        -> normal 档按最小出声间隔防抖仅记录不积压 -> high/correction 或间隔满足时以单条干净要点直通 Replyer
+        （不传过时流程单与陈旧节流堆积）-> 外层熔断与敏感词守卫 -> SpeechDispatcher.dispatch
         -> 刷新 RoomState.last_speech_ms 复位冷场兜底计时器并记录同轮防抖锚点。
         """
         summary = (req.summary or "").strip()
@@ -4746,7 +4842,7 @@ class StreamerAgent(BaseAgent):
             req_round_id = (req.round_id or "").strip()
 
             # 同轮二连发防抖：同一游戏推理轮次已播报过解说时，后续普通解说不再入账也不触发 throttled_recorded；
-            # 未带 round_id 但仍在短防抖窗内重复提交与刚播报/已缓冲内容实质重复的普通解说，同样直接去重忽略
+            # 未带 round_id 但仍在短防抖窗内重复提交与刚播报内容实质重复的普通解说，同样直接去重忽略
             if not bypass_debounce and req_round_id and req_round_id == self._last_commentary_round_id:
                 self._logger.debug(f"实况解说命中同轮二连发防抖（round_id={req_round_id}），跳过重复入账与播报")
                 return CommentaryAck(accepted=True, spoken=False, reason="same_round_deduped")
@@ -4755,10 +4851,7 @@ class StreamerAgent(BaseAgent):
                 and min_interval_ms > 0
                 and self._last_commentary_spoken_ms is not None
                 and (now - self._last_commentary_spoken_ms) < min_interval_ms
-                and (
-                    self._commentary_summaries_duplicate(summary, self._last_commentary_summary)
-                    or any(self._commentary_summaries_duplicate(summary, item) for item in self._commentary_buffer)
-                )
+                and self._commentary_summaries_duplicate(summary, self._last_commentary_summary)
             ):
                 self._logger.debug(
                     f"实况解说命中短间隔重复摘要防抖（{now - self._last_commentary_spoken_ms}ms < {min_interval_ms}ms），已去重忽略"
@@ -4769,7 +4862,7 @@ class StreamerAgent(BaseAgent):
             if self._mouth is not None:
                 self._mouth.note_game(summary)
 
-            # 普通实况解说防抖：距上次任意出声不足最小间隔时记入缓冲合并，避免刷屏抢戏；
+            # 普通实况解说防抖：距上次任意出声不足最小间隔时仅记入游戏近况，不把陈旧摘要堆积喂给后续回复器；
             # 突发高优（urgency == "high"）或即时纠偏（correction=True）直接穿透防抖立即播报
             last_speech_ms = self._room_state.last_speech_ms
             if (
@@ -4778,17 +4871,10 @@ class StreamerAgent(BaseAgent):
                 and last_speech_ms is not None
                 and (now - last_speech_ms) < min_interval_ms
             ):
-                self._commentary_buffer.append(summary)
                 self._logger.debug(
-                    f"实况解说命中最小出声间隔防抖（{now - last_speech_ms}ms < {min_interval_ms}ms），已记入缓冲"
+                    f"实况解说命中最小出声间隔防抖（{now - last_speech_ms}ms < {min_interval_ms}ms），仅记近况不播报"
                 )
                 return CommentaryAck(accepted=True, spoken=False, reason="throttled_recorded")
-
-            # 合并之前被防抖压下的解说要点进 state_facts，当前 summary 作为表达核心指引
-            buffered = list(self._commentary_buffer)
-            self._commentary_buffer.clear()
-            merged_facts = list(dict.fromkeys([*buffered, summary]))
-            state_facts = "\n".join(f"- {item}" for item in merged_facts)
 
             emotion, emotion_note = coerce_emotion(req.mood)
             if emotion_note:
@@ -4798,36 +4884,27 @@ class StreamerAgent(BaseAgent):
                 should_reply=True,
                 target=None,
                 topic_summary=summary,
-                reply_guidance=summary,
+                reply_guidance="按人设把这条实况现场自然说给观众听，保留物品和设备专有名词原貌，不额外发挥",
                 emotion=emotion,
                 intensity=intensity,
             )
             reply_to = (req.about_player or "").strip()
             recent_speeches = self._spoken_log.recent_texts(limit=8)
-            rundown_text = self._rundown_coord.build_text_sync()
 
-            generate_kwargs: Dict[str, Any] = {
-                "plan": plan,
-                "batch": [],
-                "history": [],
-                "rundown": rundown_text,
-                "state_facts": state_facts,
-                "recent_speeches": recent_speeches,
-                "reply_to": reply_to,
-                "speech_mode": "play",
-            }
-            # 仅在 replyer.generate 声明支持 commentary 或 **kwargs 时透传，兼容固定签名的测试替身
+            # 净化盲人回复器输入面：只给本轮这一条干净解说要点 + 防复读最近口播（及必要的 reply_to），
+            # 剥离过时流程单文本与陈旧节流堆积，避免盲人回复器被陈旧上下文带偏
             try:
-                gen_params = inspect.signature(self._replyer.generate).parameters
-                if "commentary" in gen_params or any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD for p in gen_params.values()
-                ):
-                    generate_kwargs["commentary"] = True
-            except (TypeError, ValueError):
-                pass
-
-            try:
-                generated = await self._replyer.generate(**generate_kwargs)
+                generated = await self._replyer.generate(
+                    plan=plan,
+                    batch=[],
+                    history=[],
+                    rundown=None,
+                    state_facts="",
+                    recent_speeches=recent_speeches,
+                    reply_to=reply_to,
+                    speech_mode="play",
+                    commentary=True,
+                )
             except Exception as exc:  # noqa: BLE001 - 解说润色异常隔离，不反噬主控游戏循环
                 self._logger.exception(f"实况解说调用 Replyer 异常: {exc}")
                 return CommentaryAck(accepted=True, spoken=False, reason=f"replyer_error: {type(exc).__name__}")
@@ -4839,15 +4916,13 @@ class StreamerAgent(BaseAgent):
             if not raw_speech:
                 return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
 
-            # 经过外层预算与敏感词兜底把关：与 Replyer.budget_for 复用同一预算口径（含游戏解说放宽档），
-            # 同时保护真实 Replyer 内层补回的同伴称呼不被二次裁句误丢
+            # 外层极端长文熔断与敏感词兜底：与 Replyer 复用同一熔断口径，保护同伴称呼不被二次裁句误丢
             required_names = [reply_to] if reply_to else []
             final_speech = self._guard_replyer_speech(
                 raw_speech,
                 reply_to=reply_to,
                 required_names=required_names,
                 log_label="实况解说",
-                commentary=True,
             )
             if final_speech is None:
                 return CommentaryAck(accepted=True, spoken=False, reason="word_filtered")

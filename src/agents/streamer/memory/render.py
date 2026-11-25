@@ -112,7 +112,7 @@ __all__ = [
 
 # 单块档案列表的兼容默认上限（供 render_archive_block 单独渲染时截断；记忆摘要按 zones 各区名额计）
 MAX_BRIEF_ARCHIVE_LINES = 12
-# 记忆摘要顶部【游戏里的熟人】短表上限：只列配置了常用称呼的游戏玩家，防常驻上下文膨胀
+# 记忆摘要顶部【游戏里的熟人】短表上限：按最近活跃优先列入本存档常驻玩家（含无别名者），防常驻上下文膨胀
 MAX_KNOWN_PLAYERS_IN_BRIEF = 12
 # 老观众在场一行最多几个人，超出的折成"等 N 位"
 MAX_PRESENCE_VIEWERS = 6
@@ -129,7 +129,7 @@ _CUE_HEADER = (
 )
 # 各分区抬头：新增分区只需往 BRIEF_ZONES 加一项，渲染骨架不动
 _OPERATOR_NOTES_HEADER = "【运营本场提醒过】（与旧记忆或之前的印象冲突时，以此为准）："
-_KNOWN_PLAYERS_HEADER = "【游戏里的熟人】（账号 ID 与常用称呼对应；核对清楚再叫，别把不同人串成同一个）："
+_KNOWN_PLAYERS_HEADER = "【游戏里的熟人】（本存档常驻玩家与称呼对应；核对清楚再叫，别把不同人串成同一个）："
 _WORLD_ZONE_HEADER = "【这个世界里】"
 _RECENT_ZONE_HEADER = "【最近几场】"
 _GAMEPLAY_HIGHLIGHT_HEADER = "【忘不掉的名场面】"
@@ -769,20 +769,25 @@ def render_save_heads(current_saves: Mapping[str, GameSave]) -> List[str]:
     return heads
 
 
-def render_known_players_block(players: Sequence["GamePlayer"]) -> List[str]:
-    """渲染记忆摘要与主控交接共用的【游戏里的熟人】短表：只列有常用称呼且未申请遗忘的玩家。
+def _format_known_player_line(player: "GamePlayer") -> str:
+    """渲染【游戏里的熟人】单行：有别名输出 ``<账号>（常叫：…）``，无别名显式标注直接叫账号名、无其他昵称。"""
+    base = " ".join((player.name or "").split())
+    if player.effective_aliases():
+        return f"- {format_player_display(base, player.aliases)}"
+    return f"- {base}（直接叫账号名，无其他昵称）"
 
-    按玩家主键升序稳定排列，确保表未变时输出逐字节不变，不影响前缀缓存命中。
+
+def render_known_players_block(players: Sequence["GamePlayer"]) -> List[str]:
+    """渲染记忆摘要与主控交接共用的【游戏里的熟人】短表：纳入全部未申请遗忘的本存档活跃常驻玩家。
+
+    不再仅按是否配置别名切残缺子集：有别名的展示常用称呼，无别名的显式标注直接叫账号名、无其他昵称，
+    消除单别名短表导致的跨人错认引力。按最近活跃时间倒序、主键升序稳定截断至上限，表未变时输出逐字节不变。
     """
-    eligible = [
-        player
-        for player in players
-        if player.forget_requested_at_ms is None and player.effective_aliases() and (player.name or "").strip()
-    ]
+    eligible = [player for player in players if player.forget_requested_at_ms is None and (player.name or "").strip()]
     if not eligible:
         return []
-    ordered = sorted(eligible, key=lambda item: int(item.id))[:MAX_KNOWN_PLAYERS_IN_BRIEF]
-    return [_KNOWN_PLAYERS_HEADER, *(f"- {format_player_display(p.name, p.aliases)}" for p in ordered)]
+    ordered = sorted(eligible, key=lambda item: (-int(item.last_seen_ms), int(item.id)))[:MAX_KNOWN_PLAYERS_IN_BRIEF]
+    return [_KNOWN_PLAYERS_HEADER, *(_format_known_player_line(p) for p in ordered)]
 
 
 def render_brief(

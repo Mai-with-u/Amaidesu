@@ -1,8 +1,4 @@
-"""台词长度预算：超出先让模型重说成一句，仍超就截到预算内最后一个完整句子。
-
-提示词里的"一两句"是软要求：本机实测换了两种模型，台词字数中位都在 90 上下、最长 155，
-还常分好几段——所以在回复器出口再卡一道。
-"""
+"""台词长度预算：常规靠提示词软引导，仅极端长文做纯确定性完整句熔断（零二次 LLM 缩句）。"""
 
 from __future__ import annotations
 
@@ -12,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.replyer import COMMENTARY_EXTRA_CHARS, Replyer
+from src.agents.streamer.replyer import (
+    RUNAWAY_SPEECH_FLOOR_CHARS,
+    Replyer,
+    is_runaway_speech,
+    runaway_limit_for,
+)
 from src.agents.streamer.speech_guard import fit_to_budget, guard
 
 
@@ -22,7 +23,7 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response
 from tests.agents.streamer.helpers import make_streamer_agent
 
-_LONG = (
+_LONG_MULTILINE = (
     "呼，总算爬上来了，整个人湿得跟落汤鸡似的……不过你们看，我手里这块安山岩！"
     "其实刚才下水都是战术动作。\n\n诶不过这水底下怎么还有美西螈在游啊？"
 )
@@ -61,42 +62,74 @@ def _plan() -> DecisionPlan:
     return DecisionPlan(should_reply=True, topic_summary="主播从水里爬上岸")
 
 
-async def test_long_speech_is_retold_as_one_line() -> None:
-    """超预算：只带人设和原话让模型重说一句，用重说的结果和它的请求号。"""
+def test_runaway_threshold_and_trigger_conditions() -> None:
+    """极端长文熔断阈值取 max(budget * 2, 120)，无换行正常一两句不触发，失控超长或超预算分段才触发。"""
+    assert runaway_limit_for(0) == 0
+    assert runaway_limit_for(30) == RUNAWAY_SPEECH_FLOOR_CHARS == 120
+    assert runaway_limit_for(70) == 140
+    assert is_runaway_speech("这是一句自然的两句口播。稍微超过三十字但没失控！", 30) is False
+    assert is_runaway_speech("这是一句带换行的第一段话。\n第二段超过三十字的文本在这里继续往后写下去呢！", 30) is True
+    assert is_runaway_speech("一" * 121, 30) is True
+    assert is_runaway_speech("一" * 200, 0) is False
+
+
+async def test_normal_two_sentence_speech_above_soft_budget_passes_with_single_llm_call() -> None:
+    """正常一两句无换行口播略超软预算但未触达极端熔断阈值时，直接原样保留，绝不发起二次 LLM 缩句。"""
+    natural_two_sentences = "我刚从水里爬上岸啦！顺手还捞到一块安山岩，待会儿回去把水车传动轴接上！"
+    assert 30 < len(natural_two_sentences) < RUNAWAY_SPEECH_FLOOR_CHARS
     replyer, llm = _replyer(
-        Response(success=True, content=_LONG, request_id="req_long"),
-        Response(success=True, content="上岸了……水底下居然有美西螈。", request_id="req_short"),
+        Response(success=True, content=natural_two_sentences, request_id="req_natural"),
+        speech_max_chars=30,
     )
     result = await replyer.generate(_plan(), [])
-    assert result == {"speech": "上岸了……水底下居然有美西螈。", "llm_request_id": "req_short"}
-    retell = llm.generate.await_args_list[1]
-    instruction = retell.args[0][0]["content"]
-    assert _LONG in instruction and "不超过 40 字" in instruction and "不要加原话里没有的事" in instruction
-    assert retell.kwargs["system"] == "PROMPT" and retell.kwargs["profile"] == "replyer"
+    assert result == {"speech": natural_two_sentences, "llm_request_id": "req_natural"}
+    assert llm.generate.await_count == 1
 
 
-async def test_retell_failure_falls_back_to_cutting_whole_sentences() -> None:
-    """重说失败：直接按完整句子截短原台词，照样发声。"""
-    replyer, _ = _replyer(
-        Response(success=True, content=_LONG, request_id="req_long"),
-        Response(success=False, error="timeout"),
+async def test_multiline_overflow_is_deterministically_truncated_without_second_llm_call() -> None:
+    """含分段换行且超软预算：纯确定性按完整句截断，零额外 LLM 推理调用，保留原请求号。"""
+    replyer, llm = _replyer(
+        Response(success=True, content=_LONG_MULTILINE, request_id="req_long"),
+        speech_max_chars=40,
     )
     result = await replyer.generate(_plan(), [])
     assert result == {
         "speech": "呼，总算爬上来了，整个人湿得跟落汤鸡似的……不过你们看，我手里这块安山岩！",
         "llm_request_id": "req_long",
     }
+    assert llm.generate.await_count == 1
+
+
+async def test_runaway_single_paragraph_is_deterministically_truncated_without_second_llm_call() -> None:
+    """单段超长失控文本（> max(budget * 2, 120)）：纯确定性完整句截断，零额外 LLM 推理调用。"""
+    runaway = (
+        "先说说这波上岸的惊险操作吧！"
+        "刚才在水底下绕了一大圈差点没找到出口，还好顺手挖了块安山岩垫脚。"
+        "接下来我要沿着河岸往东边走回工坊，顺便把箱子里的铁锭、红石和传动轴全整理一遍。"
+        "晚上再去北边山坡插满火把，顺便检查一下水车转速够不够带起整套粉碎机和合成台！"
+    )
+    assert len(runaway) > RUNAWAY_SPEECH_FLOOR_CHARS
+    replyer, llm = _replyer(
+        Response(success=True, content=runaway, request_id="req_runaway"),
+        speech_max_chars=40,
+    )
+    result = await replyer.generate(_plan(), [])
+    assert result == {
+        "speech": "先说说这波上岸的惊险操作吧！",
+        "llm_request_id": "req_runaway",
+    }
+    assert llm.generate.await_count == 1
 
 
 async def test_budget_zero_leaves_speech_untouched() -> None:
     """预算为 0 = 不限制：只调一次模型，台词原样。"""
-    replyer, llm = _replyer(Response(success=True, content=_LONG, request_id="req_long"), speech_max_chars=0)
+    replyer, llm = _replyer(Response(success=True, content=_LONG_MULTILINE, request_id="req_long"), speech_max_chars=0)
     result = await replyer.generate(_plan(), [])
-    assert result is not None and result["speech"] == _LONG and llm.generate.await_count == 1
+    assert result is not None and result["speech"] == _LONG_MULTILINE and llm.generate.await_count == 1
 
 
 async def test_turn_prompt_states_the_budget() -> None:
-    """预算先写进本轮要求，多数台词一次就落在预算内。"""
+    """软预算先写进本轮要求，多数台词一次就落在预算内。"""
     replyer, _ = _replyer(Response(success=True, content="好耶", request_id="r"))
     await replyer.generate(_plan(), [])
     turn_kwargs = {call.args[0]: call.kwargs for call in replyer._prompt_service.render.call_args_list}[
@@ -145,6 +178,7 @@ async def test_budget_follows_speech_mode_and_target(
     replyer, _, prompt = _modal_replyer(
         Response(success=True, content="好耶", request_id="r"), speech_max_chars=60, talk_speech_max_chars=150
     )
+    assert replyer.budget_for(mode, has_target=bool(target or reply_to)) == expected_budget
     plan = DecisionPlan(should_reply=True, topic_summary="话头", target=target)
     await replyer.generate(plan, [], reply_to=reply_to, speech_mode=mode)
     turn = _rendered(prompt, "amaidesu_replyer")
@@ -155,19 +189,6 @@ async def test_budget_follows_speech_mode_and_target(
     else:
         assert "一次只说一件事，说完就停" in system["speech_style_rule"]
         assert "先带出对方问的事再答，答完就停" in system["speech_style_rule"]
-
-
-async def test_shorten_with_target_keeps_the_opening_hook() -> None:
-    """接观众的话却超长：重说要求保留开头顺口带出的问题由头或称呼，删后面的枝节，防止削掉转场锚点。"""
-    long_reply = "阿杰问腰上的旋钮能不能拧啊——" + "这个旋钮可以调节麦麦的各种参数，" * 8
-    replyer, llm, _ = _modal_replyer(
-        Response(success=True, content=long_reply, request_id="r1"),
-        Response(success=True, content="阿杰问旋钮能不能拧——拧一下我就变精神。", request_id="r2"),
-        speech_max_chars=60,
-    )
-    await replyer.generate(DecisionPlan(should_reply=True, topic_summary="旋钮", target="m1"), [])
-    instruction = llm.generate.await_args_list[1].args[0][0]["content"]
-    assert "开头顺口带出的问题由头、称呼或接住对方的词要留着" in instruction and "不超过 100 字" in instruction
 
 
 async def test_no_game_omits_game_rules_and_section() -> None:
@@ -194,101 +215,57 @@ async def test_persona_profile_is_appended_with_usage_note() -> None:
     assert section.startswith("\n\n身份与来历：测试设定\n") and "聊别的事时不硬扯" in section
 
 
-async def test_shorten_falls_back_to_original_cut_when_retell_drops_merged_reply_to_names() -> None:
-    """多位进房观众合并称呼超长重说时：指令明确点名保名，若模型仍删成泛称则优先采用保留称呼的原台词裁剪。"""
-    long_welcome = (
+async def test_runaway_truncation_keeps_first_sentence_with_merged_reply_to_names() -> None:
+    """多位称呼触发极端长文熔断时：确定性截断保留首句称呼，零二次 LLM 呼叫。"""
+    runaway_welcome = (
         "欢迎星辰和小橘来到直播间呀！"
-        "今天咱们在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮，"
-        "大家快坐下来一起看看这台机器能不能顺利转起来吧！"
+        "今天咱们在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮。"
+        "待会儿还要继续沿着东边矿洞往下探查矿脉，顺便把工坊里的储物箱、漏斗和传送带全部重新规划整理一遍，晚上再去北边山坡插满火把防刷怪，大家快坐下来一起看看吧！"
     )
+    assert len(runaway_welcome) > runaway_limit_for(30 + 40)
     replyer, llm, _ = _modal_replyer(
-        Response(success=True, content=long_welcome, request_id="req_orig"),
-        Response(success=True, content="欢迎新来的朋友来玩呀，今天在折腾机械动力！", request_id="req_dropped"),
+        Response(success=True, content=runaway_welcome, request_id="req_orig"),
         speech_max_chars=30,
     )
     result = await replyer.generate(
-        DecisionPlan(should_reply=True, topic_summary="欢迎新进房观众星辰、小橘"),
-        [],
-        reply_to="星辰、小橘",
-    )
-    assert result is not None
-    instruction = llm.generate.await_args_list[1].args[0][0]["content"]
-    assert "星辰、小橘" in instruction
-    assert "星辰" in result["speech"] and "小橘" in result["speech"]
-    assert result["speech"] == "欢迎星辰和小橘来到直播间呀！"
-    assert result["llm_request_id"] == "req_orig"
-
-
-async def test_shorten_restores_missing_keep_names_when_both_cuts_lose_them() -> None:
-    """原台词前句和重说裁剪都丢掉必填称呼时，把缺失称呼补回句首，绝不把名字挤没。"""
-    long_welcome = (
-        "今天咱们在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮呢！"
-        "欢迎阿杰和小夏来到直播间一起玩呀！"
-    )
-    replyer, llm, _ = _modal_replyer(
-        Response(success=True, content=long_welcome, request_id="req_orig"),
-        Response(success=True, content="欢迎新来的小伙伴们一起看折腾水车呀！", request_id="req_short"),
-        speech_max_chars=25,
-    )
-    result = await replyer.generate(
-        DecisionPlan(should_reply=True, topic_summary="欢迎新观众"),
-        [],
-        keep_names=("阿杰", "小夏"),
-    )
-    assert result is not None
-    instruction = llm.generate.await_args_list[1].args[0][0]["content"]
-    assert "阿杰、小夏" in instruction
-    assert "阿杰" in result["speech"] and "小夏" in result["speech"]
-    assert result["speech"].startswith("阿杰、小夏，")
-
-
-async def test_shorten_uses_retell_directly_when_all_keep_names_are_preserved() -> None:
-    """重说结果完整保留全部必填称呼且在预算内时，直接采用重说台词与它的请求号。"""
-    long_welcome = (
-        "欢迎星辰和小橘来到直播间呀！"
-        "今天咱们正在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮，"
-        "大家快坐下来一起看看吧！"
-    )
-    replyer, _, _ = _modal_replyer(
-        Response(success=True, content=long_welcome, request_id="req_orig"),
-        Response(success=True, content="欢迎星辰、小橘来玩呀，今天在折腾水车呢！", request_id="req_kept"),
-        speech_max_chars=30,
-    )
-    result = await replyer.generate(
-        DecisionPlan(should_reply=True, topic_summary="欢迎新观众星辰、小橘"),
+        DecisionPlan(should_reply=True, topic_summary="欢迎进房观众星辰、小橘"),
         [],
         reply_to="星辰、小橘",
     )
     assert result == {
-        "speech": "欢迎星辰、小橘来玩呀，今天在折腾水车呢！",
-        "llm_request_id": "req_kept",
+        "speech": (
+            "欢迎星辰和小橘来到直播间呀！"
+            "今天咱们在机械动力存档里折腾水车和矿车，刚才还在矿道里差点被岩浆烫到，结果又回头补了好几块传动轴和齿轮。"
+        ),
+        "llm_request_id": "req_orig",
     }
+    assert len(result["speech"]) <= 70
+    assert "星辰" in result["speech"] and "小橘" in result["speech"]
+    assert llm.generate.await_count == 1
 
 
-async def test_shorten_restored_names_survive_outer_fit_to_budget_guard() -> None:
-    """补回缺失称呼后若原本两句贴近预算会超限，须收敛为单句归拢称呼，确保外层 fit_to_budget 不二次截断丢名。"""
-    # speech_max_chars=15 + TARGET_EXTRA_CHARS=40 => budget=55
-    long_orig = (
-        "欢迎星辰来到咱们机械动力二周目直播间玩呀！"
-        "今天小橘也正好赶上咱们调试水车和矿道齿轮，待会儿还要看看矿车轨道怎么接上去，大家快一起看看吧！"
+async def test_runaway_truncation_restores_missing_keep_names_and_survives_outer_guard() -> None:
+    """极端长文熔断裁掉尾句导致必填称呼丢失时，自动把缺失称呼补回句首，且经外层 guard 不再截丢称呼。"""
+    # speech_max_chars=15 + TARGET_EXTRA_CHARS=40 => budget=55, runaway_limit=120
+    runaway_welcome = (
+        "欢迎星辰来到咱们机械动力直播间玩呀！"
+        "今天咱们在工坊旁边折腾水车、矿车轨道和齿轮箱，刚刚还回头补了好几块传动轴、漏斗、传送带和火把，顺便把仓库里的铁矿、煤炭和红石全都分类码整齐，待会儿还要去东边河岸继续探索新矿洞呢！"
+        "也欢迎小橘和阿杰进来一起看呀！"
     )
-    # 重说正好贴近 55 字预算（两句），含星辰（首句）和小橘（次句），漏了阿杰；
-    # 若仅把“阿杰，”拼到两句开头会超 55 字，导致外层 fit_to_budget 切掉次句把小橘丢掉
-    retell_near_budget = "欢迎星辰来到咱们机械动力二周目直播间玩呀！今天小橘也正好赶上咱们调试水车和矿道齿轮机器呢！"
-    replyer, _, _ = _modal_replyer(
-        Response(success=True, content=long_orig, request_id="req_orig"),
-        Response(success=True, content=retell_near_budget, request_id="req_retell"),
+    assert len(runaway_welcome) > runaway_limit_for(55)
+    replyer, llm, _ = _modal_replyer(
+        Response(success=True, content=runaway_welcome, request_id="req_orig"),
         speech_max_chars=15,
     )
     result = await replyer.generate(
         DecisionPlan(should_reply=True, topic_summary="欢迎星辰、小橘、阿杰进房"),
         [],
-        reply_to="星辰、小橘、阿杰",
+        keep_names=("星辰", "小橘", "阿杰"),
     )
     assert result is not None
+    assert llm.generate.await_count == 1
     verdict = guard(result["speech"], speech_max_chars=55, word_filter=None)
     assert verdict.reason == "passed" and verdict.text is not None
-    assert len(result["speech"]) <= 55
     for name in ("星辰", "小橘", "阿杰"):
         assert name in result["speech"]
         assert name in verdict.text
@@ -296,17 +273,18 @@ async def test_shorten_restored_names_survive_outer_fit_to_budget_guard() -> Non
 
 async def test_keep_names_without_reply_to_omits_game_companion_and_guards_short_draft() -> None:
     """仅传 keep_names 而 reply_to 为空时，提示词绝不渲染「提及的游戏同伴」，且初稿漏名亦自动补回。"""
-    replyer, _, prompt = _modal_replyer(
+    replyer, llm, prompt = _modal_replyer(
         Response(success=True, content="欢迎ViewerA来到直播间一起玩呀！", request_id="req_short_draft"),
         speech_max_chars=30,
     )
     result = await replyer.generate(
-        DecisionPlan(should_reply=True, topic_summary="欢迎新观众ViewerA、ViewerB"),
+        DecisionPlan(should_reply=True, topic_summary="欢迎观众ViewerA、ViewerB"),
         [],
         reply_to="",
         keep_names=("ViewerA", "ViewerB"),
     )
     assert result is not None
+    assert llm.generate.await_count == 1
     rendered_plan = prompt.render.call_args.kwargs["plan"]
     assert "提及的游戏同伴" not in rendered_plan
     assert "刚在游戏里找过她" not in rendered_plan
@@ -314,16 +292,16 @@ async def test_keep_names_without_reply_to_omits_game_companion_and_guards_short
     assert "ViewerA" in result["speech"] and "ViewerB" in result["speech"]
 
 
-async def test_paid_event_batch_keeps_viewer_name_on_shorten_without_game_companion_label() -> None:
-    """批次含无 message_id 的付费礼物时，Replyer 自动把送礼观众昵称纳入保名且不渲染游戏同伴模板。"""
-    long_thanks = (
+async def test_paid_event_batch_keeps_viewer_name_on_runaway_cut_without_game_companion_label() -> None:
+    """批次含无 message_id 的付费礼物且触发极端长文熔断时，零二次 LLM 呼叫并保住送礼观众昵称且不渲染游戏同伴模板。"""
+    runaway_thanks = (
         "非常感谢观众送出的大礼物呀！"
         "今天咱们在工坊旁边折腾水车和齿轮箱，刚刚还把传送带、漏斗、储物箱和照明火把全部重新摆了一遍，"
-        "等会儿继续一起看看这台机器能不能顺利转起来吧！"
+        "等会儿继续沿着河岸往东边看看矿洞里还有没有新的矿脉，顺便把门口的农场也一起扩建起来吧！\n"
+        "再次谢谢大家的支持呀！"
     )
     replyer, llm, prompt = _modal_replyer(
-        Response(success=True, content=long_thanks, request_id="req_gift_orig"),
-        Response(success=True, content="非常感谢小伙伴送的礼物呀，今天继续折腾水车！", request_id="req_gift_short"),
+        Response(success=True, content=runaway_thanks, request_id="req_gift_orig"),
         speech_max_chars=25,
     )
     gift_msg = RoomMessagePayload(
@@ -338,54 +316,59 @@ async def test_paid_event_batch_keeps_viewer_name_on_shorten_without_game_compan
         reply_to="",
     )
     assert result is not None
+    assert llm.generate.await_count == 1
     rendered_plan = prompt.render.call_args.kwargs["plan"]
     assert "提及的游戏同伴" not in rendered_plan
     assert "ViewerAlpha" in rendered_plan
-    shorten_text = llm.generate.await_args_list[1].args[0][0]["content"]
-    assert "ViewerAlpha" in shorten_text
     assert "ViewerAlpha" in result["speech"]
 
 
-async def test_commentary_budget_and_single_sentence_grace_skip_unnecessary_shorten() -> None:
-    """游戏实况解说适度放宽预算，且单句略超宽容窗内跳过二次缩句重说，仅显著超长或多句时缩句并强调保真事实阶段与专有名词。"""
-    # 1) commentary=True 放宽无 target 时的 play 预算（30 + 25 = 55），45 字正常解说一次直出零缩句
-    draft_in_budget = "我正准备往西边河岸走，打算先收集几块黏土再回去把那套风车传动轴继续搭起来！"
+async def test_commentary_purifies_turn_input_and_preserves_item_spec_names() -> None:
+    """commentary=True 净化输入面：剥离过时流程单与无关聊天，保留最近口播防复读与专有规格名原貌，且零二次缩句。"""
+    natural_commentary = (
+        "我正准备把这组带规格编号的抽屉装回墙上，顺便看看旁边的传动轴接得稳不稳！"
+        "等会儿装好了就能把背包里的零件全归位啦！"
+    )
+    assert 30 < len(natural_commentary) < RUNAWAY_SPEECH_FLOOR_CHARS
     replyer, llm, prompt = _modal_replyer(
-        Response(success=True, content=draft_in_budget, request_id="req_c1"),
+        Response(success=True, content=natural_commentary, request_id="req_comm"),
         speech_max_chars=30,
     )
-    assert replyer.budget_for("play", has_target=False) == 30
-    assert replyer.budget_for("play", has_target=False, commentary=True) == 30 + COMMENTARY_EXTRA_CHARS
-    res1 = await replyer.generate(_plan(), [], speech_mode="play", commentary=True)
-    assert res1 == {"speech": draft_in_budget, "llm_request_id": "req_c1"}
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="准备把工作区里的专有规格储物设备装到墙上"),
+        batch=[
+            RoomMessagePayload(
+                message_type="danmaku",
+                message_id="m_noise",
+                user=RoomMessageUser(id="u_n", name="路人"),
+                content="无关弹幕噪声",
+            )
+        ],
+        rundown="过时流程单：开场聊天环节",
+        game_chat=["[minecraft] 玩家甲：无关游戏公屏噪声"],
+        recent_speeches=["刚刚说过的一句防复读台词"],
+        reply_to="同伴甲",
+        speech_mode="play",
+        commentary=True,
+    )
+    assert result == {"speech": natural_commentary, "llm_request_id": "req_comm"}
     assert llm.generate.await_count == 1
-    assert f"不超过 {30 + COMMENTARY_EXTRA_CHARS} 字" in _rendered(prompt, "amaidesu_replyer")["length_rule"]
+    turn = _rendered(prompt, "amaidesu_replyer")
+    assert turn["rundown"] == "（当前无流程单）"
+    assert "过时流程单" not in turn["rundown"]
+    assert turn["dialogue_prompt"] == "（暂无聊天记录）"
+    assert turn["game_chat"] == "" and turn["game_heading"] == "" and turn["game_people_section"] == ""
+    assert "刚刚说过的一句防复读台词" in turn["recent_speech_section"]
+    assert "同伴甲" in turn["plan"]
+    assert "原样保留" in turn["game_turn_rules"]
+    assert "不念原始游戏状态读数" not in turn["game_turn_rules"]
 
-    # 2) 超过 55 字但处于单句宽容窗内（<= 70 字、无换行、单句）：跳过高风险 LLM 缩句，原样保留动作进行态与专有名词
-    single_sentence_grace = "刚才同伴触发了石器时代进度，我现在正顺着东边山坡一路往下探矿洞，打算先把包里的铁矿石、煤炭和火把都补齐再回去整理仓库！"
-    assert 55 < len(single_sentence_grace) <= 70
-    replyer2, llm2, _ = _modal_replyer(
-        Response(success=True, content=single_sentence_grace, request_id="req_c2"),
-        speech_max_chars=30,
-    )
-    res2 = await replyer2.generate(_plan(), [], speech_mode="play", commentary=True)
-    assert res2 == {"speech": single_sentence_grace, "llm_request_id": "req_c2"}
-    assert llm2.generate.await_count == 1
 
-    # 3) 多句超长解说：触发 _shorten，缩句指令明确要求原样保留动作阶段、事件性质与专有名称、不改变事实完成态
-    multi_long = (
-        "我现在正打算往东边矿洞走，还没开始挖呢，包里刚准备好了石镐和火把！"
-        "待会儿要是运气好碰到铁矿就顺手采一点带回工坊，顺便看看水车旁边还有没有空位可以扩建仓库！"
-    )
-    replyer3, llm3, _ = _modal_replyer(
-        Response(success=True, content=multi_long, request_id="req_c3_orig"),
-        Response(success=True, content="我刚备好石镐和火把，正打算去东边矿洞找铁矿呢！", request_id="req_c3_short"),
-        speech_max_chars=30,
-    )
-    res3 = await replyer3.generate(_plan(), [], speech_mode="play", commentary=True)
-    assert res3 == {"speech": "我刚备好石镐和火把，正打算去东边矿洞找铁矿呢！", "llm_request_id": "req_c3_short"}
-    assert llm3.generate.await_count == 2
-    shorten_instruction = llm3.generate.await_args_list[1].args[0][0]["content"]
-    assert "原样保留动作所处的阶段" in shorten_instruction
-    assert "专有名称" in shorten_instruction
-    assert "不改变事实完成态" in shorten_instruction
+async def test_regular_game_turn_rules_distinguish_telemetry_from_item_spec_names() -> None:
+    """常规游戏轮次的 _GAME_TURN_RULES 明确区分原始游戏状态读数与自带规格/型号的物品专有名称。"""
+    replyer, _, prompt = _modal_replyer(Response(success=True, content="收到啦！", request_id="req_reg"))
+    await replyer.generate(_plan(), [], speech_mode="play", commentary=False)
+    rules = _rendered(prompt, "amaidesu_replyer")["game_turn_rules"]
+    assert "原始游戏状态读数" in rules
+    assert "专有名称必须原样保留" in rules
+    assert "不要改写或换算其中的数字" in rules

@@ -56,10 +56,9 @@ _DEFAULT_TALK_SPEECH_MAX_CHARS = 150
 # 接某位观众或玩家的话时篇幅多给这么多字：起手先把对方问的事顺口带出来让全场听清转场由头，再接回答，不挤掉正事
 TARGET_EXTRA_CHARS = 40
 _TARGET_EXTRA_CHARS = TARGET_EXTRA_CHARS
-# 游戏实况解说（无特定回应对象时）适度放宽的字数预算：承载动作进行态、处境变化与游戏专有名称，避免窄预算强压引发失真
-COMMENTARY_EXTRA_CHARS = 25
-# 游戏实况解说已是完整单句时跳过 LLM 缩句重说的宽容字数：单句略超预算时不冒险改写，仅在多句或显著超长时才缩句
-COMMENTARY_SHORTEN_GRACE_CHARS = 15
+# 极端长文熔断下限：常规短话靠提示词软篇幅引导，仅超过 max(budget * 2, 本下限) 或含分段换行且超软预算时
+# 做纯确定性的完整句截断兜底，不再发起二次 LLM 缩句重说
+RUNAWAY_SPEECH_FLOOR_CHARS = 120
 
 # 说话方式那一条规矩：边玩边说一次只说一件事、说完就停（两个保留的边界：回答问话可以把回答
 # 讲完整；形容保留指代锚，指代说清楚话才自然）；杂谈像跟朋友唠嗑，围绕一个话头说两三句
@@ -87,8 +86,14 @@ _GAME_RULE_LINE = "- 干活的是自己，用第一人称；同伴听不见直�
 _GAME_HEADING = "\n\n## 游戏里刚有人说的话\n\n"
 _GAME_TURN_RULES = (
     "游戏里有人搭话时，按游戏聊天和发言要点说，别当成观众弹幕或冷场。\n"
-    "台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；"
-    "观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\n"
+    "不念原始游戏状态读数（如血量、坐标、倒计时或零散库存计数），用处境口语带过；"
+    "但物品、设备与机关自带型号或规格的专有名称必须原样保留，不要改写或换算其中的数字；"
+    "观众主动问起或数字本身构成笑点与剧情时可照实说。\n"
+)
+# 游戏实况解说专用边界：游戏侧已把原始读数压成现场要点，回复器只按要点自然口播并原样保留专有规格名，不做二次数字改译
+_COMMENTARY_GAME_TURN_RULES = (
+    "发言要点里写到的物品、设备与机关专有名称（包括自带型号或规格的写法）必须原样保留，不要改写或换算其中的数字；"
+    "只按这条现场要点用自然口语讲给观众听，不额外发挥。\n"
 )
 # 聊天记录只带最近这么多条原文（与 StreamerConfig.replyer_history_items 默认值对齐）；0 = 带整份历史
 _DEFAULT_HISTORY_ITEMS = 14
@@ -280,13 +285,13 @@ class Replyer:
 
         mode = "talk" if speech_mode == "talk" else "play"
         # 付费事件（礼物/醒目留言/上舰）自带观众昵称，连同显式传入的 keep_names 一并列为必填观众称呼，
-        # 保证初稿、缩句与复读重说均保留观众昵称且绝不走游戏同伴模板
+        # 保证初稿、熔断截断与复读重说均保留观众昵称且绝不走游戏同伴模板
         paid_names = _paid_viewer_names(batch)
         explicit_keep_names = _collect_keep_names("", [*keep_names, *paid_names])
         # 汇总本轮必须硬保的观众/玩家称呼（支持多位进房观众合并称呼如 "A、B" 与显式 keep_names）
         required_names = _collect_keep_names(reply_to, explicit_keep_names)
         has_target = bool(plan.target or reply_to or required_names)
-        budget = self._budget_for(mode, has_target=has_target, commentary=commentary)
+        budget = self._budget_for(mode, has_target=has_target)
         system_prompt = self._render_system_prompt(mode)
         turn_input = self._render_turn_input(
             plan,
@@ -303,6 +308,7 @@ class Replyer:
             budget=budget,
             target_familiarity=target_familiarity,
             keep_names=explicit_keep_names,
+            commentary=commentary,
         )
         messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
@@ -332,23 +338,18 @@ class Replyer:
             return None
         request_id = response.request_id or None
 
-        # 超出长度预算：先让模型重说成一句（同时硬保必须保留的称呼），仍超就截到预算内最后一个完整句子；
-        # 游戏实况解说若已是无换行的单句且仅略超预算（处于宽容字数内），直接原样保留，避免为了压几个字改坏动作进行态或专有名词
-        if (
-            budget > 0
-            and len(speech) > budget
-            and self._should_trigger_shorten(speech, budget=budget, commentary=commentary)
-        ):
-            speech, request_id = await self._shorten(
-                system_prompt,
-                speech,
-                request_id,
-                budget=budget,
-                keep_hook=has_target,
-                keep_names=required_names,
+        # 极端长文熔断：常规口播靠提示词软篇幅引导，不再触发二次 LLM 缩句重说；
+        # 仅在明显失控（超过 max(budget * 2, 120) 或含分段换行且超软预算）时用纯确定性完整句截断兜底，
+        # 同时硬保必须保留的观众/玩家称呼，零额外 LLM 推理调用
+        if is_runaway_speech(speech, budget):
+            original_len = len(speech)
+            speech = _truncate_with_names(speech, budget=budget, keep_names=required_names)
+            self.logger.info(
+                f"台词触发极端长文熔断（{original_len} 字，软预算 {budget}，熔断阈值 {runaway_limit_for(budget)}）："
+                f"确定性截短至 {len(speech)} 字"
             )
 
-        # 显式观众称呼（进房欢迎、付费礼物/醒目留言/上舰）：即使初稿未超预算，
+        # 显式观众称呼（进房欢迎、付费礼物/醒目留言/上舰）：即使初稿未触发熔断，
         # 若模型漏掉昵称也补回句首，避免欢迎或致谢沦为泛称
         if explicit_keep_names:
             missing_explicit = _missing_keep_names(speech, explicit_keep_names)
@@ -393,63 +394,6 @@ class Replyer:
         self.logger.info(f"Replyer 生成回复: speech={result.get('speech', '')[:50]!r}")
         return result
 
-    async def _shorten(
-        self,
-        system_prompt: str,
-        speech: str,
-        request_id: Optional[str],
-        *,
-        budget: int,
-        keep_hook: bool = False,
-        keep_names: Sequence[str] = (),
-    ) -> Tuple[str, Optional[str]]:
-        """把超出长度预算的台词说短些：重说一次，仍超或重说失败就按完整句子截短。
-
-        重说只带人设（system 稳定段，前缀缓存可命中）和原台词，不重发整段上下文——
-        要的只是"同一个人把这句话说短"，事实都在原台词里。接观众或玩家的话时（``keep_hook``）
-        明确要求保留开头顺口带出的问题由头、称呼或接话钩子，删后面的枝节；若给了 ``keep_names``
-        （含多位进房观众合并称呼），重说指令显式点名必须保留，并在裁剪回退后校验与补回，
-        杜绝压短后把观众/玩家昵称挤没只剩泛称。
-        """
-        names = _collect_keep_names("", keep_names)
-        hook_note = "开头顺口带出的问题由头、称呼或接住对方的词要留着，删后面的枝节；" if keep_hook else ""
-        names_note = f"以下称呼必须完整保留在台词里，不得删成泛称：{'、'.join(names)}；" if names else ""
-        instruction = (
-            f"你刚想说的这段话有 {len(speech)} 字，太长了，像在写稿：\n{speech}\n\n"
-            f"说短一点，像口头说话那样，不超过 {budget} 字，不分段。{hook_note}{names_note}"
-            "只删修饰和枝节，原样保留动作所处的阶段、事件性质以及游戏里的专有名称，不改变事实完成态，也不要加原话里没有的事。"
-            "只输出台词。"
-        )
-        shortened = ""
-        shortened_request_id: Optional[str] = None
-        try:
-            response = await self._llm_service.generate(
-                [{"role": "user", "content": instruction}], system=system_prompt, profile=self.profile
-            )
-            if response.ok:
-                shortened = _plain_text_speech(response.content)
-                shortened_request_id = response.request_id or None
-            else:
-                self.logger.warning(f"台词重说失败，改为直接截短: {response.error or 'unknown'}")
-        except Exception as exc:
-            self.logger.warning(f"台词重说异常，改为直接截短: {exc}", exc=True)
-        # 校验重说与裁剪结果是否丢失必须保留的称呼：重说丢名而原台词裁剪保留更多称呼时优先采用原台词裁剪，
-        # 若仍缺称呼则把缺失称呼补回句首，避免新观众/同伴昵称被压没
-        fitted, used_shortened = _pick_fitted_with_names(
-            original=speech,
-            shortened=shortened,
-            budget=budget,
-            keep_names=names,
-        )
-        if used_shortened and shortened_request_id:
-            request_id = shortened_request_id
-        elif shortened and not used_shortened and names:
-            self.logger.info("台词重说删掉了必须保留的称呼，优先改用保留称呼的原台词裁剪")
-        self.logger.info(
-            f"台词超出长度预算（{len(speech)} 字 > {budget}）：重说后 {len(shortened) or '失败'}，最终 {len(fitted)} 字"
-        )
-        return fitted, request_id
-
     async def _rephrase_verbatim(
         self,
         *,
@@ -490,7 +434,7 @@ class Replyer:
         if not rephrased:
             self.logger.warning("Replyer 近逐字重说返回空台词，放弃本句")
             return "", request_id
-        if budget > 0 and len(rephrased) > budget:
+        if is_runaway_speech(rephrased, budget):
             rephrased = fit_to_budget(rephrased, budget)
         if names:
             missing = _missing_keep_names(rephrased, names)
@@ -506,35 +450,16 @@ class Replyer:
 
     # ==================== prompt 渲染（人设注入核心） ====================
 
-    def budget_for(self, mode: str, *, has_target: bool, commentary: bool = False) -> int:
-        """只读查询本轮台词长度预算（复用内部 _budget_for 单一事实源；0 表示不限制）。"""
-        return self._budget_for(mode, has_target=has_target, commentary=commentary)
+    def budget_for(self, mode: str, *, has_target: bool) -> int:
+        """只读查询本轮台词软长度预算（复用内部 _budget_for 单一事实源；0 表示不限制）。"""
+        return self._budget_for(mode, has_target=has_target)
 
-    def _budget_for(self, mode: str, *, has_target: bool, commentary: bool = False) -> int:
-        """本轮台词上限：按档位取基础上限，接某位观众或玩家的话时多给一点，游戏实况解说亦适度放宽；0 = 不限制。"""
+    def _budget_for(self, mode: str, *, has_target: bool) -> int:
+        """本轮台词软长度上限：按档位取基础上限，接某位观众或玩家的话时多给一点；0 = 不限制。"""
         base = self._talk_speech_max_chars if mode == "talk" else self._speech_max_chars
         if base <= 0:
             return 0
-        if has_target:
-            return base + _TARGET_EXTRA_CHARS
-        if commentary and mode == "play":
-            return base + COMMENTARY_EXTRA_CHARS
-        return base
-
-    @staticmethod
-    def _should_trigger_shorten(speech: str, *, budget: int, commentary: bool) -> bool:
-        """判定超预算台词是否需要触发二次 LLM 缩句重说。
-
-        常规路径超预算即缩句；游戏实况解说若初稿已是无换行的完整单句且仅略超预算
-        （在 ``COMMENTARY_SHORTEN_GRACE_CHARS`` 宽容窗内），直接保留原句，只在多句或
-        显著超长时才缩句，降低窄预算强压导致的事实完成态与专有名词失真风险。
-        """
-        if not commentary:
-            return True
-        if "\n" in speech or len(speech) > budget + COMMENTARY_SHORTEN_GRACE_CHARS:
-            return True
-        # 单句校验：fit_to_budget(speech, 1) 只留第一完整句；与原句一致说明本身就是一句完整话
-        return fit_to_budget(speech, 1) != speech.strip()
+        return base + _TARGET_EXTRA_CHARS if has_target else base
 
     def _game_enabled(self) -> bool:
         """当前是否挂有游戏（回调异常时按有游戏保底，不误删游戏规矩）。"""
@@ -584,13 +509,52 @@ class Replyer:
         budget: Optional[int] = None,
         target_familiarity: str = "",
         keep_names: Sequence[str] = (),
+        commentary: bool = False,
     ) -> str:
         """她更早说过的话、最近几条聊天记录与本轮材料合并成一条 user。
 
-        顺序：先按整份历史 + 本批查出要回应的那条原话（截取不能让较早的目标查不到）
+        常规路径：先按整份历史 + 本批查出要回应的那条原话（截取不能让较早的目标查不到）
         → 截出最近几条原文、补上本批里还看不到的弹幕 → 去掉记录里已经看得到的台词，
         剩下的单列在聊天记录前面（它们都比记录早）→ 与发言要点、状态材料一起渲染。
+
+        游戏实况解说路径（``commentary=True``）：净化盲人回复器输入面，剥离过时流程单与无关上下文，
+        只保留防复读最近口播、本轮这一条干净解说要点及必要的 ``reply_to`` / ``keep_names``。
         """
+        if commentary:
+            # 实况解说输入净化：剥离过时流程单、无关历史与游戏公屏碎片，只留最近口播防复读 + 本轮单条干净解说要点
+            return self._prompt_service.render(
+                _REPLYER_TEMPLATE,
+                plan=_render_plan_text(
+                    plan,
+                    target_text="",
+                    reply_to=reply_to,
+                    reply_to_spoke=False,
+                    target_familiarity="",
+                    keep_names=keep_names,
+                ),
+                game_people_section="",
+                dialogue_prompt="（暂无聊天记录）",
+                recent_speech_section=_recent_speech_section(
+                    recent_speeches,
+                    (),
+                    max_lines=_RECENT_SPEECH_LINES,
+                ),
+                remembered_section="",
+                bot_name=self._bot_name,
+                turn_context="本轮是游戏实况解说，只围绕发言要点里这一条现场情况自然讲给观众听，不展开要点之外的事。",
+                game_chat="",
+                game_heading="",
+                game_turn_rules=_COMMENTARY_GAME_TURN_RULES if self._game_enabled() else "",
+                pace_rule=_PACE_RULE.get(mode, _PACE_RULE["play"]),
+                rundown="（当前无流程单）",
+                state_facts=state_facts.strip() or "（无）",
+                length_rule=_length_rule(
+                    self._speech_max_chars if budget is None else budget,
+                    mode,
+                    has_target=bool(plan.target or reply_to or keep_names),
+                ),
+            )
+
         full_history = list(history or [])
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
         rundown_render = rundown if rundown else "（当前无流程单）"
@@ -848,37 +812,34 @@ def _restore_names_budget_safe(
     return _restore_missing_names(first_sentence, _missing_keep_names(first_sentence, keep_names))
 
 
-def _pick_fitted_with_names(
+def runaway_limit_for(budget: int) -> int:
+    """计算极端长文熔断阈值：budget <= 0 表示不限制（返回 0）；否则取 max(budget * 2, RUNAWAY_SPEECH_FLOOR_CHARS)。"""
+    if budget <= 0:
+        return 0
+    return max(budget * 2, RUNAWAY_SPEECH_FLOOR_CHARS)
+
+
+def is_runaway_speech(speech: str, budget: int) -> bool:
+    """判定台词是否触发极端长文熔断：超过 ``runaway_limit_for(budget)``，或含分段换行且超过软预算。"""
+    if budget <= 0:
+        return False
+    return len(speech) > runaway_limit_for(budget) or ("\n" in speech and len(speech) > budget)
+
+
+def _truncate_with_names(
+    speech: str,
     *,
-    original: str,
-    shortened: str,
     budget: int,
     keep_names: Sequence[str],
-) -> Tuple[str, bool]:
-    """结合预算裁剪与称呼完整性校验选出最终台词，返回（台词, 是否采用了重说结果）。
-
-    无必填称呼时保持原有回退顺序（优先重说，失败再裁原台词）；有必填称呼时：
-    1. 重说裁剪完整保留全部称呼 → 直接采用重说裁剪；
-    2. 重说删掉了称呼而原台词裁剪保留了更多称呼 → 优先改用原台词裁剪，再补回仍缺失的称呼；
-    3. 其余情况以较短候选为底，把缺失称呼补回句首并防范外层二次截句丢名。
-    """
+) -> str:
+    """极端长文熔断的纯确定性截断：按完整句截到软预算内，并硬保必须保留的观众/玩家称呼。"""
+    fitted = fit_to_budget(speech, budget)
     if not keep_names:
-        candidate = shortened or original
-        return fit_to_budget(candidate, budget), bool(shortened)
-
-    original_fitted = fit_to_budget(original, budget)
-    orig_missing = _missing_keep_names(original_fitted, keep_names)
-
-    if not shortened:
-        return _restore_names_budget_safe(original_fitted, orig_missing, budget=budget, keep_names=keep_names), False
-
-    shortened_fitted = fit_to_budget(shortened, budget)
-    short_missing = _missing_keep_names(shortened_fitted, keep_names)
-    if not short_missing:
-        return shortened_fitted, True
-    if len(orig_missing) < len(short_missing):
-        return _restore_names_budget_safe(original_fitted, orig_missing, budget=budget, keep_names=keep_names), False
-    return _restore_names_budget_safe(shortened_fitted, short_missing, budget=budget, keep_names=keep_names), True
+        return fitted
+    missing = _missing_keep_names(fitted, keep_names)
+    if not missing:
+        return fitted
+    return _restore_names_budget_safe(fitted, missing, budget=budget, keep_names=keep_names)
 
 
 def _length_rule(budget: int, mode: str, *, has_target: bool = False) -> str:

@@ -377,10 +377,10 @@ async def _load_known_players(
     privacy_service: Optional["PrivacyService"] = None,
     speaking_mode: str = "gameplay",
 ) -> List["GamePlayer"]:
-    """加载配置了常用称呼的游戏熟人短表：过滤已申请遗忘、不记录名单与别的存档的玩家。
+    """加载本存档活跃常驻玩家短表（含无别名者）：过滤已申请遗忘、不记录名单与别的存档的玩家。
 
     纯杂谈且未进入任何游戏存档时省略，避免无关的游戏熟人占用杂谈上下文；
-    命中玩家按主键升序返回，确保表不变时记忆摘要文本逐字节稳定。
+    命中玩家按最近活跃时刻倒序、主键升序返回，确保表不变时记忆摘要文本逐字节稳定。
     """
     if game_player_repo is None or not hasattr(game_player_repo, "list_players"):
         return []
@@ -389,20 +389,20 @@ async def _load_known_players(
     try:
         rows = await game_player_repo.list_players(limit=_CANDIDATE_LIMIT)
     except Exception as exc:  # noqa: BLE001 - 熟人短表读不到不挡记忆摘要主干
-        logger.warning(f"读取游戏玩家常用称呼失败（记忆摘要暂省略熟人短表）: {exc}", exc=exc)
+        logger.warning(f"读取游戏常驻玩家列表失败（记忆摘要暂省略熟人短表）: {exc}", exc=exc)
         return []
 
     eligible: List["GamePlayer"] = []
     for player in rows:
         if player.forget_requested_at_ms is not None:
             continue
-        if not player.effective_aliases():
+        if not (player.name or "").strip():
             continue
         if current_saves:
             active_save = current_saves.get(player.game)
             if active_save is None:
                 continue
-            # 已进入明确存档时，只在当前存档见过面（或未记录存档历史）的熟人才列进来，防止跨存档串人
+            # 已进入明确存档时，只在当前存档见过面（或未记录存档历史）的玩家才列进来，防止跨存档串人
             if active_save.known and player.saves:
                 if not any(item.save_id == active_save.id for item in player.saves):
                     continue
@@ -414,5 +414,5 @@ async def _load_known_players(
                 logger.warning(f"核对熟人短表玩家 #{player.id} 遗忘名单失败（已跳过）: {exc}", exc=exc)
                 continue
         eligible.append(player)
-    eligible.sort(key=lambda item: int(item.id))
+    eligible.sort(key=lambda item: (-int(item.last_seen_ms), int(item.id)))
     return eligible[:MAX_KNOWN_PLAYERS_IN_BRIEF]
