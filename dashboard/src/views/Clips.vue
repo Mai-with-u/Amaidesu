@@ -301,7 +301,8 @@ function sessionListDate(ms: number): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${week} ${formatTimeHM(ms)}`;
 }
 
-/** 列表副行：自定义标题（默认命名含日期，与主行重复时不重复）+ 待切/已出/文件数 */
+/** 列表副行：自定义标题（默认命名含日期，与主行重复时不重复）+ 待切/已出/文件数；
+ *  零匹配场次标出来（这种场次照样可选——未识别文件可从它的素材折叠条人工指派） */
 function sessionListSub(item: ClippedSessionItem): string {
   const date = new Date(item.started_at_ms);
   const pad = (n: number): string => String(n).padStart(2, '0');
@@ -309,6 +310,7 @@ function sessionListSub(item: ClippedSessionItem): string {
   const customTitle = item.title && !item.title.includes(yearDate) ? item.title : '';
   return [
     customTitle,
+    item.file_count === 0 ? '无匹配录播文件' : '',
     item.pending_count > 0 ? `${item.pending_count} 待切` : '',
     item.done_count > 0 ? `${item.done_count} 已出` : '',
     item.file_count > 1 ? `${item.file_count} 个文件` : '',
@@ -556,8 +558,9 @@ onBeforeUnmount(() => {
             </span>
           </button>
           <div v-if="!sessionsLoading && sessions.length === 0" class="md-list-empty">
-            录播目录里没有匹配到任何场次的文件。确认目录路径填对、且文件名带录制开始时刻（如
-            2026-11-08 20-00-00.mkv）后点刷新。
+            还没有任何直播场次记录。文件名识别不了的录制文件（如自定义命名的
+            OBS 录像）会自动读视频元数据里的录制时刻归场；读不到的在选中场次
+            下方的「录播素材」里可人工指派。
           </div>
         </div>
       </aside>
@@ -967,7 +970,7 @@ onBeforeUnmount(() => {
           <template v-if="needsSetup"
             >先把上面的切片设置填好保存（不用重启），场次列表就会出现。</template
           >
-          <template v-else>从左侧选一场直播开始切。列表只显示匹配到了录播文件的场次。</template>
+          <template v-else>从左侧选一场直播开始切。没匹配到录播文件的场次也能选，可在其素材列表里人工指派文件。</template>
         </div>
       </section>
     </div>

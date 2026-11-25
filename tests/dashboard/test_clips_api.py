@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -23,25 +22,41 @@ def _recording_name(started_at_ms: int, title: str = "测试") -> str:
 def _service(
     store, event_bus, recording_dir: Path, *, cutter=None, overrides: Path | None = None, selector=None
 ) -> ClippingService:
+    # 人工覆盖存储默认落测试录播目录（json 不在视频扫描范围）：不传就写默认
+    # 路径 data/clipping/overrides.json 会读写本机真数据文件，测试间互相污染
     return ClippingService(
         event_bus=event_bus,
         database=store,
         llm_manager=None,
         config=ClippingConfigSchema(enabled=True, recording_dir=str(recording_dir)),
         cutter=cutter,
-        override_store=RecordingOverrideStore(overrides) if overrides else None,
+        override_store=RecordingOverrideStore(overrides if overrides else recording_dir / "overrides.json"),
         selector=selector,
     )
 
 
 class _FakeCutter:
-    """受控切割替身：记录调用，按 fail 开关决定出片还是抛错；含预览重封装替身。"""
+    """受控切割替身：记录调用，按 fail 开关决定出片还是抛错；含预览重封装替身。
 
-    def __init__(self, *, fail: bool = False, remux_fail: bool = False) -> None:
+    creation_ms / creation_by_name 控制元数据兜底探测（文件名解析失败的文件
+    自动 ffprobe 读 creation_time）的返回；probe_calls 记录探测过的文件名。
+    """
+
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        remux_fail: bool = False,
+        creation_ms: int | None = None,
+        creation_by_name: dict[str, int] | None = None,
+    ) -> None:
         self.calls: list[Path] = []
         self.remux_calls: list[Path] = []
         self.fail = fail
         self.remux_fail = remux_fail
+        self.creation_ms = creation_ms
+        self.creation_by_name = creation_by_name or {}
+        self.probe_calls: list[str] = []
 
     async def cut(self, portion: CutPortion, output: Path, *, log_dir: Path) -> Path:
         if self.fail:
@@ -69,6 +84,12 @@ class _FakeCutter:
         self.remux_calls.append(output)
         return output
 
+    async def probe_creation_time_ms(self, source: Path) -> int | None:
+        self.probe_calls.append(source.name)
+        if source.name in self.creation_by_name:
+            return self.creation_by_name[source.name]
+        return self.creation_ms
+
 
 async def test_clips_sessions_lists_matched(store, event_bus, tmp_path: Path, api) -> None:
     started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
@@ -76,7 +97,7 @@ async def test_clips_sessions_lists_matched(store, event_bus, tmp_path: Path, ap
     (tmp_path / _recording_name(started)).write_bytes(b"x")
     (tmp_path / "手工改名.mp4").write_bytes(b"x")  # 解析不了 → unmatched
 
-    service = _service(store, event_bus, tmp_path)
+    service = _service(store, event_bus, tmp_path, cutter=_FakeCutter())  # 探测恒 None：保持 unmatched
     client = await api(clipping_service=service)
     resp = await client.get("/api/v1/clips/sessions")
     assert resp.status_code == 200
@@ -155,12 +176,9 @@ async def test_cut_accepts_immediately_and_runs_in_background(store, event_bus, 
     assert cut.status_code == 200
     assert cut.json()["accepted"] == 1
 
-    # 后台任务完成：段状态到 done，产物路径回填
-    for _ in range(200):
-        segments = (await client.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
-        if segments[0]["status"] in ("done", "failed"):
-            break
-        await asyncio.sleep(0.01)
+    # 后台任务完成：段状态到 done，产物路径回填（汇合任务本身，不猜完成时机）
+    await service.wait_background_tasks_done()
+    segments = (await client.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
     assert segments[0]["status"] == "done"
     assert segments[0]["output_path"].endswith(".mp4")
     assert len(cutter.calls) == 1
@@ -171,11 +189,8 @@ async def test_cut_accepts_immediately_and_runs_in_background(store, event_bus, 
     client = await api(clipping_service=service2)
     cut2 = await client.post(f"/api/v1/clips/sessions/{session_id}/cut", json={"segment_ids": [segment_id]})
     assert cut2.json()["accepted"] == 1
-    for _ in range(200):
-        segments = (await client.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
-        if segments[0]["status"] in ("done", "failed"):
-            break
-        await asyncio.sleep(0.01)
+    await service2.wait_background_tasks_done()
+    segments = (await client.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
     assert segments[0]["status"] == "failed"
     assert "假切割失败" in segments[0]["error_message"]
 
@@ -200,11 +215,8 @@ async def test_select_accepts_immediately_and_replaces_in_background(store, even
     assert resp.status_code == 200
     assert resp.json()["accepted"] is True
 
-    for _ in range(200):
-        segments = (await client.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
-        if len(segments) == 2:
-            break
-        await asyncio.sleep(0.01)
+    await service.wait_background_tasks_done()
+    segments = (await client.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
     assert [s["title"] for s in segments] == ["开场", "整活"]
     assert all(s["origin"] == "ai" for s in segments)
     assert selector.calls == [session_id]
@@ -222,10 +234,7 @@ async def test_select_accepts_immediately_and_replaces_in_background(store, even
     client3 = await api(clipping_service=service3)
     accepted = await client3.post(f"/api/v1/clips/sessions/{session_id}/select")
     assert accepted.status_code == 200
-    for _ in range(200):
-        if len(failing.calls) == 1:
-            break
-        await asyncio.sleep(0.01)
+    await service3.wait_background_tasks_done()
     segments = (await client3.get(f"/api/v1/clips/sessions/{session_id}/segments")).json()["segments"]
     assert len(segments) == 2  # 替换未发生，段保持原状
 
@@ -295,6 +304,87 @@ async def test_reveal_output_validates_subtree(store, event_bus, tmp_path: Path,
     assert len(calls) == 1  # 两笔失败都没有调起文件管理器
 
 
+async def test_metadata_fallback_recovers_custom_named_recording(store, event_bus, tmp_path: Path, api) -> None:
+    """文件名解析失败的 OBS 录像自动读容器 creation_time 归场；结果进内存缓存。"""
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    session_id = await store.sessions.insert_live_session(started_at_ms=started)
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 3600_000)
+    custom_name = "我的OBS录像 20261104-200500-杂鱼命名.mkv"
+    (tmp_path / custom_name).write_bytes(b"x")  # 文件名解析不出时刻
+    cutter = _FakeCutter(creation_by_name={custom_name: started + 300_000})
+    service = _service(store, event_bus, tmp_path, cutter=cutter)
+    client = await api(clipping_service=service)
+
+    sessions = (await client.get("/api/v1/clips/sessions")).json()["sessions"]
+    assert sessions[0]["live_session_id"] == session_id
+    assert sessions[0]["file_count"] == 1
+
+    detail = (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings")).json()
+    assert [f["file_name"] for f in detail["files"]] == [custom_name]
+    assert detail["files"][0]["started_at_ms"] == started + 300_000
+    assert detail["unmatched_files"] == []
+    assert cutter.probe_calls == [custom_name]
+
+    # 文件没变：第二次扫描命中内存缓存，不再跑 ffprobe
+    (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings"))
+    assert cutter.probe_calls == [custom_name]
+
+
+async def test_metadata_fallback_keeps_unmatched_and_zero_match_session_visible(
+    store, event_bus, tmp_path: Path, api
+) -> None:
+    """容器没有 creation_time（FLV 典型）→ 保持未识别走人工指派；
+    零匹配场次也要出现在列表里——否则这种场次在页面上没有入口（死锁）。"""
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    session_id = await store.sessions.insert_live_session(started_at_ms=started)
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 3600_000)
+    (tmp_path / "手工改名.flv").write_bytes(b"x")
+    service = _service(
+        store, event_bus, tmp_path, overrides=tmp_path / "overrides.json", cutter=_FakeCutter(creation_ms=None)
+    )
+    client = await api(clipping_service=service)
+
+    sessions = (await client.get("/api/v1/clips/sessions")).json()["sessions"]
+    assert [s["live_session_id"] for s in sessions] == [session_id]
+    assert sessions[0]["file_count"] == 0
+
+    detail = (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings")).json()
+    assert detail["files"] == []
+    assert [u["file_name"] for u in detail["unmatched_files"]] == ["手工改名.flv"]
+
+    # 人工指派后：文件以人工时刻进生效组，场次有文件
+    assigned = await client.post(
+        f"/api/v1/clips/sessions/{session_id}/recordings/assign",
+        json={"path": str(tmp_path / "手工改名.flv"), "start_ms": started + 60_000},
+    )
+    assert assigned.status_code == 200
+    detail = (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings")).json()
+    assert detail["files"][0]["started_at_ms"] == started + 60_000
+    assert detail["unmatched_files"] == []
+
+
+async def test_metadata_fallback_skips_manually_assigned_files(store, event_bus, tmp_path: Path, api) -> None:
+    """人工 assign 登记过的文件不参与兜底探测（人工表态优先，时刻以人工为准）。"""
+    started = int(datetime(2026, 11, 4, 20, 0).timestamp() * 1000)
+    session_id = await store.sessions.insert_live_session(started_at_ms=started)
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started + 3600_000)
+    custom_name = "不合规命名.mp4"
+    (tmp_path / custom_name).write_bytes(b"x")
+    cutter = _FakeCutter(creation_ms=started + 999_999)  # 若被兜底会拿到这个错误时刻
+    service = _service(store, event_bus, tmp_path, overrides=tmp_path / "overrides.json", cutter=cutter)
+    client = await api(clipping_service=service)
+
+    assigned = await client.post(
+        f"/api/v1/clips/sessions/{session_id}/recordings/assign",
+        json={"path": str(tmp_path / custom_name), "start_ms": started + 60_000},
+    )
+    assert assigned.status_code == 200
+
+    detail = (await client.get(f"/api/v1/clips/sessions/{session_id}/recordings")).json()
+    assert detail["files"][0]["started_at_ms"] == started + 60_000  # 人工时刻，不是兜底时刻
+    assert custom_name not in cutter.probe_calls  # 兜底探测根本没跑它
+
+
 async def test_clips_endpoints_503_when_not_assembled(api) -> None:
     client = await api()  # 不挂 clipping_service
     resp = await client.get("/api/v1/clips/sessions")
@@ -327,6 +417,8 @@ async def test_config_roundtrip_reassembles_without_restart(
             database=store,
             llm_manager=None,
             config=ClippingConfigSchema(**raw),
+            # 与 _service 同理：人工覆盖存储隔离到测试目录，不碰本机真数据文件
+            override_store=RecordingOverrideStore(tmp_path / "overrides.json"),
         )
 
     client = await api(config_service=initialized_config, clipping_factory=factory)
@@ -401,11 +493,7 @@ async def test_preview_path_validation_and_conversion_flow(store, event_bus, tmp
     converting = await client.get("/api/v1/clips/preview", params={"path": str(source_flv)})
     assert converting.status_code == 202
     assert converting.json()["converting"] is True
-    for _ in range(200):
-        check = await client.get("/api/v1/clips/preview/status", params={"path": str(source_flv)})
-        if check.json()["ready"]:
-            break
-        await asyncio.sleep(0.01)
+    await service.wait_background_tasks_done()
     ready = await client.get("/api/v1/clips/preview", params={"path": str(source_flv)})
     assert ready.status_code == 200
     assert ready.content == b"fake-mp4-preview"
@@ -459,7 +547,7 @@ async def test_recording_assignment_roundtrip(store, event_bus, tmp_path: Path, 
     renamed = tmp_path / "手工改名-烤海带.mp4"
     renamed.write_bytes(b"x")
     overrides_path = tmp_path / "overrides.json"
-    service = _service(store, event_bus, tmp_path, overrides=overrides_path)
+    service = _service(store, event_bus, tmp_path, overrides=overrides_path, cutter=_FakeCutter())
     client = await api(clipping_service=service)
 
     # 移出自动匹配的文件
@@ -508,7 +596,7 @@ async def test_rename_and_creation_time_endpoints(store, event_bus, tmp_path: Pa
     source = tmp_path / _recording_name(started)
     source.write_bytes(b"x")
     overrides_path = tmp_path / "overrides.json"
-    service = _service(store, event_bus, tmp_path, overrides=overrides_path)
+    service = _service(store, event_bus, tmp_path, overrides=overrides_path, cutter=_FakeCutter())
     client = await api(clipping_service=service)
 
     # 先人工移出，改名后覆盖记录应随新路径迁移

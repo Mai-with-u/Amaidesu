@@ -132,6 +132,9 @@ class ClippingService:
         self._preview_inflight: set = set()
         # 归属人工覆盖（本地 JSON，不入库）
         self._overrides = override_store if override_store is not None else RecordingOverrideStore()
+        # 元数据兜底探测缓存：（路径, mtime 毫秒, 大小）→ 容器 creation_time 毫秒
+        # （None = 探过但容器没有该标记，同样缓存避免反复跑 ffprobe）
+        self._creation_time_cache: Dict[Tuple[str, int, int], Optional[int]] = {}
         # 段级预览的并发锁（同一段并发请求共享同一次重封装，不并发写同一缓存文件）
         self._range_locks: Dict[str, asyncio.Lock] = {}
 
@@ -181,6 +184,16 @@ class ClippingService:
     async def stop_async(self) -> None:
         """stop() 的异步壳（关闭链统一 await 形态）。"""
         self.stop()
+
+    async def wait_background_tasks_done(self) -> None:
+        """等在飞后台任务（切割/选段/预览转换）结束。
+
+        测试用它替代"固定窗口轮询段状态"（轮询猜时长是负载偶发的来源）；
+        关闭链也可共用。``return_exceptions=True``：失败任务已在任务内部登记
+        结果（registry.finish + spawn 层 error 日志），汇合时不外传异常。
+        """
+        if self._background_tasks:
+            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
 
     async def _on_live_ended(self, event_name: str, payload: LiveEndedPayload, source: str) -> None:
         """下播后自动选段（fire-and-forget；空场次已被丢弃，不处理）。
@@ -247,9 +260,54 @@ class ClippingService:
 
     # ---------- 场次 × 录播文件 ----------
 
-    def _scan(self) -> RecordingScan:
-        """扫描录播目录（排除切片输出目录，避免把产物当素材）。"""
-        return scan_recording_dir(Path(self._config.recording_dir.strip()), exclude_dirs=[self.output_dir])
+    async def _scan(self) -> RecordingScan:
+        """扫描录播目录（排除切片输出目录，避免把产物当素材），并对文件名
+        解析失败的文件做元数据兜底识别。
+
+        兜底 = ffprobe 读容器 creation_time 当作录制开始时刻，让 OBS 等自定义
+        命名的录制文件不用改名也能自动归场；容器没有该标记（FLV 就没有）的
+        文件留在未识别名单走人工指派。人工覆盖登记过的文件不参与兜底（人工
+        表态优先：assign 按人工给的时刻，见 _apply_overrides）。探测结果按
+        （路径, mtime, 大小）缓存在内存，文件没变不重复跑 ffprobe。
+        """
+        scan = scan_recording_dir(Path(self._config.recording_dir.strip()), exclude_dirs=[self.output_dir])
+        if not scan.unmatched:
+            return scan
+        overridden = {override.path for override in self._overrides.load()}
+        candidates = [p for p in scan.unmatched if str(p) not in overridden]
+        if not candidates:
+            return scan
+        semaphore = asyncio.Semaphore(4)
+
+        async def probe_one(path: Path) -> Optional[RecordingFile]:
+            key = self._creation_time_cache_key(path)
+            if key is not None and key in self._creation_time_cache:
+                moment = self._creation_time_cache[key]
+            else:
+                async with semaphore:
+                    moment = await self._cutter.probe_creation_time_ms(path)
+                if key is not None:
+                    self._creation_time_cache[key] = moment
+            if moment is None:
+                return None
+            return RecordingFile(path=path, room_id="", started_at_ms=moment, title="")
+
+        recovered = await asyncio.gather(*(probe_one(path) for path in candidates))
+        for info in recovered:
+            if info is None:
+                continue
+            scan.unmatched.remove(info.path)
+            scan.parsed.append(info)
+        scan.parsed.sort(key=lambda f: (f.started_at_ms, f.sort_index))
+        return scan
+
+    def _creation_time_cache_key(self, path: Path) -> Optional[Tuple[str, int, int]]:
+        """兜底缓存键（路径, mtime 毫秒, 大小）；文件 stat 失败按不可缓存处理。"""
+        try:
+            stat = path.stat()
+        except OSError:  # 文件在扫描间隙被移动/删除：不缓存不兜底
+            return None
+        return (str(path), int(stat.st_mtime * 1000), stat.st_size)
 
     async def _session_windows(self) -> List[SessionWindow]:
         """全部场次的匹配时间窗（历史场次 + 进行中场次，按开始时间倒序）。"""
@@ -304,7 +362,7 @@ class ClippingService:
 
     async def _scan_and_match_one(self, live_session_id: int) -> Tuple[List[RecordingFile], RecordingScan]:
         """扫描目录并返回指定场次的生效文件（自动匹配 + 人工覆盖）。"""
-        scan = self._scan()
+        scan = await self._scan()
         session = await self._database.sessions.get_live_session(live_session_id=live_session_id)
         if session is None:
             return [], scan
@@ -379,8 +437,12 @@ class ClippingService:
             raise PreviewSourceError("该文件没有人工覆盖记录，无需恢复")
 
     async def list_recorded_sessions(self, *, limit: int = 100) -> List[RecordedSessionInfo]:
-        """切片页场次列表：有（自动匹配或人工指派）录播文件的场次（按开始时间倒序）。"""
-        scan = self._scan()
+        """切片页场次列表：全部场次（含暂无匹配录播文件的，按开始时间倒序）。
+
+        零匹配的场次必须可见——否则文件名识别不了的场次在页面上没有入口
+        （选不了场就到不了"未识别候选→指派"的人工路径），形成死锁。
+        """
+        scan = await self._scan()
         windows = await self._session_windows()
         matched = match_files_to_sessions(scan.parsed, windows)
         # 人工指派也算数：只被指派过、自动匹配不到的场次也要出现在列表里
@@ -397,8 +459,6 @@ class ClippingService:
         for window in windows:
             files = matched.get(window.live_session_id)
             count = (len(files) if files else 0) + manual_counts.get(window.live_session_id, 0)
-            if count == 0:
-                continue
             session = await self._database.sessions.get_live_session(live_session_id=window.live_session_id)
             counts = status_counts.get(window.live_session_id, {})
             infos.append(
@@ -420,7 +480,7 @@ class ClippingService:
         self, live_session_id: int
     ) -> Tuple[List[RecordingFile], List[RecordingFile], List[Path]]:
         """单场录播文件三组：生效文件 / 被人工移出的文件（可恢复）/ 未识别候选（可指派）。"""
-        scan = self._scan()
+        scan = await self._scan()
         session = await self._database.sessions.get_live_session(live_session_id=live_session_id)
         if session is None:
             return [], [], scan.unmatched
