@@ -11,8 +11,8 @@
 1. 消息号在本场的弹幕观众行与游戏公屏玩家行里恰好命中一行（她自己的话不能给自己作证）；
 2. 命中行原文不为空（认不出是谁说的游戏公屏只占位、没存原话，无法核对）；
 3. ``quote`` 是命中行原文里一字不差的片段（压掉连续空白的写法也认）；
-4. ``supersedes_id`` 指的行是现行、同一类，且没有被运营者锁定；
-5. 同一类在当前存档里的现行行数不超过上限，满了要取代一条旧行。
+4. ``supersedes_id`` 指的行是现行、同一类，且没有被运营者锁定；只有既有事实在现实中变更或失效时才填，
+   不因展示预算强迫覆盖仍有效的旧事实。
 
 成功回执带新行号与当前存档各类现行行数。不占配置段。
 """
@@ -26,7 +26,6 @@ from src.modules.logging import get_logger
 from src.modules.storage.models.social_facts import (
     MAX_ACTIVE_FACTS_PER_KIND,
     SOCIAL_FACT_KINDS,
-    is_works_downgraded,
 )
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
@@ -255,20 +254,8 @@ class SocialFactToolProvider(BaseToolProvider):
                     tool_name, f"行号 {target_id} 是{_KIND_LABELS.get(old.kind, old.kind)}，取代只能在同一类之间"
                 )
 
-        counts = await self._repo.count_facts_by_kind(game=game, save_id=save_id)
-        if target_id is None and counts.get(kind, 0) >= MAX_FACTS_PER_KIND:
-            if kind == "works":
-                stale_id = await self._oldest_downgraded_works(int(session_id), game, save_id)
-                if stale_id is not None:
-                    target_id = stale_id
-            if target_id is None:
-                oldest = await self._oldest(kind, game, save_id)
-                hint = f"，最旧的是行号 {oldest}" if oldest is not None else ""
-                return self._bounce(
-                    tool_name,
-                    f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条了{hint}：用 supersedes_id 取代一条旧的再登记",
-                )
-
+        # 存储真值与展示预算解耦：不再因单类展示配额强迫 supersedes 顶替仍有效的旧规矩，
+        # 新增事实直接落库为 active，由读取侧按锁定与更新时间做有界 Top-K 展示。
         new_id = await self._repo.insert_fact(
             kind=kind,
             text=text,
@@ -297,39 +284,3 @@ class SocialFactToolProvider(BaseToolProvider):
             content=f"已登记行号 {new_id}" + (f"，取代了行号 {target_id}" if target_id else ""),
             structured_content={"id": new_id, "superseded": target_id, "counts": counts},
         )
-
-    async def _oldest(self, kind: str, game: str, save_id: str) -> Optional[int]:
-        """当前存档里这一类最旧的一条现行行（超限时引导取代它）；运营者锁定的不算。"""
-        rows = await self._repo.list_active_facts(game=game, save_id=save_id)
-        candidates = [row for row in rows if row.kind == kind and not row.human_locked]
-        if not candidates:
-            return None
-        return int(min(candidates, key=lambda row: (row.updated_at_ms, row.id)).id)
-
-    async def _oldest_downgraded_works(self, current_session_id: int, game: str, save_id: str) -> Optional[int]:
-        """已隔两场未再证实的降级进行中事项：遇 4 条上限时自动让出最旧一槽。"""
-        if self._recent_sessions_provider is None:
-            return None
-        try:
-            bounds = await self._recent_sessions_provider(current_session_id)
-        except Exception as exc:  # noqa: BLE001 - 查不到场次边界时不自动顶替
-            self._logger.debug(f"读近两场边界判进行中事项降级失败: {exc}", exc=exc)
-            return None
-        if len(bounds) < 2:
-            return None
-        recent_ids = tuple(int(item[0]) for item in bounds[:2])
-        second_ms = int(bounds[1][1])
-        rows = await self._repo.list_active_facts(game=game, save_id=save_id)
-        stale = [
-            row
-            for row in rows
-            if is_works_downgraded(
-                row,
-                current_session_id=current_session_id,
-                recent_two_session_ids=recent_ids,
-                second_recent_started_ms=second_ms,
-            )
-        ]
-        if not stale:
-            return None
-        return int(min(stale, key=lambda row: (row.updated_at_ms, row.id)).id)

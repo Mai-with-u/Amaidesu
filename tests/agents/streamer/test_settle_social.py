@@ -17,6 +17,7 @@ from src.agents.streamer.memory.settle import SessionSettler
 from src.agents.streamer.memory.settle_proof import GameRecord
 from src.agents.streamer.memory.settle_social import (
     MAX_FACTS_PER_KIND,
+    MAX_SETTLE_FACTS_PER_KIND,
     SocialMaterial,
     build_social_material,
     validate_social_output,
@@ -287,41 +288,47 @@ def test_validate_bounces(row: Dict[str, Any], reason: str) -> None:
     assert len(check.missed) == 1 and reason in check.missed[0].reason
 
 
-def test_validate_cap_and_scope() -> None:
-    """满额且全锁定或不支持自动腾退的类别拒收；未锁定 sharing 带游戏公屏证据时自动腾退最旧条目；显式 supersedes 优先。"""
-    # 原料渲染：满 4/4 的类别在提示词里显式标出槽位占用
+def test_validate_decouples_storage_from_display_budget() -> None:
+    """存储真值与展示预算解耦：不再渲染满槽强迫取代提示，超过 4 条的新增有效事实直接保留 active、绝不伪造 supersedes。"""
     unlocked_facts = [
         _fact(10 + i, "sharing", updated_at_ms=1_000 + i * 100, updated_session_id=2) for i in range(MAX_FACTS_PER_KIND)
     ]
     material = _material(unlocked_facts)
-    assert "共享惯例（已满 4/4）" in material.text and "supersedes" in material.text
+    assert "已满" not in material.text
+    assert "槽位占用提示" not in material.text
 
-    # sharing 满 4 条且漏填 supersedes，有扎实游戏公屏证据时自动腾退最旧未锁定条目 #10
+    # sharing 已有 4 条仍有效的规矩时，新增第 5 条直接写 active（supersedes_id 为 None），不误杀旧规矩
     row = {"kind": "sharing", "text": "AE网络就是仓库", "chat": "游戏公屏#1", "quote": "箱子"}
     check = validate_social_output({"facts": [row]}, material, live_session_id=5)
     assert check.missed == []
     assert len(check.facts) == 1
-    assert (check.facts[0].game, check.facts[0].save_id, check.facts[0].evidence_game_chat_id) == ("minecraft", "w1", 1)
-    assert check.facts[0].supersedes_id == 10
+    assert (
+        check.facts[0].game,
+        check.facts[0].save_id,
+        check.facts[0].evidence_game_chat_id,
+        check.facts[0].supersedes_id,
+    ) == ("minecraft", "w1", 1, None)
 
-    # 显式指定 supersedes 时严格尊重模型指定目标
+    # 现实中确实变更时，显式指定 supersedes 严格生效
     explicit = validate_social_output({"facts": [{**row, "supersedes": 12}]}, material, live_session_id=5)
     (fact,) = explicit.facts
     assert (fact.game, fact.save_id, fact.evidence_game_chat_id, fact.supersedes_id) == ("minecraft", "w1", 1, 12)
 
-    # 全部 4 条均为运营者锁定时不得自动腾退，必须按满额拒收
+    # 全部 4 条均为运营者锁定时，新增独立有效的第 5 条仍可直接登记（不触碰任何锁定条目）
     locked_material = _material([_fact(20 + i, "sharing", locked=1) for i in range(MAX_FACTS_PER_KIND)])
     locked_check = validate_social_output({"facts": [row]}, locked_material, live_session_id=5)
-    assert locked_check.facts == [] and "要先取代旧的" in locked_check.missed[0].reason
+    assert locked_check.missed == []
+    assert len(locked_check.facts) == 1 and locked_check.facts[0].supersedes_id is None
 
-    # 不在自动腾退白名单的 members 满 4 条时仍按满额拒收
+    # members 已有 4 条时新增第 5 条同样直接登记，不再报满额拒收
     members_material = _material([_fact(30 + i, "members") for i in range(MAX_FACTS_PER_KIND)])
     members_check = validate_social_output(
         {"facts": [{"kind": "members", "text": "新成员关系", "chat": "游戏公屏#1", "quote": "箱子"}]},
         members_material,
         live_session_id=5,
     )
-    assert members_check.facts == [] and "要先取代旧的" in members_check.missed[0].reason
+    assert members_check.missed == []
+    assert len(members_check.facts) == 1 and members_check.facts[0].supersedes_id is None
 
 
 @pytest.mark.parametrize(
@@ -367,8 +374,8 @@ def test_interactions_accept_player_real_name_and_reject_mismatch(
 
 
 @pytest.mark.parametrize("kind", ["sharing", "setting", "open_question"])
-def test_auto_evict_skips_locked_and_current_session_for_high_value_chat_facts(kind: str) -> None:
-    """sharing / setting / open_question 满额时，带游戏公屏原话证据的新事实跳过锁定与本场条目，依次腾退最旧旧条目。"""
+def test_new_facts_never_auto_evict_existing_active_rules(kind: str) -> None:
+    """sharing / setting / open_question 已有 4 条以上时，新事实绝不自动处决既有未锁定条目。"""
     facts = [
         _fact(1, kind, locked=1, updated_at_ms=500, updated_session_id=1),
         _fact(2, kind, locked=0, updated_at_ms=2_000, updated_session_id=3),
@@ -399,20 +406,90 @@ def test_auto_evict_skips_locked_and_current_session_for_high_value_chat_facts(k
         live_session_id=75,
     )
     assert check.missed == []
-    # 锁定条目 #1 不可动；本场条目 #4 排在跨场旧条目之后；因此先腾退 #3(1500ms)，再腾退 #2(2000ms)
-    assert [fact.supersedes_id for fact in check.facts] == [3, 2]
+    # 两条新事实均以独立 active 写入，绝不自动把既有有效条目伪造成 superseded
+    assert [fact.supersedes_id for fact in check.facts] == [None, None]
 
 
-def test_open_question_without_chat_evidence_does_not_auto_evict() -> None:
-    """无游戏公屏依据的归纳型 open_question 满额时不触发自动腾退，避免纯推测挤掉已有条目。"""
-    material = _material([_fact(10 + i, "open_question", updated_at_ms=1_000 + i) for i in range(MAX_FACTS_PER_KIND)])
-    check = validate_social_output(
-        {"facts": [{"kind": "open_question", "text": "无游戏公屏猜测待弄清", "chat": None, "quote": ""}]},
-        material,
-        live_session_id=75,
+def test_build_social_material_slices_prompt_top_k_with_locked_and_newest_priority() -> None:
+    """数据库现行事实很多时，结算原料输入在读取侧按锁定优先、更新时间倒序做有界 Top-K 切片，不膨胀提示词。"""
+    locked_old = _fact(1, "sharing", locked=1, updated_at_ms=100, updated_session_id=1)
+    many_unlocked = [
+        _fact(10 + idx, "sharing", locked=0, updated_at_ms=1_000 + idx * 10, updated_session_id=2)
+        for idx in range(MAX_SETTLE_FACTS_PER_KIND + 6)
+    ]
+    # 再配齐其他类别满额，触发单类公平配额截断（确保不会因总预算余量回填而放进全部 sharing）
+    other_kinds = [
+        _fact(100 + k_idx * 20 + idx, kind, locked=0, updated_at_ms=5_000 + idx)
+        for k_idx, kind in enumerate(("setting", "members", "works", "her_role", "open_question"))
+        for idx in range(MAX_SETTLE_FACTS_PER_KIND)
+    ]
+    material = _material([locked_old, *many_unlocked, *other_kinds])
+    sharing_shown = [fact for fact in material.facts.values() if fact.kind == "sharing"]
+    assert len(sharing_shown) == MAX_SETTLE_FACTS_PER_KIND
+    assert locked_old.id in material.facts, "人工锁定事实必须优先保留在结算原料内"
+    newest_id = many_unlocked[-1].id
+    oldest_unlocked_id = many_unlocked[0].id
+    assert newest_id in material.facts
+    assert oldest_unlocked_id not in material.facts
+
+
+async def test_e2e_settle_preserves_all_valid_sharing_rules_beyond_display_budget(store, prompt_manager) -> None:
+    """端到端真库回归：已有 4 条有效共享规矩时，本场新学到第 5 条规矩后库里 5 条全部保持 active，零误杀。"""
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=session, ended_at_ms=1_801_000)
+    await store.events.insert_game_event(
+        live_session_id=session, game="minecraft", event_type="milestone", message="进了世界", save_id="w1"
     )
-    assert check.facts == []
-    assert len(check.missed) == 1 and "要先取代旧的" in check.missed[0].reason
+    await store.chat.insert_live_chat(
+        live_session_id=session, timestamp_ms=1_500, sender_role="assistant", content="收到啦", message_type="speech"
+    )
+    player = await store.game_players.meet_player(
+        game="minecraft", uuid="u-rule", name="PlayerA", live_session_id=session, at_ms=1_100
+    )
+    await store.game_players.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction="player",
+        content="二楼公共箱子里的木头随便拿",
+        player_id=player.id,
+        save_id="w1",
+        save_name="麦窝",
+        at_ms=1_200,
+        message_id="g-rule",
+    )
+    existing_ids = []
+    for idx in range(MAX_FACTS_PER_KIND):
+        fid = await store.social_facts.insert_fact(
+            kind="sharing",
+            text=f"既有有效共享规矩{idx}",
+            quote=f"既有原话{idx}",
+            game="minecraft",
+            save_id="w1",
+            created_session_id=session,
+            now_ms_value=1_000 + idx,
+        )
+        assert fid is not None
+        existing_ids.append(fid)
+
+    social = {
+        "facts": [
+            {
+                "kind": "sharing",
+                "text": "二楼公共箱子里的木头可以随便拿",
+                "chat": "游戏公屏#1",
+                "quote": "二楼公共箱子里的木头随便拿",
+                "supersedes": None,
+            }
+        ],
+        "interactions": [],
+    }
+    llm = _answers(social)
+    assert await _settler(store, llm, prompt_manager).settle_session(session) is True
+    active = await store.social_facts.list_active_facts(game="minecraft", save_id="w1")
+    assert len(active) == MAX_FACTS_PER_KIND + 1
+    for fid in existing_ids:
+        row = await store.social_facts.get_fact(fact_id=fid)
+        assert row is not None and row.status == "active"
 
 
 def test_works_supersede_accepts_verified_game_record_and_rejects_invalid_uses() -> None:
@@ -601,8 +678,8 @@ async def test_e2e_settle_closes_works_via_game_record_and_accepts_real_name_int
     ]
 
 
-def test_restore_names_whole_token_and_stale_works_auto_supersede_and_multisave_scope() -> None:
-    """10 人以上时'玩家1'不吃掉'玩家10'前缀；隔两场未再证实的旧 works 在整理满额时自动让位；跨多存档归纳行不误绑单存档。"""
+def test_restore_names_whole_token_and_stale_works_tagged_without_auto_supersede_and_multisave_scope() -> None:
+    """10 人以上时'玩家1'不吃掉'玩家10'前缀；隔两场未再证实的旧 works 标注待核实但不自动顶替；跨多存档归纳行不误绑单存档。"""
     player_names = {idx: f"玩家名{idx:02d}" for idx in range(1, 13)}
     chat_lines = [
         GameChatLine(
@@ -662,6 +739,7 @@ def test_restore_names_whole_token_and_stale_works_auto_supersede_and_multisave_
     )
     assert material.restore_names("玩家1 带 玩家10 和 玩家12 修路") == "玩家名01 带 玩家名10 和 玩家名12 修路"
     assert material.default_scope == ("minecraft", "", ""), "本场跨两个存档发言时，无引文归纳行不误绑最后一句的存档"
+    assert "已隔多场未再证实，优先核实或取代" in material.text
 
     check = validate_social_output(
         {
@@ -688,6 +766,6 @@ def test_restore_names_whole_token_and_stale_works_auto_supersede_and_multisave_
     assert check.missed == []
     assert len(check.facts) == 2
     assert check.facts[0].text == "玩家名01 和 玩家名10 修铁路"
-    assert check.facts[0].supersedes_id == 100
+    assert check.facts[0].supersedes_id is None
     assert check.facts[1].text == "她给 玩家名10 打下手"
     assert check.facts[1].save_id == ""

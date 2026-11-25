@@ -190,3 +190,34 @@ async def test_rehearsal_kind_change_removes_facts_and_reopens_superseded(store)
     assert (old.status, old.superseded_by, old.updated_session_id, old.updated_at_ms) == ("active", None, earlier, 9999)
     kept = await store.social_facts.get_fact(fact_id=untouched)
     assert kept is not None and kept.status == "active"
+
+
+async def test_list_active_facts_orders_locked_first_then_newest_updated_at(store) -> None:
+    """仓储读面按人工锁定优先、updated_at_ms 倒序返回，并完整保留多条现行有效规矩。"""
+    locked_old = await store.social_facts.insert_fact(
+        kind="sharing",
+        text="锁定旧规矩",
+        quote="锁定",
+        game="minecraft",
+        save_id="w1",
+        human_locked=1,
+        now_ms_value=100,
+    )
+    mid = await store.social_facts.insert_fact(
+        kind="sharing", text="普通较旧规矩", quote="较旧", game="minecraft", save_id="w1", now_ms_value=200
+    )
+    newest = await store.social_facts.insert_fact(
+        kind="sharing", text="普通最新规矩", quote="最新", game="minecraft", save_id="w1", now_ms_value=500
+    )
+    extra = [
+        await store.social_facts.insert_fact(
+            kind="sharing", text=f"规矩{i}", quote=f"原{i}", game="minecraft", save_id="w1", now_ms_value=300 + i
+        )
+        for i in range(4)
+    ]
+    assert None not in (locked_old, mid, newest, *extra)
+    rows = await store.social_facts.list_active_facts(game="minecraft", save_id="w1")
+    assert len(rows) == 7
+    assert rows[0].id == locked_old
+    assert rows[1].id == newest
+    assert rows[-1].id == mid

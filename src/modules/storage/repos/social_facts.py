@@ -120,11 +120,12 @@ class SocialFactRepo(BaseRepo):
         save_id: Optional[str] = None,
         limit: int = 200,
     ) -> List[SocialFact]:
-        """现行事实（``status='active'``），新的在前。
+        """现行事实（``status='active'``），人工锁定优先、最近更新在前。
 
-        ``save_id`` 给了就只取该存档下的事实；存档为空串的行走"整游戏一本"
-        的口径——同一存档下的事实与整游戏通用的事实都算数（不分环境的游戏
-        里根本没有存档这一层）。
+        库里完整保留当前存档全部仍有效的 ``active`` 事实，不按提示词展示名额截断或伪造
+        ``superseded``；展示层（参考段、线索召回、结算材料）在读取侧自行按预算做 Top-K 切片。
+        ``save_id`` 给了就只取该存档下的事实；存档为空串的行走"整游戏一本"的口径——
+        同一存档下的事实与整游戏通用的事实都算数（不分环境的游戏里根本没有存档这一层）。
         """
         conditions: List[str] = ["status='active'"]
         params: List[object] = []
@@ -141,7 +142,7 @@ class SocialFactRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     f"SELECT {_SOCIAL_FACT_COLUMNS} FROM game_social_facts WHERE {where_clause}"  # noqa: S608 条件由固定片段拼成
-                    " ORDER BY id DESC LIMIT ?",
+                    " ORDER BY human_locked DESC, updated_at_ms DESC, id DESC LIMIT ?",
                     params,
                 ).fetchall()
                 return [SocialFact.model_validate(dict(row)) for row in rows]

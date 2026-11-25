@@ -29,7 +29,13 @@ from src.modules.agents.delegation_text import (
     PROMPT_CHAT_HEAD,
     PROMPT_REQUIREMENT_HEAD,
 )
-from src.modules.storage.models.social_facts import SocialFact, is_social_fact_resident, is_works_downgraded
+from src.modules.storage.models.social_facts import (
+    DISPLAY_FACTS_PER_KIND,
+    SocialFact,
+    is_social_fact_resident,
+    is_works_downgraded,
+    select_social_facts_for_display,
+)
 from src.modules.tools.conversation import to_conversation_view
 
 __all__ = [
@@ -463,7 +469,6 @@ def render_social_facts(
     rows = [fact for fact in facts if is_social_fact_resident(fact)]
     if not rows:
         return ""
-    rank = {kind: index for index, kind in enumerate(_SOCIAL_FACT_KIND_ORDER)}
 
     def _downgraded(item: SocialFact) -> bool:
         return is_works_downgraded(
@@ -473,15 +478,16 @@ def render_social_facts(
             second_recent_started_ms=second_recent_started_ms,
         )
 
-    rows.sort(
-        key=lambda fact: (
-            0 if fact.human_locked else 1,
-            1 if _downgraded(fact) else 0,
-            rank.get(fact.kind, len(rank)),
-            -int(fact.updated_at_ms),
-        )
+    # 读取侧公平 Top-K：锁定条目优先，每类先保单类展示配额（防止某类活跃事实积累过多挤掉共享惯例等），
+    # 总量未达上限时再按优先级回填溢出条目，数据库内全部有效事实原样保留。
+    shown = select_social_facts_for_display(
+        rows,
+        per_kind_limit=DISPLAY_FACTS_PER_KIND,
+        total_limit=_SOCIAL_FACTS_MAX,
+        kind_order=_SOCIAL_FACT_KIND_ORDER,
+        downgraded_fn=_downgraded,
+        fill_remaining=True,
     )
-    shown = rows[:_SOCIAL_FACTS_MAX]
 
     def _session_age_note(fact: SocialFact, age: str, stale: bool) -> str:
         """行尾标注场数为主、时长为辅：场次信息够时说隔了几场，不够时退回纯时长写法。"""

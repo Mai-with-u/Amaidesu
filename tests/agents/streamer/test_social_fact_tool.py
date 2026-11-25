@@ -217,24 +217,29 @@ async def test_supersede_rules(store) -> None:
     assert old is not None and old.status == "superseded"
 
 
-async def test_kind_cap_counts_current_save_and_points_at_oldest(store) -> None:
+async def test_storage_preserves_facts_beyond_display_budget_without_forced_supersede(store) -> None:
+    """场内工具解耦存储真值与展示预算：超过 4 条同类别事实时直接新增 active，不强迫 supersedes 覆盖旧条目。"""
     env = await _setup(store)
     ids = [await _seed(store, "members") for _ in range(MAX_FACTS_PER_KIND)]
-    # 别的存档的行不占本存档的名额
+    # 别的存档的行不混入本存档计数
     await _seed(store, "works", save_id="w2")
     result = await _call(
         env["provider"], kind="members", text="合住一个基地", quote="箱子大家随便用", evidence_message_id="gc1"
     )
-    assert not result.success
-    assert "supersedes_id" in (result.error_message or "") and f"行号 {ids[0]}" in (result.error_message or "")
-    result = await _call(
+    assert result.success, result.error_message
+    assert result.structured_content["superseded"] is None
+    assert result.structured_content["counts"]["members"] == MAX_FACTS_PER_KIND + 1
+    for old_id in ids:
+        row = await store.social_facts.get_fact(fact_id=old_id)
+        assert row is not None and row.status == "active"
+    result_works = await _call(
         env["provider"],
         kind="works",
         text="在修房子",
         quote="箱子大家随便用",
         evidence_message_id="gc1",
     )
-    assert result.success, result.error_message
+    assert result_works.success, result_works.error_message
 
 
 def test_registration_follows_repo_injection() -> None:
@@ -332,8 +337,62 @@ def test_render_notes_session_count_before_duration() -> None:
     assert "事实4（48 小时前记的）" in text
 
 
-async def test_downgraded_works_yields_slot_when_kind_cap_is_full(store) -> None:
-    """进行中的事满 4 条时，已隔两场未再证实的旧 works 自动让位被新进展取代，不再拒收新进展。"""
+def test_render_fair_share_prevents_one_kind_from_starving_sharing_rules() -> None:
+    """库里某类 active 事实积累较多时（如 8 条 works），常驻渲染按每类公平 Top-K 切片，不饿死共享惯例与环境形态。"""
+    facts = [_fact(i, "works", updated=100 + i) for i in range(1, 9)]
+    facts += [_fact(20 + i, "sharing", updated=50 + i) for i in range(1, 5)]
+    facts += [_fact(30 + i, "setting", updated=10 + i) for i in range(1, 3)]
+    text = render_social_facts(facts, 100_000, lambda ms: "刚才")
+    lines = [line for line in text.splitlines()[1:] if not line.startswith("（")]
+    assert len(lines) == 12
+    # sharing 4 条与 setting 2 条均得到保留，works 取最新的 6 条（首轮 4 条 + 剩余 2 空位回填）
+    for fid in (21, 22, 23, 24, 31, 32, 8, 7, 6, 5):
+        assert f"事实{fid}（" in text
+    assert "事实1（" not in text and "事实2（" not in text
+
+
+def test_render_round_robin_guarantees_later_kinds_and_fresh_facts_over_stale_works() -> None:
+    """前 3 类满额且 works 全为已降级旧进展时，分层轮转保证后排新鲜 sharing/setting 不被饿死且优先于降级条目。"""
+    # 前 3 类各 4 条（works 全为隔两场未证实旧进展），后排 sharing 与 setting 各 2 条新鲜事实
+    facts = [_fact(i, "works", updated=1_000 + i, session_id=10) for i in range(1, 5)]
+    facts += [_fact(10 + i, "her_role", updated=3_000 + i, session_id=12) for i in range(1, 5)]
+    facts += [_fact(20 + i, "members", updated=3_000 + i, session_id=12) for i in range(1, 5)]
+    facts += [_fact(30 + i, "sharing", updated=3_000 + i, session_id=12) for i in range(1, 3)]
+    facts += [_fact(40 + i, "setting", updated=3_000 + i, session_id=12) for i in range(1, 3)]
+
+    text = render_social_facts(
+        facts,
+        100_000,
+        lambda ms: "早先",
+        current_session_id=13,
+        recent_two_session_ids=(12, 11),
+        second_recent_started_ms=2_000,
+    )
+    lines = [line for line in text.splitlines()[1:] if not line.startswith("（")]
+    assert len(lines) == 12
+    # 后排新鲜共享惯例与环境形态全部保留，已降级 works 不得抢占新鲜条目名额
+    for fid in (31, 32, 41, 42):
+        assert f"事实{fid}（" in text
+    for stale_id in (1, 2, 3, 4):
+        assert f"事实{stale_id}（" not in text
+
+    # 全部 6 类均有 4 条新鲜事实时，总配额 12 按轮转每类均分 2 条，不因靠前 3 类先拿满 4 条而饿死后排类别
+    six_kind_facts = [
+        _fact(kind_idx * 10 + i, kind, updated=5_000 + i, session_id=12)
+        for kind_idx, kind in enumerate(("works", "her_role", "members", "sharing", "setting", "open_question"), 1)
+        for i in range(1, 5)
+    ]
+    six_kind_text = render_social_facts(six_kind_facts, 100_000, lambda ms: "刚才")
+    six_kind_lines = [line for line in six_kind_text.splitlines()[1:] if not line.startswith("（")]
+    assert len(six_kind_lines) == 12
+    for kind_idx in range(1, 7):
+        assert f"事实{kind_idx * 10 + 4}（" in six_kind_text
+        assert f"事实{kind_idx * 10 + 3}（" in six_kind_text
+        assert f"事实{kind_idx * 10 + 2}（" not in six_kind_text
+
+
+async def test_new_works_keeps_old_works_active_until_explicit_supersede(store) -> None:
+    """进行中的事新增第 5 条时不再自动把旧 works 标为 superseded；旧条目保持 active，展示侧按隔场自动降级。"""
     s1 = await store.sessions.insert_live_session(started_at_ms=1_000)
     s2 = await store.sessions.insert_live_session(started_at_ms=2_000)
     s3 = await store.sessions.insert_live_session(started_at_ms=3_000)
@@ -392,7 +451,9 @@ async def test_downgraded_works_yields_slot_when_kind_cap_is_full(store) -> None
         provider, kind="works", text="玩家甲开始修铁轨", quote="开始修铁轨", evidence_message_id="gc-rail"
     )
     assert res.success, res.error_message
-    assert res.structured_content["superseded"] == stale_id
+    assert res.structured_content["superseded"] is None
+    stale_row = await store.social_facts.get_fact(fact_id=stale_id)
+    assert stale_row is not None and stale_row.status == "active"
 
 
 async def test_recall_finds_active_social_fact(store) -> None:

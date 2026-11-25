@@ -13,8 +13,8 @@
 - kind 是六类之一，text 非空且不超长；
 - 非归纳类必须引一句游戏公屏（chat），quote 是那句原文一字不差的片段（压掉连续空白的写法也认）；
   归纳类（她的角色、待弄清）可以不引，引了就照样核对；
-- 取代目标须是给模型看过的现行行、同类、没被运营者锁定；
-- 每类在一个游戏存档里的现行行数加上本场新写的不超过上限（取代不占新名额）；
+- 取代目标须是给模型看过的现行行、同类、没被运营者锁定；取代只表达现实中既有事实确实变更或失效，
+  不再因展示名额逼迫模型或代码自动将仍有效的旧事实标成 ``superseded``；
 - 互动只收 together / helped，必须引那位玩家自己说的一句游戏公屏。
 
 没通过的写进整理报告的未登记清单。事实挂的游戏与存档：引了游戏公屏的取那句游戏公屏的游戏与存档，没引的
@@ -39,12 +39,14 @@ from src.modules.storage.models.game_players import (
 )
 from src.modules.storage.models.memory import UnregisteredItem
 from src.modules.storage.models.social_facts import (
+    DISPLAY_FACTS_PER_KIND,
     MAX_ACTIVE_FACTS_PER_KIND,
     QUOTE_OPTIONAL_KINDS,
     SOCIAL_FACT_KINDS,
     NewSocialFact,
     SocialFact,
     is_works_downgraded,
+    select_social_facts_for_display,
 )
 
 from .saves import SaveTimeline
@@ -53,6 +55,8 @@ from .textmatch import verbatim_quote
 
 __all__ = [
     "MAX_FACTS_PER_KIND",
+    "MAX_SETTLE_FACTS_PER_KIND",
+    "MAX_SETTLE_FACTS_TOTAL",
     "SocialCheck",
     "SocialMaterial",
     "build_social_material",
@@ -61,8 +65,11 @@ __all__ = [
 
 logger = get_logger("SettleSocial")
 
-# 每类在一个存档里至多几行现行事实（与场内工具同一个数）
+# 兼容导出别名：读取侧单类常驻展示配额（不作数据库 active 存储硬上限）
 MAX_FACTS_PER_KIND = MAX_ACTIVE_FACTS_PER_KIND
+# 下播结算提示词输入预算：给模型核对用的单类与总条数上限（按人工锁定与最新更新优先切片，库内全量保真）
+MAX_SETTLE_FACTS_PER_KIND = max(DISPLAY_FACTS_PER_KIND * 2, 8)
+MAX_SETTLE_FACTS_TOTAL = 48
 # 一场至多给模型看多少句玩家游戏公屏（刷屏的场次只留最后这些）
 _MAX_PLAYER_LINES = 120
 # 游戏公屏对话双侧行的总量上限：她的行进对话流后行数随场次增长，截到最近的这些行
@@ -76,9 +83,6 @@ _FACT_PREFIX = "事实#"
 _PLAYER_PREFIX = "玩家"
 # 单趟整词匹配玩家代号（"玩家1"不命中"玩家10"的前缀）
 _PLAYER_CODE_RE = re.compile(rf"{_PLAYER_PREFIX}(\d+)(?!\d)")
-# 满额后允许按“最旧未锁定条目”自动腾退的类别：仅当新事实具备经核实的玩家游戏公屏原话证据时触发，
-# 避免模型漏填 supersedes 时把新学到的服务器关键规矩或共用惯例直接丢弃
-_AUTO_EVICT_KINDS = frozenset({"sharing", "setting", "open_question"})
 _KIND_ORDER: Tuple[str, ...] = ("setting", "members", "sharing", "works", "her_role", "open_question")
 
 _KIND_LABELS: Dict[str, str] = {
@@ -145,36 +149,6 @@ def _clip(text: str) -> str:
     return " ".join((text or "").split())
 
 
-def _format_full_slot_notice(active: Sequence[SocialFact]) -> str:
-    """汇总已达槽位上限的类别提示，提醒模型新增该类事实时通过 supersedes 取代旧条目。"""
-    bucket_counts: Dict[Tuple[str, str, str], int] = {}
-    save_labels: Dict[Tuple[str, str], str] = {}
-    for fact in active:
-        key = (fact.game, fact.save_id, fact.kind)
-        bucket_counts[key] = bucket_counts.get(key, 0) + 1
-        if (fact.game, fact.save_id) not in save_labels:
-            save_labels[(fact.game, fact.save_id)] = fact.save_name or fact.save_id
-    full_buckets = [
-        (game, save_id, kind, count)
-        for (game, save_id, kind), count in bucket_counts.items()
-        if count >= MAX_FACTS_PER_KIND
-    ]
-    if not full_buckets:
-        return ""
-    distinct_scopes = {(game, save_id) for game, save_id, _kind, _count in full_buckets}
-    kind_rank = {kind: idx for idx, kind in enumerate(_KIND_ORDER)}
-    full_buckets.sort(key=lambda item: (item[0], item[1], kind_rank.get(item[2], len(_KIND_ORDER)), item[2]))
-    entries: List[str] = []
-    for game, save_id, kind, count in full_buckets:
-        label = _KIND_LABELS.get(kind, kind)
-        if len(distinct_scopes) > 1:
-            scope_tag = save_labels.get((game, save_id)) or game
-            entries.append(f"{scope_tag}·{label}（已满 {count}/{MAX_FACTS_PER_KIND}）")
-        else:
-            entries.append(f"{label}（已满 {count}/{MAX_FACTS_PER_KIND}）")
-    return f"槽位占用提示：{'、'.join(entries)}，已满类别新增须填 supersedes 取代旧条目"
-
-
 def build_social_material(
     *,
     chat_lines: Sequence[GameChatLine],
@@ -236,8 +210,22 @@ def build_social_material(
         f"- {clock_text(int(item.at_ms))} {code_of(item.player_id)}：{_INTERACTION_LABELS.get(item.kind, item.kind)}"
         for item in interactions
     ]
+    # 下播结算输入侧按人工锁定优先、未降级优先、更新时间倒序做有界 Top-K 切片：
+    # 数据库保留完整 active 真值，结算提示词保持体积可控且不再施压模型“满槽强迫取代”。
+    shown_active = select_social_facts_for_display(
+        active,
+        per_kind_limit=MAX_SETTLE_FACTS_PER_KIND,
+        total_limit=MAX_SETTLE_FACTS_TOTAL,
+        kind_order=_KIND_ORDER,
+        downgraded_fn=lambda item: is_works_downgraded(
+            item,
+            current_session_id=current_session_id,
+            recent_two_session_ids=recent_two_session_ids,
+            second_recent_started_ms=second_recent_started_ms,
+        ),
+    )
     fact_rows: List[str] = []
-    for fact in active:
+    for fact in shown_active:
         tags = [_KIND_LABELS.get(fact.kind, fact.kind)]
         if fact.human_locked:
             tags.append("运营者定的")
@@ -249,9 +237,6 @@ def build_social_material(
         ):
             tags.append("已隔多场未再证实，优先核实或取代")
         fact_rows.append(f"{_FACT_PREFIX}{fact.id}（{'，'.join(tags)}）{fact.text}")
-    slot_notice = _format_full_slot_notice(active)
-    if slot_notice:
-        fact_rows.append(slot_notice)
     roster = "；".join(f"{code} = {player_names.get(player_id, '（名字未知）')}" for player_id, code in codes.items())
     parts = [
         "【现有的社交事实】\n" + ("\n".join(fact_rows) if fact_rows else "没有"),
@@ -280,7 +265,7 @@ def build_social_material(
         chat_by_number=chat_by_number,
         player_codes=codes,
         player_names={int(pid): str(name) for pid, name in player_names.items() if name},
-        facts={int(fact.id): fact for fact in active},
+        facts={int(fact.id): fact for fact in shown_active},
         records_by_number={int(rec.number): rec for rec in game_records},
         default_scope=scope,
         recent_two_session_ids=tuple(int(sid) for sid in recent_two_session_ids[:2]),
@@ -368,13 +353,14 @@ def _miss(check: SocialCheck, what: str, quote: str, reason: str) -> None:
 
 
 def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *, live_session_id: int) -> SocialCheck:
-    """把模型的输出逐条核成要写的行；没通过的进未登记清单。"""
+    """把模型的输出逐条核成要写的行；没通过的进未登记清单。
+
+    存储真值与展示预算彻底解耦：新增有效事实时直接以 ``status='active'`` 落库，
+    不再因固定条数上限拒收或自动把既有仍有效的事实伪造成 ``superseded``；
+    只有模型基于现实变更显式填写 ``supersedes`` 时才核对并取代旧条目。
+    """
     check = SocialCheck()
     rows = data.get("facts")
-    counts: Dict[Tuple[str, str, str], int] = {}
-    for fact in material.facts.values():
-        key = (fact.game, fact.save_id, fact.kind)
-        counts[key] = counts.get(key, 0) + 1
     superseded: set[int] = set()
     for raw in rows if isinstance(rows, list) else []:
         if not isinstance(raw, dict):
@@ -468,68 +454,6 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
                 _miss(check, text, quote, f"{_FACT_PREFIX}{supersedes} 不是同一类，取代只在同类之间")
                 continue
             superseded.add(supersedes)
-        else:
-            key = (scope[0], scope[1], kind)
-            if counts.get(key, 0) >= MAX_FACTS_PER_KIND:
-                if kind == "works":
-                    stale_candidates = [
-                        old_f
-                        for old_f in material.facts.values()
-                        if old_f.id not in superseded
-                        and old_f.game == scope[0]
-                        and (old_f.save_id == scope[1] or old_f.save_id == "" or scope[1] == "")
-                        and is_works_downgraded(
-                            old_f,
-                            current_session_id=int(live_session_id),
-                            recent_two_session_ids=material.recent_two_session_ids,
-                            second_recent_started_ms=material.second_recent_started_ms,
-                        )
-                    ]
-                    if stale_candidates:
-                        oldest_stale = min(stale_candidates, key=lambda item: (item.updated_at_ms, item.id))
-                        supersedes = int(oldest_stale.id)
-                        superseded.add(supersedes)
-                    else:
-                        _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
-                        continue
-                elif kind in _AUTO_EVICT_KINDS and line is not None:
-                    # 满额的共享惯例/环境形态/待弄清在收到带玩家游戏公屏逐字原话证据的新事实时，
-                    # 按“非本场优先 -> 最后证实时刻最早 -> 更早场次 -> 更小行号”自动腾退最旧未锁定条目，
-                    # 防止模型漏填 supersedes 导致服务器关键规矩被静默丢弃
-                    evict_candidates = [
-                        old_f
-                        for old_f in material.facts.values()
-                        if old_f.id not in superseded
-                        and not old_f.human_locked
-                        and old_f.kind == kind
-                        and old_f.game == scope[0]
-                        and old_f.save_id == scope[1]
-                    ]
-                    if evict_candidates:
-                        oldest_unlocked = min(
-                            evict_candidates,
-                            key=lambda item: (
-                                int(item.updated_session_id or item.created_session_id or 0) == int(live_session_id),
-                                int(item.updated_at_ms),
-                                int(item.updated_session_id or item.created_session_id or 0),
-                                int(item.id),
-                            ),
-                        )
-                        supersedes = int(oldest_unlocked.id)
-                        superseded.add(supersedes)
-                        logger.info(
-                            f"场次 {live_session_id} 社交事实[{_KIND_LABELS[kind]}]已满 {MAX_FACTS_PER_KIND} 条，"
-                            f"自动以游戏公屏证据新事实取代最旧未锁定条目 {_FACT_PREFIX}{supersedes}："
-                            f"「{oldest_unlocked.text}」->「{material.restore_names(text)}」"
-                        )
-                    else:
-                        _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
-                        continue
-                else:
-                    _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
-                    continue
-            else:
-                counts[key] = counts.get(key, 0) + 1
         check.facts.append(
             NewSocialFact(
                 kind=kind,
