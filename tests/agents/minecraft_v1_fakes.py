@@ -37,11 +37,19 @@ _LLM_UNSET = object()
 OFFLINE_MCP_CONFIG = McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp")
 
 
-def offline_config(events_wait_ms: Optional[int] = None) -> MinecraftConfig:
-    """不连私有 MCP 的 Agent 配置；长轮询等待时长可调（事件流替身按它等）。"""
+def offline_config(
+    events_wait_ms: Optional[int] = None, commentary_guard_window_ms: Optional[int] = None
+) -> MinecraftConfig:
+    """不连私有 MCP 的 Agent 配置；长轮询等待时长可调（事件流替身按它等）。
+
+    解说前提守卫暂扣窗默认置 0（旧测试的"提交目标后同批紧跟解说"脚本不受守卫拦截）；
+    要测守卫本身时显式传入窗口毫秒数。
+    """
     kwargs: Dict[str, Any] = {"mcp": OFFLINE_MCP_CONFIG}
     if events_wait_ms is not None:
         kwargs["events_wait_ms"] = events_wait_ms
+    if commentary_guard_window_ms is not None:
+        kwargs["commentary_guard_window_ms"] = commentary_guard_window_ms
     return MinecraftConfig(**kwargs)
 
 

@@ -184,6 +184,13 @@ class MinecraftConfig(BaseConfig):
         description="身体事件流、聊天流连不上 Mod 或读失败后的重试间隔（毫秒，逐次加长到最长 60 秒）",
         json_schema_extra={"x-ui-advanced": True},
     )
+    commentary_guard_window_ms: int = Field(
+        default=8000,
+        ge=0,
+        title="解说前提守卫暂扣窗",
+        description="目标下达后这段时间内提交的普通解说会被守卫拒回（等结果或超窗放行）；纠偏与突发高优解说不受拦",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     mcp: McpServerConfig = Field(
         default_factory=lambda: McpServerConfig(url=DEFAULT_MAICRAFT_MCP_URL),
         title="MCP 连接",

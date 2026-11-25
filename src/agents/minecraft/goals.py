@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
+from src.modules.utils.time_utils import now_ms
 
 from .maicraft import AWAITING_ANSWER, EVENTS, GOAL, EventsPage, GoalRun, MaicraftReply, events_page_of, goal_run_of
 
@@ -81,11 +82,12 @@ PageSeen = Callable[[EventsPage], Awaitable[None]]
 
 @dataclass(slots=True)
 class TrackedGoal:
-    """一个在跟踪的目标：编号、下达它时是哪种能力（换世界后用来认出是不是同一个）。"""
+    """一个在跟踪的目标：编号、下达它时是哪种能力（换世界后用来认出是不是同一个）、下达时刻（单调毫秒）。"""
 
     goal_id: int
     ability: str
     purpose: str
+    issued_at_ms: int
 
 
 class GoalWatch:
@@ -102,6 +104,7 @@ class GoalWatch:
         on_decision_asked: Optional[DecisionAsked] = None,
         on_page: Optional[PageSeen] = None,
         wait_ms: int = DEFAULT_WAIT_MS,
+        clock_ms: Optional[Callable[[], int]] = None,
     ) -> None:
         self._call = call
         self._connected = connected
@@ -111,6 +114,8 @@ class GoalWatch:
         self._on_decision_asked = on_decision_asked
         self._on_page = on_page
         self._wait_ms = wait_ms
+        # 下达时刻的取时入口（单调毫秒域）：解说前提守卫要判断目标是不是刚下达
+        self._clock_ms: Callable[[], int] = clock_ms if clock_ms is not None else now_ms
         self._goals: Dict[int, TrackedGoal] = {}
         self._stream_id: Optional[str] = None
         # 读到过的最后一个流编号：连接重建（forget_stream）时也留着，拿来认出 Mod 是不是换了流。
@@ -122,10 +127,10 @@ class GoalWatch:
     # ----- 跟踪名单 -----
 
     def track(self, run: GoalRun) -> None:
-        """登记一个刚下达（或恢复）的目标；已经结束的不登记。"""
+        """登记一个刚下达（或恢复）的目标；已经结束的不登记。下达时刻取登记当时。"""
         if run.finished:
             return
-        self._goals[run.goal_id] = TrackedGoal(run.goal_id, run.ability, run.purpose)
+        self._goals[run.goal_id] = TrackedGoal(run.goal_id, run.ability, run.purpose, self._clock_ms())
 
     def untrack(self, goal_id: int) -> None:
         self._goals.pop(goal_id, None)
@@ -143,6 +148,13 @@ class GoalWatch:
     def tracked_abilities(self) -> List[str]:
         """在跟踪的目标各是哪种能力（死讯到时据此认出是不是自己在寻死）。"""
         return [goal.ability for goal in self._goals.values()]
+
+    def pending_issuance(self) -> Dict[int, int]:
+        """在跟踪目标（已下达、未收到终态）的下达时刻表：编号 → 下达时刻（单调毫秒）。
+
+        解说前提守卫据此判断"目标刚下达还没回结果"。
+        """
+        return {goal_id: goal.issued_at_ms for goal_id, goal in self._goals.items()}
 
     def clear(self) -> None:
         """换了逻辑任务或连接重建：名单清空，游标保留（流没变时不重读旧事件）。"""

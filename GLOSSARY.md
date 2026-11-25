@@ -74,6 +74,10 @@ _Avoid_: 公屏, 游戏公共聊天
 主播交给游戏 Agent 去做的一件事。对应代码里的 delegation。
 _Avoid_: 派单
 
+**解说前提守卫**:
+游戏 Agent 提交实况解说（`framework_commentary`）前对"目标结果是否已落定"的两条件校验，命中即拒回让模型稍后重写。对应代码里的 `CommentaryPremiseGuard`。
+_Avoid_: 解说门, 暂扣闸
+
 **流程单**:
 导演预写的直播环节清单。对应代码里的 `Rundown`。
 _Avoid_: 节目单, 环节表

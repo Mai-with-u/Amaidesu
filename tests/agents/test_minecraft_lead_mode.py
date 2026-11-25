@@ -135,8 +135,13 @@ def _make_lead_env(
     }
 
 
-async def _start_lead_env(env: Dict[str, Any]) -> tuple[MinecraftAgent, ScriptLlm, Any]:
-    """启动完整的动态主从联调环境：AgentManager + LeadCoordinator + AgentControlProvider + MinecraftAgent。"""
+async def _start_lead_env(
+    env: Dict[str, Any], *, commentary_guard_window_ms: int = 0
+) -> tuple[MinecraftAgent, ScriptLlm, Any]:
+    """启动完整的动态主从联调环境：AgentManager + LeadCoordinator + AgentControlProvider + MinecraftAgent。
+
+    解说前提守卫暂扣窗默认置 0（旧脚本"提交目标后同批紧跟解说"不受守卫拦截）；测守卫时显式传窗。
+    """
     clock = env["clock"]
     agent, llm, _ = await make_minecraft_agent(
         env["server"],
@@ -154,7 +159,7 @@ async def _start_lead_env(env: Dict[str, Any]) -> tuple[MinecraftAgent, ScriptLl
         lead_llm_cooldown_s=env["lead_llm_cooldown_s"],
         chat_batch_window_ms=env["chat_batch_window_ms"],
         chat_flush_wait=env["chat_flush_wait"],
-        config=offline_config(events_wait_ms=1000),
+        config=offline_config(events_wait_ms=1000, commentary_guard_window_ms=commentary_guard_window_ms),
     )
     env["manager"].register(agent)
     control_provider = build_agent_control_provider(
@@ -1237,6 +1242,54 @@ async def test_commentary_strip_preserves_concurrent_external_echo_and_does_not_
         assert len(llm.seen) == 3
         step3_text = _texts(llm.seen[2])
         assert "commentary 需要非空的 summary" in step3_text
+    finally:
+        await _stop_lead_env(env, agent)
+
+
+async def test_commentary_premise_guard_rejects_right_after_goal_submit(fake_clock: Any) -> None:
+    """解说前提守卫接线：同批"提交目标后紧跟普通解说"被守卫拒回，解说未经主播受理，模型下一步读到拒收回执。"""
+    server = FakeMaicraft()
+    commentaries: List[CommentaryRequest] = []
+    step = [0]
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        step[0] += 1
+        if step[0] == 1:
+            return _resp(
+                "开干并给直播间报进展",
+                calls=[
+                    _call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍橡木原木"}}, "c_gather"),
+                    _call(
+                        "framework_commentary",
+                        {"summary": "正在砍橡木原木准备盖小屋", "mood": "excited", "urgency": "normal"},
+                        "c_comm",
+                    ),
+                ],
+            )
+        return _resp("解说被守卫拒回，等待目标结果")
+
+    env = _make_lead_env(server=server, script=script, fake_clock=fake_clock)
+    agent, llm, _ = await _start_lead_env(env, commentary_guard_window_ms=8000)
+    coord: LeadCoordinator = env["coordinator"]
+
+    async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
+        commentaries.append(req)
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_on_commentary)
+
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="林地建家"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 2 and not agent.batch_active)
+
+        # 解说未送达主播侧解说处理器（守卫在工具执行前拦截）
+        assert commentaries == []
+        # 模型下一步读到的工具回执是守卫的拒收文案（含目标编号与重试指引）
+        step2_text = _texts(llm.seen[1])
+        assert "解说暂不受理" in step2_text
     finally:
         await _stop_lead_env(env, agent)
 

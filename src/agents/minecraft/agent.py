@@ -32,6 +32,7 @@ from src.agents.minecraft.attention_matrix import items_tossed_line
 from src.agents.minecraft.chat_attribution import format_chat_sender
 from src.agents.minecraft.chat_gate import DEFAULT_BATCH_WINDOW_MS, MinecraftChatGate
 from src.agents.minecraft.chosen_death import is_suicide_ability
+from src.agents.minecraft.commentary_guard import CommentaryPremiseGuard, is_exempt
 from src.agents.minecraft.context import (
     FACTS_KEY,
     INSTRUCTION_KEY,
@@ -1205,6 +1206,13 @@ class MinecraftAgent(BaseAgent):
             on_decision_asked=self._on_decision_asked,
             on_page=self._on_events_page,
             wait_ms=config.events_wait_ms,
+            clock_ms=self._clock_ms,
+        )
+        # 解说前提守卫：framework_commentary 提交解说时校验目标结果是否已落定（条件①刚下达未终态、
+        # 条件②本步推理开始后在跟踪名单里变为终态），命中即立即拒回，不阻塞同批后续工具调用
+        self._commentary_guard = CommentaryPremiseGuard(
+            window_ms=config.commentary_guard_window_ms,
+            clock_ms=self._clock_ms,
         )
 
         # 本批 ReAct 是否正在跑；本批期间的身体事件（上报时随 payload 带上任务上下文）
@@ -2612,6 +2620,9 @@ class MinecraftAgent(BaseAgent):
                     # 只有开新任务的委派原话钉在固定层；中途补充留在普通历史，可随演进被折叠或摘要吸收
                     incoming[INSTRUCTION_KEY] = True
                 messages.append(incoming)
+            # 解说前提守卫的步开始快照：排空唤醒队列后、推理前，给当前未决目标名单拍照。
+            # 本步推理期间有快照里的目标变为终态时，稍后的解说提交按"写作期间依据变了"拒回
+            self._commentary_guard.begin_step(self._goals.tracked_ids())
             if opening_due:
                 opening_due = False
                 if self._mc_state.dirty:
@@ -2832,7 +2843,17 @@ class MinecraftAgent(BaseAgent):
                     all_commentary_only = False
                 # 记录调用 framework_commentary 前已有的回声快照，仅在本次出声时精准剥离新增的 game_commentary 自产回声
                 pre_commentary_echoes = self._spoken_echo_buffer.snapshot() if is_commentary_call else None
-                observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
+                # 解说前提守卫：普通解说提交前校验目标结果是否已落定（刚下达未终态 / 写作期间变终态），
+                # 命中即拒回（立即返回工具错误，不调工具、不阻塞同批后续调用）；纠偏与突发高优豁免。
+                # 拒绝算受理失败，"仅解说且受理成功就让出"的分支不会走——模型下一步带着结果回执重写
+                guard_refusal: Optional[str] = None
+                if is_commentary_call and not is_exempt(arguments):
+                    guard_refusal = self._commentary_guard.check(self._goals.pending_issuance())
+                if guard_refusal is not None:
+                    self._logger.info(f"解说前提守卫拒回 framework_commentary：{guard_refusal}")
+                    observation: Dict[str, Any] = {"ok": False, "error": guard_refusal, "tool": call.name}
+                else:
+                    observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 if call.name == "streamer_memory_correct":
                     # 刚更新完承诺账本（进展或结案），标记下一推理步前刷新尾部权威承诺状态
                     self._commitment_ledger_dirty = True
