@@ -44,9 +44,10 @@ export interface SearchHit {
   tag: string;
   /** 所属分类（过滤 chips 的数据源） */
   category: LiveHitCategory;
-  /** 主体（说话人 / 工具名 / 载荷字段名） */
+  /** 主体（说话人 / 工具名 / 载荷字段名 / 事件名；给不出主体的条目是空串） */
   actor: string;
-  /** 命中片段 */
+  /** 命中片段（hit=true 的段是关键词本身）。关键词不在返回内容里的条目
+   *  放整段原文或一句说明，全程 hit=false */
   parts: SnippetPart[];
   /** 本地条目（服务端命中没有本地条目，跳转按时刻走） */
   entry?: ShowEntry;
@@ -275,42 +276,87 @@ export function hitFromEntry(entry: ShowEntry, keyword: string): SearchHit {
   };
 }
 
-/** 载荷里第一个命中关键词的字符串（连同它的字段路径） */
-function payloadHit(
+/** 载荷里的一处位置：字段路径与这一处的文本（字符串值的原文，或键名） */
+interface PayloadLocation {
+  /** 字段路径：嵌套对象用点连接，数组元素带下标 */
+  label: string;
+  text: string;
+}
+
+/** 载荷里第一处 pick 认可的位置（保持键的顺序，逐层深入）。pick 返回这一处
+ *  要展示的文本，null 表示这一处不算；数组元素没有键名，key 传 null */
+function findInPayload(
   data: Record<string, unknown>,
-  keyword: string,
+  pick: (key: string | null, value: unknown) => string | null,
   prefix = '',
-): { label: string; text: string } | null {
-  const needle = keyword.trim().toLowerCase();
-  if (!needle) return null;
+): PayloadLocation | null {
   for (const [key, value] of Object.entries(data)) {
     const path = prefix ? `${prefix}.${key}` : key;
-    if (typeof value === 'string') {
-      if (value.toLowerCase().includes(needle)) return { label: path, text: value };
-      continue;
-    }
+    const picked = pick(key, value);
+    if (picked !== null) return { label: path, text: picked };
     if (Array.isArray(value)) {
       for (let i = 0; i < value.length; i += 1) {
+        const itemPath = `${path}[${i}]`;
         const item = value[i];
-        if (typeof item === 'string' && item.toLowerCase().includes(needle)) {
-          return { label: `${path}[${i}]`, text: item };
-        }
+        const itemPicked = pick(null, item);
+        if (itemPicked !== null) return { label: itemPath, text: itemPicked };
         if (item && typeof item === 'object') {
-          const nested = payloadHit(item as Record<string, unknown>, keyword, `${path}[${i}]`);
+          const nested = findInPayload(item as Record<string, unknown>, pick, itemPath);
           if (nested) return nested;
         }
       }
       continue;
     }
     if (value && typeof value === 'object') {
-      const nested = payloadHit(value as Record<string, unknown>, keyword, path);
+      const nested = findInPayload(value as Record<string, unknown>, pick, path);
       if (nested) return nested;
     }
   }
   return null;
 }
 
-/** 服务端命中（时间线条目形状）→ 结果行 */
+/** 整场检索判定命中、但条目返回的内容里找不到关键词时，片段位显示的说明 */
+const KEYWORD_NOT_IN_RETURNED_TEXT = '整场检索命中，但返回的内容里不含关键词';
+
+/** 不标高亮的片段：整段原文照放；原文为空时放说明 */
+function unmarkedSnippet(text: string): SnippetPart[] {
+  return [{ text: text || KEYWORD_NOT_IN_RETURNED_TEXT, hit: false }];
+}
+
+/** 事件条目的主体与命中片段。关键词的位置按信息量从多到少找：载荷里的
+ *  字符串值（片段带上下文）→ 载荷里的键名 → 事件名；三处都没有时主体留空，
+ *  片段位放说明。needle 是去掉首尾空白并转成小写的关键词 */
+function eventActorAndSnippet(
+  eventType: string,
+  data: Record<string, unknown>,
+  needle: string,
+): { actor: string; parts: SnippetPart[] } {
+  const byValue = findInPayload(data, (_key, value) =>
+    typeof value === 'string' && value.toLowerCase().includes(needle) ? value : null,
+  );
+  if (byValue) return { actor: byValue.label, parts: hitSnippet(byValue.text, needle) };
+  const byKey = findInPayload(data, (key, _value) =>
+    key !== null && key.toLowerCase().includes(needle) ? key : null,
+  );
+  if (byKey) return { actor: byKey.label, parts: hitSnippet(byKey.text, needle) };
+  if (eventType.toLowerCase().includes(needle)) {
+    return { actor: eventType, parts: hitSnippet(eventType, needle) };
+  }
+  return { actor: '', parts: unmarkedSnippet('') };
+}
+
+/** 明细行的命中片段：正文命中取正文，其次发送者昵称；两处都对不上时取正文
+ *  且不标高亮。对不上通常是因为关键词只在发送者昵称里，而昵称不一定随条目
+ *  返回（主播发言行只带正文） */
+function detailRowSnippet(text: string, name: string, needle: string): SnippetPart[] {
+  if (text.toLowerCase().includes(needle)) return hitSnippet(text, needle);
+  if (name.toLowerCase().includes(needle)) return hitSnippet(name, needle);
+  return unmarkedSnippet(text);
+}
+
+/** 服务端命中（时间线条目形状）→ 结果行。条目是否命中由服务端的整场检索
+ *  判定，返回几条这里就建几行：服务端还按事件摘要匹配、并且掌握未被截断的
+ *  载荷，这两处前端拿不到，所以不在"前端找不到关键词"时丢条目 */
 export function hitFromItem(item: SessionTimelineItem, keyword: string): SearchHit | null {
   const needle = keyword.trim().toLowerCase();
   if (!needle) return null;
@@ -319,27 +365,22 @@ export function hitFromItem(item: SessionTimelineItem, keyword: string): SearchH
 
   if (kind === 'event') {
     const data = (item.data ?? {}) as Record<string, unknown>;
-    const found = payloadHit(data, needle);
-    if (!found) return null;
     const eventType = String(item.event_type ?? '');
     const category = eventItemCategoryOf(eventType, data);
+    const { actor, parts } = eventActorAndSnippet(eventType, data, needle);
     return {
       id: `srv-${tsMs}-${eventType}`,
       tsMs,
       tag: eventTagLabel(eventType, category),
       category,
-      actor: found.label,
-      parts: hitSnippet(found.text, needle),
+      actor,
+      parts,
     };
   }
 
   // 正文候选按条目形状取：发言/弹幕/SC 是 text|content，礼物行是 gift_name
   const text = String(item.text ?? item.content ?? item.gift_name ?? '');
   const name = String(item.user_name ?? '');
-  const matchedText = text.toLowerCase().includes(needle);
-  const matchedName = name.toLowerCase().includes(needle);
-  if (!matchedText && !matchedName) return null;
-  const parts = matchedText ? hitSnippet(text, needle) : hitSnippet(name, needle);
   return {
     id: `srv-${tsMs}-${kind}`,
     tsMs,
@@ -348,8 +389,16 @@ export function hitFromItem(item: SessionTimelineItem, keyword: string): SearchH
     ),
     category: itemCategoryOf(item),
     actor: name || '—',
-    parts,
+    parts: detailRowSnippet(text, name, needle),
   };
+}
+
+/** 整场检索返回的一批条目 → 结果行清单，顺序不变。hitFromItem 只在关键词
+ *  为空时返回 null，所以非空关键词下返回几条、清单就有几行 */
+export function hitsFromItems(items: SessionTimelineItem[], keyword: string): SearchHit[] {
+  return items
+    .map(item => hitFromItem(item, keyword))
+    .filter((hit): hit is SearchHit => hit !== null);
 }
 
 /** 请求记录里第一条命中关键词的消息 */

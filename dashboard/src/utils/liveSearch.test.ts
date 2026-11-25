@@ -3,6 +3,8 @@
 // 匹配是大小写不敏感的子串匹配（中文不分词）；命中行有两个来源——本地条目
 // （带条目引用，跳转按条目 id）与服务端命中（只有时刻，跳转按时刻近邻），
 // 测试把两条路的形状与匹配面（正文 / 备注 / 说话人 / 载荷）都钉住。
+// 服务端命中的条目是否命中由服务端判定：前端在返回内容里对不上关键词的
+// 条目也保留，钉住"返回几条、清单就有几条"。
 
 import { describe, expect, it } from 'vitest';
 
@@ -17,6 +19,7 @@ import {
   hitFromItem,
   hitFromRecord,
   hitSnippet,
+  hitsFromItems,
   matchEntries,
   recordHitMessage,
   recordMatches,
@@ -149,14 +152,195 @@ describe('hitFromItem（服务端命中 → 结果行）', () => {
       },
       '下播',
     );
-    expect(inArray).not.toBeNull();
+    expect(inArray?.actor).toBe('batch[0].text');
+    expect(inArray?.parts).toEqual([
+      { text: '弹幕里提到', hit: false },
+      { text: '下播', hit: true },
+    ]);
   });
 
-  it('都不命中时返回 null', () => {
+  it('载荷数组里的字符串元素也能定位：主体是带下标的路径', () => {
+    const hit = hitFromItem(
+      {
+        kind: 'event',
+        ts_ms: 9_500,
+        event_type: 'planner.verdict',
+        data: { tags: ['日常', '破防现场'] },
+      },
+      '破防',
+    );
+    expect(hit?.actor).toBe('tags[1]');
+    expect(hit?.parts).toEqual([
+      { text: '破防', hit: true },
+      { text: '现场', hit: false },
+    ]);
+  });
+
+  it('关键词只在事件名里：条目保留，主体与片段都是事件名', () => {
+    const hit = hitFromItem(
+      {
+        kind: 'event',
+        ts_ms: 8_000,
+        event_type: 'planner.decision',
+        data: { speak: false, reason_code: 2 },
+      },
+      'planner',
+    );
+    expect(hit).toEqual({
+      id: 'srv-8000-planner.decision',
+      tsMs: 8_000,
+      tag: '决策',
+      category: 'agent',
+      actor: 'planner.decision',
+      parts: [
+        { text: 'planner', hit: true },
+        { text: '.decision', hit: false },
+      ],
+    });
+  });
+
+  it('关键词只在载荷键名里（值不是字符串）：条目保留，主体是键路径，片段标出键名', () => {
+    const hit = hitFromItem(
+      {
+        kind: 'event',
+        ts_ms: 9_000,
+        event_type: 'tool.result.memory_recall',
+        data: { tool_name: 'memory_recall', reply: 5 },
+      },
+      'reply',
+    );
+    expect(hit).toEqual({
+      id: 'srv-9000-tool.result.memory_recall',
+      tsMs: 9_000,
+      tag: '工具',
+      category: 'agent',
+      actor: 'reply',
+      parts: [{ text: 'reply', hit: true }],
+    });
+
+    const nested = hitFromItem(
+      {
+        kind: 'event',
+        ts_ms: 9_001,
+        event_type: 'tool.result.memory_recall',
+        data: { tool_name: 'memory_recall', args: { reply: 5 } },
+      },
+      'reply',
+    );
+    expect(nested?.actor).toBe('args.reply');
+    expect(nested?.parts).toEqual([{ text: 'reply', hit: true }]);
+
+    const inArray = hitFromItem(
+      {
+        kind: 'event',
+        ts_ms: 9_002,
+        event_type: 'tool.result.memory_recall',
+        data: { batch: [{ reply: 5 }, { reply: 6 }] },
+      },
+      'reply',
+    );
+    expect(inArray?.actor).toBe('batch[0].reply');
+  });
+
+  it('载荷里键名与字符串值都命中时取字符串值：片段带着上下文', () => {
+    const hit = hitFromItem(
+      {
+        kind: 'event',
+        ts_ms: 9_100,
+        event_type: 'tool.result.memory_recall',
+        data: { tool_name: 'memory_recall', reply: 5, detail: '已按 reply 生成' },
+      },
+      'reply',
+    );
+    expect(hit?.actor).toBe('detail');
+    expect(hit?.parts).toEqual([
+      { text: '已按 ', hit: false },
+      { text: 'reply', hit: true },
+      { text: ' 生成', hit: false },
+    ]);
+  });
+
+  it('返回的内容里找不到关键词（如只在事件摘要里）：条目保留，主体留空，片段位放说明', () => {
+    const hit = hitFromItem(
+      {
+        kind: 'event',
+        ts_ms: 10_000,
+        event_type: 'tool.result.minecraft_glance',
+        data: { tool_name: 'minecraft_glance', ok: true },
+      },
+      '破防',
+    );
+    expect(hit).toEqual({
+      id: 'srv-10000-tool.result.minecraft_glance',
+      tsMs: 10_000,
+      tag: '工具',
+      category: 'game',
+      actor: '',
+      parts: [{ text: '整场检索命中，但返回的内容里不含关键词', hit: false }],
+    });
+
+    // 关键词恰好是说明文字里的字：说明照写，不标高亮
+    const selfMatch = hitFromItem(
+      { kind: 'event', ts_ms: 10_001, event_type: 'core.error', data: { code: 1 } },
+      '关键词',
+    );
+    expect(selfMatch?.parts).toEqual([
+      { text: '整场检索命中，但返回的内容里不含关键词', hit: false },
+    ]);
+  });
+
+  it('发送者昵称没有随明细行返回（主播发言行）：按昵称命中的条目保留，片段放正文', () => {
+    const hit = hitFromItem({ kind: 'speech', ts_ms: 7_500, text: '我们开始吧' }, '主播');
+    expect(hit).toEqual({
+      id: 'srv-7500-speech',
+      tsMs: 7_500,
+      tag: '发言',
+      category: 'speech',
+      actor: '—',
+      parts: [{ text: '我们开始吧', hit: false }],
+    });
+
+    const blank = hitFromItem({ kind: 'speech', ts_ms: 7_501, text: '' }, '主播');
+    expect(blank?.parts).toEqual([{ text: '整场检索命中，但返回的内容里不含关键词', hit: false }]);
+  });
+
+  it('空关键词返回 null', () => {
     expect(
-      hitFromItem({ kind: 'danmaku', ts_ms: 1, user_name: 'x', content: '无关' }, '破防'),
+      hitFromItem(
+        { kind: 'event', ts_ms: 1, event_type: 'planner.decision', data: { speak: false } },
+        '',
+      ),
     ).toBeNull();
-    expect(hitFromItem({ kind: 'event', ts_ms: 1, event_type: 't', data: {} }, '破防')).toBeNull();
+    expect(
+      hitFromItem({ kind: 'danmaku', ts_ms: 1, user_name: 'x', content: '正文' }, '   '),
+    ).toBeNull();
+  });
+});
+
+describe('hitsFromItems（整场检索返回的一批条目 → 结果行清单）', () => {
+  // 四条依次是：正文命中、事件名命中、发送者昵称没随条目返回的发言行、
+  // 返回内容里找不到关键词的事件条目。后三条前端都对不上关键词
+  const items = [
+    { kind: 'danmaku', ts_ms: 1_000, user_name: '观众A', content: '这个 decision 不错' },
+    { kind: 'event', ts_ms: 2_000, event_type: 'planner.decision', data: { speak: false } },
+    { kind: 'speech', ts_ms: 3_000, text: '我们开始吧' },
+    {
+      kind: 'event',
+      ts_ms: 4_000,
+      event_type: 'tool.result.minecraft_glance',
+      data: { tool_name: 'minecraft_glance', ok: true },
+    },
+  ];
+
+  it('服务端返回几条，结果清单就有几条，顺序不变', () => {
+    const hits = hitsFromItems(items, 'decision');
+    expect(hits.map(hit => hit.tsMs)).toEqual([1_000, 2_000, 3_000, 4_000]);
+    expect(hits.map(hit => hit.tag)).toEqual(['弹幕', '决策', '发言', '工具']);
+    expect(hits.map(hit => hit.category)).toEqual(['audience', 'agent', 'speech', 'game']);
+  });
+
+  it('空关键词得到空清单', () => {
+    expect(hitsFromItems(items, '')).toEqual([]);
   });
 });
 

@@ -17,8 +17,8 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import {
   countByCategory,
   hitFromEntry,
-  hitFromItem,
   hitFromRecord,
+  hitsFromItems,
   matchEntries,
   type LiveHitCategory,
   type SearchHit,
@@ -145,9 +145,7 @@ export function useLiveSearch(options: UseLiveSearchOptions) {
 
       const response = await liveSessionsApi.search(sid, { q: keyword, limit: SEARCH_LIMIT });
       if (seq !== requestSeq) return;
-      const found = response.data.items
-        .map(item => hitFromItem(item, keyword))
-        .filter((hit): hit is SearchHit => hit !== null);
+      const found = hitsFromItems(response.data.items, keyword);
       hits.value = found;
       activeCategory.value = 'all';
       index.value = found.length ? 0 : -1;
