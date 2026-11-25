@@ -28,6 +28,7 @@
           placeholder="选择场次（可多选合并）"
           class="review-select"
           :loading="sessionsLoading"
+          @change="onSelectChange"
         >
           <el-option
             v-for="item in sessions"
@@ -36,6 +37,14 @@
             :value="item.live_session_id"
           />
         </el-select>
+        <el-button
+          class="review-refresh-btn"
+          :loading="refreshing"
+          :disabled="refreshing || sessionsLoading || loading"
+          @click="handleRefresh"
+        >
+          刷新
+        </el-button>
         <el-button
           type="primary"
           :disabled="!review || !review.sessions.length"
@@ -424,7 +433,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+/**
+ * 场次复盘页 —— 单场或多场合并的只读复盘聚合视图
+ *
+ * keep-alive 生命周期语义：
+ * - 本页被外层路由 `<keep-alive>` 缓存，不含持续定时器、事件订阅或 WebSocket；
+ * - 首次 `onMounted` 加载场次列表并选中深链参数（`?session=`）或最新已结束场次，
+ *   同时跳过紧随首次挂载触发的那一次 `onActivated` 以避免双发请求；
+ * - 后续切回页面触发 `onActivated` 时静默刷新场次列表：若带入新的 `?session=` 深链
+ *   则切到目标场次；若用户仍停留在之前自动选中的旧默认最新已结束场次且列表出现
+ *   更新的已结束场次，自动跟进到最新已结束场次并重拉复盘数据；若用户手动选择了特定
+ *   场次或深链场次，则保留用户选择不覆盖。
+ */
+import { computed, nextTick, onActivated, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { EChartsCoreOption } from 'echarts/core';
@@ -461,6 +482,7 @@ import { useChartPalette, useECharts } from '@/composables/useECharts';
 
 const sessions = ref<LiveSessionItem[]>([]);
 const sessionsLoading = ref(false);
+const refreshing = ref(false);
 const selectedIds = ref<number[]>([]);
 /** 深链参数：场次管理页点"复盘"带 session 进来（多 id 逗号分隔） */
 const route = useRoute();
@@ -510,61 +532,178 @@ const {
 const chartRef = ref<HTMLElement | null>(null);
 const palette = useChartPalette();
 
-onMounted(async () => {
-  sessionsLoading.value = true;
+/** 场次列表请求序号：并发或快速切页时只认最后发起的响应 */
+let sessionsSeq = 0;
+/** 当前选中是否停留在页面自动选中的“最新已结束场次”；用户手动改动或深链命中后置 null */
+let autoSelectedDefaultId: number | null = null;
+/** 用户是否主动操作过下拉框（含手动清空），用于区分“从未选过”与“用户主动清空” */
+let userTouchedSelection = false;
+/** 最近一次已应用的 ?session= 深链原始字符串，用于识别切回页面时是否带入了新的深链 */
+let appliedDeepLinkQuery = '';
+/** Vue keep-alive 首次挂载后会紧接着触发一次 onActivated：置 true 跳过这次重复拉取 */
+let skipNextActivated = false;
+
+/** 解析当前路由 ?session= 里的有效正整数场次 id 列表 */
+function parseDeepLinkSessionIds(raw: unknown): number[] {
+  return String(raw ?? '')
+    .split(',')
+    .map(Number)
+    .filter(id => Number.isFinite(id) && id > 0);
+}
+
+/** 用户手动在下拉框修改或清空场次选择：标记为手动选择并清除已应用深链记录，后续静默刷新不再覆盖 */
+function onSelectChange(): void {
+  userTouchedSelection = true;
+  autoSelectedDefaultId = null;
+  appliedDeepLinkQuery = '';
+}
+
+/**
+ * 加载场次列表并按来源模式更新选中态。
+ *
+ * - initial（首次挂载）：优先应用 ?session= 深链，否则默认选最新已结束场次；
+ * - activated（keep-alive 切回静默刷新）/ manual（点工具栏刷新）：
+ *   若带入新的 ?session= 深链则切到目标场次；若仍停留在旧自动默认场次（或此前
+ *   尚无已结束场次且用户未手动改过选择）且列表出现更新的已结束场次，自动跟进到
+ *   最新已结束场次；用户手动选定的特定场次或已有深链保持不动。
+ */
+async function loadSessions(
+  mode: 'initial' | 'activated' | 'manual' = 'initial',
+): Promise<boolean> {
+  const seq = ++sessionsSeq;
+  // 切回静默刷新时若已有数据则不闪下拉 loading，首次与手动刷新正常展示加载态
+  const showSpinner = mode !== 'activated' || sessions.value.length === 0;
+  if (showSpinner) sessionsLoading.value = true;
   try {
     const resp = await liveSessionsApi.list({ limit: 200 });
-    sessions.value = resp.data.items;
-    // 深链：场次管理页点"复盘"带 session 参数进来（多个场次用逗号分隔）；
-    // 参数里的场次不存在就落回默认选择，不报错。
-    const deepLinkIds = String(route.query.session ?? '')
-      .split(',')
-      .map(Number)
-      .filter(id => Number.isFinite(id) && id > 0);
-    const linked = resp.data.items.filter(item => deepLinkIds.includes(item.live_session_id));
-    if (linked.length) {
-      selectedIds.value = linked.map(item => item.live_session_id);
-    } else {
-      // 默认选最新已结束场次（列表倒序，第一个 ended 非空的）
-      const latestEnded = resp.data.items.find(item => item.ended_at_ms !== null);
-      if (latestEnded) selectedIds.value = [latestEnded.live_session_id];
+    if (seq !== sessionsSeq) return false;
+    errorMessage.value = '';
+    const items = resp.data.items;
+    sessions.value = items;
+
+    const rawDeepLink = String(route.query.session ?? '').trim();
+    const hasNewDeepLink =
+      rawDeepLink.length > 0 && (mode === 'initial' || rawDeepLink !== appliedDeepLinkQuery);
+    if (hasNewDeepLink) {
+      const deepLinkIds = parseDeepLinkSessionIds(rawDeepLink);
+      const linked = items.filter(item => deepLinkIds.includes(item.live_session_id));
+      appliedDeepLinkQuery = rawDeepLink;
+      if (linked.length) {
+        autoSelectedDefaultId = null;
+        selectedIds.value = linked.map(item => item.live_session_id);
+        return true;
+      }
+      if (mode !== 'initial') return true;
     }
+
+    const latestEnded = items.find(item => item.ended_at_ms !== null);
+    if (mode === 'initial') {
+      if (latestEnded) {
+        autoSelectedDefaultId = latestEnded.live_session_id;
+        selectedIds.value = [latestEnded.live_session_id];
+      }
+      return true;
+    }
+
+    // 切回页面或点刷新：仅当用户仍停在旧自动默认场次（或初始无可选场次且未手动改过）时，
+    // 自动跟进到最新已结束场次；手动选择或深链场次一律尊重用户当前选择
+    const stayingOnAutoDefault =
+      autoSelectedDefaultId !== null &&
+      selectedIds.value.length === 1 &&
+      selectedIds.value[0] === autoSelectedDefaultId;
+    const waitingForFirstEnded = !userTouchedSelection && selectedIds.value.length === 0;
+    if ((stayingOnAutoDefault || waitingForFirstEnded) && latestEnded) {
+      if (latestEnded.live_session_id !== autoSelectedDefaultId || selectedIds.value.length === 0) {
+        autoSelectedDefaultId = latestEnded.live_session_id;
+        selectedIds.value = [latestEnded.live_session_id];
+      }
+    }
+    return true;
   } catch (error) {
+    if (seq !== sessionsSeq) return false;
     errorMessage.value = getApiErrorMessage(error, '场次列表加载失败');
+    return false;
   } finally {
-    sessionsLoading.value = false;
+    if (seq === sessionsSeq) sessionsLoading.value = false;
   }
+}
+
+onMounted(() => {
+  skipNextActivated = true;
+  void loadSessions('initial');
 });
 
-watch(selectedIds, loadReview, { deep: true });
-
-/** 复盘聚合请求序号：快速切换场次时只认最后发起的响应 */
-let reviewSeq = 0;
-
-async function loadReview(): Promise<void> {
-  const seq = ++reviewSeq;
-  loading.value = true;
-  errorMessage.value = '';
-  try {
-    const resp = await reviewApi.get(selectedIds.value);
-    if (seq !== reviewSeq) return;
-    review.value = resp.data;
-  } catch (error) {
-    if (seq !== reviewSeq) return;
-    review.value = null;
-    errorMessage.value = getApiErrorMessage(error, '复盘聚合加载失败');
-  } finally {
-    if (seq === reviewSeq) loading.value = false;
+onActivated(() => {
+  if (skipNextActivated) {
+    skipNextActivated = false;
+    return;
   }
-  if (seq !== reviewSeq) return;
-  archiveActionError.value = '';
-  // 单场语义的几块互不依赖：并行加载，互不阻塞
-  await Promise.all([
-    loadRundown(),
-    loadArchive(archiveSessionId.value),
-    loadSpeech(archiveSessionId.value),
-    loadCues(archiveSessionId.value),
-  ]);
+  void loadSessions('activated');
+});
+
+/** 复盘聚合请求序号与在途 Promise：快速切换或手动刷新时防乱序、防双发 */
+let reviewSeq = 0;
+let inFlightReview: Promise<void> | null = null;
+
+watch(
+  () => selectedIds.value.join(','),
+  () => {
+    void loadReview();
+  },
+);
+
+/** 工具栏「刷新」：重拉场次列表与当前复盘数据，加载态防重复点击 */
+async function handleRefresh(): Promise<void> {
+  if (refreshing.value || sessionsLoading.value || loading.value) return;
+  refreshing.value = true;
+  try {
+    const beforeKey = selectedIds.value.join(',');
+    const ok = await loadSessions('manual');
+    if (!ok) return;
+    const afterKey = selectedIds.value.join(',');
+    if (afterKey !== beforeKey) {
+      // 列表刷新已自动切到更新的默认场次，等待 watch 触发的 loadReview 完成即可，不重复发请求
+      await nextTick();
+      if (inFlightReview) await inFlightReview;
+    } else if (selectedIds.value.length > 0 || review.value !== null) {
+      await loadReview();
+    }
+  } finally {
+    refreshing.value = false;
+  }
+}
+
+function loadReview(): Promise<void> {
+  const seq = ++reviewSeq;
+  const task = (async (): Promise<void> => {
+    loading.value = true;
+    errorMessage.value = '';
+    try {
+      const resp = await reviewApi.get(selectedIds.value);
+      if (seq !== reviewSeq) return;
+      review.value = resp.data;
+    } catch (error) {
+      if (seq !== reviewSeq) return;
+      review.value = null;
+      errorMessage.value = getApiErrorMessage(error, '复盘聚合加载失败');
+    } finally {
+      if (seq === reviewSeq) loading.value = false;
+    }
+    if (seq !== reviewSeq) return;
+    archiveActionError.value = '';
+    // 单场语义的几块互不依赖：并行加载，互不阻塞
+    await Promise.all([
+      loadRundown(),
+      loadArchive(archiveSessionId.value),
+      loadSpeech(archiveSessionId.value),
+      loadCues(archiveSessionId.value),
+    ]);
+  })();
+  inFlightReview = task;
+  void task.finally(() => {
+    if (inFlightReview === task) inFlightReview = null;
+  });
+  return task;
 }
 
 /** 流程单执行仅在单场选择时加载；接口不可用/无事实行按无数据降级（面板隐藏） */
