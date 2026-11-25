@@ -279,7 +279,8 @@ async def test_reveal_output_validates_subtree(store, event_bus, tmp_path: Path,
     ok_resp = await client.post("/api/v1/clips/outputs/reveal", json={"path": str(output_file)})
     assert ok_resp.status_code == 200
     assert ok_resp.json()["opened"] is True
-    assert calls and "切片-开场.mp4" in calls[0][-1]
+    # Windows 与 macOS 定位到文件本身；Linux 没有通用的定位到文件的命令，打开它所在的文件夹
+    assert calls and Path(calls[0][-1]).resolve() in (output_file.resolve(), service.output_dir.resolve())
 
     outside = tmp_path.parent / "外面.mp4"
     outside.write_bytes(b"x")
