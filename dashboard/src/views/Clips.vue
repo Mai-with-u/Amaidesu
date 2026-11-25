@@ -16,12 +16,12 @@ import { useClipReview } from '@/composables/useClipReview';
 import ClipPreviewPlayer from '@/components/clips/ClipPreviewPlayer.vue';
 import SegmentTimeline from '@/components/clips/SegmentTimeline.vue';
 import type {
+  CatalogEntryInfo,
   ClipConfig,
   ClippedSessionItem,
   ClipSegment,
   ClipSegmentStatus,
   RecordingFileInfo,
-  UnmatchedFileInfo,
 } from '@/types/clips';
 
 const {
@@ -31,7 +31,6 @@ const {
   configSaving,
   recordings,
   detachedFiles,
-  unmatchedFiles,
   segments,
   sessionDensity,
   detailLoading,
@@ -49,6 +48,7 @@ const {
   restoreRecording,
   readCreationTime,
   renameRecording,
+  loadRecordingCatalog,
   loadSessions,
   loadConfig,
   saveConfig,
@@ -236,10 +236,12 @@ const filteredSegments = computed<ClipSegment[]>(() => {
   }
 });
 
-/** 素材折叠条标题里的就绪数（mp4 视为恒就绪） */
-const readyCount = computed(
-  () => recordings.value.filter(f => previewReadiness.value[f.path]).length,
-);
+/** 字节数的人类可读形态（选择器行内大小展示用） */
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
 
 async function openSessionSegments(): Promise<void> {
   if (selectedSessionId.value !== null) {
@@ -422,10 +424,10 @@ watch(selectedSegmentId, segmentId => {
   if (segmentId !== null) segmentRowEls.get(segmentId)?.scrollIntoView({ block: 'nearest' });
 });
 
-// ---- 归属人工修正：移出 / 恢复 / 指派（指派需补录制开始时刻）----
+// ---- 归属人工修正：移出 / 恢复 / 匹配（选文件 + 确认开始时刻）----
 async function onDetachFile(file: RecordingFileInfo): Promise<void> {
   if (!selectedSession.value) return;
-  const ok = await confirmAction(`把「${file.file_name}」移出本场？自动匹配会被人工覆盖。`, '移出');
+  const ok = await confirmAction(`把「${file.file_name}」移出本场？之后可以在录播目录里另选文件匹配。`, '移出');
   if (!ok) return;
   await detachRecording(selectedSession.value.live_session_id, file.path);
 }
@@ -435,47 +437,85 @@ async function onRestoreFile(file: RecordingFileInfo): Promise<void> {
   await restoreRecording(selectedSession.value.live_session_id, file.path);
 }
 
-const assignDialogVisible = ref(false);
-const assignTarget = ref<UnmatchedFileInfo | null>(null);
-const assignStartText = ref('');
-const readingMeta = ref(false);
+// ---- 匹配录播文件：从录播目录挑一个视频对应到本场 ----
+const matcherVisible = ref(false);
+const catalogEntries = ref<CatalogEntryInfo[]>([]);
+const catalogLoading = ref(false);
+const catalogSelected = ref<CatalogEntryInfo | null>(null);
+const matchStartText = ref('');
+const matchReading = ref(false);
+/** 替换模式：匹配成功后把原文件移出本场 */
+const replaceTarget = ref<RecordingFileInfo | null>(null);
 
-function onAssignFile(file: UnmatchedFileInfo): void {
-  if (!selectedSession.value) return;
-  assignTarget.value = file;
-  assignStartText.value = formatLocalDateTime(selectedSession.value.started_at_ms); // 默认预填开播时刻
-  assignDialogVisible.value = true;
+/** 推算/识别出的开始时刻落在本场时间窗内（±10 分钟余量）→ 选择器置顶推荐 */
+function isSuggestedCatalogEntry(entry: CatalogEntryInfo): boolean {
+  if (!selectedSession.value) return false;
+  const startMs = entry.started_at_ms ?? entry.inferred_start_ms;
+  if (startMs === null) return false;
+  const upper = sessionEndMs.value;
+  return selectedSession.value.started_at_ms - 10 * 60 * 1000 <= startMs && startMs <= upper;
+}
+
+const sortedCatalogEntries = computed(() => {
+  const suggested = catalogEntries.value.filter(isSuggestedCatalogEntry);
+  const rest = catalogEntries.value.filter(entry => !isSuggestedCatalogEntry(entry));
+  return [...suggested, ...rest];
+});
+
+async function openMatcher(replace?: RecordingFileInfo): Promise<void> {
+  replaceTarget.value = replace ?? null;
+  catalogSelected.value = null;
+  matcherVisible.value = true;
+  catalogLoading.value = true;
+  try {
+    catalogEntries.value = await loadRecordingCatalog();
+  } finally {
+    catalogLoading.value = false;
+  }
+  if (catalogEntries.value.length === 0) {
+    ElMessage.info('录播目录里没有找到视频文件；确认录播目录配置正确');
+  }
+}
+
+function selectCatalogEntry(entry: CatalogEntryInfo): void {
+  catalogSelected.value = entry;
+  // 时刻预填优先级：识别出的开始时刻 > 推算窗起点 > 本场开播时刻
+  const startMs = entry.started_at_ms ?? entry.inferred_start_ms ?? selectedSession.value?.started_at_ms;
+  matchStartText.value = startMs === null || startMs === undefined ? '' : formatLocalDateTime(startMs);
 }
 
 /** 从视频容器元数据（ffprobe creation_time）读录制时刻填入输入框 */
-async function onReadMetadata(): Promise<void> {
-  if (!assignTarget.value) return;
-  readingMeta.value = true;
+async function onReadMatchMetadata(): Promise<void> {
+  if (!catalogSelected.value) return;
+  matchReading.value = true;
   try {
-    const moment = await readCreationTime(assignTarget.value.path);
+    const moment = await readCreationTime(catalogSelected.value.path);
     if (moment === null) {
       ElMessage.info('视频元数据里没有录制时刻（该容器未写入 creation_time）');
       return;
     }
-    assignStartText.value = formatLocalDateTime(moment);
+    matchStartText.value = formatLocalDateTime(moment);
   } finally {
-    readingMeta.value = false;
+    matchReading.value = false;
   }
 }
 
-async function onConfirmAssign(): Promise<void> {
-  if (!selectedSession.value || !assignTarget.value) return;
-  const startMs = parseLocalDateTime(assignStartText.value);
+async function onConfirmMatch(): Promise<void> {
+  const session = selectedSession.value;
+  const target = catalogSelected.value;
+  if (!session || !target) return;
+  const startMs = parseLocalDateTime(matchStartText.value);
   if (startMs === null) {
     ElMessage.warning('开始时刻格式不认识；用 YYYY-MM-DD HH:mm:ss');
     return;
   }
-  const ok = await assignRecording(
-    selectedSession.value.live_session_id,
-    assignTarget.value.path,
-    startMs,
-  );
-  if (ok) assignDialogVisible.value = false;
+  const assigned = await assignRecording(session.live_session_id, target.path, startMs);
+  if (!assigned) return;
+  if (replaceTarget.value && replaceTarget.value.path !== target.path) {
+    await detachRecording(session.live_session_id, replaceTarget.value.path);
+    replaceTarget.value = null;
+  }
+  matcherVisible.value = false;
 }
 
 // ---- WebUI 改名（同目录、扩展名不可改；归属覆盖随新路径迁移）----
@@ -488,6 +528,12 @@ function onRenameFile(file: { path: string; file_name: string }): void {
   renameTarget.value = file;
   renameNewName.value = file.file_name;
   renameDialogVisible.value = true;
+}
+
+/** 已匹配文件行"更多"菜单：改名 / 移出 */
+function onFileMoreCommand(file: RecordingFileInfo, command: string): void {
+  if (command === 'rename') onRenameFile(file);
+  else if (command === 'detach') void onDetachFile(file);
 }
 
 async function onConfirmRename(): Promise<void> {
@@ -882,116 +928,133 @@ onBeforeUnmount(() => {
             />
           </section>
 
-          <el-collapse class="clip-files-collapse">
-            <el-collapse-item name="files">
-              <template #title>
-                <span class="clip-files-summary">
-                  录播素材 · {{ recordings.length }} 个文件<template v-if="readyCount">
-                    · {{ readyCount }} 个预览就绪</template
-                  ><template v-if="unmatchedFiles.length">
-                    · {{ unmatchedFiles.length }} 个未识别</template
-                  >
-                </span>
-              </template>
-              <div class="clip-files-scroll">
-                <ul class="clip-file-list">
-                  <li v-for="file in recordings" :key="file.path" class="clip-file-row">
-                    <div class="clip-file-info">
-                      <span class="clip-file-name" :title="file.file_name">{{
-                        file.file_name
-                      }}</span>
-                      <span class="clip-file-time">
-                        自
-                        {{ formatRelClock(file.started_at_ms - selectedSession.started_at_ms) }} 起
-                        · {{ fileExtOf(file) }} ·
-                        {{ previewReadiness[file.path] ? '预览就绪' : '首次预览现转该段' }}
-                      </span>
-                    </div>
-                    <div class="clip-file-actions">
-                      <el-button size="small" text type="primary" @click="onPreviewFile(file)"
-                        >预览</el-button
-                      >
-                      <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
-                      <el-button size="small" text type="warning" @click="onDetachFile(file)"
-                        >移出本场</el-button
-                      >
-                    </div>
-                  </li>
-                  <li
-                    v-for="file in detachedFiles"
-                    :key="`detached-${file.path}`"
-                    class="clip-file-row is-detached"
-                  >
-                    <div class="clip-file-info">
-                      <span class="clip-file-name" :title="file.file_name">{{
-                        file.file_name
-                      }}</span>
-                      <span class="clip-file-time">已被移出本场（人工）</span>
-                    </div>
-                    <div class="clip-file-actions">
-                      <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
-                      <el-button size="small" text @click="onRestoreFile(file)">恢复</el-button>
-                    </div>
-                  </li>
-                  <li
-                    v-for="file in unmatchedFiles"
-                    :key="`unmatched-${file.path}`"
-                    class="clip-file-row"
-                  >
-                    <div class="clip-file-info">
-                      <span class="clip-file-name" :title="file.file_name">{{
-                        file.file_name
-                      }}</span>
-                      <span class="clip-file-time">文件名解析不出时刻（手工改名归档？）</span>
-                    </div>
-                    <div class="clip-file-actions">
-                      <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
-                      <el-button size="small" text type="primary" @click="onAssignFile(file)"
-                        >指派到本场</el-button
-                      >
-                    </div>
-                  </li>
-                </ul>
-                <p
-                  v-if="
-                    recordings.length === 0 &&
-                    detachedFiles.length === 0 &&
-                    unmatchedFiles.length === 0
-                  "
-                  class="clip-unmatched-note"
+          <section v-loading="detailLoading" class="clip-card clip-files">
+            <div class="clip-files-head">
+              <h3 class="clip-section-title">
+                本场的录像文件<span class="clip-settings-hint"
+                  >自动识别失败时，从这里手动把录播目录里的视频对应到本场</span
                 >
-                  录播目录里没有属于本场的文件。
-                </p>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
+              </h3>
+              <el-button size="small" type="primary" plain @click="openMatcher()">
+                + 匹配录播文件
+              </el-button>
+            </div>
+            <ul v-if="recordings.length || detachedFiles.length" class="clip-file-list">
+              <li v-for="file in recordings" :key="file.path" class="clip-file-row">
+                <div class="clip-file-info">
+                  <span class="clip-file-name" :title="file.file_name">{{ file.file_name }}</span>
+                  <span class="clip-file-time">
+                    自 {{ formatRelClock(file.started_at_ms - selectedSession.started_at_ms) }} 起
+                    <template v-if="file.started_at_source !== 'filename'">· 按时间自动识别</template>
+                    · {{ fileExtOf(file) }} ·
+                    {{ previewReadiness[file.path] ? '预览就绪' : '首次预览现转' }}
+                  </span>
+                </div>
+                <div class="clip-file-actions">
+                  <el-button size="small" text type="primary" @click="onPreviewFile(file)">预览</el-button>
+                  <el-button size="small" text @click="openMatcher(file)">替换</el-button>
+                  <el-dropdown trigger="click" @command="command => onFileMoreCommand(file, command)">
+                    <el-button size="small" text aria-label="更多操作">⋯</el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="rename">改名</el-dropdown-item>
+                        <el-dropdown-item command="detach" class="clip-more-danger">移出本场</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
+              </li>
+              <li
+                v-for="file in detachedFiles"
+                :key="`detached-${file.path}`"
+                class="clip-file-row is-detached"
+              >
+                <div class="clip-file-info">
+                  <span class="clip-file-name" :title="file.file_name">{{ file.file_name }}</span>
+                  <span class="clip-file-time">已被移出本场（人工）</span>
+                </div>
+                <div class="clip-file-actions">
+                  <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
+                  <el-button size="small" text @click="onRestoreFile(file)">恢复</el-button>
+                </div>
+              </li>
+            </ul>
+            <div v-else class="clip-files-empty">
+              这场还没有对应到录像文件。点上方「+ 匹配录播文件」，从录播目录里选一个视频对应过来。
+            </div>
+          </section>
         </template>
         <div v-else class="md-list-empty clip-empty-detail">
           <template v-if="needsSetup"
             >先把上面的切片设置填好保存（不用重启），场次列表就会出现。</template
           >
-          <template v-else>从左侧选一场直播开始切。没匹配到录播文件的场次也能选，可在其素材列表里人工指派文件。</template>
+          <template v-else>从左侧选一场直播开始切。没匹配到录像文件的场次也能选，进场后手动匹配。</template>
         </div>
       </section>
     </div>
 
-    <el-dialog v-model="assignDialogVisible" title="指派到本场" width="480px">
-      <p class="clip-assign-path">{{ assignTarget?.file_name }}</p>
-      <el-form label-width="110px" @submit.prevent>
+    <el-dialog
+      v-model="matcherVisible"
+      :title="replaceTarget ? `替换「${replaceTarget.file_name}」` : '匹配录播文件'"
+      width="720px"
+      top="6vh"
+    >
+      <p class="clip-matcher-hint">
+        从录播目录里选一个视频对应到本场。按时间自动识别失败的文件都在这里，
+        标了推算的录制时间供判断；可能属于本场
+        <template v-if="sortedCatalogEntries.some(isSuggestedCatalogEntry)">的排在最前面</template>。
+      </p>
+      <div v-loading="catalogLoading" class="clip-matcher-list">
+        <div
+          v-for="entry in sortedCatalogEntries"
+          :key="entry.path"
+          class="clip-matcher-row"
+          :class="{
+            'is-suggested': isSuggestedCatalogEntry(entry),
+            'is-selected': catalogSelected?.path === entry.path,
+          }"
+          @click="selectCatalogEntry(entry)"
+        >
+          <div class="clip-matcher-main">
+            <span class="clip-matcher-name" :title="entry.file_name">{{ entry.file_name }}</span>
+            <span class="clip-matcher-meta">
+              <template v-if="entry.started_at_ms !== null">
+                识别为 {{ formatDateTimeCn(entry.started_at_ms) }} 开始
+              </template>
+              <template v-else-if="entry.inferred_start_ms !== null">
+                推算 {{ formatDateTimeCn(entry.inferred_start_ms) }} →
+                {{ formatTimeHM(entry.inferred_end_ms ?? 0) }}
+              </template>
+              <template v-else>读不出录制时间</template>
+              · {{ formatSize(entry.size_bytes) }}
+              <template v-if="entry.matched_session_ids.length">
+                · 已属于 #{{ entry.matched_session_ids.join('、#') }} 场</template
+              >
+            </span>
+          </div>
+          <span v-if="isSuggestedCatalogEntry(entry)" class="clip-matcher-badge">可能属于本场</span>
+        </div>
+        <div v-if="!catalogLoading && catalogEntries.length === 0" class="clip-matcher-empty">
+          录播目录里没有找到视频文件；确认录播目录配置正确后重试。
+        </div>
+      </div>
+      <el-form label-width="110px" class="clip-matcher-form" @submit.prevent>
         <el-form-item label="录制开始">
-          <el-input v-model="assignStartText" placeholder="YYYY-MM-DD HH:mm:ss">
+          <el-input v-model="matchStartText" placeholder="YYYY-MM-DD HH:mm:ss" :disabled="!catalogSelected">
             <template #append>
-              <el-button :loading="readingMeta" @click="onReadMetadata">读元数据</el-button>
+              <el-button :loading="matchReading" :disabled="!catalogSelected" @click="onReadMatchMetadata"
+                >读元数据</el-button
+              >
             </template>
           </el-input>
           <div class="clip-dir-warning">
-            文件名解析不出时刻，切片偏移按这个时刻换算；默认预填本场开播时刻
+            切片偏移按这个时刻换算；已按推算/识别结果预填，不对就改。
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="assignDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="onConfirmAssign">指派</el-button>
+        <el-button @click="matcherVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!catalogSelected" @click="onConfirmMatch">归入本场</el-button>
       </template>
     </el-dialog>
 
@@ -1243,16 +1306,127 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
-.clip-file-item {
+/* 素材区：常驻区块（非折叠），高度内容驱动、上限内滚动 */
+.clip-files {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 4px 0;
-  font-size: 13px;
+  flex-direction: column;
 }
 
-.clip-file-item.is-unmatched .clip-file-name {
+.clip-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.clip-files-body {
+  min-height: 0;
+}
+
+.clip-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.clip-files-empty {
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.8;
   color: var(--el-text-color-secondary);
+  border: 1px dashed var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+
+/* 匹配录播文件选择器 */
+.clip-matcher-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
+
+.clip-matcher-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  margin-bottom: 14px;
+}
+
+.clip-matcher-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.clip-matcher-row:last-child {
+  border-bottom: none;
+}
+
+.clip-matcher-row:hover {
+  background: var(--el-fill-color-light);
+}
+
+.clip-matcher-row.is-selected {
+  background: var(--el-color-primary-light-9);
+  box-shadow: inset 3px 0 0 0 var(--el-color-primary);
+}
+
+.clip-matcher-row.is-suggested .clip-matcher-name::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+  vertical-align: middle;
+}
+
+.clip-matcher-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clip-matcher-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clip-matcher-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-matcher-badge {
+  flex: none;
+  font-size: 11px;
+  color: var(--el-color-primary);
+  border: 1px solid var(--el-color-primary-light-5);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+.clip-matcher-empty {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.clip-matcher-form {
+  margin-top: 4px;
 }
 
 .clip-file-name {
@@ -1265,32 +1439,6 @@ onBeforeUnmount(() => {
   flex: none;
   color: var(--el-text-color-secondary);
   font-size: 12px;
-}
-
-.clip-files-collapse {
-  border-top: none;
-}
-
-.clip-files-collapse :deep(.el-collapse-item__content) {
-  padding: 4px 0 8px;
-}
-
-/* 折叠内容可滚动：未识别文件多时不撑破定高页面 */
-.clip-files-scroll {
-  max-height: 280px;
-  overflow-y: auto;
-  padding-left: 8px;
-}
-
-.clip-files-summary {
-  font-size: 13px;
-}
-
-.clip-unmatched-note {
-  margin: 8px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--el-text-color-secondary);
 }
 
 .clip-no-segments {
@@ -1448,13 +1596,6 @@ onBeforeUnmount(() => {
 .clip-time-input :deep(.el-input__wrapper.is-focus) {
   box-shadow: 0 0 0 1px var(--el-border-color) inset;
   background: var(--el-fill-color-blank);
-}
-
-.clip-assign-path {
-  margin: 0 0 12px;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
-  word-break: break-all;
 }
 
 .clip-empty-detail {

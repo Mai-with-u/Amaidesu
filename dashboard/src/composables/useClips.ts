@@ -19,6 +19,7 @@ import { EVENT } from '@/types/events';
 import type { BackgroundTask } from '@/types/events';
 import type { WebSocketMessage } from '@/types';
 import type {
+  CatalogEntryInfo,
   ClipConfig,
   ClipConfigState,
   ClippedSessionItem,
@@ -419,6 +420,17 @@ export function useClips() {
     }
   }
 
+  /** 录播目录视频清单（"匹配录播文件"选择器数据源）；失败弹错返回空 */
+  async function loadRecordingCatalog(): Promise<CatalogEntryInfo[]> {
+    try {
+      const { data } = await clipsApi.recordingsCatalog();
+      return data;
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error, '加载录播目录清单失败'));
+      return [];
+    }
+  }
+
   async function restoreRecording(sessionId: number, path: string): Promise<boolean> {
     try {
       await clipsApi.restoreRecording(sessionId, path);
@@ -546,6 +558,7 @@ export function useClips() {
     assignRecording,
     detachRecording,
     restoreRecording,
+    loadRecordingCatalog,
     readCreationTime,
     renameRecording,
   };

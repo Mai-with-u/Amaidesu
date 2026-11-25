@@ -36,12 +36,34 @@ export interface RecordingFileInfo {
   file_name: string;
   started_at_ms: number;
   title: string;
+  /** 开始时刻识别来源：filename=文件名 / metadata=容器元数据 / inferred=修改时间−时长推断 */
+  started_at_source: string;
 }
 
-/** 一个文件名解析不出录制开始时刻的视频文件（无法自动匹配场次） */
+/** 一个自动识别不出的视频文件（待归档候选，附判断归属的推断信息） */
 export interface UnmatchedFileInfo {
   path: string;
   file_name: string;
+  size_bytes: number;
+  mtime_ms: number;
+  duration_s: number | null;
+  inferred_start_ms: number | null;
+  inferred_end_ms: number | null;
+}
+
+/** 录播目录视频清单一行（"匹配录播文件"选择器数据源） */
+export interface CatalogEntryInfo {
+  path: string;
+  file_name: string;
+  size_bytes: number;
+  mtime_ms: number;
+  duration_s: number | null;
+  inferred_start_ms: number | null;
+  inferred_end_ms: number | null;
+  started_at_ms: number | null;
+  started_at_source: string | null;
+  matched_session_ids: number[];
+  assigned_session_id: number | null;
 }
 
 /** 切片页场次列表一行 */

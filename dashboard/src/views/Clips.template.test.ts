@@ -94,6 +94,31 @@ describe('核对工作流与播放器接线', () => {
     expect(sfcSource).toContain('@click="revealOutput(path)"');
     expect(sfcSource).toContain('打开文件夹');
   });
+
+  it('素材区常驻不折叠，零文件时空态直给匹配入口', () => {
+    expect(sfcSource).not.toContain('clip-files-collapse');
+    expect(sfcSource).toContain('class="clip-files-head"');
+    expect(sfcSource).toContain('+ 匹配录播文件');
+    expect(sfcSource).toContain('这场还没有对应到录像文件');
+  });
+
+  it('匹配选择器：本场候选置顶推荐、归属冲突标注、时刻按识别/推算预填', () => {
+    expect(sfcSource).toMatch(/function isSuggestedCatalogEntry/);
+    expect(sfcSource).toContain('已属于 #');
+    // 时刻预填优先级：识别出的开始时刻 > 推算窗起点 > 本场开播时刻
+    expect(sfcSource).toMatch(
+      /const startMs = entry\.started_at_ms \?\? entry\.inferred_start_ms \?\? selectedSession\.value\?\.started_at_ms;/,
+    );
+    expect(sfcSource).toContain('>归入本场<');
+    expect(sfcSource).toContain('onConfirmMatch');
+  });
+
+  it('自动识别来源标记与替换动线', () => {
+    expect(sfcSource).toContain("file.started_at_source !== 'filename'");
+    expect(sfcSource).toContain('按时间自动识别');
+    expect(sfcSource).toContain('openMatcher(file)'); // 行内「替换」进选择器
+    expect(sfcSource).toMatch(/replaceTarget\.value = replace \?\? null/);
+  });
 });
 
 describe('播放器空态与页头细节', () => {

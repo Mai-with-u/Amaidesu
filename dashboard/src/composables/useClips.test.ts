@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     assignRecording: vi.fn(),
     detachRecording: vi.fn(),
     restoreRecording: vi.fn(),
+    recordingsCatalog: vi.fn(),
   },
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
@@ -173,6 +174,16 @@ describe('useClips', () => {
 
     mocks.clipsApi.assignRecording.mockRejectedValue(new Error('越界'));
     expect(await clips.assignRecording(7, 'C:/outside.mp4', 1)).toBe(false);
+    expect(mocks.ElMessage.error).toHaveBeenCalled();
+  });
+
+  it('loadRecordingCatalog 返回目录清单；失败弹错返回空数组', async () => {
+    const clips = useClips();
+    mocks.clipsApi.recordingsCatalog.mockReturnValue(ok([{ file_name: 'a.mkv' }]));
+    expect(await clips.loadRecordingCatalog()).toEqual([{ file_name: 'a.mkv' }]);
+
+    mocks.clipsApi.recordingsCatalog.mockRejectedValue(new Error('x'));
+    expect(await clips.loadRecordingCatalog()).toEqual([]);
     expect(mocks.ElMessage.error).toHaveBeenCalled();
   });
 

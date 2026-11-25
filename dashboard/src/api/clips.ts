@@ -7,6 +7,7 @@
  */
 import api from '@/api';
 import type {
+  CatalogEntryInfo,
   ClipConfig,
   ClipConfigApplyResult,
   ClipConfigState,
@@ -45,6 +46,8 @@ export const clipsApi = {
     api.get<{ creation_time_ms: number | null }>('/clips/recordings/creation-time', {
       params: { path },
     }),
+  // 录播目录全部视频清单（"匹配录播文件"选择器数据源，含识别状态与场次归属）
+  recordingsCatalog: () => api.get<CatalogEntryInfo[]>('/clips/recordings/catalog'),
   renameRecording: (path: string, newName: string) =>
     api.post<{ path: string }>('/clips/recordings/rename', { path, new_name: newName }),
   select: (sessionId: number) =>
