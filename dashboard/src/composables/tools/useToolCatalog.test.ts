@@ -68,7 +68,10 @@ function mockTwoCategories(): void {
             }),
           ],
         }),
-        category({ category: 'unknown_cat', providers: [unit({ key: 'mcp_x', tool_count: 2 })] }),
+        category({
+          category: 'unknown_cat',
+          providers: [unit({ key: 'mcp_x', provider_name: 'mcp_x', tool_count: 2 })],
+        }),
       ],
     },
   } as never);
@@ -151,12 +154,12 @@ describe('useToolCatalog 分类派生', () => {
     expect(c.activeMeta.value).toEqual({ label: 'unknown_cat', description: '' });
   });
 
-  it('切换分类时清空搜索词', async () => {
+  it('切换分类保留搜索词（跨分类搜索的前提，不再清空）', async () => {
     const c = await setup();
     c.searchQuery.value = 'move';
     c.selectCategory('unknown_cat');
     await nextTick();
-    expect(c.searchQuery.value).toBe('');
+    expect(c.searchQuery.value).toBe('move');
   });
 
   it('toolsOf：按分类+提供者过滤，搜索词匹配名称或描述', async () => {
@@ -169,7 +172,25 @@ describe('useToolCatalog 分类派生', () => {
     expect(c.toolsOf(vtsUnit).map(t => t.name)).toEqual(['move']);
   });
 
-  it('visibleProviders：搜索时隐藏无命中工具的提供者', async () => {
+  it('跨分类搜索：命中其他分类工具时该分类提供者出现在结果中', async () => {
+    const c = await setup();
+    c.selectCategory('avatar');
+    c.searchQuery.value = 'wave';
+    // wave 属于 unknown_cat 的 mcp_x；搜索模式下不受当前分类限制
+    expect(c.searchMode.value).toBe(true);
+    expect(c.visibleProviders.value.map(u => u.key)).toEqual(['mcp_x']);
+    expect(c.activeToolCount.value).toBe(1);
+  });
+
+  it('activeToolCount：常规模式=当前分类工具数，搜索模式=跨分类匹配总数', async () => {
+    const c = await setup();
+    expect(c.activeToolCount.value).toBe(4);
+    // 'a' 只命中 wave（move 名称与描述都不含 a）
+    c.searchQuery.value = 'a';
+    expect(c.activeToolCount.value).toBe(1);
+  });
+
+  it('visibleProviders：搜索时隐藏无命中工具的提供者；常规视图保留 0 工具提供者', async () => {
     const c = await setup();
     expect(c.visibleProviders.value).toHaveLength(2);
     c.searchQuery.value = 'move';

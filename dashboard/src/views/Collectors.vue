@@ -1,115 +1,67 @@
 <template>
   <div class="collectors-page">
-    <!-- LEFT：采集器列表（narrow, 240px） -->
-    <aside class="md-list-panel" aria-label="采集器列表">
-      <header class="md-list-header">
-        <div class="md-list-header-main">
-          <h2 class="md-list-title">采集器</h2>
-          <span class="md-list-count">
-            <span class="md-list-count-running">{{ startedCount }}</span>
-            <span class="md-list-count-divider">/</span>
-            <span class="md-list-count-total">{{ totalCount }}</span>
-          </span>
-        </div>
-        <div class="md-batch-actions">
-          <el-button
-            size="small"
-            type="success"
-            plain
-            class="batch-btn"
-            :loading="batchLoading === 'start'"
-            :disabled="totalCount === 0 || startedCount === totalCount"
-            title="启动全部"
-            @click="runBatch('start')"
-          >
-            启动
-          </el-button>
-          <el-button
-            size="small"
-            type="danger"
-            plain
-            class="batch-btn"
-            :loading="batchLoading === 'stop'"
-            :disabled="totalCount === 0 || startedCount === 0"
-            title="停止全部"
-            @click="runBatch('stop')"
-          >
-            停止
-          </el-button>
-        </div>
-      </header>
-
-      <div v-if="totalCount === 0 && !loading" class="md-list-empty">
-        <el-empty :image-size="64" description="暂无采集器" />
-      </div>
-      <ul v-else class="md-list" role="listbox">
-        <li
-          v-for="c in collectorsList"
-          :key="c.name"
-          class="md-row"
-          :class="{
-            'is-selected': c.name === selectedName,
-            'is-running': c.is_started,
-            'is-stopped': !c.is_started && c.is_enabled,
-            'is-disabled': !c.is_enabled,
-          }"
-          role="option"
-          :aria-selected="c.name === selectedName"
-          @click="select(c.name)"
-          tabindex="0"
-          @keydown.enter.prevent="select(c.name)"
-          @keydown.space.prevent="select(c.name)"
+    <!-- LEFT：采集器列表 -->
+    <ComponentListPanel
+      title="采集器"
+      list-label="采集器列表"
+      :items="listItems"
+      :selected-key="selectedName"
+      :loading="loading"
+      :error="componentsStore.error"
+      empty-text="暂无采集器"
+      :count-running="startedCount"
+      :count-total="totalCount"
+      @select="select"
+      @retry="componentsStore.fetchComponents()"
+    >
+      <template #batch>
+        <el-button
+          size="small"
+          type="success"
+          plain
+          class="batch-btn"
+          :loading="batchLoading === 'start'"
+          :disabled="totalCount === 0 || startedCount === totalCount"
+          title="启动全部"
+          @click="handleBatch('start')"
         >
-          <span class="md-status-dot" aria-hidden="true" />
-          <span class="md-row-name" :title="c.name">{{ c.name }}</span>
-          <el-tag
-            v-if="c.is_started"
-            size="small"
-            type="success"
-            effect="plain"
-            class="md-running-tag"
-          >
-            运行
-          </el-tag>
-        </li>
-      </ul>
-    </aside>
+          启动
+        </el-button>
+        <el-button
+          size="small"
+          type="danger"
+          plain
+          class="batch-btn"
+          :loading="batchLoading === 'stop'"
+          :disabled="totalCount === 0 || startedCount === 0"
+          title="停止全部"
+          @click="handleBatch('stop')"
+        >
+          停止
+        </el-button>
+      </template>
+    </ComponentListPanel>
 
-    <!-- RIGHT：详情 + 数据流（flex-1, the star） -->
+    <!-- RIGHT：详情 + 数据流 -->
     <main class="md-detail-panel" aria-label="采集器详情">
       <template v-if="selectedCollector">
-        <!-- 详情头：名称 + 状态 + 操作 -->
-        <header class="md-detail-header">
-          <div class="md-detail-title-block">
-            <div class="md-detail-title-row">
-              <h1 class="md-detail-name">{{ selectedCollector.name }}</h1>
-              <el-tag
-                size="default"
-                :type="
-                  selectedCollector.is_started
-                    ? 'success'
-                    : selectedCollector.is_enabled
-                      ? 'warning'
-                      : 'info'
-                "
-                effect="dark"
-                class="md-status-tag"
-              >
-                {{ statusLabel(selectedCollector) }}
-              </el-tag>
-              <span class="md-type-chip">类型：采集器</span>
-            </div>
-            <p class="md-detail-description">
-              {{ selectedCollector.description || '（暂无描述）' }}
-            </p>
-            <div class="detail-links">
-              <router-link to="/settings" class="config-link">
-                <el-icon><Setting /></el-icon>
-                <span>查看配置</span>
-              </router-link>
-            </div>
-          </div>
-          <div class="md-detail-actions">
+        <DetailHeader
+          :name="selectedCollector.name"
+          :status-label="statusLabel(selectedCollector)"
+          :status-type="statusType"
+          type-chip="类型：采集器"
+          :description="selectedCollector.description"
+        >
+          <template #links>
+            <router-link
+              :to="`/settings?key=collectors.${selectedCollector.name}`"
+              class="config-link"
+            >
+              <el-icon><Setting /></el-icon>
+              <span>查看配置</span>
+            </router-link>
+          </template>
+          <template #actions>
             <el-button
               type="primary"
               size="default"
@@ -136,38 +88,10 @@
             >
               重启
             </el-button>
-          </div>
-        </header>
+          </template>
+        </DetailHeader>
 
-        <!-- 元信息条：compact stat chips -->
-        <div class="md-details-strip" aria-label="状态摘要">
-          <div class="md-stat-chip">
-            <span class="md-chip-label">已启用</span>
-            <span
-              class="md-chip-value"
-              :class="selectedCollector.is_enabled ? 'md-chip-yes' : 'md-chip-no'"
-            >
-              {{ selectedCollector.is_enabled ? '是' : '否' }}
-            </span>
-          </div>
-          <div class="md-stat-chip">
-            <span class="md-chip-label">运行中</span>
-            <span
-              class="md-chip-value"
-              :class="selectedCollector.is_started ? 'md-chip-yes' : 'md-chip-no'"
-            >
-              {{ selectedCollector.is_started ? '是' : '否' }}
-            </span>
-          </div>
-          <div class="md-stat-chip">
-            <span class="md-chip-label">类型</span>
-            <span class="md-chip-value mono">{{ selectedCollector.type || '—' }}</span>
-          </div>
-          <div class="md-stat-chip md-stat-chip--accent">
-            <span class="md-chip-label">归因族</span>
-            <span class="md-chip-value mono">{{ attributionFamiliesLabel }}</span>
-          </div>
-        </div>
+        <StatChipBar :chips="detailChips" />
 
         <!-- 数据流 -->
         <section class="md-stream-panel" aria-label="采集数据流">
@@ -227,7 +151,8 @@
  * （payloads/base.py）均无 source 字段，运行轨迹按事件族近似归属；
  * COLLECTOR_EVENT_FAMILIES 依据 collectors/*.py 的实际 emit 代码核对。
  *
- * 主从通用逻辑（选中保持 / 控制 / 批量 / 事件流缓冲）见 useComponentMasterDetail。
+ * 主从通用逻辑（选中保持 / 控制 / 批量 / 事件流缓冲）见 useComponentMasterDetail；
+ * 左栏面板 / 详情头 / 状态摘要条为三页共享组件（components/master-detail/）。
  */
 import { computed, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -236,12 +161,19 @@ import { useComponentsStore, useEventsStore } from '@/stores';
 import { EVENT } from '@/types/events';
 import { useNowTick } from '@/composables/useNowTick';
 import { useScrollFollow } from '@/composables/useScrollFollow';
+import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
+import { confirmAction } from '@/utils/confirmAction';
 import {
   STREAM_CAP,
   useComponentMasterDetail,
   type ComponentEvent,
   type ComponentStreamItem,
 } from '@/composables/useComponentMasterDetail';
+import ComponentListPanel from '@/components/master-detail/ComponentListPanel.vue';
+import type { ListPanelItem } from '@/components/master-detail/ComponentListPanel.vue';
+import DetailHeader from '@/components/master-detail/DetailHeader.vue';
+import StatChipBar from '@/components/master-detail/StatChipBar.vue';
+import type { StatChip } from '@/components/master-detail/StatChipBar.vue';
 import { summarizeEvent } from '@/utils/eventSummary';
 import { relativeTime as relativeTimeLabel } from '@/utils/liveFeed';
 import '@/styles/component-master-detail.css';
@@ -297,6 +229,17 @@ const { events } = storeToRefs(eventsStore);
 
 const totalCount = computed(() => collectorsList.value.length);
 const startedCount = computed(() => collectorsList.value.filter(c => c.is_started).length);
+
+// 左栏列表行（共享面板数据形态）
+const listItems = computed<ListPanelItem[]>(() =>
+  collectorsList.value.map(c => ({
+    key: c.name,
+    name: c.name,
+    isStarted: c.is_started,
+    isEnabled: c.is_enabled,
+    tag: c.is_started ? '运行' : null,
+  })),
+);
 
 type CollectorStreamItem = ComponentStreamItem;
 
@@ -364,12 +307,42 @@ const attributionFamiliesLabel = computed(() => {
   return families.map(f => FAMILY_HUMAN_LABELS[f] ?? f).join(' / ');
 });
 
+// 详情头状态标签三态与状态摘要条
+const statusType = computed<'success' | 'warning' | 'info'>(() => {
+  const c = selectedCollector.value;
+  if (!c) return 'info';
+  return c.is_started ? 'success' : c.is_enabled ? 'warning' : 'info';
+});
+
+const detailChips = computed<StatChip[]>(() => {
+  const c = selectedCollector.value;
+  if (!c) return [];
+  return [
+    { label: '已启用', value: c.is_enabled ? '是' : '否', tone: c.is_enabled ? 'yes' : 'no' },
+    { label: '运行中', value: c.is_started ? '是' : '否', tone: c.is_started ? 'yes' : 'no' },
+    { label: '类型', value: c.type || '—', tone: 'mono' },
+    { label: '归因族', value: attributionFamiliesLabel.value, tone: 'mono', accent: true },
+  ];
+});
+
 // 视图层：从缓冲里取最后 STREAM_CAP 条；保持时间升序展示（新条目在末尾）。
 const streamEntries = computed<CollectorStreamItem[]>(() => streamBuffer.value);
 
 // 自动滚动：新条目追加时滚到底部，除非用户已向上滚动
 
 const { scrollRef: streamScrollRef } = useScrollFollow(streamEntries);
+
+// 批量启停影响所有采集器，先确认再执行（取消路径零请求），与 Agent 页同标准
+async function handleBatch(action: 'start' | 'stop'): Promise<void> {
+  const verb = action === 'start' ? '启动' : '停止';
+  const ok = await confirmAction(
+    `确认${verb}全部 ${totalCount.value} 个采集器？将同时改变所有采集器的运行状态`,
+    `批量${verb}确认`,
+    { confirmButtonText: `确认${verb}` },
+  );
+  if (!ok) return;
+  await runBatch(action);
+}
 
 // 工具
 
@@ -381,6 +354,10 @@ function relativeTime(timestampMs: number): string {
 }
 
 // 生命周期
+
+// 清单 8s 静默轮询随激活态启停（与 Agent 页同节奏）；首屏由显式拉取负责
+const COMPONENTS_POLL_INTERVAL_MS = 8000;
+useKeepAlivePolling(() => componentsStore.fetchComponents(true), COMPONENTS_POLL_INTERVAL_MS);
 
 onMounted(() => {
   componentsStore.fetchComponents();
@@ -399,10 +376,6 @@ onMounted(() => {
   gap: var(--spacing-md);
   height: calc(100vh - var(--header-height) - 2 * var(--spacing-lg));
   min-height: 640px;
-}
-
-.detail-links {
-  margin-top: var(--spacing-sm);
 }
 
 .config-link {

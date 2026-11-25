@@ -29,16 +29,23 @@ export const useComponentsStore = defineStore('components', () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
 
-  async function fetchComponents() {
-    loading.value = true;
-    error.value = null;
+  async function fetchComponents(silent = false) {
+    if (!silent) {
+      loading.value = true;
+      error.value = null;
+    }
     try {
       const response = await componentApi.getAll();
       components.value = response.data;
     } catch (e) {
-      error.value = getApiErrorMessage(e, 'Failed to fetch components');
+      if (silent) {
+        // 轮询静默失败不打扰用户（等待下轮重试），保留上一次清单与错误态
+        console.warn('组件清单轮询失败（等待下轮重试）:', e);
+      } else {
+        error.value = getApiErrorMessage(e, 'Failed to fetch components');
+      }
     } finally {
-      loading.value = false;
+      if (!silent) loading.value = false;
     }
   }
 

@@ -3,7 +3,7 @@
  * 页面私有状态（仅工具页消费）。
  */
 
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { toolsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import type { ToolCategoryView, ToolEntry, ToolProviderUnit } from '@/types';
@@ -106,23 +106,37 @@ export function useToolCatalog() {
 
   const searchQuery = ref('');
 
+  /** 搜索词非空即进入跨分类搜索模式：右栏改为展示全部分类的匹配结果 */
+  const searchMode = computed(() => searchQuery.value.trim().length > 0);
+
   function toolsOf(unit: ToolProviderUnit): ToolEntry[] {
     const q = searchQuery.value.trim().toLowerCase();
     return tools.value.filter(t => {
-      if (t.category !== activeCategory.value || t.provider !== unit.provider_name) return false;
+      // 始终按提供者归卡；搜索模式跨分类，常规模式只在当前分类内
+      if (t.provider !== unit.provider_name) return false;
+      if (!searchMode.value && t.category !== activeCategory.value) return false;
       if (q && !`${t.name} ${t.description ?? ''}`.toLowerCase().includes(q)) return false;
       return true;
     });
   }
 
   const visibleProviders = computed<ToolProviderUnit[]>(() => {
-    const units = activeCategoryData.value?.providers ?? [];
-    if (!searchQuery.value.trim()) return units;
-    return units.filter(unit => toolsOf(unit).length > 0);
+    if (searchMode.value) {
+      // 跨分类搜索：全部分类的提供者中，有匹配工具的才显示
+      return categories.value
+        .flatMap(cat => cat.providers)
+        .filter(unit => toolsOf(unit).length > 0);
+    }
+    // 常规视图展示当前分类全部提供者（含 0 工具的，空态由页面分支处理）
+    return activeCategoryData.value?.providers ?? [];
   });
 
-  watch(activeCategory, () => {
-    searchQuery.value = '';
+  // 「工具」chip 的计数：搜索模式 = 跨分类匹配总数；常规模式 = 当前分类工具数
+  const activeToolCount = computed(() => {
+    if (searchMode.value) {
+      return visibleProviders.value.reduce((sum, unit) => sum + toolsOf(unit).length, 0);
+    }
+    return categoryNav.value.find(c => c.category === activeCategory.value)?.toolCount ?? 0;
   });
 
   return {
@@ -140,6 +154,8 @@ export function useToolCatalog() {
     activeEnabledCount,
     pendingRestartCount,
     searchQuery,
+    searchMode,
+    activeToolCount,
     toolsOf,
     visibleProviders,
   };

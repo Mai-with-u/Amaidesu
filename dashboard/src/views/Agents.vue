@@ -3,110 +3,67 @@
     <!-- 主网格：左 240px Agent 列表 + 右 flex-1 详情 -->
     <div class="agents-page">
       <!-- LEFT：Agent 列表（narrow, 240px） -->
-      <aside class="md-list-panel" aria-label="Agent 列表">
-        <header class="md-list-header">
-          <div class="md-list-header-main">
-            <h2 class="md-list-title">Agent</h2>
-            <span class="md-list-count">
-              <span class="md-list-count-running">{{ startedCount }}</span>
-              <span class="md-list-count-unit">运行</span>
-              <span class="md-list-count-divider">·</span>
-              <span class="md-list-count-total">共 {{ totalCount }}</span>
-            </span>
-          </div>
+      <ComponentListPanel
+        title="Agent"
+        list-label="Agent 列表"
+        :items="listItems"
+        :selected-key="selectedName"
+        :loading="loading"
+        :error="componentsStore.error"
+        empty-text="暂无 Agent"
+        :count-running="startedCount"
+        :count-total="totalCount"
+        @select="select"
+        @retry="componentsStore.fetchComponents()"
+      >
+        <template #batch>
           <!-- 批量启停影响所有 Agent（直播中误点全部停止会直接停摆），先确认再执行 -->
-          <div class="md-batch-actions">
-            <el-button
-              type="success"
-              plain
-              class="batch-btn"
-              :loading="batchLoading === 'start'"
-              :disabled="totalCount === 0 || startedCount === totalCount"
-              title="启动全部 Agent"
-              @click="handleBatch('start')"
-            >
-              全部启动
-            </el-button>
-            <el-button
-              type="danger"
-              plain
-              class="batch-btn"
-              :loading="batchLoading === 'stop'"
-              :disabled="totalCount === 0 || startedCount === 0"
-              title="停止全部 Agent"
-              @click="handleBatch('stop')"
-            >
-              全部停止
-            </el-button>
-          </div>
-        </header>
-
-        <!-- 动态主从状态与导演一键切权入口（后端未注入时自动隐藏，不占空间） -->
-        <div class="md-lead-slot">
-          <AgentLeadControl block />
-        </div>
-
-        <div v-if="totalCount === 0 && !loading" class="md-list-empty">
-          <el-empty :image-size="64" description="暂无 Agent" />
-        </div>
-        <ul v-else class="md-list" role="listbox">
-          <li
-            v-for="a in agentsList"
-            :key="a.name"
-            class="md-row"
-            :class="{
-              'is-selected': a.name === selectedName,
-              'is-running': a.is_started,
-              'is-stopped': !a.is_started && a.is_enabled,
-              'is-disabled': !a.is_enabled,
-            }"
-            role="option"
-            :aria-selected="a.name === selectedName"
-            @click="select(a.name)"
-            tabindex="0"
-            @keydown.enter.prevent="select(a.name)"
-            @keydown.space.prevent="select(a.name)"
+          <el-button
+            type="success"
+            plain
+            class="batch-btn"
+            :loading="batchLoading === 'start'"
+            :disabled="totalCount === 0 || startedCount === totalCount"
+            title="启动全部 Agent"
+            @click="handleBatch('start')"
           >
-            <span class="md-status-dot" aria-hidden="true" />
-            <span class="md-row-name" :title="a.name">{{ a.name }}</span>
-            <el-tag
-              v-if="a.is_started"
-              size="small"
-              type="success"
-              effect="plain"
-              class="md-running-tag"
-            >
-              运行
-            </el-tag>
-          </li>
-        </ul>
-      </aside>
+            全部启动
+          </el-button>
+          <el-button
+            type="danger"
+            plain
+            class="batch-btn"
+            :loading="batchLoading === 'stop'"
+            :disabled="totalCount === 0 || startedCount === 0"
+            title="停止全部 Agent"
+            @click="handleBatch('stop')"
+          >
+            全部停止
+          </el-button>
+        </template>
+        <template #below-header>
+          <!-- 动态主从状态与导演一键切权入口（后端未注入时自动隐藏，不占空间） -->
+          <div class="md-lead-slot">
+            <AgentLeadControl block />
+          </div>
+        </template>
+      </ComponentListPanel>
 
       <!-- RIGHT：详情（按 Agent 类型分视图） -->
       <main class="md-detail-panel" aria-label="Agent 详情">
         <template v-if="selected">
           <!-- 详情头：名称 + 状态 + 操作。档案页以查看为主：状态标签是头部
                最大权重元素，启停/暂停恢复为次要样式，高风险动作收进"更多" -->
-          <header class="md-detail-header">
-            <div class="md-detail-title-block">
-              <div class="md-detail-title-row">
-                <h1 class="md-detail-name">{{ selected.name }}</h1>
-                <el-tag
-                  size="large"
-                  :type="selected.is_started ? 'success' : selected.is_enabled ? 'warning' : 'info'"
-                  effect="dark"
-                  class="md-status-tag"
-                >
-                  {{ statusLabel(selected) }}
-                </el-tag>
-                <span class="md-type-chip">类型：Agent</span>
-              </div>
-              <p class="md-detail-description">
-                {{ selected.description || '（暂无描述）' }}
-              </p>
-            </div>
-            <div class="md-detail-actions">
-              <!-- 启动/停止互斥：同一时刻只渲染可用的一项 -->
+          <DetailHeader
+            :name="selected.name"
+            :status-label="statusLabel(selected)"
+            :status-type="statusType"
+            status-size="large"
+            type-chip="类型：Agent"
+            :description="selected.description"
+          >
+            <template #actions>
+              <!-- 启动/停止互斥：同一时刻只渲染可用的一项；停止与关机同标准先确认 -->
               <el-button
                 v-if="!selected.is_started"
                 type="primary"
@@ -120,13 +77,13 @@
                 v-else
                 plain
                 :loading="actionLoading[`${selected.name}-stop`]"
-                @click="handleControl('stop')"
+                @click="handleStopWithConfirm"
               >
                 停止
               </el-button>
               <!-- 暂停/恢复互斥：同理只渲染可用的一项 -->
               <el-button
-                v-if="selectedState !== 'paused'"
+                v-if="selectedState !== '已暂停'"
                 plain
                 :disabled="!agentStateOf(selected.name)"
                 :loading="controlLoading[`${selected.name}-pause`]"
@@ -161,43 +118,23 @@
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
-            </div>
-          </header>
+            </template>
+          </DetailHeader>
 
           <!-- 元信息条：状态 / 心跳 / 重启 / 最近决策（启停与存活由标题 tag 与心跳新鲜度表达） -->
-          <div class="md-details-strip" aria-label="状态摘要">
-            <div class="md-stat-chip">
-              <span class="md-chip-label">状态</span>
-              <span class="md-chip-value mono">{{ selectedState }}</span>
-            </div>
-            <div class="md-stat-chip">
-              <span class="md-chip-label">心跳</span>
-              <span
-                class="md-chip-value mono"
-                :class="heartbeatTone"
-                title="距上次心跳的时间；超时由守护线程判定失活"
+          <StatChipBar :chips="detailChips">
+            <template #append>
+              <el-button
+                text
+                aria-label="刷新状态"
+                title="刷新状态"
+                :loading="stateRefreshing"
+                @click="refreshAgentStates()"
               >
-                {{ heartbeatLabel }}
-              </span>
-            </div>
-            <div class="md-stat-chip">
-              <span class="md-chip-label">重启</span>
-              <span class="md-chip-value mono">{{ selectedInfo?.restart_count ?? '—' }}</span>
-            </div>
-            <div class="md-stat-chip md-stat-chip--accent">
-              <span class="md-chip-label">最近决策</span>
-              <span class="md-chip-value mono">{{ latestDecisionLabel }}</span>
-            </div>
-            <el-button
-              text
-              aria-label="刷新状态"
-              title="刷新状态"
-              :loading="stateRefreshing"
-              @click="refreshAgentStates()"
-            >
-              <el-icon><refresh /></el-icon>
-            </el-button>
-          </div>
+                <el-icon><refresh /></el-icon>
+              </el-button>
+            </template>
+          </StatChipBar>
 
           <!-- 详情主体按 Agent 类型分视图：主播 = 决策轮决定卡；
                minecraft = 活任务板（进行中可取消 + 已完结折叠）；其他 = 占位 -->
@@ -434,6 +371,11 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import AgentLeadControl from '@/components/agents/AgentLeadControl.vue';
 import DecisionRoundCard from '@/components/agents/DecisionRoundCard.vue';
+import ComponentListPanel from '@/components/master-detail/ComponentListPanel.vue';
+import type { ListPanelItem } from '@/components/master-detail/ComponentListPanel.vue';
+import DetailHeader from '@/components/master-detail/DetailHeader.vue';
+import StatChipBar from '@/components/master-detail/StatChipBar.vue';
+import type { StatChip } from '@/components/master-detail/StatChipBar.vue';
 import {
   MINECRAFT_AGENT_NAME,
   STREAMER_AGENT_NAME,
@@ -464,6 +406,17 @@ const { events } = storeToRefs(eventsStore);
 
 const totalCount = computed(() => agentsList.value.length);
 const startedCount = computed(() => agentsList.value.filter(a => a.is_started).length);
+
+// 左栏列表行（共享面板数据形态）
+const listItems = computed<ListPanelItem[]>(() =>
+  agentsList.value.map(a => ({
+    key: a.name,
+    name: a.name,
+    isStarted: a.is_started,
+    isEnabled: a.is_enabled,
+    tag: a.is_started ? '运行' : null,
+  })),
+);
 
 // 主从通用逻辑：选中保持 / 启停控制 / 批量 / 状态文案。
 // 本页不渲染事件流水，mapEvent 置空（共享逻辑保留，Collectors 页还在用）
@@ -539,7 +492,21 @@ const selectedInfo = computed<AgentInfo | null>(() =>
   selectedName.value ? agentStateOf(selectedName.value) : null,
 );
 
-const selectedState = computed<string>(() => selectedInfo.value?.state ?? '—');
+/** AgentState 后端枚举 → 中文标签（值域见 src/modules/agents/base.py AgentState） */
+const AGENT_STATE_LABELS: Record<string, string> = {
+  created: '已创建',
+  starting: '启动中',
+  running: '运行中',
+  paused: '已暂停',
+  stopping: '停止中',
+  stopped: '已停止',
+  errored: '异常',
+};
+
+const selectedState = computed<string>(() => {
+  const s = selectedInfo.value?.state;
+  return s ? (AGENT_STATE_LABELS[s] ?? s) : '—';
+});
 
 // 相对时间的时钟源：共享 tick 驱动心跳/轨迹/最近决策的时间自动更新
 const nowMs = useNowTick();
@@ -557,11 +524,18 @@ const heartbeatLabel = computed<string>(() => {
 });
 
 // 新鲜度着色：失活（守护判定）红色；失活与否未知但明显滞后（>60s，默认心跳间隔 10s 的 6 倍）黄色
-const heartbeatTone = computed<string>(() => {
+const heartbeatTone = computed<StatChip['tone']>(() => {
   const info = selectedInfo.value;
-  if (!info || heartbeatAgeSec.value === null) return '';
-  if (!info.is_alive) return 'md-chip-dead';
-  return heartbeatAgeSec.value > 60 ? 'md-chip-stale' : 'md-chip-ok';
+  if (!info || heartbeatAgeSec.value === null) return undefined;
+  if (!info.is_alive) return 'dead';
+  return heartbeatAgeSec.value > 60 ? 'stale' : 'ok';
+});
+
+// 详情头状态标签三态（状态摘要条 detailChips 在最近决策指标定义之后组装）
+const statusType = computed<'success' | 'warning' | 'info'>(() => {
+  const a = selected.value;
+  if (!a) return 'info';
+  return a.is_started ? 'success' : a.is_enabled ? 'warning' : 'info';
 });
 
 // pause/resume/shutdown 走框架级控制端点；shutdown 为高风险动作，确认后才携带 confirm: true
@@ -636,6 +610,17 @@ async function handleBatch(action: 'start' | 'stop'): Promise<void> {
   await runBatch(action);
 }
 
+// 详情头的「停止」与重启/关机同标准先确认（批量停止有确认，单停也不裸奔）
+async function handleStopWithConfirm(): Promise<void> {
+  const name = selectedName.value;
+  if (!name) return;
+  const ok = await confirmAction(`确认停止「${name}」？该 Agent 将停止运行（可再次启动）`, '停止确认', {
+    confirmButtonText: '确认停止',
+  });
+  if (!ok) return;
+  await handleControl('stop');
+}
+
 // 既有重启语义（组件控制端点）不动，仅补确认框
 async function handleRestartWithConfirm(): Promise<void> {
   const name = selectedName.value;
@@ -700,6 +685,22 @@ const latestDecisionLabel = computed<string>(() => {
     }
   }
   return '—';
+});
+
+// 状态摘要条（状态 chip 样式由共享 StatChipBar 承载）
+const detailChips = computed<StatChip[]>(() => {
+  if (!selected.value) return [];
+  return [
+    { label: '状态', value: selectedState.value, tone: 'mono' },
+    {
+      label: '心跳',
+      value: heartbeatLabel.value,
+      tone: heartbeatTone.value ?? 'mono',
+      title: '距上次心跳的时间；超时由守护线程判定失活',
+    },
+    { label: '重启', value: String(selectedInfo.value?.restart_count ?? '—'), tone: 'mono' },
+    { label: '最近决策', value: latestDecisionLabel.value, tone: 'mono', accent: true },
+  ];
 });
 
 // 工具：相对时间

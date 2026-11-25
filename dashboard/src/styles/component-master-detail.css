@@ -64,6 +64,12 @@
   color: var(--text-regular);
 }
 
+.md-list-count-unit,
+.md-list-count-suffix {
+  color: var(--text-placeholder);
+  margin-left: 2px;
+}
+
 .md-batch-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -75,12 +81,22 @@
   width: 100%;
 }
 
+/* 插槽里只放一个动作（如工具页的刷新）时占满整行，不留半行空位 */
+.md-batch-actions > :only-child {
+  grid-column: 1 / -1;
+}
+
 .md-list-empty {
   padding: var(--spacing-lg) var(--spacing-sm);
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.md-list-error {
+  margin: var(--spacing-sm);
+  flex-shrink: 0;
 }
 
 .md-list {
@@ -247,6 +263,10 @@
   max-width: 720px;
 }
 
+.md-detail-links {
+  margin-top: var(--spacing-sm);
+}
+
 .md-detail-actions {
   display: flex;
   align-items: center;
@@ -276,6 +296,11 @@
 
 .md-stat-chip--accent {
   background: var(--md-accent-bg);
+  border-color: transparent;
+}
+
+.md-stat-chip--warning {
+  background: var(--color-warning-bg, rgba(230, 162, 60, 0.1));
   border-color: transparent;
 }
 

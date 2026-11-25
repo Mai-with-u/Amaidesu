@@ -1,76 +1,35 @@
 <template>
   <div class="tools-page">
     <!-- LEFT：分类列表（narrow, 240px）                                   -->
-    <aside class="list-panel" aria-label="工具提供者分类">
-      <header class="list-header">
-        <div class="list-header-main">
-          <h2 class="list-title">工具分类</h2>
-          <span class="list-count">
-            <span class="list-count-on">{{ totalToolCount }}</span>
-            <span class="list-count-suffix">个工具</span>
-          </span>
-        </div>
-        <div class="list-header-actions">
-          <el-button :loading="loading" @click="refreshAll">刷新</el-button>
-        </div>
-      </header>
-
-      <div v-if="loading" class="list-empty">
-        <el-skeleton :rows="4" animated />
-      </div>
-      <el-alert
-        v-else-if="error"
-        :title="error"
-        type="error"
-        :closable="false"
-        show-icon
-        class="list-error"
-      >
-        <el-button type="primary" @click="refreshAll">重试</el-button>
-      </el-alert>
-      <div v-else-if="categoryNav.length === 0" class="list-empty">
-        <el-empty :image-size="64" description="暂无分类数据" />
-      </div>
-      <ul v-else class="category-list" role="listbox">
-        <li
-          v-for="cat in categoryNav"
-          :key="cat.category"
-          class="category-row"
-          :class="{
-            'is-selected': cat.category === activeCategory,
-            'is-on': cat.enabledCount > 0,
-            'is-off': cat.enabledCount === 0,
-          }"
-          role="option"
-          :aria-selected="cat.category === activeCategory"
-          tabindex="0"
-          @keydown.enter.prevent="selectCategory(cat.category)"
-          @keydown.space.prevent="selectCategory(cat.category)"
-          @click="selectCategory(cat.category)"
-        >
-          <span class="status-dot" aria-hidden="true" />
-          <span class="category-name">{{ cat.label }}</span>
-          <el-tag size="small" effect="plain" type="info" class="count-tag">
-            {{ cat.toolCount }}
-          </el-tag>
-        </li>
-      </ul>
-    </aside>
+    <ComponentListPanel
+      title="工具分类"
+      list-label="工具提供者分类"
+      :items="listItems"
+      :selected-key="activeCategory"
+      :loading="loading"
+      :error="error"
+      empty-text="暂无分类数据"
+      :count-total="totalToolCount"
+      count-suffix="个工具"
+      @select="selectCategory"
+      @retry="refreshAll"
+    >
+      <template #batch>
+        <el-button :loading="loading" @click="refreshAll">刷新</el-button>
+      </template>
+    </ComponentListPanel>
 
     <!-- RIGHT：分类详情 + 提供者分组                                      -->
-    <main class="detail-panel" aria-label="分类详情">
+    <main class="md-detail-panel" aria-label="分类详情">
       <template v-if="activeCategoryData">
-        <!-- 分类头：名称 + 描述 + 搜索 -->
-        <header class="detail-header">
-          <div class="detail-title-block">
-            <div class="detail-title-row">
-              <h1 class="detail-name">{{ activeMeta.label }}</h1>
-              <span class="type-chip mono">{{ activeCategory }}</span>
-            </div>
-            <p class="detail-description">{{ activeMeta.description }}</p>
-          </div>
-          <div class="detail-actions">
-            <div v-if="bulkSwitchable" class="bulk-switch">
+        <!-- 分类头：名称 + 描述 + 搜索（搜索词非空时整页切到跨分类搜索结果视图） -->
+        <DetailHeader
+          :name="headerTitle"
+          :type-chip="headerChip"
+          :description="headerDescription"
+        >
+          <template #actions>
+            <div v-if="bulkSwitchable && !searchMode" class="bulk-switch">
               <span class="bulk-label">全部启用</span>
               <el-switch
                 :model-value="bulkState === 'all'"
@@ -81,43 +40,29 @@
             </div>
             <el-input
               v-model="searchQuery"
-              placeholder="搜索工具名或描述"
+              placeholder="搜索工具名或描述（跨分类）"
               clearable
               :prefix-icon="Search"
               class="search-input"
             />
-          </div>
-        </header>
+          </template>
+        </DetailHeader>
 
         <!-- 元信息条 -->
-        <div class="details-strip" aria-label="状态摘要">
-          <div class="stat-chip">
-            <span class="chip-label">工具</span>
-            <span class="chip-value mono">{{ totalToolCount }}</span>
-          </div>
-          <div class="stat-chip">
-            <span class="chip-label">启用提供者</span>
-            <span class="chip-value">
-              <span class="chip-yes">{{ activeEnabledCount }}</span>
-              <span class="chip-divider">/</span>
-              <span>{{ activeSwitchableCount }}</span>
-            </span>
-          </div>
-          <div v-if="pendingRestartCount > 0" class="stat-chip stat-chip--warning">
-            <span class="chip-label">待重启</span>
-            <span class="chip-value">{{ pendingRestartCount }}</span>
-          </div>
-        </div>
+        <StatChipBar :chips="detailChips" />
 
         <!-- 提供者分组 -->
         <section class="provider-panel" aria-label="提供者列表">
-          <!-- 视觉分类专属：显示器选择 + 预览叠框 + 拖框落盘（独立组件） -->
-          <VisionCapturePanel v-if="activeCategory === 'vision'" class="vision-panel-mount" />
+          <!-- 视觉分类专属：显示器选择 + 预览叠框 + 拖框落盘（独立组件；搜索模式不挂） -->
+          <VisionCapturePanel
+            v-if="activeCategory === 'vision' && !searchMode"
+            class="vision-panel-mount"
+          />
 
-          <div v-if="(activeCategoryData?.providers ?? []).length === 0" class="detail-empty">
+          <div v-if="(activeCategoryData?.providers ?? []).length === 0" class="md-detail-empty">
             <el-empty description="该分类下没有提供者" />
           </div>
-          <div v-else-if="visibleProviders.length === 0" class="detail-empty">
+          <div v-else-if="visibleProviders.length === 0" class="md-detail-empty">
             <el-empty description="没有匹配的工具" :image-size="64" />
           </div>
           <article v-for="unit in visibleProviders" v-else :key="unit.key" class="provider-card">
@@ -273,7 +218,7 @@
         </section>
       </template>
 
-      <div v-else class="detail-empty full">
+      <div v-else class="md-detail-empty full">
         <el-empty description="从左侧选择一个分类查看提供者与工具" />
       </div>
     </main>
@@ -429,11 +374,16 @@
  * 调试调用（useToolDetail）、WS 熔断状态（useToolHealth）。
  * 本组件只做装配与初始加载。
  */
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import VisionCapturePanel from '@/components/vision/VisionCapturePanel.vue';
+import ComponentListPanel from '@/components/master-detail/ComponentListPanel.vue';
+import type { ListPanelItem } from '@/components/master-detail/ComponentListPanel.vue';
+import DetailHeader from '@/components/master-detail/DetailHeader.vue';
+import StatChipBar from '@/components/master-detail/StatChipBar.vue';
+import type { StatChip } from '@/components/master-detail/StatChipBar.vue';
 import { useToolCatalog } from '@/composables/tools/useToolCatalog';
 import { useToolControls } from '@/composables/tools/useToolControls';
 import { useToolDetail } from '@/composables/tools/useToolDetail';
@@ -456,6 +406,8 @@ const {
   activeEnabledCount,
   pendingRestartCount,
   searchQuery,
+  searchMode,
+  activeToolCount,
   toolsOf,
   visibleProviders,
 } = useToolCatalog();
@@ -496,6 +448,42 @@ const {
 
 const { healthTooltip } = useToolHealth(tools);
 
+// 左栏分类行（共享面板数据形态；tag 显示该分类工具数）
+const listItems = computed<ListPanelItem[]>(() =>
+  categoryNav.value.map(cat => ({
+    key: cat.category,
+    name: cat.label,
+    isStarted: cat.enabledCount > 0,
+    isEnabled: cat.enabledCount > 0,
+    tag: String(cat.toolCount),
+    tagType: 'info' as const,
+  })),
+);
+
+// 分类头文案：搜索模式切到搜索结果视图（详情头/chip 随之切换语义）
+const headerTitle = computed(() => (searchMode.value ? '搜索结果' : activeMeta.value.label));
+const headerChip = computed(() => (searchMode.value ? 'search' : activeCategory.value));
+const headerDescription = computed(() =>
+  searchMode.value
+    ? `跨分类匹配「${searchQuery.value.trim()}」的工具`
+    : activeMeta.value.description,
+);
+
+// 元信息条：工具数（搜索模式 = 匹配总数，常规 = 当前分类数；不再显示与分类无关的全局数）
+const detailChips = computed<StatChip[]>(() => {
+  const chips: StatChip[] = [{ label: '工具', value: String(activeToolCount.value), tone: 'mono' }];
+  if (!searchMode.value) {
+    chips.push({
+      label: '启用提供者',
+      value: `${activeEnabledCount.value} / ${activeSwitchableCount.value}`,
+    });
+  }
+  if (pendingRestartCount.value > 0) {
+    chips.push({ label: '待重启', value: String(pendingRestartCount.value), warning: true });
+  }
+  return chips;
+});
+
 onMounted(() => {
   void refreshAll();
 });
@@ -511,234 +499,8 @@ onMounted(() => {
   min-height: 640px;
 }
 
-/* LEFT：分类列表                                                */
-.list-panel {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-lg);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.list-header {
-  padding: var(--spacing-md);
-  border-bottom: 1px solid var(--border-color-light);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-  background: var(--bg-card);
-  flex-shrink: 0;
-}
-
-.list-header-main {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--spacing-sm);
-}
-
-.list-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.list-count {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
-  display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
-}
-
-.list-count-on {
-  color: var(--color-tool);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.list-count-suffix {
-  color: var(--text-placeholder);
-}
-
-.list-header-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.list-header-actions :deep(.el-button) {
-  margin-left: 0;
-  width: 100%;
-}
-
-.list-error {
-  margin: var(--spacing-sm);
-  flex-shrink: 0;
-}
-
-.list-empty {
-  padding: var(--spacing-lg) var(--spacing-sm);
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.category-list {
-  list-style: none;
-  margin: 0;
-  padding: var(--spacing-xs);
-  overflow-y: auto;
-  flex: 1;
-}
-
-.category-list::-webkit-scrollbar {
-  width: 6px;
-}
-.category-list::-webkit-scrollbar-thumb {
-  background: var(--border-color-dark);
-  border-radius: 3px;
-}
-
-.category-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    transform var(--transition-fast);
-  margin-bottom: 2px;
-  user-select: none;
-}
-
-.category-row:hover {
-  background: var(--bg-hover);
-}
-
-.category-row.is-selected {
-  background: var(--color-tool-bg);
-  box-shadow: inset 3px 0 0 0 var(--color-tool);
-}
-
-.category-row.is-selected .category-name {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  border: 1.5px solid var(--text-placeholder);
-  background: transparent;
-  transition: background var(--transition-normal);
-}
-
-.category-row.is-on .status-dot {
-  background: var(--color-tool);
-  border-color: var(--color-tool);
-}
-
-.category-row.is-off .status-dot {
-  border-style: solid;
-  border-color: var(--text-placeholder);
-  background: transparent;
-}
-
-.category-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  color: var(--text-regular);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.count-tag {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  height: 18px;
-  padding: 0 6px;
-  line-height: 16px;
-}
-
-/* RIGHT：详情面板                                               */
-.detail-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-  min-width: 0;
-  overflow: hidden;
-}
-
-/* 分类头 */
-.detail-header {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-md) var(--spacing-lg);
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--spacing-md);
-  flex-shrink: 0;
-}
-
-.detail-title-block {
-  flex: 1;
-  min-width: 0;
-}
-
-.detail-title-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  flex-wrap: wrap;
-}
-
-.detail-name {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-  letter-spacing: -0.01em;
-}
-
-.type-chip {
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 2px 8px;
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-sm);
-  background: var(--bg-page);
-}
-
-.detail-description {
-  font-size: 13px;
-  color: var(--text-regular);
-  margin: var(--spacing-sm) 0 0;
-  line-height: 1.6;
-  max-width: 720px;
-}
-
-.detail-actions {
-  display: flex;
-  gap: var(--spacing-sm);
-  flex-shrink: 0;
-  align-items: center;
-}
-
+/* 左栏列表 / 详情头 / 状态摘要条样式已并入共享 component-master-detail.css；
+   本页只留工具域特有样式 */
 .search-input {
   width: 240px;
 }
@@ -781,52 +543,6 @@ onMounted(() => {
   border-radius: 50%;
   background: var(--color-success);
   opacity: 0.45;
-}
-
-/* 元信息条 */
-.details-strip {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-
-.stat-chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 6px 12px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-md);
-  font-size: 12px;
-}
-
-.stat-chip--warning {
-  background: var(--color-warning-bg, rgba(230, 162, 60, 0.1));
-  border-color: transparent;
-}
-
-.chip-label {
-  color: var(--text-secondary);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.chip-value {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.chip-yes {
-  color: var(--color-tool);
-}
-
-.chip-divider {
-  color: var(--text-placeholder);
-  margin: 0 2px;
 }
 
 /* 提供者分组：主面板 */
@@ -956,19 +672,12 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* Empty                                                         */
-.detail-empty {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-lg);
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* Empty（共享 md-detail-empty 之上补工具页的最小高度特例）       */
+.md-detail-empty {
   min-height: 200px;
 }
 
-.detail-empty.full {
+.md-detail-empty.full {
   min-height: 320px;
 }
 
@@ -1202,10 +911,6 @@ onMounted(() => {
   .tools-page {
     grid-template-columns: 200px minmax(0, 1fr);
   }
-
-  .detail-name {
-    font-size: 20px;
-  }
 }
 
 @media (max-width: 768px) {
@@ -1213,15 +918,6 @@ onMounted(() => {
     grid-template-columns: 1fr;
     height: auto;
     min-height: 0;
-  }
-
-  .list-panel {
-    max-height: 280px;
-  }
-
-  .detail-header {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .search-input {
