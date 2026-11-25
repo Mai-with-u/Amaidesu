@@ -174,3 +174,49 @@ async def test_list_session_game_events_sampled_covers_full_span_and_prioritizes
     assert "交付：建成动力磨坊" in messages
     assert any(msg.startswith("后半场事件 #") for msg in messages)
     assert all(not ev.event_type.startswith(("place_", "delegation_")) for ev in sampled)
+
+
+async def test_list_session_game_events_filters_by_event_types_and_samples_task_succeeded(
+    store: SQLiteDatabase,
+) -> None:
+    """event_types 白名单过滤让高频 attention_required 不挤掉前半场 task_succeeded；分桶采样优先保单步成功与交付。"""
+    sid = await _session(store, 1_000_000)
+    await store.events.insert_game_event(
+        live_session_id=sid,
+        game="minecraft",
+        event_type="task_succeeded",
+        message="对动力压机使用成功，压出 4 块铁板",
+        timestamp_ms=1_001_000,
+    )
+    await store.events.insert_game_event(
+        live_session_id=sid,
+        game="minecraft",
+        event_type="item_delivery",
+        message="朝同伴扔出 2 个木板",
+        timestamp_ms=1_002_000,
+    )
+    for idx in range(70):
+        await store.events.insert_game_event(
+            live_session_id=sid,
+            game="minecraft",
+            event_type="attention_required",
+            message=f"常规告警 #{idx}",
+            timestamp_ms=1_010_000 + idx * 1_000,
+        )
+
+    # 未过滤时最近 60 条全被 attention_required 占满
+    tail_all = await store.events.list_session_game_events(live_session_id=sid, limit=60)
+    assert all(ev.event_type == "attention_required" for ev in tail_all)
+
+    # 按作证白名单过滤时，前半场 task_succeeded 与 item_delivery 完整保留
+    proof_only = await store.events.list_session_game_events(
+        live_session_id=sid,
+        limit=60,
+        event_types=("milestone", "report", "dimension_changed", "item_delivery", "task_succeeded"),
+    )
+    assert [ev.event_type for ev in proof_only] == ["task_succeeded", "item_delivery"]
+
+    # 跨时段采样同样优先保留高信号 task_succeeded 与 item_delivery
+    sampled = await store.events.list_session_game_events_sampled(live_session_id=sid, limit=20)
+    sampled_types = {ev.event_type for ev in sampled}
+    assert {"task_succeeded", "item_delivery"} <= sampled_types

@@ -695,3 +695,112 @@ async def test_stop_unsubscribes_item_delivery_body_events(
         ),
     )
     assert await store.events.list_session_game_events(live_session_id=_FAKE_PK) == []
+
+
+async def test_provider_task_succeeded_persists_deduped_and_skips_noise(
+    ledger: StorageLedger,
+    store: SQLiteDatabase,
+    event_bus: EventBus,
+) -> None:
+    """provider 型 task.changed 终态 succeeded 经去重降噪落库为 task_succeeded，空摘要/失败/告警/非游戏归属不落库。"""
+    # 带 purpose + summary 的单步成功（如 use / fish / drop）落库，归属 game=initiator
+    await _emit(
+        event_bus,
+        CoreEvents.TASK_CHANGED,
+        TaskChangedPayload(
+            task_id="maicraft-goal-1",
+            status="succeeded",
+            summary="钓到了 1 条鳕鱼",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            snapshot={"ability": "maicraft:fish", "purpose": "在河边钓鱼", "save_id": "s1", "save_name": "生存档"},
+            timestamp_ms=10_000,
+        ),
+    )
+    # 短窗内完全相同的重复成功去重折叠
+    await _emit(
+        event_bus,
+        CoreEvents.TASK_CHANGED,
+        TaskChangedPayload(
+            task_id="maicraft-goal-2",
+            status="succeeded",
+            summary="钓到了 1 条鳕鱼",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            snapshot={"ability": "maicraft:fish", "purpose": "在河边钓鱼", "save_id": "s1", "save_name": "生存档"},
+            timestamp_ms=15_000,
+        ),
+    )
+    # 超过去重窗或不同内容的成功照常落库（仅 summary 无 purpose）
+    await _emit(
+        event_bus,
+        CoreEvents.TASK_CHANGED,
+        TaskChangedPayload(
+            task_id="maicraft-goal-3",
+            status="succeeded",
+            summary="对动力合成器使用成功，放入 1 个铁锭",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            snapshot={"ability": "maicraft:use"},
+            timestamp_ms=25_000,
+        ),
+    )
+    # 噪声与非游戏归属过滤：空摘要、TaskLedger 占位文案、非 succeeded、alert=True 与 streamer 归属均不落库
+    for noisy in (
+        TaskChangedPayload(
+            task_id="g-empty",
+            status="succeeded",
+            summary="",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            timestamp_ms=30_000,
+        ),
+        TaskChangedPayload(
+            task_id="g-synth",
+            status="succeeded",
+            summary="状态变化 running -> succeeded",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            timestamp_ms=31_000,
+        ),
+        TaskChangedPayload(
+            task_id="g-fail",
+            status="failed",
+            summary="使用失败",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            timestamp_ms=32_000,
+        ),
+        TaskChangedPayload(
+            task_id="g-alert",
+            status="succeeded",
+            summary="告警",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            alert=True,
+            timestamp_ms=33_000,
+        ),
+        TaskChangedPayload(
+            task_id="s-non-game",
+            status="succeeded",
+            summary="后台整理完成",
+            initiator="streamer",
+            executor="internal_provider",
+            source="provider",
+            timestamp_ms=34_000,
+        ),
+    ):
+        await _emit(event_bus, CoreEvents.TASK_CHANGED, noisy)
+
+    rows = await store.events.list_session_game_events(live_session_id=_FAKE_PK)
+    assert [(r.game, r.event_type, r.message, r.save_id, r.save_name) for r in rows] == [
+        ("minecraft", "task_succeeded", "在河边钓鱼：钓到了 1 条鳕鱼", "s1", "生存档"),
+        ("minecraft", "task_succeeded", "对动力合成器使用成功，放入 1 个铁锭", "", ""),
+    ]

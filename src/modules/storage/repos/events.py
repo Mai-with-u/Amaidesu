@@ -45,8 +45,17 @@ _QUEUED_INTERRUPTED_SUMMARY = "重启前在待办排队，被打断了，还没�
 _IS_DELEGATION_EVENT = f"substr(event_type, 1, {len(DELEGATION_EVENT_PREFIX)}) = '{DELEGATION_EVENT_PREFIX}'"
 # 读游戏进展、按类型计数只看真正的游戏事件：地点动静与委派账都不算
 _GAME_PROGRESS_EVENT = f"{_NOT_PLACE_EVENT} AND NOT ({_IS_DELEGATION_EVENT})"
-# 跨全时段采样时优先保留的高信号游戏事件类型（跨维度/阵亡最稀缺关键，其次阶段汇报与里程碑）
-OVERVIEW_HIGH_SIGNAL_EVENT_TYPES: Tuple[str, ...] = ("dimension_changed", "died", "report", "milestone")
+# 单步/外部工具任务终态成功事件类型（由 task.changed 的 provider 型 succeeded 终态去重降噪落库）
+TASK_SUCCEEDED_EVENT = "task_succeeded"
+# 跨全时段采样时优先保留的高信号游戏事件类型（跨维度/阵亡最稀缺关键，其次阶段汇报、物品交付、单步成功与里程碑）
+OVERVIEW_HIGH_SIGNAL_EVENT_TYPES: Tuple[str, ...] = (
+    "dimension_changed",
+    "died",
+    "report",
+    "item_delivery",
+    TASK_SUCCEEDED_EVENT,
+    "milestone",
+)
 _CRITICAL_SIGNAL_EVENT_TYPES: frozenset[str] = frozenset({"dimension_changed", "died"})
 # 全时段采样单场读取安全上界，避免异常刷屏事件导致内存膨胀
 _SAMPLED_SCAN_CAP: int = 5000
@@ -210,16 +219,34 @@ class EventRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_session_game_events(self, *, live_session_id: int, limit: int = 60) -> List[GameEventRecord]:
-        """取指定场次的游戏事件（时间正序，最多 ``limit`` 条最近的）——场次档案的游戏进展原料；不含地点动静与委派账。"""
+    async def list_session_game_events(
+        self,
+        *,
+        live_session_id: int,
+        limit: int = 60,
+        event_types: Optional[Sequence[str]] = None,
+    ) -> List[GameEventRecord]:
+        """取指定场次的游戏事件（时间正序，最多 ``limit`` 条最近的）——场次档案的游戏进展原料；不含地点动静与委派账。
+
+        传入 ``event_types`` 时只查询指定白名单事件类型，避免高频异常或告警事件挤掉下播核验所需的成功记录。
+        """
         page_limit = max(1, min(int(limit), 500))
+        allowed_types = tuple(dict.fromkeys(str(item).strip() for item in (event_types or ()) if str(item).strip()))
 
         def _exec() -> List[GameEventRecord]:
+            params: List[Any] = [int(live_session_id)]
+            type_clause = ""
+            if allowed_types:
+                placeholders = ",".join("?" for _ in allowed_types)
+                type_clause = f" AND event_type IN ({placeholders})"
+                params.extend(allowed_types)
+            params.append(page_limit)
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT game, event_type, message, scene, timestamp_ms, save_id, save_name FROM game_events"
-                    f" WHERE live_session_id=? AND {_GAME_PROGRESS_EVENT} ORDER BY timestamp_ms DESC LIMIT ?",  # noqa: S608
-                    (int(live_session_id), page_limit),
+                    f" WHERE live_session_id=? AND {_GAME_PROGRESS_EVENT}{type_clause}"  # noqa: S608
+                    " ORDER BY timestamp_ms DESC, id DESC LIMIT ?",
+                    params,
                 ).fetchall()
                 return [GameEventRecord.model_validate(dict(row)) for row in reversed(rows)]
 
@@ -539,6 +566,7 @@ __all__ = [
     "DELEGATION_INTERRUPTED",
     "DELEGATION_QUEUED",
     "OVERVIEW_HIGH_SIGNAL_EVENT_TYPES",
+    "TASK_SUCCEEDED_EVENT",
     "EventRepo",
     "sample_game_events",
 ]

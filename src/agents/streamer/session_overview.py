@@ -17,14 +17,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 from src.modules.background import BackgroundTaskRegistry
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.storage.models.sessions import LiveSession
 from src.modules.storage.models.topics import TimelineSummaryEntry
-from src.modules.storage.repos.events import OVERVIEW_HIGH_SIGNAL_EVENT_TYPES, sample_game_events
+from src.modules.storage.repos.events import OVERVIEW_HIGH_SIGNAL_EVENT_TYPES, TASK_SUCCEEDED_EVENT, sample_game_events
 from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("SessionOverviewWriter")
@@ -101,8 +101,9 @@ class SessionOverviewWriter:
             live_session_id=live_session_id, limit=_SUMMARY_SEGMENTS_MAX
         )
         events = await self._load_game_events(live_session_id)
-        if not summaries and not events:
-            # 没有话题摘要也没有游戏事件：这场没留下可概括的东西，不白花一次模型调用
+        delegations = await self._load_succeeded_delegations(live_session_id)
+        if not summaries and not events and not delegations:
+            # 没有话题摘要也没有游戏事实记录：这场没留下可概括的东西，不白花一次模型调用
             return False
 
         if self._task_registry is not None:
@@ -110,7 +111,7 @@ class SessionOverviewWriter:
                 _task_id(live_session_id), f"场次概览 #{live_session_id}", progress_text="取料中"
             )
         try:
-            prompt = self._build_prompt(session, summaries, events)
+            prompt = self._build_prompt(session, summaries, events, delegations)
             system = self._prompt_manager.render(_OVERVIEW_TEMPLATE)
             response = await self._llm.generate(prompt, profile=_OVERVIEW_PROFILE, system=system)
             content = getattr(response, "content", None)
@@ -165,11 +166,30 @@ class SessionOverviewWriter:
             logger.warning(f"场次 #{live_session_id} 读取游戏事件失败，概览将只按话题摘要生成: {exc}", exc=True)
             return []
 
+    async def _load_succeeded_delegations(self, live_session_id: int) -> List[Any]:
+        """读取本场成功交付的委派终态记录，补足概览事实源中缺失的完成结果。"""
+        if self._events is None:
+            return []
+        list_fn = getattr(self._events, "list_session_delegations", None)
+        if not callable(list_fn):
+            return []
+        try:
+            records = await list_fn(live_session_id=live_session_id)
+        except Exception as exc:  # noqa: BLE001 - 委派读不到时只按游戏事件与话题摘要生成概览
+            logger.warning(f"场次 #{live_session_id} 读取委派交付记录失败，概览将跳过委派项: {exc}", exc=True)
+            return []
+        return [
+            item
+            for item in records
+            if str(getattr(item, "status", "") or "") == "succeeded" and int(getattr(item, "ended_ms", 0) or 0) > 0
+        ]
+
     def _build_prompt(
         self,
         session: LiveSession,
         summaries: List[TimelineSummaryEntry],
         events: List[Any],
+        delegations: Optional[List[Any]] = None,
     ) -> str:
         """把这一场的原料拼成给模型的一段话（不含观众昵称）。"""
         parts: List[str] = []
@@ -184,11 +204,43 @@ class SessionOverviewWriter:
         if summaries:
             lines = [f"{_format_clock(int(item.end_ms))} {item.summary}" for item in summaries if item.summary]
             parts.append("【按时间顺序的观众话题摘要】\n" + "\n".join(lines))
-        if events:
-            lines = [
-                f"{_format_clock(int(event.timestamp_ms))} {event.message or event.event_type}" for event in events
-            ]
-            parts.append("【游戏里发生的事】\n" + "\n".join(lines))
+
+        # 合并游戏进展事件与成功交付的委派终态按时间正序排列，避免只看到失败里程碑而把已跑通的成果写反
+        game_items: List[Tuple[int, int, str]] = []
+        report_messages: List[str] = []
+        for idx, event in enumerate(events):
+            ts = int(getattr(event, "timestamp_ms", 0) or 0)
+            event_type = str(getattr(event, "event_type", "") or "")
+            msg = " ".join(str(getattr(event, "message", "") or "").split()) or event_type
+            if event_type == "report":
+                report_messages.append(msg)
+            if event_type == TASK_SUCCEEDED_EVENT and not msg.startswith(("完成", "交付", "委派")):
+                line_text = f"完成：{msg}"
+            else:
+                line_text = msg
+            game_items.append((ts, idx, f"{_format_clock(ts)} {line_text}"))
+
+        base_order = len(game_items)
+        for offset, item in enumerate(delegations or ()):
+            ended_ms = int(getattr(item, "ended_ms", 0) or 0)
+            instruction = " ".join(str(getattr(item, "instruction", "") or "").split())
+            summary = " ".join(str(getattr(item, "summary", "") or "").split()).removeprefix("delivery:").strip()
+            # 过短的委派摘要容易被无关 report 误子串命中：仅完全相等或长度至少 6 字时才按子串去重
+            if summary and any(summary == rep or (len(summary) >= 6 and summary in rep) for rep in report_messages):
+                continue
+            if instruction and summary:
+                text = f"委派完成「{instruction}」：{summary}"
+            elif summary:
+                text = f"委派完成：{summary}"
+            elif instruction:
+                text = f"委派完成「{instruction}」"
+            else:
+                continue
+            game_items.append((ended_ms, base_order + offset, f"{_format_clock(ended_ms)} {text}"))
+
+        if game_items:
+            game_items.sort(key=lambda entry: (entry[0], entry[1]))
+            parts.append("【游戏里发生的事】\n" + "\n".join(line for _, _, line in game_items))
         return "\n\n".join(parts)
 
 

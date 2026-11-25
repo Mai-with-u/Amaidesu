@@ -49,8 +49,9 @@ from src.modules.logging import get_logger
 from src.modules.storage.game_player_ledger import GamePlayerLedger
 from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.repos import ChatRepo, EventRepo, GamePlayerRepo, ViewerRepo
+from src.modules.storage.repos.events import TASK_SUCCEEDED_EVENT
 from src.modules.storage.retention import RetentionService
-from src.modules.tools.tasks import TERMINAL_TASK_STATES
+from src.modules.tools.tasks import TASK_SUCCEEDED, TERMINAL_TASK_STATES, owner_agent_of
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -67,6 +68,14 @@ _VIEWER_MESSAGE_TYPES = frozenset({"danmaku", "gift", "super_chat", "guard"})
 _DAY_MS = 86_400_000
 # 启动收尾给上一个进程留下、没了结的委派记的终态摘要（下播整理核对时读到）
 _INTERRUPTED_DELEGATION_SUMMARY = "重启前在做，被打断了，做到哪不确定"
+# provider 型任务终态成功落库时的短窗去重时长（毫秒）、单条摘要字符上限与去重表容量上限
+_PROVIDER_SUCCESS_DEDUP_MS = 10_000
+_PROVIDER_SUCCESS_SUMMARY_MAX_CHARS = 120
+_PROVIDER_DEDUP_CACHE_MAX = 64
+# TaskLedger 在调用方未提供 summary 时自动合成的占位前缀，不算有效行为事实
+_SYNTHETIC_STATUS_PREFIX = "状态变化 "
+# 非游戏 Agent 归属名单：其 provider 异步任务不属于游戏内行为事实，不写入 game_events
+_NON_GAME_AGENT_OWNERS = frozenset({"streamer"})
 
 
 class StorageLedger:
@@ -114,6 +123,8 @@ class StorageLedger:
         self._writes_in_flight = 0
         self._writes_idle = asyncio.Event()
         self._writes_idle.set()
+        # provider 型终态成功事件短窗去重表：(场次主键, 游戏名, 行为摘要) -> 最近写入时刻（毫秒）
+        self._recent_provider_success: dict[tuple[int, str, str], int] = {}
 
     def set_cleanup_on_live_ended(self, enabled: bool) -> None:
         """由主播 Agent 接管下播清理时置 False。
@@ -733,19 +744,107 @@ class StorageLedger:
             names = "、".join(f"{record.task_id}（场次 {record.live_session_id}）" for record in settled)
             logger.info(f"启动收尾：上一个进程留下 {len(settled)} 件没了结的委派，记成被打断：{names}")
 
+    @staticmethod
+    def _format_provider_success_message(payload: TaskChangedPayload) -> str:
+        """提取 provider 型终态成功任务的紧凑行为事实摘要；无有效内容或仅为占位状态文案时返回空串。"""
+        snapshot = payload.snapshot if isinstance(payload.snapshot, dict) else {}
+        raw_summary = " ".join(str(payload.summary or "").split())
+        if raw_summary.startswith(_SYNTHETIC_STATUS_PREFIX):
+            raw_summary = ""
+        if not raw_summary:
+            result_obj = snapshot.get("result")
+            if isinstance(result_obj, dict):
+                raw_summary = " ".join(str(result_obj.get("summary") or "").split())
+        purpose = " ".join(str(snapshot.get("purpose") or "").split())
+        if not raw_summary and not purpose:
+            return ""
+        if purpose and raw_summary and purpose not in raw_summary:
+            combined = f"{purpose}：{raw_summary}"
+        else:
+            combined = raw_summary or purpose
+        if len(combined) > _PROVIDER_SUCCESS_SUMMARY_MAX_CHARS:
+            return f"{combined[: _PROVIDER_SUCCESS_SUMMARY_MAX_CHARS - 1]}…"
+        return combined
+
+    @staticmethod
+    def _extract_snapshot_save(snapshot: Any) -> tuple[str, str]:
+        """从任务快照中尽力读取存档编号与显示名（缺省返回空串）。"""
+        if not isinstance(snapshot, dict):
+            return "", ""
+        save_id = str(snapshot.get("save_id") or "").strip()
+        save_name = str(snapshot.get("save_name") or "").strip()
+        if not save_id and isinstance(snapshot.get("world"), dict):
+            world = snapshot["world"]
+            save_id = str(world.get("id") or "").strip()
+            save_name = str(world.get("name") or "").strip()
+        return save_id, save_name
+
+    async def _persist_provider_task_success(self, payload: TaskChangedPayload) -> None:
+        """将 provider 型异步/单步任务的真实成功终态经去重降噪落入 game_events（event_type=task_succeeded）。
+
+        触发条件：``task.changed`` 收到 ``source='provider'`` 且 ``status='succeeded'`` 的非告警事件。
+        执行顺序：提取有效行为摘要 -> 归属所属游戏 Agent 与场次 -> 短窗去重 -> 写入 ``game_events``，
+        补齐单步成功行为的事实源，使下播核验与场次概览不再偏重失败里程碑。
+        """
+        message = self._format_provider_success_message(payload)
+        if not message:
+            return
+        game = owner_agent_of(
+            source=payload.source,
+            initiator=payload.initiator,
+            executor=payload.executor,
+        ).strip()
+        if not game or game.lower() in _NON_GAME_AGENT_OWNERS:
+            return
+        try:
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
+                logger.debug(f"provider 终态成功事件无法归属场次，跳过落库（task_id={payload.task_id}）")
+                return
+            ts = int(payload.timestamp_ms or 0)
+            dedup_key = (live_pk, game, message)
+            prev_ts = self._recent_provider_success.get(dedup_key)
+            if prev_ts is not None and abs(ts - prev_ts) <= _PROVIDER_SUCCESS_DEDUP_MS:
+                return
+            if len(self._recent_provider_success) >= _PROVIDER_DEDUP_CACHE_MAX:
+                self._recent_provider_success.clear()
+            self._recent_provider_success[dedup_key] = ts
+            save_id, save_name = self._extract_snapshot_save(payload.snapshot)
+            await self.event_repo.insert_game_event(
+                live_session_id=live_pk,
+                game=game,
+                event_type=TASK_SUCCEEDED_EVENT,
+                message=message,
+                scene=payload.task_id or None,
+                timestamp_ms=ts,
+                save_id=save_id,
+                save_name=save_name,
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(
+                f"StorageLedger 写入 provider 任务成功事件失败（task_id={payload.task_id}）：{exc}",
+                exc=True,
+            )
+
     async def _on_task_changed(
         self,
         event_name: str,
         payload: TaskChangedPayload,
         source: str,
     ) -> None:
-        """``task.changed`` 回调：委派型任务的受理与终态写成 ``delegation_*`` 游戏事件行。
+        """``task.changed`` 回调：委派型任务落 ``delegation_*`` 账，provider 型终态成功落 ``task_succeeded`` 事实行。
 
         受理行正文只存发起方自己的原话（受理时快照里的 own_words）：账面的全文附着来源对话，里面有
         观众昵称、弹幕原话与玩家游戏公屏原话，落库后删观众、删玩家只换得掉名字、换不掉原话。终态行正文
-        是终态摘要；每行都记发起方。停滞提醒、running 与等定夺这类过程变化不落，provider 型任务也不落。
+        是终态摘要；每行都记发起方。停滞提醒、running 与等定夺这类过程变化不落。
         """
-        if payload.source != "agent" or payload.alert:
+        if payload.alert:
+            return
+        if payload.source == "provider":
+            if payload.status == TASK_SUCCEEDED:
+                await self._persist_provider_task_success(payload)
+            return
+        if payload.source != "agent":
             return
         if payload.status in ("accepted", "queued"):
             # 区分受理在做与入待办排队，续播恢复据此保留排队状态而不把待办提前激活为在做

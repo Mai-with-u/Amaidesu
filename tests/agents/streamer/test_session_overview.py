@@ -179,3 +179,105 @@ async def test_write_overview_covers_early_mid_late_events_for_long_session(
     assert "交付：完成自动磨坊布线" in prompt
     assert "末段常规事件 #197" in prompt
     assert prompt.index("从主世界到了下界") < prompt.index("交付：完成自动磨坊布线") < prompt.index("末段常规事件 #197")
+
+
+async def test_write_overview_includes_task_succeeded_and_succeeded_delegations_in_order(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """概览同时纳入失败里程碑、单步成功 task_succeeded 与交付委派，防止偏失败事件把已跑通机器写反。"""
+    t0 = 1_700_000_000_000
+    minute = 60_000
+    session_id = await store.sessions.insert_live_session(started_at_ms=t0, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=t0 + 60 * minute)
+
+    # 先有一条失败里程碑，随后通过单步 task_succeeded 与委派交付跑通机器
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="minecraft",
+        event_type="milestone",
+        message="使用动力压机未完成：站位不对",
+        timestamp_ms=t0 + 5 * minute,
+    )
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="minecraft",
+        event_type="task_succeeded",
+        message="使用动力压机：压出 4 块铁板",
+        timestamp_ms=t0 + 12 * minute,
+    )
+    await store.events.insert_delegation_event(
+        live_session_id=session_id,
+        game="minecraft",
+        task_id="deleg-mill",
+        kind="accepted",
+        text="接通自动磨坊",
+        timestamp_ms=t0 + 15 * minute,
+    )
+    await store.events.insert_delegation_event(
+        live_session_id=session_id,
+        game="minecraft",
+        task_id="deleg-mill",
+        kind="succeeded",
+        text="delivery: 磨坊已接通开始出面粉",
+        timestamp_ms=t0 + 25 * minute,
+    )
+
+    llm = FakeLLMManager(Response(success=True, content="本场先遇压机站位问题，随后顺利压出铁板并接通磨坊。"))
+    writer = _writer(store, llm, prompt_manager)
+
+    assert await writer.write_overview(session_id) is True
+    prompt = str(llm.calls[0]["input"])
+    assert "使用动力压机未完成：站位不对" in prompt
+    assert "完成：使用动力压机：压出 4 块铁板" in prompt
+    assert "委派完成「接通自动磨坊」：磨坊已接通开始出面粉" in prompt
+    assert (
+        prompt.index("使用动力压机未完成：站位不对")
+        < prompt.index("完成：使用动力压机：压出 4 块铁板")
+        < prompt.index("委派完成「接通自动磨坊」：磨坊已接通开始出面粉")
+    )
+
+
+async def test_write_overview_does_not_swallow_short_delegation_summary_on_substring_report(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """短委派摘要不因偶然是某条无关 report 的子串而被去重吞掉；长摘要子串命中时仍正常去重。"""
+    t0 = 1_700_000_000_000
+    minute = 60_000
+    session_id = await store.sessions.insert_live_session(started_at_ms=t0, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=t0 + 30 * minute)
+
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="minecraft",
+        event_type="report",
+        message="交付：营地仓库整理好了，自动熔炉已点火投入运转",
+        timestamp_ms=t0 + 10 * minute,
+    )
+    for task_id, instruction, summary, ended in (
+        ("d-short", "给正门换门板", "delivery: 好了", t0 + 12 * minute),
+        ("d-dup", "点亮自动熔炉", "delivery: 自动熔炉已点火投入运转", t0 + 14 * minute),
+    ):
+        await store.events.insert_delegation_event(
+            live_session_id=session_id,
+            game="minecraft",
+            task_id=task_id,
+            kind="accepted",
+            text=instruction,
+            timestamp_ms=t0 + 5 * minute,
+        )
+        await store.events.insert_delegation_event(
+            live_session_id=session_id,
+            game="minecraft",
+            task_id=task_id,
+            kind="succeeded",
+            text=summary,
+            timestamp_ms=ended,
+        )
+
+    llm = FakeLLMManager(Response(success=True, content="本场整理了仓库并更换门板。"))
+    writer = _writer(store, llm, prompt_manager)
+
+    assert await writer.write_overview(session_id) is True
+    prompt = str(llm.calls[0]["input"])
+    assert "委派完成「给正门换门板」：好了" in prompt
+    assert "委派完成「点亮自动熔炉」" not in prompt
