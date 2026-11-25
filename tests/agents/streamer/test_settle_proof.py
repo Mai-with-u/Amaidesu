@@ -16,6 +16,7 @@ import pytest
 from src.agents.streamer.memory.settle import SessionSettler
 from src.agents.streamer.memory.settle_proof import (
     game_records,
+    infer_proof_for_claim,
     is_done_claim,
     mark_unverified,
     proof_for,
@@ -43,6 +44,10 @@ _MINUTE = 60_000
         ("钻石镐合成出来啦", True),
         ("海带还没烤完", False),
         ("门没装好", False),
+        ("动力压机还没完全修好", False),
+        ("打算把门装好", False),
+        ("准备去拿到钻石", False),
+        ("听说 Alex 把刷铁机修好了", False),
         ("明天去挖铁", False),
         ("今天好累", False),
     ],
@@ -519,3 +524,301 @@ async def test_item_delivery_event_proves_archive_and_commitment_closure_in_sett
     assert [line.text for line in lines] == ["Minecraft：把三颗钻石放好进木桶"]
     comm_after = await store.commitments.get_commitment(commitment_id=comm_id)
     assert comm_after is not None and comm_after.status == "closed"
+
+
+async def test_task_succeeded_proves_single_step_actions_while_bluffs_and_contradictions_stay_marked(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """单步成功事件 task_succeeded 进入记录#（含连续同文折叠），真实达成不误标、与失败矛盾或无依据吹牛仍拦截。"""
+    # 连续同文单步完成自动折叠；含失败词的摘要不作证
+    recs = game_records(
+        [
+            _event("task_succeeded", "对动力合成器使用成功，放入铁锭", 2 * _MINUTE),
+            _event("task_succeeded", "对动力合成器使用成功，放入铁锭", 3 * _MINUTE),
+            _event("task_succeeded", "河边钓鱼：钓到了 1 条鳕鱼", 5 * _MINUTE),
+            _event("task_succeeded", "用东西失败", 6 * _MINUTE),
+        ],
+        [],
+    )
+    assert [(r.number, r.kind, r.text, r.proves, r.until_ms) for r in recs] == [
+        (1, "完成", "对动力合成器使用成功，放入铁锭（共 2 次）", True, 3 * _MINUTE),
+        (2, "完成", "河边钓鱼：钓到了 1 条鳕鱼", True, 0),
+    ]
+
+    # 端到端真库回归：验证高频告警不挤掉单步成功、真实成果不误标、无依据吹牛与失败矛盾仍标未核实
+    session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=40 * _MINUTE)
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="task_succeeded",
+        message="河边钓鱼：钓到了 1 条鳕鱼",
+        timestamp_ms=4 * _MINUTE,
+    )
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="task_succeeded",
+        message="动力压机运行：压出了 4 块铁板",
+        timestamp_ms=5 * _MINUTE,
+    )
+    # 510 条高频 attention_required 排在后面，不应把前半场的 task_succeeded 挤出核验窗口
+    for idx in range(510):
+        await store.events.insert_game_event(
+            live_session_id=session_id,
+            game="Minecraft",
+            event_type="attention_required",
+            message=f"战斗告警 #{idx}",
+            timestamp_ms=10 * _MINUTE + idx * 1_000,
+        )
+    await store.events.insert_delegation_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        task_id="d-bridge",
+        kind="accepted",
+        text="修好北岸木桥",
+        timestamp_ms=2 * _MINUTE,
+    )
+    await store.events.insert_delegation_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        task_id="d-bridge",
+        kind="undelivered",
+        text="停了但没交付结果",
+        timestamp_ms=6 * _MINUTE,
+    )
+    for content, at_ms in (
+        ("在河边钓到一条鳕鱼啦", 7 * _MINUTE),
+        ("动力压机修好压出铁板啦", 8 * _MINUTE),
+        ("全套下界合金甲也打造出来啦", 9 * _MINUTE),
+        ("北岸木桥已经修好啦", 10 * _MINUTE),
+    ):
+        await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=at_ms,
+            sender_role="assistant",
+            content=content,
+            message_type="speech",
+        )
+
+    archive = [
+        # 显式引单步成功记录#1 -> 核实通过
+        {
+            "line": 1,
+            "title": "Minecraft：河边钓到鳕鱼",
+            "quote": "在河边钓到一条鳕鱼啦",
+            "game": "Minecraft",
+            "evidence": "记录#1",
+        },
+        # 漏填 evidence，但存在同游戏更早且无矛盾的 task_succeeded（动力压机压出铁板）-> 兜底核实通过不误标
+        {
+            "line": 2,
+            "title": "Minecraft：动力压机修好压出铁板",
+            "quote": "动力压机修好压出铁板啦",
+            "game": "Minecraft",
+            "evidence": None,
+        },
+        # 纯吹牛，记录里毫无根据 -> 仍标未核实
+        {
+            "line": 3,
+            "title": "Minecraft：打造出全套下界合金甲",
+            "quote": "全套下界合金甲也打造出来啦",
+            "game": "Minecraft",
+            "evidence": None,
+        },
+        # 与未交付委派 d-bridge 矛盾 -> 仍标未核实
+        {
+            "line": 4,
+            "title": "Minecraft：北岸木桥修好了",
+            "quote": "北岸木桥已经修好啦",
+            "game": "Minecraft",
+            "evidence": None,
+        },
+    ]
+    llm = FakeLLMManager(
+        responses=[
+            Response(success=True, content=json.dumps({"archive": archive}, ensure_ascii=False)),
+            Response(success=True, content='{"commitments": []}'),
+        ]
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 9_800,
+    )
+
+    assert await settler.settle_session(session_id) is True
+    assert "完成：河边钓鱼：钓到了 1 条鳕鱼" in str(llm.calls[0]["input"])
+    assert "完成：动力压机运行：压出了 4 块铁板" in str(llm.calls[0]["input"])
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [line.text for line in lines] == [
+        "Minecraft：河边钓到鳕鱼",
+        "Minecraft：动力压机修好压出铁板",
+        "Minecraft：她说打造出全套下界合金甲（游戏记录里没核实到）",
+        "Minecraft：她说北岸木桥修好了（游戏记录里没核实到）",
+    ]
+
+
+def test_infer_proof_rejects_broad_prefix_bluffs_and_supports_single_char_nouns_and_scoped_contradictions() -> None:
+    """兜底核验不得被单个宽泛地标或修饰前缀穿透，同时正确识别单字核心物词且不被无关前缀失败记录误杀。"""
+    bluff_records = game_records(
+        [
+            _event("task_succeeded", "营地门口采木头", 2 * _MINUTE),
+            _event("milestone", "动力水车装好", 3 * _MINUTE),
+            _event("dimension_changed", "从主世界到了下界", 4 * _MINUTE),
+            _event("milestone", "发现下界要塞", 4 * _MINUTE + 10_000),
+            _event("task_succeeded", "在矿洞采了 5 个圆石", 5 * _MINUTE),
+        ],
+        [],
+    )
+    # 宽泛前缀与单点局部重合均不可放行吹牛，且“门口”不误认作核心物词“门”
+    assert (
+        infer_proof_for_claim(
+            "Minecraft：营地城堡盖好了 营地二楼城堡盖好了", bluff_records, game="Minecraft", at_ms=8 * _MINUTE
+        )
+        is None
+    )
+    assert (
+        infer_proof_for_claim(
+            "Minecraft：动力磨粉机做好了 动力磨粉机和压板机全做好了", bluff_records, game="Minecraft", at_ms=8 * _MINUTE
+        )
+        is None
+    )
+    assert (
+        infer_proof_for_claim(
+            "Minecraft：下界要塞刷怪笼拆完了 下界要塞刷怪笼拆完了", bluff_records, game="Minecraft", at_ms=8 * _MINUTE
+        )
+        is None
+    )
+    assert (
+        infer_proof_for_claim(
+            "Minecraft：矿洞里的刷怪笼和附魔台全拆完了", bluff_records, game="Minecraft", at_ms=8 * _MINUTE
+        )
+        is None
+    )
+    assert infer_proof_for_claim("门装好啦", bluff_records, game="Minecraft", at_ms=8 * _MINUTE) is None
+
+    # 短单字核心物词（门/床/树）存在真实成功交付记录时可兜底核实
+    short_noun_records = game_records(
+        [
+            _event("task_succeeded", "把木床摆在屋里", 2 * _MINUTE),
+            _event("task_succeeded", "砍完后院橡树", 3 * _MINUTE),
+        ],
+        [
+            _delegation(
+                "succeeded",
+                instruction="把营地的门装上",
+                summary="delivery: 正门装好了，能开能关",
+                ended_ms=4 * _MINUTE,
+            )
+        ],
+    )
+    door_hit = infer_proof_for_claim("门装好啦", short_noun_records, game="Minecraft", at_ms=6 * _MINUTE)
+    assert door_hit is not None and "正门" in door_hit.text
+    bed_hit = infer_proof_for_claim("床摆好了", short_noun_records, game="Minecraft", at_ms=6 * _MINUTE)
+    assert bed_hit is not None and "木床" in bed_hit.text
+    tree_hit = infer_proof_for_claim("树砍完了", short_noun_records, game="Minecraft", at_ms=6 * _MINUTE)
+    assert tree_hit is not None and "橡树" in tree_hit.text
+
+    # 共享宽泛前缀“动力”的不同设备失败记录，不得误杀已跑通的“动力压机”
+    scoped_records = game_records(
+        [
+            _event("task_succeeded", "动力压机运行：压出了 4 块铁板", 5 * _MINUTE),
+            _event("milestone", "北岸木桥搭好第一根柱子", 4 * _MINUTE),
+        ],
+        [
+            _delegation("undelivered", instruction="修好动力磨粉机", summary="停了但没交付结果", ended_ms=6 * _MINUTE),
+            _delegation("undelivered", instruction="修好北岸木桥", summary="停了但没交付结果", ended_ms=6 * _MINUTE),
+        ],
+    )
+    press_hit = infer_proof_for_claim(
+        "Minecraft：动力压机压出铁板 动力压机跑通压出铁板啦", scoped_records, game="Minecraft", at_ms=8 * _MINUTE
+    )
+    assert press_hit is not None and "压机" in press_hit.text
+    # 指向同一事项“北岸木桥”的后续未交付记录仍须拦截
+    assert (
+        infer_proof_for_claim(
+            "Minecraft：北岸木桥修好了 北岸木桥已经修好啦", scoped_records, game="Minecraft", at_ms=8 * _MINUTE
+        )
+        is None
+    )
+
+
+async def test_commitment_closure_requires_explicit_evidence_and_disallows_fuzzy_inference(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """旧承诺结案严禁靠语义兜底放行：未显式填写有效 evidence 时保持 open，而档案行仍可由真实单步成功兜底核实。"""
+    session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=30 * _MINUTE)
+    comm_id = await store.commitments.insert_commitment(
+        what="跑通动力压机压出铁板",
+        quote="下次把动力压机跑通压出铁板",
+        game="Minecraft",
+        now_ms_value=100,
+    )
+    assert comm_id is not None
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="task_succeeded",
+        message="动力压机运行：压出了 4 块铁板",
+        timestamp_ms=4 * _MINUTE,
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=6 * _MINUTE,
+        sender_role="assistant",
+        content="动力压机修好压出铁板啦",
+        message_type="speech",
+    )
+    archive = [
+        {
+            "line": 1,
+            "title": "Minecraft：动力压机修好压出铁板",
+            "quote": "动力压机修好压出铁板啦",
+            "game": "Minecraft",
+            "evidence": None,
+        }
+    ]
+    closed = [
+        {
+            "id": comm_id,
+            "line": 1,
+            "quote": "动力压机修好压出铁板啦",
+            "evidence": None,
+        }
+    ]
+    llm = FakeLLMManager(
+        responses=[
+            Response(success=True, content=json.dumps({"archive": archive}, ensure_ascii=False)),
+            Response(success=True, content='{"commitments": []}'),
+            Response(success=True, content=json.dumps({"closed": closed}, ensure_ascii=False)),
+        ]
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 9_900,
+    )
+
+    assert await settler.settle_session(session_id) is True
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [line.text for line in lines] == ["Minecraft：动力压机修好压出铁板"]
+    comm_after = await store.commitments.get_commitment(commitment_id=comm_id)
+    assert comm_after is not None and comm_after.status == "open"
+    session = await store.sessions.get_live_session(live_session_id=session_id)
+    assert session is not None and session.settle_report is not None
+    report = SettleReport.model_validate_json(session.settle_report)
+    assert any(item.what == f"了结 #{comm_id}" and "游戏记录里没核实到" in item.reason for item in report.unregistered)

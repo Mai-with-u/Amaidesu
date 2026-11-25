@@ -19,20 +19,33 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Set, Tuple
+
+from src.modules.storage.repos.events import TASK_SUCCEEDED_EVENT
 
 __all__ = [
+    "PROOF_GAME_EVENT_TYPES",
     "UNVERIFIED_MARK",
     "GameRecord",
     "game_records",
+    "infer_proof_for_claim",
     "is_done_claim",
     "mark_unverified",
     "proof_for",
     "render_records",
 ]
 
+# 下播核验读取 game_events 时只取能作证的进展事件类型，避免高频异常或告警挤掉前半场成功记录
+PROOF_GAME_EVENT_TYPES: Tuple[str, ...] = (
+    "milestone",
+    "report",
+    "dimension_changed",
+    "item_delivery",
+    TASK_SUCCEEDED_EVENT,
+)
+
 # 完成说法：游戏里做成了某件事的说法（搭好了、装上了、拿到了、做完了这类）。前面紧挨着"没、未、不、别"的
-# 是没做成（"还没烤完""没装好"），不算
+# 是没做成（"还没烤完""没装好"），或前面紧挨着打算/准备/听说等非已成陈述的，不算
 _DONE_CLAIM = re.compile(
     r"(?:做|盖|搭|建|装|修|弄|种|铺|围|造|摆|放|点|挖|砌|封|补|烤|拼|画|配|收拾|整理|布置|备|堆|垒|架|焊|刷|插|挂"
     r"|接|连|炼|熔|煮|炒|绑|圈|驯|立)好"
@@ -44,6 +57,173 @@ _DONE_CLAIM = re.compile(
     r"|种下|立起来|烤干|搞定|完成|到手|落成|竣工"
 )
 _NEGATION_CHARS = ("没", "未", "不", "别")
+_CLAUSE_BREAKS = "，。！？；,.!?;:：\n"
+# 非已成事实的计划、未然或转述前导词：紧邻完成词前出现时不视为“宣称已完成”
+_NON_DONE_PREFIXES: Tuple[str, ...] = (
+    "打算",
+    "准备",
+    "计划",
+    "想要",
+    "快要",
+    "即将",
+    "等会儿",
+    "待会儿",
+    "听说",
+)
+# 连续同文单步完成记录合并窗口（毫秒）：3 分钟内连续多次相同完成摘要折叠为一条“共 N 次”
+_CONSECUTIVE_DEDUP_WINDOW_MS = 3 * 60 * 1000
+# 兜底语义核对清洗前剥离的宽泛地标、修饰前缀、通用动作与记录模板短语（按长短降序编译，避免靠宽泛前缀穿透匹配）
+_STRIP_PHRASES: Tuple[str, ...] = tuple(
+    sorted(
+        (
+            "停了但没交付结果",
+            "游戏那边没交付",
+            "做到哪不确定",
+            "她认定做完了",
+            "停了没交付",
+            "被重启打断",
+            "不能作证",
+            "能推能关",
+            "能开能关",
+            "主世界",
+            "全自动",
+            "自动化",
+            "一整套",
+            "下界",
+            "末地",
+            "营地",
+            "基地",
+            "家里",
+            "房间",
+            "屋里",
+            "门口",
+            "门外",
+            "门前",
+            "门后",
+            "门边",
+            "出门",
+            "进门",
+            "附近",
+            "河边",
+            "海边",
+            "山上",
+            "地下",
+            "后院",
+            "旁边",
+            "上面",
+            "下面",
+            "里面",
+            "外面",
+            "这边",
+            "那边",
+            "这里",
+            "那里",
+            "地方",
+            "世界",
+            "一楼",
+            "二楼",
+            "三楼",
+            "动力",
+            "自动",
+            "机械",
+            "工作",
+            "系统",
+            "全套",
+            "全部",
+            "全都",
+            "一堆",
+            "一批",
+            "一些",
+            "几个",
+            "几块",
+            "几条",
+            "一根",
+            "一条",
+            "一块",
+            "一座",
+            "一排",
+            "一个",
+            "一把",
+            "一只",
+            "一扇",
+            "已经",
+            "今天",
+            "刚才",
+            "终于",
+            "东西",
+            "这个",
+            "那个",
+            "游戏",
+            "玩家",
+            "大家",
+            "我们",
+            "自己",
+            "一下",
+            "然后",
+            "现在",
+            "可以",
+            "开始",
+            "运行",
+            "使用",
+            "成功",
+            "完成",
+            "搞定",
+            "做完",
+            "做好",
+            "拿到",
+            "找到",
+            "弄好",
+            "装好",
+            "修好",
+            "放好",
+            "交付",
+            "委派",
+            "记录",
+            "她说",
+            "起来",
+            "出来",
+            "进入",
+            "来到",
+            "回到",
+            "跑通",
+            "压出",
+            "放入",
+            "放进",
+            "取出",
+            "扔出",
+            "存进",
+            "塞进",
+            "摆在",
+            "放在",
+            "装上",
+            "拿了",
+            "给了",
+            "还给",
+            "好了",
+            "完了",
+            "到了",
+            "上了",
+            "去了",
+            "回来",
+            "直接",
+            "就是",
+            "也把",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+_STRIP_PHRASES_RE = re.compile("|".join(re.escape(phrase) for phrase in _STRIP_PHRASES))
+# 清洗后用于切分短句的纯语气词与功能助词（不跨词误伤常见物品名）
+_PARTICLE_SPLIT_RE = re.compile(r"[的了啦啊呢呀哦嘛也都]")
+# 仅在中文词段开头剥离的介词/连词（保留结尾如“火把”中的“把”）
+_LEADING_FUNC_RE = re.compile(r"^[把被给在往从对和与跟]+")
+# 短完成声明（如“门装好啦”“床摆好了”“树砍完了”）缺失双字实词时允许兜底识别的单字核心物词
+_SINGLE_CHAR_OBJECT_NOUNS: frozenset[str] = frozenset(
+    "门床树花桥墙路船车炉箱桶剑镐斧锹弓箭鱼牛羊猪鸡猫狗狼马田屋塔井灯矿铁金铜煤石木沙土水书蛋肉药钟梯窗"
+)
+_CJK_ANY_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+_ALNUM_RUN_RE = re.compile(r"[a-z0-9_]{2,}", re.IGNORECASE)
 
 # 记录超过这么多条时，同一次执行里连续的几步里程碑并成一行（第 54、58 场各四五十条，不用并）；
 # 每步只留这么多字。不截条数：截掉的是长场前半段，那时说的"做好了"就引不到记录、被误判成没核实到
@@ -107,11 +287,25 @@ class GameRecord:
     until_ms: int = 0
 
 
+def _clause_prefix(text: str, pos: int, max_chars: int) -> str:
+    """取命中位置前同一分句内至多 max_chars 个字符，遇分句标点截断。"""
+    window = text[max(0, pos - max_chars) : pos]
+    for idx in range(len(window) - 1, -1, -1):
+        if window[idx] in _CLAUSE_BREAKS:
+            return window[idx + 1 :]
+    return window
+
+
 def is_done_claim(text: str) -> bool:
-    """这段话里有没有"游戏里做成了某件事"的说法；前面紧挨着否定字的（"还没烤完"）不算。"""
-    for match in _DONE_CLAIM.finditer(text or ""):
-        before = text[max(0, match.start() - 2) : match.start()]
-        if any(char in before for char in _NEGATION_CHARS):
+    """这段话里有没有"游戏里做成了某件事"的说法；同一分句前有否定或未然/计划/转述词的不算。"""
+    raw = text or ""
+    for match in _DONE_CLAIM.finditer(raw):
+        neg_before = _clause_prefix(raw, match.start(), 4)
+        if any(char in neg_before for char in _NEGATION_CHARS):
+            continue
+        # 同分句内的未然/计划/转述前导词可能隔着主语与宾语（如"听说 Alex 把刷铁机修好了"），查至本分句起点
+        clause_before = _clause_prefix(raw, match.start(), match.start())
+        if any(prefix in clause_before for prefix in _NON_DONE_PREFIXES):
             continue
         return True
     return False
@@ -155,12 +349,13 @@ def game_records(events: Sequence[Any], delegations: Sequence[Any]) -> List[Game
         at_ms = int(getattr(delegation, "ended_ms", 0) or 0)
         staged.append(_Staged(at_ms, str(getattr(delegation, "game", "") or ""), "委派", text, status == "succeeded"))
     for event in events:
-        # 里程碑、阶段上报、真实跨维度迁移与物品交付（存进他人容器/朝玩家扔出）均可作为游戏内完成说法的核实证源
+        # 里程碑、阶段上报、跨维度迁移、物品交付与单步任务终态成功均可作为游戏内完成说法的核实证源
         kind = {
             "milestone": "里程碑",
             "report": "上报",
             "dimension_changed": "跨维度",
             "item_delivery": "交付",
+            TASK_SUCCEEDED_EVENT: "完成",
         }.get(str(getattr(event, "event_type", "") or ""))
         message = " ".join(str(getattr(event, "message", "") or "").split())
         if kind is None or not message or any(word in message for word in _FAILED_WORDS):
@@ -168,6 +363,7 @@ def game_records(events: Sequence[Any], delegations: Sequence[Any]) -> List[Game
         at_ms = int(getattr(event, "timestamp_ms", 0) or 0)
         staged.append(_Staged(at_ms, str(getattr(event, "game", "") or ""), kind, message, True))
     staged.sort(key=lambda item: item.at_ms)
+    staged = _dedupe_consecutive_completions(staged)
     if len(staged) > _FOLD_AFTER:
         staged = _fold_steps(staged)
     return [
@@ -194,6 +390,45 @@ class _Staged:
     text: str
     proves: bool
     until_ms: int = 0
+
+
+def _dedupe_consecutive_completions(staged: Sequence[_Staged]) -> List[_Staged]:
+    """将短窗内连续重复的同类同文单步“完成”记录折叠为一条“……（共 N 次）”，防止重复动作刷屏占满记录表。"""
+    result: List[_Staged] = []
+    idx = 0
+    total = len(staged)
+    while idx < total:
+        current = staged[idx]
+        if current.kind != "完成":
+            result.append(current)
+            idx += 1
+            continue
+        end = idx
+        while (
+            end + 1 < total
+            and staged[end + 1].kind == "完成"
+            and staged[end + 1].game == current.game
+            and staged[end + 1].text == current.text
+            and staged[end + 1].at_ms - staged[end].at_ms <= _CONSECUTIVE_DEDUP_WINDOW_MS
+        ):
+            end += 1
+        count = end - idx + 1
+        if count == 1:
+            result.append(current)
+        else:
+            clipped = _clip(current.text, _RECORD_TEXT_CHARS)
+            result.append(
+                _Staged(
+                    at_ms=current.at_ms,
+                    game=current.game,
+                    kind=current.kind,
+                    text=f"{clipped}（共 {count} 次）",
+                    proves=current.proves,
+                    until_ms=staged[end].at_ms,
+                )
+            )
+        idx = end + 1
+    return result
 
 
 def _fold_steps(staged: Sequence[_Staged]) -> List[_Staged]:
@@ -274,3 +509,146 @@ def proof_for(ref: Any, records: Sequence[GameRecord], *, game: Optional[str], a
             continue
         return record
     return None
+
+
+def _clean_for_proof(text: str, *, game: Optional[str] = None) -> str:
+    """剥离游戏名、完成动词、宽泛地标/修饰前缀与语气助词，保留可用于事实指向比对的实词骨架。"""
+    cleaned = _DONE_CLAIM.sub(" ", str(text or ""))
+    if game:
+        cleaned = re.sub(re.escape(game), " ", cleaned, flags=re.IGNORECASE)
+    cleaned = _STRIP_PHRASES_RE.sub(" ", cleaned)
+    cleaned = _PARTICLE_SPLIT_RE.sub(" ", cleaned)
+    return cleaned
+
+
+def _extract_proof_features(
+    text: str, *, game: Optional[str] = None
+) -> Tuple[List[frozenset[str]], Set[str], List[str], Set[str]]:
+    """从文本抽取实质比对特征：(去重实词单元列表, 全部双字/字母词元, 中文词段列表, 候选单字核心物词)。
+
+    先清洗宽泛前缀与助词，再对每个中文词段剥离句首介词并切片为双字词元；
+    当声明不含多字实词时（如“门装好啦”），回退到受控单字物词集合，并与记录词段末尾中心语比对，
+    避免被“门口”“鱼竿”等非中心语复合词误匹配。
+    """
+    cleaned = _clean_for_proof(text, game=game)
+    raw_units: List[frozenset[str]] = []
+    all_tokens: Set[str] = set()
+    cjk_runs: List[str] = []
+    single_nouns: Set[str] = set()
+
+    for match in _CJK_ANY_RUN_RE.finditer(cleaned):
+        run = match.group(0)
+        if len(run) >= 2:
+            stripped = _LEADING_FUNC_RE.sub("", run)
+            if stripped:
+                run = stripped
+        if not run:
+            continue
+        cjk_runs.append(run)
+        if len(run) == 1:
+            if run in _SINGLE_CHAR_OBJECT_NOUNS:
+                single_nouns.add(run)
+            continue
+        unit_tokens = frozenset(run[pos : pos + 2] for pos in range(len(run) - 1))
+        if unit_tokens:
+            raw_units.append(unit_tokens)
+            all_tokens.update(unit_tokens)
+
+    for match in _ALNUM_RUN_RE.finditer(cleaned):
+        word = match.group(0).lower()
+        unit_tokens = frozenset({word})
+        raw_units.append(unit_tokens)
+        all_tokens.add(word)
+
+    # 合并重复或被更完整实词覆盖的子单元（如标题写“木桥”、原话写“北岸木桥”时不重复计两份）
+    unique_units: List[frozenset[str]] = []
+    for unit in sorted(set(raw_units), key=len, reverse=True):
+        if any(unit.issubset(existing) for existing in unique_units):
+            continue
+        unique_units.append(unit)
+    return unique_units, all_tokens, cjk_runs, single_nouns
+
+
+def _match_record_score(
+    claim_units: Sequence[frozenset[str]],
+    claim_tokens: Set[str],
+    claim_single_nouns: Set[str],
+    rec_tokens: Set[str],
+    rec_cjk_runs: Sequence[str],
+) -> Tuple[int, int]:
+    """评估单条记录与声明的实质重合度；不满足门槛返回 (0, 0)。
+
+    判定规则：
+    - 多字实词声明：
+      - 仅 1 个实词单元时，若该单元含 >= 3 个双字词元（4 字及以上长名词如“要塞刷怪笼”），至少命中 2 个双字词元；
+        否则至少命中 1 个双字词元（如“鳕鱼”“正门”）。
+      - 含 >= 2 个实词单元时，至少命中 2 个双字/字母词元，且至少覆盖声明半数实词单元，防止单点重合放行吹牛。
+    - 无多字实词的短声明（如“门装好啦”“床摆好了”）：
+      - 仅当声明中的全部单字核心物词均命中记录的独立单字或词段中心语尾字（如“正门”“木床”“橡树”）时才算命中。
+    """
+    if claim_units:
+        overlap = len(claim_tokens & rec_tokens)
+        if overlap <= 0:
+            return (0, 0)
+        hit_units = sum(1 for unit in claim_units if unit & rec_tokens)
+        if len(claim_units) == 1:
+            min_overlap = 2 if len(claim_tokens) >= 3 else 1
+            if overlap < min_overlap:
+                return (0, 0)
+            return (hit_units, overlap)
+        if overlap < 2 or hit_units * 2 < len(claim_units):
+            return (0, 0)
+        return (hit_units, overlap)
+
+    if not claim_single_nouns:
+        return (0, 0)
+    matched = sum(1 for noun in claim_single_nouns if any(run.endswith(noun) for run in rec_cjk_runs))
+    if matched < len(claim_single_nouns):
+        return (0, 0)
+    return (matched, matched)
+
+
+def infer_proof_for_claim(
+    text: str,
+    records: Sequence[GameRecord],
+    *,
+    game: Optional[str],
+    at_ms: int,
+) -> Optional[GameRecord]:
+    """当模型漏填 evidence 时，按时间与实质重合度从可作证游戏记录里兜底匹配对应证据。
+
+    触发条件：仅在场次档案校验且模型未显式填写 ``evidence`` 时调用（绝不绕过显式指向失败/超时记录的错误引用，
+    也不用于旧承诺结案）。
+    执行顺序：提取声明实词单元与兜底单字核心物词 -> 筛同游戏且不晚于发言时刻（容两分钟）的记录
+    -> 对可作证记录与失败记录采用同一实词门槛评分 -> 挑覆盖最高者并确认同期或之后无指向同一事项的失败矛盾记录。
+    """
+    claim_units, claim_tokens, _, claim_single_nouns = _extract_proof_features(text, game=game)
+    if not claim_units and not claim_single_nouns:
+        return None
+    deadline = at_ms + _LATE_SLACK_MS
+    best: Optional[Tuple[int, int, int, GameRecord]] = None
+    contradiction_times: List[int] = []
+    for record in records:
+        if game and record.game and record.game.lower() != game.lower():
+            continue
+        if record.at_ms > deadline:
+            continue
+        _, rec_tokens, rec_cjk_runs, _ = _extract_proof_features(record.text, game=game)
+        hit_units, overlap = _match_record_score(
+            claim_units, claim_tokens, claim_single_nouns, rec_tokens, rec_cjk_runs
+        )
+        if overlap <= 0:
+            continue
+        if record.proves:
+            score_tuple = (hit_units, overlap, record.at_ms, record)
+            if best is None or score_tuple[:3] > best[:3]:
+                best = score_tuple
+        else:
+            contradiction_times.append(record.at_ms)
+    if best is None:
+        return None
+    best_record = best[3]
+    # 若在命中的成功记录同一时刻或之后存在指向同一事项的未交付/失败记录，保守不自动放行
+    if any(fail_at_ms >= best_record.at_ms for fail_at_ms in contradiction_times):
+        return None
+    return best_record

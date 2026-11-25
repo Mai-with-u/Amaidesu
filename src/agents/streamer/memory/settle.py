@@ -112,9 +112,11 @@ from src.agents.streamer.memory.settle_candidates import (
 from src.agents.streamer.memory.settle_players import PlayerChat, build_player_chat
 from src.agents.streamer.memory.settle_social import SocialMaterial, build_social_material, validate_social_output
 from src.agents.streamer.memory.settle_proof import (
+    PROOF_GAME_EVENT_TYPES,
     UNVERIFIED_MARK,
     GameRecord,
     game_records,
+    infer_proof_for_claim,
     is_done_claim,
     mark_unverified,
     proof_for,
@@ -1461,13 +1463,19 @@ class SessionSettler:
         )
 
     async def _load_game_records(self, session: LiveSession) -> List[GameRecord]:
-        """本场的游戏记录：了结了的委派与里程碑、上报；读不到就当没有（完成说法这一场不核对，其余照常整理）。"""
+        """本场的游戏记录：了结了的委派与可作证游戏事件（里程碑、上报、跨维度、交付、单步完成）；读不到就当没有。"""
         if self._events is None:
             return []
         try:
-            events = await self._events.list_session_game_events(
-                live_session_id=int(session.id), limit=_RECORD_EVENTS_MAX
-            )
+            list_fn = self._events.list_session_game_events
+            if _supports_kwarg(list_fn, "event_types"):
+                events = await list_fn(
+                    live_session_id=int(session.id),
+                    limit=_RECORD_EVENTS_MAX,
+                    event_types=PROOF_GAME_EVENT_TYPES,
+                )
+            else:
+                events = await list_fn(live_session_id=int(session.id), limit=_RECORD_EVENTS_MAX)
             delegations = await self._events.list_session_delegations(live_session_id=int(session.id))
         except Exception as exc:  # noqa: BLE001 - 少了核对依据不挡整理
             logger.warning(f"场次 {session.id} 读游戏记录失败，本场不核对完成说法: {exc}", exc=exc)
@@ -2622,13 +2630,30 @@ class SessionSettler:
         return written, missed
 
     @staticmethod
-    def _proven(raw: Dict[str, Any], text: str, material: SettleMaterial, game: str, line: SettleSpeechLine) -> bool:
-        """这一条站得住：不是完成说法，或引的游戏记录撑得住它；本场没有游戏记录时无从核对，算站得住。"""
+    def _proven(
+        raw: Dict[str, Any],
+        text: str,
+        material: SettleMaterial,
+        game: str,
+        line: SettleSpeechLine,
+        *,
+        allow_infer: bool = True,
+    ) -> bool:
+        """这一条站得住：不是完成说法，或引的游戏记录撑得住它；本场没有游戏记录时无从核对，算站得住。
+
+        执行顺序：显式填写 evidence 时严格按所引编号核对（绝不放行错引未交付或晚于发言的记录）；
+        仅在允许兜底（场次档案行）且模型未填 evidence 时，才按实质词元在同游戏且不晚于发言时刻的成功记录里
+        兜底核实，同时确保无同期或后续失败记录与之矛盾；旧承诺结案不启用兜底，必须显式引用有效记录编号。
+        """
         if not material.game_records or not is_done_claim(text):
             return True
-        return (
-            proof_for(raw.get("evidence"), material.game_records, game=game, at_ms=int(line.timestamp_ms)) is not None
-        )
+        ref = raw.get("evidence")
+        at_ms = int(line.timestamp_ms)
+        if _has_value(ref):
+            return proof_for(ref, material.game_records, game=game, at_ms=at_ms) is not None
+        if not allow_infer:
+            return False
+        return infer_proof_for_claim(text, material.game_records, game=game, at_ms=at_ms) is not None
 
     def _validate_closures(
         self, rows: List[Any], material: SettleMaterial
@@ -2687,9 +2712,9 @@ class SessionSettler:
                     )
                 )
                 continue
-            # 挂了游戏的承诺说"做完了"：同样要有游戏记录撑着；说做不到、不做了的不用
+            # 挂了游戏的承诺说"做完了"：必须显式引一条撑得住的游戏记录编号（不靠语义兜底结案）；说做不到、不做了的不用
             game = open_by_id[int(commitment_id)].game
-            if game and not self._proven(raw, verified, material, game, line):
+            if game and not self._proven(raw, verified, material, game, line, allow_infer=False):
                 missed.append(
                     UnregisteredItem(
                         kind="commitment", what=f"了结 #{commitment_id}", quote=verified, reason=_UNPROVEN_REASON
