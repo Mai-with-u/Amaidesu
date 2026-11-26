@@ -77,6 +77,7 @@ def test_minecraft_config_comes_from_its_package_and_has_no_step_limit() -> None
 
     defaults = AgentsConfig().minecraft
     assert (defaults.context.max_tokens, defaults.context.window_ratio) == (200_000, 0.5)  # 保留上下文预算
+    assert defaults.commentary_guard_window_ms == 2000  # 默认 2 秒极短瞬态守卫窗
     assert (
         "max_steps" not in defaults.model_dump()
         and "max_steps" not in MinecraftConfig.model_json_schema()["properties"]

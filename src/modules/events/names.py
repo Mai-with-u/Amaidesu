@@ -80,6 +80,11 @@ class CoreEvents:
     # 复盘哨兵据此统计"长挂站桩次数与合计时长"——这是发呆治理的验收指标。
     GAME_SUSPEND_NO_PROGRESS = "game.suspend.no_progress"
 
+    # 游戏 Agent 解说前提守卫拒回事件：宿主侧守卫在 framework_commentary 提交前因刚下达未落稳
+    # 或本步推理期间目标刚变终态而拒回时发布。三层名避开 game.* 单层通配（不落 game_events
+    # 里程碑表、不唤醒主播决策），由事件历史记录器自动落诊断事件流供复盘统计。
+    GAME_COMMENTARY_REJECTED = "game.commentary.rejected"
+
     # ========== 流程单（Rundown）子系统事件 ==========
     # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖
     # load / goto / next（含 finish）/ pause / resume 五种状态变更；

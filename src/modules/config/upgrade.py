@@ -1199,6 +1199,14 @@ _widen_tts_max_queue = swap_default("tts.max_queue", 3, 6)
 # 生产钩子登记：infra.toml v2.0.46（[tts].max_queue 默认 3 → 6）
 register_file_hook("infra.toml", "widen_tts_max_queue", "2.0.46", _widen_tts_max_queue)
 
+# agents.toml v2.0.54：解说前提守卫暂扣窗默认 8000 → 2000 毫秒（缩短为 2 秒极短瞬态窗，
+# 避免正常行动开局与推进中的实况解说被长窗误拒）。仅改写落盘值恰为旧默认 8000 的存量文件，
+# 用户显式设成其他值的原样保留。
+_shorten_commentary_guard_window = swap_default("agents.minecraft.commentary_guard_window_ms", 8000, 2000)
+
+# 生产钩子登记：agents.toml v2.0.54（[agents.minecraft].commentary_guard_window_ms 默认 8s → 2s）
+register_file_hook("agents.toml", "shorten_commentary_guard_window", "2.0.54", _shorten_commentary_guard_window)
+
 
 __all__ = [
     "FileUpgradeHook",

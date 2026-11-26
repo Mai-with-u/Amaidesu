@@ -234,6 +234,23 @@ def _check_game_lead_idle_fallback(expected_ms: int) -> Callable[[Path], None]:
     return check
 
 
+def _seed_commentary_guard_window(window_ms: int) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "agents.toml", "2.0.53")
+        doc["agents"]["minecraft"]["commentary_guard_window_ms"] = window_ms
+        write_doc(d, "agents.toml", doc)
+
+    return seed
+
+
+def _check_commentary_guard_window(expected_ms: int) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        minecraft = read_doc(d, "agents.toml")["agents"]["minecraft"]
+        assert minecraft["commentary_guard_window_ms"] == expected_ms
+
+    return check
+
+
 # infra.toml
 
 
@@ -859,6 +876,18 @@ CASES = [
         _check_game_lead_idle_fallback(120_000),
     ),
     Case(
+        "commentary-guard-window-old-default",
+        ("agents.toml",),
+        _seed_commentary_guard_window(8000),
+        _check_commentary_guard_window(2000),
+    ),
+    Case(
+        "commentary-guard-window-user-kept",
+        ("agents.toml",),
+        _seed_commentary_guard_window(5000),
+        _check_commentary_guard_window(5000),
+    ),
+    Case(
         "maibot-sync-share-notes-retire", ("infra.toml",), _seed_maibot_sync_share_notes, _check_maibot_sync_share_notes
     ),
     Case("tts-max-queue-old-default", ("infra.toml",), _seed_tts_max_queue(3), _check_tts_max_queue(6)),
@@ -921,6 +950,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_maibot_sync_share_notes": ("case", "maibot-sync-share-notes-retire"),
     "retire_speech_gate_and_widen_budget": ("case", "speech-gate-retire-old-default"),
     "disable_game_lead_idle_fallback": ("case", "game-lead-idle-fallback-old-default"),
+    "shorten_commentary_guard_window": ("case", "commentary-guard-window-old-default"),
     "widen_tts_max_queue": ("case", "tts-max-queue-old-default"),
     # 具名测试函数覆盖
     "builder_scene_transport": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),

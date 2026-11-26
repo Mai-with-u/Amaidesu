@@ -174,4 +174,44 @@ class GameBoardStatePayload(BasePayload):
     )
 
 
-__all__ = ["GameBoardStatePayload", "GamePayload"]
+@register_event(CoreEvents.GAME_COMMENTARY_REJECTED)
+class GameCommentaryRejectedPayload(BasePayload):
+    """解说前提守卫拒回观测事件 Payload（三层名 ``game.commentary.rejected``）。
+
+    用于记录宿主侧解说前提守卫的每次拦截事实，供诊断事件流与场次复盘统计消费；
+    不携带解说正文等自由文本，也不触发主播决策或低频里程碑落库。
+    """
+
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入",
+    )
+    game: str = Field(..., description="游戏标识（如 'minecraft'）")
+    condition: Literal["recently_issued", "settled_during_step"] = Field(
+        ...,
+        description="命中的守卫条件（recently_issued=刚下达未落稳 / settled_during_step=写作期间目标变终态）",
+    )
+    blocking_goal_ids: List[int] = Field(
+        default_factory=list,
+        description="触发本次拦截的受守卫目标编号列表（升序）",
+    )
+    window_ms: int = Field(
+        default=0,
+        ge=0,
+        description="当前生效的条件①暂扣窗时长（毫秒）",
+    )
+    reason: str = Field(
+        default="",
+        description="返回给模型的简明拒回原因说明（不含敏感信息）",
+    )
+    round_id: str = Field(
+        default="",
+        description="关联的推理轮次 ID（空串表示无轮次标识）",
+    )
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件时间戳（Unix 毫秒）",
+    )
+
+
+__all__ = ["GameBoardStatePayload", "GameCommentaryRejectedPayload", "GamePayload"]

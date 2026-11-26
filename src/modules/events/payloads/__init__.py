@@ -58,7 +58,7 @@ from .core import (
     CoreShutdownPayload,
     CoreStartupPayload,
 )
-from .game import GamePayload
+from .game import GameCommentaryRejectedPayload, GamePayload
 from .game_chat import GameChatPayload, GameSelfChattedPayload
 from .game_place import GamePlacePayload
 from .game_player import GamePlayerInteractedPayload
@@ -117,7 +117,8 @@ __all__ = [
     "RoomMessagePayload",
     # room.state.* 直播间状态快照
     "RoomStateWatchedPayload",
-    # game.* 游戏里程碑
+    # game.* 游戏里程碑与观测
+    "GameCommentaryRejectedPayload",
     "GamePayload",
     # game.place.noted 游戏里的地点动静（只落库）
     "GamePlacePayload",
