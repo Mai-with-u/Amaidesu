@@ -222,6 +222,99 @@ def _parse_emotion_prefix(line: str) -> Optional[Tuple[Emotion, str, str]]:
 _MAX_LINES = 3
 #: 整行都包在括号里的是旁白或动作说明（"（挠头）"），不是要念出来的话
 _STAGE_DIRECTION = re.compile(r"^[（(【\[].*[）)】\]]$")
+#: 游戏事件写入即时反应背景的短窗去重时长（毫秒）：覆盖死亡/本能收场瞬间连发的多条同源重复文案
+_GAME_NOTE_DEDUP_WINDOW_MS = 15_000
+#: 死亡系统消息或游戏系统播报里的确凿死讯特征词（排除玩家游戏公屏，仅用于短窗内同源死亡记录去重折叠）
+_DEATH_NOTE_MARKERS: Tuple[str, ...] = (
+    "被杀死了",
+    "杀死了",
+    "被炸死了",
+    "炸死了",
+    "射死了",
+    "摔死了",
+    "被烧死了",
+    "烧死了",
+    "淹死了",
+    "溺死了",
+    "饿死了",
+    "窒息而死",
+    "窒息在墙里",
+    "从高处摔落",
+    "落地过猛",
+    "试图在岩浆里游泳",
+    "在岩浆中游泳",
+    "掉出了这个世界",
+    "坠落而死",
+    "在火焰中燃烧",
+    "浴火焚身",
+    "被火焰烧死",
+    "被雷劈死",
+    "被魔法杀死",
+    "被刺死了",
+    "凋零了",
+    "阵亡",
+)
+#: 无具体凶手/原因的泛称死亡文案（同窗内有更具体的死因说明时优先被替换）
+_GENERIC_DEATH_TEXTS: frozenset[str] = frozenset({"死了", "死了：被杀死了", "角色死了", "角色死了（被杀死了）"})
+#: 死亡状态副产物关键词（仅汇报任务中止/本能收场而未给具体死因，优先级严格低于带具体死因的死亡文案）
+_DEATH_STATUS_ONLY_HINTS: Tuple[str, ...] = ("任务", "中止", "中断", "取消", "收场", "停了", "角色不在了")
+#: 具体死因特征词（区别于纯任务中止说明或泛称“被杀死了”）
+_SPECIFIC_DEATH_CAUSE_MARKERS: Tuple[str, ...] = tuple(marker for marker in _DEATH_NOTE_MARKERS if marker != "被杀死了")
+
+
+def _normalize_game_note(text: str) -> str:
+    """归一化游戏背景条目文本，供短窗去重比对。"""
+    return " ".join((text or "").split())
+
+
+def _is_player_chat_note(text: str) -> bool:
+    """判断游戏背景条目是否为玩家游戏公屏发言（不参与系统死亡/本能收场去重折叠）。"""
+    return text.startswith("玩家 ")
+
+
+def _is_death_related_note(text: str) -> bool:
+    """判断非玩家游戏公屏的游戏条目是否属于死亡或因角色死亡导致的本能收场系统消息。"""
+    if text.startswith(("死了", "角色死了")):
+        return True
+    if text.startswith("急事处理完了") and "角色不在了" in text:
+        return True
+    if text.startswith("系统消息") and any(marker in text for marker in _DEATH_NOTE_MARKERS):
+        return True
+    return False
+
+
+def _has_specific_death_cause(text: str) -> bool:
+    """判断死亡文本是否包含具体死因（排除泛称“被杀死了”以及仅汇报任务中止/收场的状态副产物）。"""
+    if text in _GENERIC_DEATH_TEXTS:
+        return False
+    if any(hint in text for hint in _DEATH_STATUS_ONLY_HINTS):
+        return False
+    if text.startswith("系统消息"):
+        return "被杀死了" not in text and any(marker in text for marker in _SPECIFIC_DEATH_CAUSE_MARKERS)
+    if text.startswith("死了："):
+        detail = text.removeprefix("死了：").strip()
+        return bool(detail) and detail != "被杀死了"
+    if text.startswith(("角色死了（", "角色死了(")):
+        detail = text[5:].rstrip("）)").strip()
+        return bool(detail) and detail != "被杀死了"
+    return False
+
+
+def _death_note_priority(text: str) -> Tuple[int, int]:
+    """比较同窗内多条死亡相关系统消息的信息完整度。
+
+    优先级（从高到低）：
+    - 3 档：含具体死因的明确死亡消息或系统死讯播报（如“死了：被蜘蛛杀死了”“系统消息：角色从高处摔落”）；
+    - 2 档：明确死亡但无具体死因的泛称文案（如“死了：被杀死了”“角色死了”）；
+    - 1 档：因死亡产生的状态/任务副产物（如“急事处理完了：角色不在了…”“角色死了（任务已中止）”）。
+    """
+    if text.startswith("急事处理完了") and "角色不在了" in text:
+        return (1, len(text))
+    if _has_specific_death_cause(text):
+        return (3, len(text))
+    if any(hint in text for hint in _DEATH_STATUS_ONLY_HINTS):
+        return (1, len(text))
+    return (2, len(text))
 
 
 @dataclass(frozen=True)
@@ -232,6 +325,7 @@ class _Record:
     kind: str  # viewer / speech / game
     text: str
     sender: str = ""
+    is_player_chat: bool = False
 
 
 @dataclass(frozen=True)
@@ -307,6 +401,8 @@ class Mouth:
         self._records: Deque[_Record] = deque(maxlen=max(30, config.history_items * 3))
         # 单独保留最近说过的台词：高频身体/游戏事件刷屏时，她刚说过的话仍保底留在事实快照与复读闸里
         self._speeches: Deque[str] = deque(maxlen=20)
+        # 单独保留近期玩家游戏公屏发言：高频本能/系统日志刷满 _records 时仍保底进入事实快照
+        self._player_chats: Deque[Tuple[int, str]] = deque(maxlen=6)
         self._pending: List[Trigger] = []
         self._wake = asyncio.Event()
         self._task: Optional[asyncio.Task[None]] = None
@@ -326,8 +422,54 @@ class Mouth:
         if text and text.strip():
             self._speeches.append(text.strip())
 
-    def note_game(self, text: str, at_ms: Optional[int] = None) -> None:
-        self._records.append(_Record(at_ms or self._clock(), "game", text))
+    def note_game(self, text: str, at_ms: Optional[int] = None, *, is_player_chat: bool = False) -> None:
+        """记一条游戏侧背景事实；短窗内对完全相同或同源重复的死亡/本能收场系统消息去重，不误吞玩家游戏公屏。"""
+        cleaned = _normalize_game_note(text)
+        if not cleaned:
+            return
+        ts = at_ms if at_ms is not None else self._clock()
+        player_chat = is_player_chat or _is_player_chat_note(cleaned)
+        if player_chat:
+            self._records.append(_Record(ts, "game", cleaned, is_player_chat=True))
+            self._player_chats.append((ts, cleaned))
+            return
+
+        # 死亡瞬间会并发涌入多条同文或同源的本能收场/死亡系统消息：在短时间窗内查重并折叠，
+        # 优先保留信息更全或最新的一条，避免把近期同伴游戏公屏与前序现场挤出事实快照
+        incoming_death = _is_death_related_note(cleaned)
+        existing_records = list(self._records)
+        matched_indices: List[int] = []
+        best_existing: Optional[_Record] = None
+        for idx, rec in enumerate(existing_records):
+            if rec.kind != "game" or rec.is_player_chat:
+                continue
+            if ts - rec.at_ms > _GAME_NOTE_DEDUP_WINDOW_MS or rec.at_ms - ts > _GAME_NOTE_DEDUP_WINDOW_MS:
+                continue
+            rec_norm = _normalize_game_note(rec.text)
+            if rec_norm == cleaned or (incoming_death and _is_death_related_note(rec_norm)):
+                matched_indices.append(idx)
+                if best_existing is None or (
+                    incoming_death
+                    and _death_note_priority(rec_norm) >= _death_note_priority(_normalize_game_note(best_existing.text))
+                ):
+                    best_existing = rec
+
+        if matched_indices:
+            chosen_text = cleaned
+            chosen_ts = ts
+            if incoming_death and best_existing is not None:
+                best_norm = _normalize_game_note(best_existing.text)
+                if _death_note_priority(best_norm) > _death_note_priority(cleaned):
+                    # 已有同窗死亡条目包含更具体死因时，保留更完整的文案并忽略泛称/本能收场副产物
+                    chosen_text = best_norm
+                    chosen_ts = max(ts, best_existing.at_ms)
+            kept = [rec for idx, rec in enumerate(existing_records) if idx not in matched_indices]
+            kept.append(_Record(chosen_ts, "game", chosen_text, is_player_chat=False))
+            self._records.clear()
+            self._records.extend(kept)
+            return
+
+        self._records.append(_Record(ts, "game", cleaned, is_player_chat=False))
 
     def react(
         self,
@@ -348,6 +490,7 @@ class Mouth:
         """场次边界：清掉上一场的记录、由头、冷却与现场，开播后从头记。"""
         self._records.clear()
         self._speeches.clear()
+        self._player_chats.clear()
         self._pending.clear()
         self._last_reacted.clear()
         self._scene_brief, self._scene_at_ms = "", 0
@@ -553,6 +696,7 @@ class Mouth:
             scene_brief_ms=self._scene_at_ms,
             goals=goals,
             recent_events=[(record.at_ms, record.text) for record in self._records if record.kind == "game"],
+            recent_player_chats=list(self._player_chats),
             segment_title=segment,
             # 观众进房名单只由规划器负责欢迎；即时反应不读进房名单，免得因游戏小事开口时顺嘴二次欢迎
             room_activity=self._room_state.activity_line(include_enters=False),

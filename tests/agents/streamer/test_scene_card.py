@@ -101,3 +101,46 @@ def test_identity_line_renders_when_in_game_name_given() -> None:
 
     no_name = build_scene_card(SceneInputs(now_ms=1_000, scene_brief="院子里有一只苦力怕。", scene_brief_ms=1_000))
     assert "游戏里你的名字叫" not in no_name
+
+
+def test_scene_card_reserves_slots_for_recent_player_chat_under_tight_budget() -> None:
+    """预算收紧压缩【刚发生的事】时，近期同伴游戏公屏优先保位不被高频本能/系统日志挤飞，且严格遵守 max_chars。"""
+    events = (
+        (NOW - 30_000, "玩家 同伴甲：我把备用镐放你箱子里了"),
+        (NOW - 20_000, "玩家 同伴乙：我在南门等你"),
+        (NOW - 8_000, "急事处理完了：临时绕障完成" + "的详细说明" * 4),
+        (NOW - 6_000, "先放下手上的事：躲避附近怪物的袭击" + "补充" * 4),
+        (NOW - 4_000, "急事处理完了：躲避结束" + "补充" * 4),
+        (NOW - 2_000, "死了：被蜘蛛杀死了"),
+    )
+    card = build_scene_card(_inputs(recent_events=events), max_chars=420, max_events=6)
+    assert len(card) <= 420
+    assert "玩家 同伴乙：我在南门等你" in card
+    assert "死了：被蜘蛛杀死了" in card
+
+
+def test_scene_card_ignores_stale_player_chat_for_priority_reservation() -> None:
+    """超过保位窗（3 分钟外）的陈旧游戏公屏不再抢占【刚发生的事】的近期事件名额。"""
+    events = (
+        (NOW - 400_000, "玩家 同伴甲：很久以前的一句旧话"),
+        (NOW - 12_000, "天色变了：天黑了"),
+        (NOW - 8_000, "装备用坏了：铁镐坏了"),
+        (NOW - 4_000, "死了：被蜘蛛杀死了"),
+    )
+    card = build_scene_card(_inputs(recent_events=events), max_chars=800, max_events=2)
+    assert "很久以前的一句旧话" not in card
+    assert "装备用坏了：铁镐坏了" in card and "死了：被蜘蛛杀死了" in card
+
+
+def test_scene_card_does_not_resurrect_stale_backup_player_chat_under_low_event_count() -> None:
+    """低事件数场景下，保底通道 recent_player_chats 中超过 3 分钟的陈旧游戏公屏不会复活进【刚发生的事】。"""
+    card = build_scene_card(
+        _inputs(
+            recent_events=((NOW - 5_000, "天色变了：天亮了"),),
+            recent_player_chats=((NOW - 15 * 60_000, "玩家 同伴甲：十五分钟前的陈旧发言"),),
+        ),
+        max_chars=800,
+        max_events=6,
+    )
+    assert "天色变了：天亮了" in card
+    assert "十五分钟前的陈旧发言" not in card

@@ -775,3 +775,129 @@ async def test_high_risk_attacked_respects_larger_configured_same_kind_cooldown(
     clock.now += configured_cooldown_ms - 55_000
     allowed_at_70s = Trigger(at_ms=clock.now, key=HIGH_RISK_ATTACKED_KEY, text="着火了", kind="attacked")
     assert await mouth.react_once([allowed_at_70s]) == "又烧起来了！"
+
+
+def _events_block_of(card: str) -> str:
+    """从渲染后的事实快照中截取【刚发生的事】段落，避免断言被【这次的由头】干扰。"""
+    head, sep, tail = card.partition("【刚发生的事】")
+    assert sep, f"事实快照缺少【刚发生的事】段落: {card!r}"
+    del head
+    return tail.split("\n\n【", 1)[0]
+
+
+async def test_mouth_dedups_death_burst_keeps_richest_cause_and_preserves_player_chat(prompts: Any) -> None:
+    """死亡瞬间并发涌入的重复本能收场与多条死亡系统文案折叠成信息最全的一条，不误吞同伴游戏公屏并保位进事实快照。"""
+    clock = _Clock()
+    llm, speech = _LLM("sad：哎呀怎么突然没了！"), _Speech()
+    mouth = _mouth(llm, speech, prompts, clock=clock)
+
+    mouth.note_game("玩家 同伴甲：我把火把放在门口箱子里了", at_ms=clock.now - 5_000, is_player_chat=True)
+    mouth.note_game("急事处理完了：角色不在了，睡觉，APPROACH收场", at_ms=clock.now - 300)
+    mouth.note_game("急事处理完了：角色不在了，睡觉，APPROACH收场", at_ms=clock.now - 250)
+    mouth.note_game("死了：被蜘蛛杀死了", at_ms=clock.now - 200)
+    mouth.note_game("死了：被杀死了", at_ms=clock.now - 150)
+    mouth.note_game("角色死了（任务已中止）", at_ms=clock.now - 100)
+    # 普通不重复游戏事件与玩家游戏公屏里提到“死了”的话绝不被误吞
+    mouth.note_game("装备用坏了：铁镐坏了", at_ms=clock.now - 50)
+    mouth.note_game("玩家 同伴甲：你怎么突然死了呀", at_ms=clock.now - 20, is_player_chat=True)
+
+    await mouth.react_once([Trigger(at_ms=clock.now, key="body:died", text="死了：被蜘蛛杀死了", kind="died")])
+
+    events_block = _events_block_of(llm.calls[0]["messages"][-1]["content"])
+    assert "急事处理完了：角色不在了" not in events_block
+    assert "死了：被蜘蛛杀死了" in events_block
+    assert "死了：被杀死了" not in events_block
+    assert "角色死了（任务已中止）" not in events_block
+    assert "装备用坏了：铁镐坏了" in events_block
+    assert "玩家 同伴甲：我把火把放在门口箱子里了" in events_block
+    assert "玩家 同伴甲：你怎么突然死了呀" in events_block
+
+
+@pytest.mark.parametrize(
+    ("sequence", "expected_kept", "expected_dropped"),
+    [
+        # 倒序到达：状态副产物与泛称先到、具体死因后到 → 具体死因替换前者
+        (
+            [
+                "角色死了（任务已中止）",
+                "死了：被杀死了",
+                "急事处理完了：角色不在了，睡觉，APPROACH收场",
+                "死了：被蜘蛛杀死了",
+            ],
+            "死了：被蜘蛛杀死了",
+            ("角色死了（任务已中止）", "死了：被杀死了", "急事处理完了：角色不在了"),
+        ),
+        # 系统死亡播报（摔落）与本能收场同窗并发 → 保留带具体死因的系统死讯
+        (
+            [
+                "急事处理完了：角色不在了，睡觉，APPROACH收场",
+                "系统消息：角色从高处摔落",
+                "角色死了（任务已中止）",
+            ],
+            "系统消息：角色从高处摔落",
+            ("急事处理完了：角色不在了", "角色死了（任务已中止）"),
+        ),
+        # 系统死亡播报（岩浆）先到、泛称与任务中止后到 → 保留具体岩浆死因
+        (
+            [
+                "系统消息：角色试图在岩浆里游泳",
+                "死了：被杀死了",
+                "角色死了（任务已中止）",
+            ],
+            "系统消息：角色试图在岩浆里游泳",
+            ("死了：被杀死了", "角色死了（任务已中止）"),
+        ),
+    ],
+    ids=["reverse-order-spider", "system-fall-death", "system-lava-death"],
+)
+async def test_mouth_death_dedup_handles_reverse_order_and_system_death_broadcasts(
+    prompts: Any,
+    sequence: List[str],
+    expected_kept: str,
+    expected_dropped: tuple[str, ...],
+) -> None:
+    """无论到达先后顺序，含具体死因的死亡或系统死讯播报都严格优先于任务中止副产物与泛称文案。"""
+    clock = _Clock()
+    llm, speech = _LLM("sad：哎呀！"), _Speech()
+    mouth = _mouth(llm, speech, prompts, clock=clock)
+
+    for offset, text in enumerate(sequence):
+        mouth.note_game(text, at_ms=clock.now - 500 + offset * 50)
+
+    await mouth.react_once([Trigger(at_ms=clock.now, key="body:died", text="死了", kind="died")])
+
+    events_block = _events_block_of(llm.calls[0]["messages"][-1]["content"])
+    assert expected_kept in events_block
+    for dropped in expected_dropped:
+        assert dropped not in events_block
+
+
+async def test_mouth_keeps_recent_player_chat_in_scene_card_under_high_frequency_event_flood(prompts: Any) -> None:
+    """高频游戏事件把记录环形缓冲刷满时，近期玩家游戏公屏仍经保底通道进入【刚发生的事】而不被挤飞。"""
+    clock = _Clock()
+    llm, speech = _LLM("scared：好险！"), _Speech()
+    mouth = _mouth(llm, speech, prompts, clock=clock)
+
+    mouth.note_game("玩家 同伴乙：前面拐角有熔岩池小心点", at_ms=clock.now - 10_000, is_player_chat=True)
+    for idx in range(40):
+        mouth.note_game(f"急事处理完了：临时绕障第 {idx} 次", at_ms=clock.now - 8_000 + idx * 100)
+
+    await mouth.react_once([_trigger(at_ms=clock.now)])
+
+    events_block = _events_block_of(llm.calls[0]["messages"][-1]["content"])
+    assert "玩家 同伴乙：前面拐角有熔岩池小心点" in events_block
+
+
+def test_mouth_prompt_contains_no_fabrication_boundary_for_uncertain_causes(prompts: Any) -> None:
+    """即时反应系统提示词写明未写明死因、变动缘由或物品来历时只陈述眼下处境，不拿旧失误或手持物拼凑。"""
+    mouth_sys = prompts.render(
+        "amaidesu_mouth",
+        bot_name="麦麦",
+        personality="活泼",
+        style_constraints="口语化",
+        max_chars="40",
+        emotions="happy",
+        boundaries_rule="",
+    )
+    assert "死因、变动缘由或物品来历未在现场事实里明确写明时" in mouth_sys
+    assert "只陈述已确认的眼下处境" in mouth_sys

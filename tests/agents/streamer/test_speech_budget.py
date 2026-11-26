@@ -361,6 +361,9 @@ async def test_commentary_purifies_turn_input_and_preserves_item_spec_names() ->
     assert "刚刚说过的一句防复读台词" in turn["recent_speech_section"]
     assert "同伴甲" in turn["plan"]
     assert "原样保留" in turn["game_turn_rules"]
+    assert "进行态与打算态" in turn["game_turn_rules"]
+    assert "同伴协助过的成果不说成独自完成" in turn["game_turn_rules"]
+    assert "主线打算或向同伴的报备信息" in turn["game_turn_rules"]
     assert "不念原始游戏状态读数" not in turn["game_turn_rules"]
 
 

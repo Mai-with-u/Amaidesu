@@ -26,6 +26,8 @@ __all__ = ["GoalLine", "GoalStatus", "SceneInputs", "brief_of", "build_scene_car
 
 #: 现场信息过了这么久就提醒"可能已经变了"：嘴据此少下断言
 STALE_SCENE_MS = 60_000
+#: 近期玩家游戏公屏保位时间窗（毫秒）：3 分钟内同伴在游戏公屏说的话在预算收紧时优先保位
+RECENT_PLAYER_CHAT_MS = 180_000
 
 GoalStatus = Literal["进行中", "做完了", "卡住了", "停了没交付", "被打断了"]
 
@@ -51,6 +53,8 @@ class SceneInputs:
     scene_brief_ms: int = 0
     goals: Sequence[GoalLine] = ()
     recent_events: Sequence[Tuple[int, str]] = ()
+    # 近期玩家游戏公屏消息（旧→新）：高频本能/系统日志刷屏或预算缩减时在【刚发生的事】优先保位
+    recent_player_chats: Sequence[Tuple[int, str]] = ()
     segment_title: str = ""
     room_activity: str = ""
     recent_speeches: Sequence[str] = field(default_factory=tuple)
@@ -116,8 +120,76 @@ def _goal_section(inputs: SceneInputs) -> str:
     return "【手上的目标】（这是打算，不一定已经做到；现状以上面和下面为准）\n" + "\n".join(rows)
 
 
+def _is_player_chat_event(text: str) -> bool:
+    """按通用游戏公屏行前缀识别玩家发言（不依赖任何具体游戏名）。"""
+    return (text or "").strip().startswith("玩家 ")
+
+
+def _select_events(inputs: SceneInputs, limit: int) -> List[Tuple[int, str]]:
+    """按条数上限挑选【刚发生的事】：预算收紧时优先为近期玩家游戏公屏保位，不被高频本能/系统日志挤飞。
+
+    执行顺序：
+    1. 合并 ``recent_events`` 与保底通道 ``recent_player_chats``（仅纳入 3 分钟内的近期玩家游戏公屏，
+       超出时间窗的保底记录直接忽略，避免陈旧游戏公屏在低事件数时复活；按时刻与文本去重，保时间序旧→新）；
+    2. 总条数未超限时原样保留；超限时若存在 3 分钟内的近期玩家游戏公屏，先为其预留 1～2 个名额
+       （``limit >= 3`` 最多保 2 条，``limit < 3`` 保 1 条），剩余名额按最新优先补足；
+    3. 选出的条目按原时间顺序（旧→新）还原，确保阅读时序自然。
+    """
+    if limit <= 0:
+        return []
+    # (at_ms, order_idx, text, is_recent_chat)
+    merged: List[Tuple[int, int, str, bool]] = []
+    seen_keys: set[Tuple[int, str]] = set()
+    order_idx = 0
+    for at_ms, text in inputs.recent_events:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            continue
+        key = (at_ms, cleaned)
+        is_chat = _is_player_chat_event(cleaned) and (inputs.now_ms - at_ms) <= RECENT_PLAYER_CHAT_MS
+        merged.append((at_ms, order_idx, cleaned, is_chat))
+        seen_keys.add(key)
+        order_idx += 1
+    merged_from_backup = False
+    for at_ms, text in inputs.recent_player_chats:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            continue
+        # 超出保位窗的陈旧玩家游戏公屏直接跳过，防止已滚出常规记录的旧话重新复活进【刚发生的事】
+        if (inputs.now_ms - at_ms) > RECENT_PLAYER_CHAT_MS:
+            continue
+        key = (at_ms, cleaned)
+        if key in seen_keys:
+            # 同一条已在 recent_events 里：显式传入且在近期窗内时，确保其标记为优先保位的玩家游戏公屏
+            for idx, item in enumerate(merged):
+                if (item[0], item[2]) == key and not item[3]:
+                    merged[idx] = (item[0], item[1], item[2], True)
+            continue
+        merged.append((at_ms, order_idx, cleaned, True))
+        seen_keys.add(key)
+        order_idx += 1
+        merged_from_backup = True
+
+    if merged_from_backup:
+        merged.sort(key=lambda item: (item[0], item[1]))
+    if len(merged) <= limit:
+        return [(item[0], item[2]) for item in merged]
+
+    chat_positions = [idx for idx, item in enumerate(merged) if item[3]]
+    if not chat_positions:
+        return [(item[0], item[2]) for item in merged[-limit:]]
+
+    chat_quota = min(len(chat_positions), 2 if limit >= 3 else 1)
+    chosen: set[int] = set(chat_positions[-chat_quota:])
+    for idx in range(len(merged) - 1, -1, -1):
+        if len(chosen) >= limit:
+            break
+        chosen.add(idx)
+    return [(merged[idx][0], merged[idx][2]) for idx in sorted(chosen)]
+
+
 def _events_section(inputs: SceneInputs, limit: int) -> str:
-    events = list(inputs.recent_events)[-limit:] if limit > 0 else []
+    events = _select_events(inputs, limit)
     if not events:
         return ""
     rows = [f"- {_ago(inputs.now_ms - at_ms)} {_clip(text, 80)}" for at_ms, text in events]

@@ -3372,7 +3372,7 @@ class StreamerAgent(BaseAgent):
                     mention=self_mention_word(payload),
                 )
                 if self._mouth is not None:
-                    self._mouth.note_game(body)
+                    self._mouth.note_game(body, is_player_chat=(payload.kind == "player"))
                 if payload.kind != "player":
                     # 游戏公屏系统消息里的玩家加入提示（如"系统消息：玩家甲加入了游戏"）：登记待欢迎名，防即时反应与决策重复欢迎
                     joined_player = extract_player_join_name(payload.content) or extract_player_join_name(body)
@@ -4884,7 +4884,10 @@ class StreamerAgent(BaseAgent):
                 should_reply=True,
                 target=None,
                 topic_summary=summary,
-                reply_guidance="按人设把这条实况现场自然说给观众听，保留物品和设备专有名词原貌，不额外发挥",
+                reply_guidance=(
+                    "按人设把这条实况现场自然说给观众听，保持进行态、归属与主线打算或报备信息，"
+                    "保留物品和设备专有名词原貌，不额外发挥"
+                ),
                 emotion=emotion,
                 intensity=intensity,
             )
