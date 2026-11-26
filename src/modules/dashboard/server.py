@@ -5,6 +5,7 @@ Dashboard 服务器主类
 """
 
 import asyncio
+import errno
 import mimetypes
 import os
 import socket
@@ -20,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from src.modules.agents.control import AgentControl
 from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.dashboard.dependencies import set_dashboard_server
+from src.modules.dashboard.instance_lock import RESTART_HANDOFF_ENV
 from src.modules.dashboard.shutdown import ShutdownGuard, ShutdownJournal
 from src.modules.config.core_schemas import DEFAULT_VITE_DEV_PORT, DashboardConfig
 from src.modules.dashboard.vite_dev import ViteDevServer
@@ -63,6 +65,34 @@ from src.modules.dashboard.websocket.handler import WebSocketHandler
 #: 拉起新进程前给旧进程留的收尾时间（秒）：新进程冷启动要十几秒，
 #: 这一点只是让"新进程已创建"与旧进程开始清理之间有个交接间隔
 RESTART_SPAWN_DELAY_S = 0.5
+
+#: Windows 端口已被占用错误码（WSAEADDRINUSE）
+_WINERROR_ADDRINUSE = 10048
+
+
+class DashboardPortInUseError(RuntimeError):
+    """Dashboard 端口全部被占用导致绑定失败：继承 RuntimeError 兼容既有调用方，同时供启动入口识别并中止双开进程。"""
+
+    def __init__(self, message: str, *, host: str = "", port: int = 0, dev_mode: bool = False) -> None:
+        super().__init__(message)
+        self.host = host
+        self.port = port
+        self.dev_mode = dev_mode
+
+
+def is_port_in_use_error(exc: Optional[BaseException]) -> bool:
+    """判断异常或其因果链是否表示端口已被占用（兼容 POSIX EADDRINUSE 与 Windows WinError 10048）。"""
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, DashboardPortInUseError):
+            return True
+        if isinstance(current, OSError):
+            if current.errno == errno.EADDRINUSE or getattr(current, "winerror", None) == _WINERROR_ADDRINUSE:
+                return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class DashboardServer:
@@ -119,6 +149,7 @@ class DashboardServer:
         shutdown_timeout_s: float = 30.0,
         exit_func: Optional[Callable[[int], None]] = None,
         shutdown_journal: Optional[ShutdownJournal] = None,
+        instance_lock: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -262,6 +293,8 @@ class DashboardServer:
         self._exit_func = exit_func if exit_func is not None else os._exit
         # 停机现场日志可注入：默认写 logs/shutdown/，注入替身时避免落进真实目录
         self._shutdown_journal = shutdown_journal
+        # 单实例进程锁：热重启清理完毕后显式释放，便于交接中的新进程无缝接管
+        self._instance_lock = instance_lock
 
     async def start(self) -> None:
         """启动 Dashboard 服务器"""
@@ -272,122 +305,130 @@ class DashboardServer:
 
         self.logger.info(f"Dashboard 服务器启动中: http://{self.host}:{self.port}")
 
-        self.app = create_app()
-        setup_cors(self.app, self.cors_origins)
-
-        # widget 路由必须先于下方 serve_spa catch-all 挂载（路由按注册顺序匹配，
-        # 反了则 /api/widget/* 全部被 catch-all 的 api/ 守卫截成 Not Found）
-        await self._setup_widget_service()
-
-        DASHBOARD_DIST = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
-
-        if DASHBOARD_DIST.exists() and DASHBOARD_DIST.is_dir():
-            assets_dir = DASHBOARD_DIST / "assets"
-            if assets_dir.exists():
-                # Windows 注册表可能将 .js 标记为 text/plain，模块脚本需要正确的 MIME 类型。
-                mimetypes.add_type("text/javascript", ".js")
-                mimetypes.add_type("text/javascript", ".mjs")
-                self.app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
-
-            # FileResponse|dict 混合返回无法生成 Pydantic 响应模型，须显式关闭
-            @self.app.get("/{full_path:path}", response_model=None)
-            async def serve_spa(full_path: str) -> FileResponse | Dict[str, str]:
-                if full_path.startswith("api/") or full_path == "ws":
-                    return {"detail": "Not Found"}
-                # dist 根下的真实文件（public/ 拷贝物如 icon.png）优先于 SPA 回退：
-                # 只挂 /assets 时这类路径会拿到 index.html，浏览器把 HTML 当图片
-                candidate = DASHBOARD_DIST / full_path
-                if full_path and candidate.is_file() and candidate.resolve().is_relative_to(DASHBOARD_DIST.resolve()):
-                    # 与 index.html 同理 no-cache：icon.png 等未带内容 hash，重验避免换图后失效
-                    return FileResponse(str(candidate), headers={"Cache-Control": "no-cache"})
-                # no-cache 强制每次重验（未变时 304）：后端重建后标签页必须拿到新 index，
-                # 否则启发式缓存会让旧入口引用已被清掉的 chunk hash，懒加载路由卡死
-                return FileResponse(str(DASHBOARD_DIST / "index.html"), headers={"Cache-Control": "no-cache"})
-
-            self.logger.info(f"前端静态文件已挂载: {DASHBOARD_DIST}")
-        else:
-
-            @self.app.get("/")
-            async def root() -> Dict[str, str]:
-                return {
-                    "name": "Amaidesu Dashboard API",
-                    "version": "1.0.0",
-                    "docs": "/docs",
-                    "message": (
-                        "前端未构建（dashboard/dist/ 不存在），开发模式请先执行 'cd dashboard && pnpm run dev' "
-                        f"并访问 http://localhost:{DEFAULT_VITE_DEV_PORT}"
-                    ),
-                }
-
-            self.logger.info("前端未构建，仅 API 模式运行")
-
-        # 预绑定端口：在任何副作用（broadcaster/log_streamer/vite/心跳）之前完成，
-        # 端口被占用时在此失败，避免先打印“已启动”再退出的假象。
-        config = uvicorn.Config(
-            app=self.app,
-            host=self.host,
-            port=self.port,
-            log_level="warning",
-            ws=WebSocketsSansIOProtocol,
-        )
-        server = uvicorn.Server(config)
-        self._server = server
+        # 预绑定端口：在任何副作用（widget/app/broadcaster/log_streamer/vite/心跳）之前完成，
+        # 端口被占用时在此立即失败，避免残留事件总线订阅或先打印“已启动”再退出的假象。
         bound_socket = self._bind_socket()
+        try:
+            self.app = create_app()
+            setup_cors(self.app, self.cors_origins)
 
-        set_dashboard_server(self)
+            # widget 路由必须先于下方 serve_spa catch-all 挂载（路由按注册顺序匹配，
+            # 反了则 /api/widget/* 全部被 catch-all 的 api/ 守卫截成 Not Found）
+            await self._setup_widget_service()
 
-        self.ws_handler = WebSocketHandler(heartbeat_interval=self.websocket_heartbeat)
+            DASHBOARD_DIST = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
 
-        # 事件广播仅走 WS 推送，不负责记录（记录所有权在 EventHistoryService）
-        self.event_broadcaster = EventBroadcaster(
-            event_bus=self.event_bus,
-            ws_handler=self.ws_handler,
-            event_history=self.event_history,
-            history_push_limit=self.dashboard_config.max_history_messages,
-        )
-        await self.event_broadcaster.start()
+            if DASHBOARD_DIST.exists() and DASHBOARD_DIST.is_dir():
+                assets_dir = DASHBOARD_DIST / "assets"
+                if assets_dir.exists():
+                    # Windows 注册表可能将 .js 标记为 text/plain，模块脚本需要正确的 MIME 类型。
+                    mimetypes.add_type("text/javascript", ".js")
+                    mimetypes.add_type("text/javascript", ".mjs")
+                    self.app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-        if self._external_log_streamer:
-            self._external_log_streamer.ws_handler = self.ws_handler
-            self.log_streamer = self._external_log_streamer
-            if not hasattr(self.log_streamer, "_is_running") or not self.log_streamer._is_running:
-                await self.log_streamer.start()
-        else:
-            self.log_streamer = LogStreamer(ws_handler=self.ws_handler, min_level="DEBUG")
-            await self.log_streamer.start()
+                # FileResponse|dict 混合返回无法生成 Pydantic 响应模型，须显式关闭
+                @self.app.get("/{full_path:path}", response_model=None)
+                async def serve_spa(full_path: str) -> FileResponse | Dict[str, str]:
+                    if full_path.startswith("api/") or full_path == "ws":
+                        return {"detail": "Not Found"}
+                    # dist 根下的真实文件（public/ 拷贝物如 icon.png）优先于 SPA 回退：
+                    # 只挂 /assets 时这类路径会拿到 index.html，浏览器把 HTML 当图片
+                    candidate = DASHBOARD_DIST / full_path
+                    if (
+                        full_path
+                        and candidate.is_file()
+                        and candidate.resolve().is_relative_to(DASHBOARD_DIST.resolve())
+                    ):
+                        # 与 index.html 同理 no-cache：icon.png 等未带内容 hash，重验避免换图后失效
+                        return FileResponse(str(candidate), headers={"Cache-Control": "no-cache"})
+                    # no-cache 强制每次重验（未变时 304）：后端重建后标签页必须拿到新 index，
+                    # 否则启发式缓存会让旧入口引用已被清掉的 chunk hash，懒加载路由卡死
+                    return FileResponse(str(DASHBOARD_DIST / "index.html"), headers={"Cache-Control": "no-cache"})
 
-        @self.app.websocket("/ws")
-        async def websocket_endpoint(websocket: WebSocket) -> None:
-            ws_handler = self.ws_handler
-            # 防御: dashboard.cleanup() 可能已把 ws_handler 置 None（孤儿 WS task 场景），
-            # 直接调用会抛 AttributeError -> starlette traceback
-            if ws_handler is None:
-                await websocket.close()
-                return
+                self.logger.info(f"前端静态文件已挂载: {DASHBOARD_DIST}")
+            else:
 
-            # 连接建立后、接收循环开始前推送历史（日志 + 事件）
-            async def push_history(client_id: str) -> None:
-                if self.log_streamer:
-                    await self.log_streamer.broadcast_history(client_id)
-                if self.event_broadcaster:
-                    await self.event_broadcaster.push_history_to_client(client_id)
+                @self.app.get("/")
+                async def root() -> Dict[str, str]:
+                    return {
+                        "name": "Amaidesu Dashboard API",
+                        "version": "1.0.0",
+                        "docs": "/docs",
+                        "message": (
+                            "前端未构建（dashboard/dist/ 不存在），开发模式请先执行 'cd dashboard && pnpm run dev' "
+                            f"并访问 http://localhost:{DEFAULT_VITE_DEV_PORT}"
+                        ),
+                    }
 
-            await ws_handler.run_client_handler(websocket, on_connected=push_history)
+                self.logger.info("前端未构建，仅 API 模式运行")
 
-        self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
-
-        if self.dev_mode:
-            dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
-            self._vite_dev = ViteDevServer(
-                dashboard_dir=dashboard_dir,
-                port=self.vite_dev_port,
-                backend_host=self.host,
-                backend_port=self.port,
+            config = uvicorn.Config(
+                app=self.app,
+                host=self.host,
+                port=self.port,
+                log_level="warning",
+                ws=WebSocketsSansIOProtocol,
             )
-            await self._vite_dev.start()
+            server = uvicorn.Server(config)
+            self._server = server
 
-        # socket 已预绑定，serve 直接复用，不会再绑定端口
-        self._server_task = asyncio.create_task(server.serve(sockets=[bound_socket]))
+            set_dashboard_server(self)
+
+            self.ws_handler = WebSocketHandler(heartbeat_interval=self.websocket_heartbeat)
+
+            # 事件广播仅走 WS 推送，不负责记录（记录所有权在 EventHistoryService）
+            self.event_broadcaster = EventBroadcaster(
+                event_bus=self.event_bus,
+                ws_handler=self.ws_handler,
+                event_history=self.event_history,
+                history_push_limit=self.dashboard_config.max_history_messages,
+            )
+            await self.event_broadcaster.start()
+
+            if self._external_log_streamer:
+                self._external_log_streamer.ws_handler = self.ws_handler
+                self.log_streamer = self._external_log_streamer
+                if not hasattr(self.log_streamer, "_is_running") or not self.log_streamer._is_running:
+                    await self.log_streamer.start()
+            else:
+                self.log_streamer = LogStreamer(ws_handler=self.ws_handler, min_level="DEBUG")
+                await self.log_streamer.start()
+
+            @self.app.websocket("/ws")
+            async def websocket_endpoint(websocket: WebSocket) -> None:
+                ws_handler = self.ws_handler
+                # 防御: dashboard.cleanup() 可能已把 ws_handler 置 None（孤儿 WS task 场景），
+                # 直接调用会抛 AttributeError -> starlette traceback
+                if ws_handler is None:
+                    await websocket.close()
+                    return
+
+                # 连接建立后、接收循环开始前推送历史（日志 + 事件）
+                async def push_history(client_id: str) -> None:
+                    if self.log_streamer:
+                        await self.log_streamer.broadcast_history(client_id)
+                    if self.event_broadcaster:
+                        await self.event_broadcaster.push_history_to_client(client_id)
+
+                await ws_handler.run_client_handler(websocket, on_connected=push_history)
+
+            self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
+
+            if self.dev_mode:
+                dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
+                self._vite_dev = ViteDevServer(
+                    dashboard_dir=dashboard_dir,
+                    port=self.vite_dev_port,
+                    backend_host=self.host,
+                    backend_port=self.port,
+                )
+                await self._vite_dev.start()
+
+            # socket 已预绑定，serve 直接复用，不会再绑定端口
+            self._server_task = asyncio.create_task(server.serve(sockets=[bound_socket]))
+        except Exception:
+            bound_socket.close()
+            raise
 
         self._is_running = True
         self.logger.info(f"Dashboard 已启动: {self.get_url()}")
@@ -428,7 +469,15 @@ class DashboardServer:
             detail = f"{self.host}:{self.port} 被占用（开发模式不回退换口，vite 代理硬编码该端口）"
         else:
             detail = f"{self.host}:{self.port} 起连续 {self._PORT_FALLBACK_CANDIDATES} 个候选端口均被占用"
-        raise RuntimeError(f"Dashboard 端口绑定失败（{detail}）: {last_error}") from last_error
+        message = f"Dashboard 端口绑定失败（{detail}）: {last_error}"
+        if is_port_in_use_error(last_error):
+            raise DashboardPortInUseError(
+                message,
+                host=self.host,
+                port=self.port,
+                dev_mode=self.dev_mode,
+            ) from last_error
+        raise RuntimeError(message) from last_error
 
     async def stop(self) -> None:
         """停止 Dashboard 服务器"""
@@ -522,9 +571,12 @@ class DashboardServer:
         self.logger.info("准备重启服务进程...")
         await asyncio.sleep(RESTART_SPAWN_DELAY_S)
         try:
+            # 透传热重启交接信号，让新进程等待旧进程完成停机清理并释放单实例锁后再接管
+            child_env = {**os.environ, RESTART_HANDOFF_ENV: "1"}
             subprocess.Popen(
                 [sys.executable] + sys.argv,
                 cwd=os.getcwd(),
+                env=child_env,
                 close_fds=True,
             )
         except Exception:
@@ -545,10 +597,12 @@ class DashboardServer:
         self._exit_func(0)
 
     async def _shutdown_sequence(self) -> None:
-        """停机清理序列：Dashboard 停止 → 资源引用清理 → SQLite 连接落盘。"""
+        """停机清理序列：Dashboard 停止 → 资源引用清理 → SQLite 连接落盘 → 释放单实例锁。"""
         await self.stop()
         await self.cleanup()
         await self._close_shared_storage()
+        if self._instance_lock is not None:
+            self._instance_lock.release()
 
     async def _close_shared_storage(self) -> None:
         """关闭注入仓储的 SQLite 连接，确保 WAL/事务落盘。

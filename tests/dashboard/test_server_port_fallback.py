@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import socket
 import time
 from collections.abc import Iterator
@@ -9,12 +10,12 @@ from contextlib import contextmanager
 
 import pytest
 
-from src.modules.dashboard.server import DashboardServer
+from src.modules.dashboard.server import DashboardPortInUseError, DashboardServer, is_port_in_use_error
 from src.modules.logging import get_logger
 
-# 本机后台进程会在 TCP 动态端口段抢位：取号（绑定后关闭）与再次绑定之间存在
-# 空窗。预占冲突（Windows 10048）时换新起点整体重试有限次，耗尽才显式失败。
-_RETRY_LIMIT = 5
+# 本机后台进程或并行测试进程会在 TCP 动态端口段抢位，Windows 上也可能撞到保留端口段（WinError 10013）。
+# 预占冲突时换新起点整体重试有限次，耗尽才显式失败。
+_RETRY_LIMIT = 20
 _RETRY_INTERVAL_S = 0.01
 
 
@@ -82,11 +83,13 @@ def test_free_configured_port_is_kept() -> None:
 
 
 def test_occupied_port_falls_back_to_the_next_one_and_updates_the_server_port() -> None:
-    # 占住 base（模拟配置端口被其他进程占用），base+1 保持空闲供回退
+    # 占住 base（模拟配置端口被外部程序占用）；并行测试环境下 base+1 可能被临近进程瞬时占用，
+    # 回退应落在候选窗 (base, base + _PORT_FALLBACK_CANDIDATES) 内并同步更新 server.port
     with _held_contiguous_ports(1) as base:
         server = _make_server(base)
         with server._bind_socket() as sock:
-            assert server.port == base + 1 and sock.getsockname()[1] == base + 1
+            assert base < server.port < base + DashboardServer._PORT_FALLBACK_CANDIDATES
+            assert sock.getsockname()[1] == server.port
 
 
 def test_dev_mode_never_falls_back_because_the_vite_proxy_hardcodes_the_port() -> None:
@@ -100,6 +103,35 @@ def test_dev_mode_never_falls_back_because_the_vite_proxy_hardcodes_the_port() -
 def test_all_candidates_occupied_raises_without_rewriting_the_configured_port() -> None:
     with _held_contiguous_ports(DashboardServer._PORT_FALLBACK_CANDIDATES) as base:
         server = _make_server(base)
-        with pytest.raises(RuntimeError, match="均被占用"):
+        with pytest.raises(DashboardPortInUseError, match="均被占用") as exc_info:
             server._bind_socket()
+        assert isinstance(exc_info.value, RuntimeError)
+        assert is_port_in_use_error(exc_info.value) is True
         assert server.port == base
+
+
+def test_dev_mode_occupied_raises_port_in_use_error_subclass() -> None:
+    """开发模式端口冲突抛出 DashboardPortInUseError（RuntimeError 子类），便于启动入口识别并中止双开进程。"""
+    with _held_contiguous_ports(1) as base:
+        server = _make_server(base, dev_mode=True)
+        with pytest.raises(DashboardPortInUseError, match="开发模式") as exc_info:
+            server._bind_socket()
+        assert exc_info.value.port == base
+        assert exc_info.value.dev_mode is True
+        assert is_port_in_use_error(exc_info.value) is True
+
+
+def test_is_port_in_use_error_recognizes_posix_and_windows_codes() -> None:
+    """is_port_in_use_error 同时识别 DashboardPortInUseError、POSIX EADDRINUSE、Windows 10048 与其因果链。"""
+    posix_err = OSError(errno.EADDRINUSE, "Address already in use")
+    win_err = OSError(0, "Only one usage of each socket address is normally permitted")
+    win_err.winerror = 10048  # type: ignore[attr-defined]
+    wrapped = RuntimeError("bind failed")
+    wrapped.__cause__ = win_err
+
+    assert is_port_in_use_error(DashboardPortInUseError("busy")) is True
+    assert is_port_in_use_error(posix_err) is True
+    assert is_port_in_use_error(win_err) is True
+    assert is_port_in_use_error(wrapped) is True
+    assert is_port_in_use_error(RuntimeError("unrelated failure")) is False
+    assert is_port_in_use_error(OSError(errno.ENOENT, "not found")) is False
