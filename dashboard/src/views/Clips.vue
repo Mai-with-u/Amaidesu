@@ -1142,9 +1142,11 @@ onBeforeUnmount(() => {
 @media (max-width: 1279px) {
   .clip-workspace {
     grid-template-columns: minmax(0, 1fr);
-    /* 单列堆叠后不再给工作区定高：播放器给固定高度，列表放开内层滚动，
-       让详情区外层统一滚动（双层滚动条打架） */
-    flex: initial;
+    /* 单列堆叠后工作区退出伸缩（flex:none 高度=内容自然高）：若留在伸缩流里
+       会被兄弟压缩、段列表以 overflow:visible 溢出画到下方时间轴卡片上，
+       概览条盖住段卡输入框拦截点击（"输入框打不进字"的根因）。页面滚动
+       统一交详情区外层 */
+    flex: none;
     min-height: 0;
   }
 
