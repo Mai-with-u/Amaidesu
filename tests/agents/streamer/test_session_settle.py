@@ -15,7 +15,14 @@ from typing import Any, Iterator, List, Optional, Tuple
 
 import pytest
 
-from src.agents.streamer.memory.settle import MAX_ATTEMPTS, SessionSettler, SettleError, parse_json_object
+from src.agents.streamer.memory.settle import (
+    MAX_ATTEMPTS,
+    MAX_TITLE_CHARS,
+    SessionSettler,
+    SettleError,
+    clip_title,
+    parse_json_object,
+)
 from src.modules.background import BackgroundTaskRegistry
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -2632,3 +2639,48 @@ async def test_settle_viewer_names_guard_excludes_known_player_aliases(
     assert sess is not None and sess.settle_report is not None
     unregistered = json.loads(sess.settle_report)["unregistered"]
     assert any("观众昵称" in item.get("reason", "") for item in unregistered)
+
+
+@pytest.mark.parametrize(
+    ("raw", "limit", "expected"),
+    [
+        # 48 字上限内包含较长英文账号名时完整保留，不再在 30 字处截裂
+        (
+            "Minecraft：和同伴 PartnerAlpha 一起修好了河边的大水车与传动轴",
+            MAX_TITLE_CHARS,
+            "Minecraft：和同伴 PartnerAlpha 一起修好了河边的大水车与传动轴",
+        ),
+        # 落点恰好切在 PartnerAlpha 中间时回退到该词之前，绝不产出半截英文账号名
+        (
+            "Minecraft：在矿洞入口遇到了热心同伴 PartnerAlpha 并收下补给",
+            30,
+            "Minecraft：在矿洞入口遇到了热心同伴",
+        ),
+        # 带下划线和数字的英文 ID 同样视作连续词边界
+        (
+            "Minecraft：和队友 Player_01_Alpha 合作点亮了整片矿洞",
+            20,
+            "Minecraft：和队友",
+        ),
+        # 切在中文之间时照常按上限截断
+        ("这是一段全中文而且长度明显超过限制的档案标题文本", 12, "这是一段全中文而且长度明"),
+        # 极端情况：整条标题开头就是超长单个英文词，兜底截到上限避免退化成空串
+        ("SuperLongIdentifierWithoutSpacesOrChineseChars", 16, "SuperLongIdentif"),
+        # 极端情况：首字符为孤立标点紧跟超长英文词，避免回退成孤立单字符标点
+        ("（SuperLongIdentifierWithoutSpacesOrChineseChars）", 16, "（SuperLongIdenti"),
+    ],
+    ids=[
+        "within-48-keeps-id",
+        "cut-mid-ascii-id",
+        "cut-mid-underscore-id",
+        "chinese-cut",
+        "leading-overlong-word",
+        "leading-punct-overlong-word",
+    ],
+)
+def test_clip_title_avoids_splitting_ascii_identifiers(raw: str, limit: int, expected: str) -> None:
+    """档案与承诺标题上限放宽至 48 字，且截断落点切在连续 ASCII 账号名中间时回退到词前不切半截。"""
+    assert MAX_TITLE_CHARS == 48
+    clipped = clip_title(raw, limit)
+    assert clipped == expected
+    assert len(clipped) <= limit

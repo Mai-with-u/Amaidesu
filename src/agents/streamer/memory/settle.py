@@ -146,8 +146,10 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_SETTLE_REASONING_EFFORT",
     "MAX_ATTEMPTS",
+    "MAX_TITLE_CHARS",
     "SessionSettler",
     "SettleError",
+    "clip_title",
     "parse_commitment_output",
     "parse_json_object",
 ]
@@ -190,9 +192,9 @@ _UNPROVEN_REASON = "说游戏里的事做完了，游戏记录里没核实到：
 # 核对完成说法时读的游戏事件至多几条：取读口的上限，要的是全本场（第 58 场连同急事插曲一百二十来条），
 # 少了就是长场前半段做成的事查不到
 _RECORD_EVENTS_MAX = 500
-# 逐字引文与标题的上限（超出的引文整条丢弃，超出的标题截断）
+# 逐字引文与标题的上限（超出的引文整条丢弃，超出的标题按词边界安全截断；48 字可容纳含长英文账号名的完整标题）
 MAX_QUOTE_CHARS = 80
-MAX_TITLE_CHARS = 30
+MAX_TITLE_CHARS = 48
 # 交给「找新承诺」的旧承诺标题上限：未了结的全给，判误记、已了结的只给最近的这些条
 MAX_VOID_TITLES = 40
 MAX_CLOSED_TITLES = 40
@@ -644,10 +646,35 @@ _EXTRACT_STEPS: Tuple[_ExtractStep, ...] = (
 )
 
 
-def _clip(text: str, limit: int) -> str:
-    """按字数截断（标题用；引文不截断，截过的引文已经不是逐字引文）。"""
+def _is_ascii_word_char(ch: str) -> bool:
+    """判断字符是否属于连续 ASCII 标识符（字母/数字/下划线，用于防止截断切裂英文玩家账号名）。"""
+    return ch.isascii() and (ch.isalnum() or ch == "_")
+
+
+def clip_title(text: str, limit: int = MAX_TITLE_CHARS) -> str:
+    """按字数安全截断标题（引文不截断，截过的引文已经不是逐字引文）。
+
+    当截断落点恰好切在连续 ASCII 字母/数字/下划线词（如英文账号名）中间时，
+    回退到该词起点之前（同时去除回退后的尾随空白），避免截出半截英文 ID；
+    若回退后为空或仅剩孤立标点（如前导括号紧接超长英文词），则兜底截到上限。
+    """
     cleaned = (text or "").strip()
-    return cleaned[:limit] if len(cleaned) > limit else cleaned
+    if limit <= 0:
+        return ""
+    if len(cleaned) <= limit:
+        return cleaned
+    cut = limit
+    if _is_ascii_word_char(cleaned[cut - 1]) and _is_ascii_word_char(cleaned[cut]):
+        word_start = cut - 1
+        while word_start > 0 and _is_ascii_word_char(cleaned[word_start - 1]):
+            word_start -= 1
+        prefix = cleaned[:word_start].rstrip()
+        if prefix and any(ch.isalnum() for ch in prefix):
+            return prefix
+    return cleaned[:limit].rstrip()
+
+
+_clip = clip_title
 
 
 # "对谁"字段的已知取值：对具体观众 / 对全体观众。提示词只要求这两个值，
@@ -2390,7 +2417,7 @@ class SessionSettler:
                 misses.append(
                     UnregisteredItem(
                         kind="archive",
-                        what=f"档#{item.archive_line_id} 更正：{item.summary}"[:MAX_TITLE_CHARS],
+                        what=_clip(f"档#{item.archive_line_id} 更正：{item.summary}", MAX_TITLE_CHARS),
                         quote=item.evidence_quote,
                         reason="本场有场内更正但快照仍保留原行，请人工复核",
                     )
