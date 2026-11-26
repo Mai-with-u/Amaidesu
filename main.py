@@ -47,7 +47,14 @@ from src.modules.config.core_schemas import (
 from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig
 from src.modules.config.service import ConfigService
 from src.modules.config.storage_schemas import ViewerIdentityConfig
-from src.modules.dashboard.server import DashboardServer
+from src.modules.dashboard.instance_lock import (
+    RESTART_HANDOFF_ENV,
+    RESTART_HANDOFF_WAIT_S,
+    InstanceAlreadyRunningError,
+    SingleInstanceLock,
+    resolve_instance_lock_path,
+)
+from src.modules.dashboard.server import DashboardPortInUseError, DashboardServer, is_port_in_use_error
 from src.modules.dashboard.stream_preview import StreamPreviewHub
 from src.modules.diagnostics import DiagnosticsWriter, TtsDiagnosticsRecorder
 from src.modules.events import (
@@ -352,6 +359,7 @@ class AppComponents:
     privacy_service: Optional[PrivacyService] = None
     retention_service: Optional[RetentionService] = None
     lead_coordinator: Optional[LeadCoordinator] = None
+    instance_lock: Optional[SingleInstanceLock] = None
 
 
 async def create_app_components(
@@ -365,6 +373,7 @@ async def create_app_components(
     log_streamer_persist: bool = True,
     log_streamer_persist_dir: Optional[str] = None,
     startup_effects: bool = True,
+    acquire_instance_lock: bool = True,
 ) -> AppComponents:
     """组合根：构造并连接所有核心组件。
 
@@ -400,18 +409,154 @@ async def create_app_components(
         health_monitor / task_tracker / tts_diagnostics_recorder /
         maibot_sync_reporter
     """
+    # --- 单实例进程锁（先于数据库初始化与采集器建连，任何模式下双开立即拦截，零外部副作用）---
+    # 立即消费热重启交接信号避免泄漏给子进程：仅 WebUI 热重启拉起的新进程等待旧进程释锁，普通双开 0ms 立即拒绝
+    restart_handoff = bool(os.environ.pop(RESTART_HANDOFF_ENV, ""))
+    instance_lock: Optional[SingleInstanceLock] = None
+    if acquire_instance_lock:
+        lock_path = resolve_instance_lock_path(config, base_dir=Path(_BASE_DIR))
+        instance_lock = SingleInstanceLock(lock_path)
+        wait_timeout_s = RESTART_HANDOFF_WAIT_S if restart_handoff else 0.0
+        if restart_handoff:
+            logger.info(f"检测到热重启交接信号，等待旧进程释放单实例锁（最多 {wait_timeout_s:.1f}s）: {lock_path}")
+        try:
+            instance_lock.acquire(wait_timeout_s=wait_timeout_s)
+        except InstanceAlreadyRunningError as exc:
+            logger.error(f"检测到同机已有 Amaidesu 实例正在运行，为避免双开抢占直播间连接已中止启动: {exc}")
+            raise
+        logger.info(f"单实例进程锁已获取: {lock_path}")
+
+    # 预置各阶段组件引用：若装配中途（如 Dashboard 端口冲突）抛出致命异常，
+    # 由下方 except 分支统一经 run_shutdown 收口清理已启动的采集器、Agent、MCP 子进程与数据库连接
+    database: Optional[SQLiteDatabase] = None
+    privacy_service: Optional[PrivacyService] = None
+    retention_service: Optional[RetentionService] = None
+    event_bus: Optional[EventBus] = None
+    session_manager: Optional[LiveSessionManager] = None
+    diagnostics_writer: Optional[DiagnosticsWriter] = None
+    llm_service: Optional[LLMManager] = None
+    event_recorder: Optional[EventHistoryRecorder] = None
+    tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = None
+    storage_ledger: Optional[StorageLedger] = None
+    maibot_sync_reporter: Optional[LiveStatusReporter] = None
+    maigo_bridge: Optional[MaiGOBridge] = None
+    clipping_service: Optional[ClippingService] = None
+    collector_manager: Optional[CollectorManager] = None
+    simulator_service: Optional[SimulatorService] = None
+    agent_manager: Optional[AgentManager] = None
+    tool_registry: Optional[ToolRegistry] = None
+    health_monitor: Optional[ToolHealthMonitor] = None
+    task_tracker: Optional[TaskTracker] = None
+    avatar_tracking: Optional[TrackingRuntime] = None
+    lead_coordinator: Optional[LeadCoordinator] = None
+    dashboard_server: Optional[DashboardServer] = None
+    log_streamer: Optional[LogStreamer] = None
+
+    try:
+        return await _assemble_app_components(
+            config=config,
+            config_service=config_service,
+            dev_webui=dev_webui,
+            storage_ledger_auto_start=storage_ledger_auto_start,
+            session_manager_auto_start=session_manager_auto_start,
+            providers_auto_start=providers_auto_start,
+            log_streamer_persist=log_streamer_persist,
+            log_streamer_persist_dir=log_streamer_persist_dir,
+            startup_effects=startup_effects,
+            instance_lock=instance_lock,
+            state=(
+                state := {
+                    "database": database,
+                    "privacy_service": privacy_service,
+                    "retention_service": retention_service,
+                    "event_bus": event_bus,
+                    "session_manager": session_manager,
+                    "diagnostics_writer": diagnostics_writer,
+                    "llm_service": llm_service,
+                    "event_recorder": event_recorder,
+                    "tts_diagnostics_recorder": tts_diagnostics_recorder,
+                    "storage_ledger": storage_ledger,
+                    "maibot_sync_reporter": maibot_sync_reporter,
+                    "maigo_bridge": maigo_bridge,
+                    "clipping_service": clipping_service,
+                    "collector_manager": collector_manager,
+                    "simulator_service": simulator_service,
+                    "agent_manager": agent_manager,
+                    "tool_registry": tool_registry,
+                    "health_monitor": health_monitor,
+                    "task_tracker": task_tracker,
+                    "avatar_tracking": avatar_tracking,
+                    "lead_coordinator": lead_coordinator,
+                    "dashboard_server": dashboard_server,
+                    "log_streamer": log_streamer,
+                }
+            ),
+        )
+    except BaseException:
+        # 装配期异常收口：反向关闭已启动组件并释放单实例锁，避免残留采集器/子进程或死锁
+        pending_log_streamer = state.get("log_streamer")
+        if pending_log_streamer is not None and state.get("dashboard_server") is None:
+            with contextlib.suppress(Exception):
+                await pending_log_streamer.stop()
+        partial = AppComponents(
+            event_bus=state["event_bus"],  # type: ignore[arg-type]
+            llm_service=state["llm_service"],  # type: ignore[arg-type]
+            dashboard_server=state["dashboard_server"],
+            event_recorder=state["event_recorder"],
+            collector_manager=state["collector_manager"],
+            agent_manager=state["agent_manager"],
+            simulator_service=state["simulator_service"],
+            database=state["database"],  # type: ignore[arg-type]
+            storage_ledger=state["storage_ledger"],
+            session_manager=state["session_manager"],  # type: ignore[arg-type]
+            tool_registry=state["tool_registry"],
+            health_monitor=state["health_monitor"],
+            task_tracker=state["task_tracker"],
+            tts_diagnostics_recorder=state["tts_diagnostics_recorder"],
+            maibot_sync_reporter=state["maibot_sync_reporter"],
+            maigo_bridge=state["maigo_bridge"],
+            clipping_service=state["clipping_service"],
+            avatar_tracking=state["avatar_tracking"],
+            privacy_service=state["privacy_service"],
+            retention_service=state["retention_service"],
+            lead_coordinator=state["lead_coordinator"],
+            instance_lock=instance_lock,
+        )
+        await run_shutdown(partial, diagnostics_writer=state.get("diagnostics_writer"))
+        raise
+
+
+async def _assemble_app_components(
+    *,
+    config: Dict[str, Any],
+    config_service: ConfigService,
+    dev_webui: bool,
+    storage_ledger_auto_start: bool,
+    session_manager_auto_start: bool,
+    providers_auto_start: bool,
+    log_streamer_persist: bool,
+    log_streamer_persist_dir: Optional[str],
+    startup_effects: bool,
+    instance_lock: Optional[SingleInstanceLock],
+    state: Dict[str, Any],
+) -> AppComponents:
+    """组合根实际装配体；每步就绪后同步登记到 ``state`` 供异常路径统一清理。"""
     # --- 存储（SQLiteDatabase：建表 + 迁移 + 自检）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
     logger.info("初始化存储（SQLiteDatabase）...")
     database = await build_database(config)
+    state["database"] = database
     privacy_service, retention_service = await build_privacy_and_retention(
         config, database, startup_effects=startup_effects
     )
+    state["privacy_service"] = privacy_service
+    state["retention_service"] = retention_service
     logger.info(f"存储已就绪（db={database.db_path}）")
 
     # --- EventBus（先于 LLMManager：水位事件经构造器注入引擎）---
     logger.info("初始化事件总线...")
     event_bus = EventBus()
+    state["event_bus"] = event_bus
 
     # --- 场次管理（先于 LLMManager：llm_usage 场次归属经构造器注入解析器）---
 
@@ -420,6 +565,7 @@ async def create_app_components(
     # 下游 StorageLedger 据此跳过落库。platform 是装配期常量（本项目生产
     # 平台为 B 站），主播发言行落库与 open_session 未显式指定时经此取值。
     session_manager = LiveSessionManager(database.sessions, database.chat, event_bus, platform="bilibili")
+    state["session_manager"] = session_manager
     if session_manager_auto_start:
         await session_manager.start()
 
@@ -432,6 +578,7 @@ async def create_app_components(
     if diagnostics_config.enabled:
         diagnostics_writer = DiagnosticsWriter(retention_days=diagnostics_config.retention_days)
         diagnostics_writer.start()
+        state["diagnostics_writer"] = diagnostics_writer
     else:
         logger.info("[diagnostics].enabled=false，诊断正文不落盘（统计落库不受影响）")
 
@@ -446,6 +593,7 @@ async def create_app_components(
         live_session_resolver=lambda: session_manager.active_pk,
         diagnostics_writer=diagnostics_writer,
     )
+    state["llm_service"] = llm_service
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
@@ -469,11 +617,13 @@ async def create_app_components(
 
     # --- 事件历史（系统级）+ TTS 合成诊断记录 ---
     event_recorder = await _start_event_recorder(event_bus, config, diagnostics_writer=diagnostics_writer)
+    state["event_recorder"] = event_recorder
     logger.info("事件历史记录器已启动")
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = None
     if diagnostics_writer is not None:
         tts_diagnostics_recorder = TtsDiagnosticsRecorder(event_bus=event_bus, writer=diagnostics_writer)
         await tts_diagnostics_recorder.start()
+        state["tts_diagnostics_recorder"] = tts_diagnostics_recorder
         logger.info("TTS 合成诊断记录已启动")
 
     # --- StorageLedger（订阅 room.message.# 落业务表）---
@@ -488,18 +638,22 @@ async def create_app_components(
         privacy=privacy_service,
         retention=retention_service,
     )
+    state["storage_ledger"] = storage_ledger
 
     # --- 直播近况与整场记录同步给 MaiBot（[maibot_sync]）---
     # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
     # streamer.recap.written 也能接住（整场记录随回顾一起补推）
     maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config, database=database)
+    state["maibot_sync_reporter"] = maibot_sync_reporter
     # --- 跨端记忆与生活流交换（[maigo_sync]）---
     maigo_bridge = _build_maigo_bridge(event_bus, config, database=database)
+    state["maigo_bridge"] = maigo_bridge
 
     # --- 直播切片（[clipping]）：AI 选段 + ffmpeg 切割（enabled 且配了录播目录才订阅下播事件）---
     clipping_service = _build_clipping_service(
         event_bus=event_bus, config=config, database=database, llm_service=llm_service
     )
+    state["clipping_service"] = clipping_service
 
     # --- CollectorManager ---
     # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
@@ -512,6 +666,7 @@ async def create_app_components(
     if collectors_config or _enabled_agents_with_companions(agents_for_companions):
         logger.info("初始化 CollectorManager（src/modules/collectors/）...")
         collector_manager = CollectorManager()
+        state["collector_manager"] = collector_manager
         await _register_collectors_from_config(
             collector_manager,
             collectors_config or {},
@@ -541,6 +696,7 @@ async def create_app_components(
             services_by_type={type(llm_service): llm_service},
             session_manager=session_manager,
         )
+        state["simulator_service"] = simulator_service
     else:
         logger.debug("[simulator].enabled=false，零装配 SimulatorService")
 
@@ -599,6 +755,7 @@ async def create_app_components(
         # 注意不可用 `or 3` 兜底：会把用户显式配置的 0（关闭熔断）吞成 3
         failure_threshold = int(tools_health_cfg.get("failure_threshold", 3))
         tool_registry = ToolRegistry(event_bus=event_bus, failure_threshold=failure_threshold)
+        state["tool_registry"] = tool_registry
         # 工具运营面（提供者目录视图 / 健康快照 / 重连编排）：只读伴生对象，随 registry 一并交给 Dashboard
         tool_operations = ToolOperations(tool_registry)
         # Agent 守护（心跳巡检 + 自动重建）：配置来自 [agent_supervisor] 段（infra.toml）
@@ -644,6 +801,7 @@ async def create_app_components(
             maigo_bridge=maigo_bridge,
             supervisor_config=supervisor_config,
         )
+        state["agent_manager"] = agent_manager
 
         # 口型分析器（avatar 共享件，调参 [avatar.lipsync]；拍平后顶层键 lipsync）：
         # 在 TTS 装配前构造，
@@ -706,6 +864,7 @@ async def create_app_components(
                     tts_enabled=tts_engine is not None,
                 )
                 await avatar_tracking.start()
+                state["avatar_tracking"] = avatar_tracking
             except Exception as exc:
                 logger.warning(f"面捕合成器构造失败（形象不被逐帧驱动）: {type(exc).__name__}: {exc}")
                 avatar_tracking = None
@@ -739,6 +898,7 @@ async def create_app_components(
             wait_timeout_ms=tasks_wait_ms,
         )
         task_tracker.start()
+        state["task_tracker"] = task_tracker
         logger.info(f"任务跟踪循环已启动（poll_interval_ms={tasks_poll_ms}, wait_timeout_ms={tasks_wait_ms}）")
 
         # speech_config 推导（组合根职责）：兜底与 Schema 默认一致
@@ -756,6 +916,7 @@ async def create_app_components(
         # 动态主从协调器（组合根唯一单例）：先于 Agent 注册构造并回填到 AgentManager，
         # 确保启动装配与后续动态启用/热重启均注入同一协调器实例
         lead_coordinator = LeadCoordinator(agent_manager, event_bus=event_bus)
+        state["lead_coordinator"] = lead_coordinator
         agent_manager.set_lead_coordinator(lead_coordinator)
 
         await _register_agents_from_config(
@@ -933,6 +1094,7 @@ async def create_app_components(
                 probe_interval_ms=probe_interval_ms,
             )
             health_monitor.start()
+            state["health_monitor"] = health_monitor
             logger.info(
                 f"ToolHealthMonitor 已启动（probe_interval_ms={probe_interval_ms}, "
                 f"failure_threshold={failure_threshold}）"
@@ -998,6 +1160,7 @@ async def create_app_components(
             persist=log_streamer_persist,
             persist_dir=log_streamer_persist_dir,
         )
+        state["log_streamer"] = log_streamer
         dashboard_server = await _start_dashboard(
             dashboard_config,
             dev_webui,
@@ -1060,7 +1223,9 @@ async def create_app_components(
             subtitle_service=subtitle_service,
             tts_engine=tts_engine,
             avatar_tracking=avatar_tracking,
+            instance_lock=instance_lock,
         )
+        state["dashboard_server"] = dashboard_server
 
     # Dashboard 字幕后端注册：StreamerAgent 与 Dashboard 共享同一
     # subtitle_service 引用，新 Backend 注册后 show/clear 自动广播到 widget。
@@ -1104,6 +1269,7 @@ async def create_app_components(
         privacy_service=privacy_service,
         retention_service=retention_service,
         lead_coordinator=lead_coordinator,
+        instance_lock=instance_lock,
     )
 
 
@@ -1475,6 +1641,7 @@ async def _start_dashboard(
     sim_repo=None,
     clipping_service=None,
     database=None,
+    instance_lock: Optional[SingleInstanceLock] = None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -1572,6 +1739,7 @@ async def _start_dashboard(
             # 事件历史服务所有权在 EventHistoryRecorder，这里共享引用供
             # REST（/events、/traces）与 WS（events.history 推送）读取
             event_history=(event_recorder.event_history if event_recorder else None),
+            instance_lock=instance_lock,
         )
         await dashboard_server.start()
         # 端口回退后配置值会偏离实际绑定端口，地址一律取服务器实况
@@ -1589,6 +1757,14 @@ async def _start_dashboard(
         logger.warning("Dashboard 功能将被禁用。请运行: uv add fastapi 'uvicorn[standard]'")
         return None
     except Exception as e:
+        if isinstance(e, DashboardPortInUseError) or is_port_in_use_error(e):
+            # 端口占用通常意味着同机已有另一 Amaidesu 实例正在运行：
+            # 绝不吞异常降级带病启动，否则孤儿进程会滞留后台继续抢占弹幕与直播间连接
+            if log_streamer is not None:
+                with contextlib.suppress(Exception):
+                    await log_streamer.stop()
+            logger.error(f"Dashboard 端口冲突（疑似同机已有实例正在运行），为避免双开抢占直播间连接已中止启动: {e}")
+            raise
         logger.error(f"Dashboard 启动失败: {e}")
         logger.warning("Dashboard 功能将被禁用")
         return None
@@ -1828,6 +2004,10 @@ async def run_shutdown(
         logger.info("正在关闭 SQLiteDatabase...")
         await safe_log(database.close(), "SQLiteDatabase.close")
 
+    if components.instance_lock is not None:
+        components.instance_lock.release()
+        logger.info("单实例进程锁已释放")
+
     logger.info("Amaidesu 应用程序已关闭。")
 
     if _saw_cancelled:
@@ -1859,16 +2039,21 @@ async def main() -> None:
     ensure_registry_consistency()
     logger.info(f"核心事件注册完成，共 {len(list_registered_events())} 个事件")
 
-    components = await create_app_components(
-        config,
-        config_service,
-        dev_webui=args.dev_webui,
-        storage_ledger_auto_start=not args.dry,
-        session_manager_auto_start=not args.dry,
-        providers_auto_start=not args.dry,
-        log_streamer_persist=not args.dry,
-        startup_effects=not args.dry,
-    )
+    try:
+        components = await create_app_components(
+            config,
+            config_service,
+            dev_webui=args.dev_webui,
+            storage_ledger_auto_start=not args.dry,
+            session_manager_auto_start=not args.dry,
+            providers_auto_start=not args.dry,
+            log_streamer_persist=not args.dry,
+            startup_effects=not args.dry,
+            acquire_instance_lock=not args.dry,
+        )
+    except (InstanceAlreadyRunningError, DashboardPortInUseError) as exc:
+        logger.error(f"启动中止（防双开/端口冲突）: {exc}")
+        sys.exit(1)
     event_bus = components.event_bus
     session_manager = components.session_manager
 
