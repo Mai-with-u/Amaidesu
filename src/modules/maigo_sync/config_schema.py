@@ -58,6 +58,19 @@ class MaiGOSyncConfigSchema(BaseConfig):
         title="注入跨端熟人线索",
         description="直播间或游戏里命中显式绑定的跨端熟人时，是否在本地线索块补充脱敏近况",
     )
+    backfill_on_startup: bool = Field(
+        default=True,
+        title="首次连通自动回填旧史",
+        description="启用且接入服务端后，首次启动是否在后台低速导入近期未同步过的正式场高信噪比记忆",
+    )
+    backfill_days: int = Field(
+        default=30,
+        ge=0,
+        le=365,
+        title="回填历史天数",
+        description="首次连通自动回填覆盖最近几天的正式场记忆（0 表示不限天数）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
     @field_validator("url")
     @classmethod

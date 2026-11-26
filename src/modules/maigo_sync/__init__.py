@@ -1,5 +1,6 @@
 """MaiGO 跨端记忆与生活流交换模块（Amaidesu 薄接入端）。"""
 
+from src.modules.maigo_sync.backfill import StartupHistoryBackfiller
 from src.modules.maigo_sync.bridge import (
     CachedPersonEntry,
     CachedPromiseEntry,
@@ -22,4 +23,5 @@ __all__ = [
     "MaiGOClient",
     "MaiGORejected",
     "MaiGOSyncConfigSchema",
+    "StartupHistoryBackfiller",
 ]

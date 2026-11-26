@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 import aiohttp
 
@@ -23,6 +23,8 @@ class MaiGOClient(Protocol):
     async def checkin(self, checkout_id: str, payload: Dict[str, Any]) -> Dict[str, Any]: ...
 
     async def consume_topic(self, topic_id: int, *, branch_id: str) -> Dict[str, Any]: ...
+
+    async def post_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]: ...
 
     async def close(self) -> None: ...
 
@@ -76,6 +78,10 @@ class HttpMaiGOClient:
     async def consume_topic(self, topic_id: int, *, branch_id: str) -> Dict[str, Any]:
         """标记某条跨端话头卡已在当前分支消费。"""
         return await self._post_json(f"/api/v1/topics/{int(topic_id)}/consume", {"branch_id": branch_id})
+
+    async def post_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """批量上报历史或增量经历事件（依赖服务端 idempotency_key 去重）。"""
+        return await self._post_json("/api/v1/events", {"events": list(events)})
 
     async def close(self) -> None:
         """关闭底层 HTTP 会话连接池（幂等）。"""

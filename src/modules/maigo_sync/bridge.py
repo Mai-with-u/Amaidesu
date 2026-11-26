@@ -12,6 +12,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.rundown import RundownChangedPayload
 from src.modules.logging import get_logger
+from src.modules.maigo_sync.backfill import StartupHistoryBackfiller
 from src.modules.maigo_sync.client import MaiGOClient, MaiGORejected
 from src.modules.maigo_sync.pending_log import (
     CachedPersonEntry,
@@ -94,6 +95,11 @@ class MaiGOBridge:
         inject_topic_cards: bool = True,
         inject_person_cues: bool = True,
         pending_log_path: Optional[Path] = None,
+        backfill_db_path: Optional[Path] = None,
+        backfill_state_path: Optional[Path] = None,
+        backfill_on_startup: bool = False,
+        backfill_days: int = 30,
+        backfill_batch_interval_ms: int = 500,
         retry_delays_ms: Sequence[int] = _DEFAULT_RETRY_DELAYS_MS,
         clock_ms: Callable[[], int] = now_ms,
     ) -> None:
@@ -104,6 +110,19 @@ class MaiGOBridge:
         self._inject_topic_cards = bool(inject_topic_cards)
         self._inject_person_cues = bool(inject_person_cues)
         self._pending_log = PendingCheckinLog(pending_log_path)
+        self._backfiller: Optional[StartupHistoryBackfiller] = (
+            StartupHistoryBackfiller(
+                db_path=backfill_db_path,
+                state_path=backfill_state_path or Path(backfill_db_path).with_name("maigo_backfill_state.json"),
+                client=client,
+                branch_id=self._branch_id,
+                since_days=backfill_days,
+                batch_interval_ms=backfill_batch_interval_ms,
+                clock_ms=clock_ms,
+            )
+            if backfill_on_startup and backfill_db_path is not None
+            else None
+        )
         self._retry_delays_ms = tuple(max(0, int(d)) for d in retry_delays_ms)
         self._clock_ms = clock_ms
 
@@ -431,6 +450,17 @@ class MaiGOBridge:
             await asyncio.to_thread(self._pending_log.rewrite, remaining)
             return delivered
 
+    async def run_startup_backfill(self) -> int:
+        """首次连通时后台低速回填历史库高信噪比记录；未配置时返回 0。"""
+        if self._backfiller is None:
+            return 0
+        return await self._backfiller.run()
+
+    async def _run_startup_sync(self) -> None:
+        if self._pending_log.enabled:
+            await self.replay_pending_checkins()
+        await self.run_startup_backfill()
+
     async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
         del event_name, source
         await self.ensure_checked_out(payload)
@@ -573,14 +603,14 @@ class MaiGOBridge:
             await self.flush_heartbeat()
 
     def _spawn_replay_if_loop_running(self) -> None:
-        if not self._pending_log.enabled:
+        if not self._pending_log.enabled and self._backfiller is None:
             return
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            logger.debug("当前无运行中事件循环，启动时延迟补推")
+            logger.debug("当前无运行中事件循环，启动时延迟补推与回填")
             return
-        task = asyncio.create_task(self.replay_pending_checkins(), name="maigo-checkin-replay")
+        task = asyncio.create_task(self._run_startup_sync(), name="maigo-startup-sync")
         self._background_tasks.add(task)
         task.add_done_callback(self._on_bg_task_done)
 

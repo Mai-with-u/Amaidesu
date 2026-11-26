@@ -76,8 +76,10 @@ class _StubMaiGOClient:
         self.checkouts: List[Dict[str, Any]] = []
         self.heartbeats: List[Tuple[str, Dict[str, Any]]] = []
         self.checkins: List[Tuple[str, Dict[str, Any]]] = []
+        self.posted_batches: List[List[Dict[str, Any]]] = []
         self.fail_checkout: Optional[Exception] = None
         self.fail_checkin_times: int = 0
+        self.fail_post_after: Optional[int] = None
         self.checkin_error: Exception = RuntimeError("MaiGO 离线")
         self.closed = False
 
@@ -100,6 +102,12 @@ class _StubMaiGOClient:
 
     async def consume_topic(self, topic_id: int, *, branch_id: str) -> Dict[str, Any]:
         return {"ok": True, "topic_id": topic_id, "branch_id": branch_id}
+
+    async def post_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if self.fail_post_after is not None and len(self.posted_batches) >= self.fail_post_after:
+            raise ConnectionError("MaiGO 暂不可达")
+        self.posted_batches.append([dict(item) for item in events])
+        return {"ok": True, "accepted": len(events), "deduplicated": 0}
 
     async def close(self) -> None:
         self.closed = True
@@ -395,3 +403,128 @@ async def test_main_wiring_builds_optional_bridge(tmp_path: Path) -> None:
         await bridge.stop()
     finally:
         await db.close()
+
+
+async def test_startup_backfill_high_signal_idempotent_and_resumable(tmp_path: Path) -> None:
+    db_file = tmp_path / "amaidesu_hist.db"
+    state_file = tmp_path / "maigo_backfill_state.json"
+    now_val = 1_795_660_000_000
+    recent_t = now_val - 2 * 86_400_000
+
+    db = SQLiteDatabase(db_file)
+    await db.initialize()
+    try:
+        live_sid = await db.sessions.insert_live_session(
+            stream_id="live-1", platform="bilibili", kind=SESSION_KIND_LIVE, started_at_ms=recent_t, title="主线建家"
+        )
+        rehearsal_sid = await db.sessions.insert_live_session(
+            stream_id="reh-1", platform="bilibili", kind=SESSION_KIND_REHEARSAL, started_at_ms=recent_t + 100, title="彩排"
+        )
+        chat_id = await db.chat.insert_live_chat(
+            live_session_id=live_sid,
+            timestamp_ms=recent_t + 50,
+            sender_role="assistant",
+            content="高炉终于亮起来了！周末一定铺完铁路。",
+            message_type="speech",
+        )
+        reh_chat_id = await db.chat.insert_live_chat(
+            live_session_id=rehearsal_sid,
+            timestamp_ms=recent_t + 150,
+            sender_role="assistant",
+            content="彩排测试句",
+            message_type="speech",
+        )
+        await db.archive.insert_line(
+            live_session_id=live_sid,
+            text="在海边建成高炉仓库",
+            quote="高炉终于亮起来了！",
+            evidence_chat_id=chat_id,
+            game="minecraft",
+            save_id="save-ocean-1",
+            save_name="海洋一号档",
+            highlight=True,
+        )
+        await db.archive.insert_line(
+            live_session_id=rehearsal_sid,
+            text="彩排测试句子不能进入历史回填",
+            quote="测试",
+            evidence_chat_id=reh_chat_id,
+            game="minecraft",
+            save_id="save-ocean-1",
+        )
+        await db.commitments.insert_commitment(
+            what="周末继续铺设铁路",
+            quote="周末一定铺完",
+            evidence_chat_id=chat_id,
+            created_session_id=live_sid,
+            save_id="save-ocean-1",
+            now_ms_value=recent_t + 200,
+        )
+        await db.execute(
+            "INSERT INTO viewers (id, platform, account_id, user_name, name_seen_ms, last_active_ms) VALUES (77, 'bilibili', 'u-77', '观众丙', ?, ?)",
+            (recent_t, recent_t),
+        )
+        await db.commitments.insert_commitment(
+            what="私下答应某观众的悄悄话",
+            quote="悄悄话",
+            evidence_chat_id=chat_id,
+            viewer_id=77,
+            created_session_id=live_sid,
+            now_ms_value=recent_t + 250,
+        )
+        p_keep = await db.game_players.meet_player(
+            game="minecraft", uuid="uuid-keep-100", name="好友甲", live_session_id=live_sid, at_ms=recent_t + 300
+        )
+        p_forget = await db.game_players.meet_player(
+            game="minecraft", uuid="uuid-forget-200", name="遗忘玩家乙", live_session_id=live_sid, at_ms=recent_t + 350
+        )
+        await db.execute("UPDATE game_players SET forget_requested_at_ms=? WHERE id=?", (recent_t + 360, p_forget.id))
+        await db.game_players.add_interaction(
+            player_id=p_keep.id,
+            live_session_id=live_sid,
+            kind="gift",
+            fact={"item": "面包", "count": 2},
+            at_ms=recent_t + 400,
+        )
+        await db.game_players.add_interaction(
+            player_id=p_forget.id,
+            live_session_id=live_sid,
+            kind="gift",
+            fact={"item": "苹果", "count": 1},
+            at_ms=recent_t + 450,
+        )
+    finally:
+        await db.close()
+
+    bus = EventBus()
+    client = _StubMaiGOClient()
+    client.fail_post_after = 0
+    bridge = MaiGOBridge(
+        event_bus=bus,
+        client=client,
+        backfill_db_path=db_file,
+        backfill_state_path=state_file,
+        backfill_on_startup=True,
+        backfill_days=30,
+        backfill_batch_interval_ms=0,
+        clock_ms=lambda: now_val,
+    )
+    # 首次服务端离线：失败后不写完成状态，留待下次重启续传
+    assert await bridge.run_startup_backfill() == 0
+    assert not state_file.exists()
+
+    client.fail_post_after = None
+    sent = await bridge.run_startup_backfill()
+    assert sent == 3
+    assert state_file.exists()
+
+    all_events = [ev for batch in client.posted_batches for ev in batch]
+    summaries = [ev["summary"] for ev in all_events]
+    assert "在海边建成高炉仓库" in summaries
+    assert "周末继续铺设铁路" in summaries
+    assert any("好友甲" in s and "面包" in s for s in summaries)
+    assert not any("彩排测试" in s or "某观众" in s or "遗忘玩家" in s for s in summaries)
+
+    # 再次运行保持幂等，不再重复推送已标记完成的场次与约定
+    assert await bridge.run_startup_backfill() == 0
+    await bridge.stop()

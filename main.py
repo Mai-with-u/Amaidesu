@@ -1225,8 +1225,9 @@ def _build_maibot_sync_reporter(
     return reporter
 
 
-# 下播签入失败待补推队列文件名（放在库文件旁）
+# 下播签入失败待补推队列及首次回填状态文件名（放在库文件旁）
 _MAIGO_PENDING_CHECKIN_LOG = "maigo_checkin_pending.jsonl"
+_MAIGO_BACKFILL_STATE_FILE = "maigo_backfill_state.json"
 
 
 def _build_maigo_bridge(
@@ -1244,7 +1245,9 @@ def _build_maigo_bridge(
     if not sync_config.url:
         logger.warning("[maigo_sync] 已启用但 url 未设置，跳过装配 MaiGO 同步桥")
         return None
-    pending_path = Path(database.db_path).with_name(_MAIGO_PENDING_CHECKIN_LOG) if database is not None else None
+    db_file = Path(database.db_path) if database is not None else None
+    pending_path = db_file.with_name(_MAIGO_PENDING_CHECKIN_LOG) if db_file is not None else None
+    backfill_state_path = db_file.with_name(_MAIGO_BACKFILL_STATE_FILE) if db_file is not None else None
     bridge = MaiGOBridge(
         event_bus=event_bus,
         client=HttpMaiGOClient(
@@ -1257,6 +1260,10 @@ def _build_maigo_bridge(
         inject_topic_cards=sync_config.inject_topic_cards,
         inject_person_cues=sync_config.inject_person_cues,
         pending_log_path=pending_path,
+        backfill_db_path=db_file,
+        backfill_state_path=backfill_state_path,
+        backfill_on_startup=sync_config.backfill_on_startup,
+        backfill_days=sync_config.backfill_days,
     )
     bridge.setup()
     logger.info(f"MaiGO 跨端记忆同步桥已接线: branch={sync_config.branch_id} -> {sync_config.url}")
