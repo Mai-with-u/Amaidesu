@@ -30,6 +30,8 @@ export interface ChartPalette {
   primaryColor: string;
   collectorColor: string;
   agentColor: string;
+  /** 读当前主题的任意 CSS 变量实际色值（取域色等未预列的颜色用） */
+  readVar: (name: string) => string;
 }
 
 /**
@@ -52,6 +54,7 @@ export function useChartPalette(): Ref<ChartPalette> {
       primaryColor: read('--color-primary'),
       collectorColor: read('--color-collector'),
       agentColor: read('--color-agent'),
+      readVar: read,
     };
   });
 }

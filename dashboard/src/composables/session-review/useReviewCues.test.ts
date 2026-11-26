@@ -1,6 +1,8 @@
-// useReviewCues 的测试：本场记忆线索的加载与来源筛选
+// useReviewCues 的测试：本场记忆线索的加载状态机
 //
-// 覆盖：加载成功、切场清空并复位筛选、过期响应丢弃、错误态、空场次清空。
+// 覆盖：加载成功、切场清空、过期响应丢弃、错误态、空场次清空。
+// 来源筛选的行为归 ReviewCuesCard 组件（filterCuesBySource 在组件内调用），
+// 其用例见 components/session-review/ReviewCuesCard.test.ts。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,7 +46,7 @@ describe('useReviewCues', () => {
     listCuesMock.mockReset();
   });
 
-  it('加载成功后写入卡片，按来源筛选只在本地做', async () => {
+  it('加载成功后写入条目', async () => {
     listCuesMock.mockResolvedValueOnce(listOk([cue(1, ['danmaku']), cue(2, ['self'])]));
     const state = useReviewCues();
 
@@ -53,23 +55,20 @@ describe('useReviewCues', () => {
     await pending;
 
     expect(listCuesMock).toHaveBeenCalledWith(7);
-    expect(state.sourceOptions.value).toEqual(['danmaku', 'self']);
-    state.source.value = 'self';
-    expect(state.visible.value.map(item => item.id)).toEqual([2]);
+    expect(state.items.value.map(item => item.id)).toEqual([1, 2]);
     expect(state.loading.value).toBe(false);
   });
 
-  it('切场先清空并复位筛选，过期响应不覆盖后选的场次', async () => {
+  it('切场先清空，过期响应不覆盖后选的场次', async () => {
     const slow = deferred();
     listCuesMock
       .mockReturnValueOnce(slow.promise)
       .mockResolvedValueOnce(listOk([cue(9, ['place'])]));
     const state = useReviewCues();
-    state.source.value = 'danmaku';
 
     const first = state.load(1);
     const second = state.load(2);
-    expect(state.source.value).toBe('');
+    expect(state.items.value).toEqual([]);
     await second;
     slow.resolve(listOk([cue(1, ['danmaku'])]));
     await first;

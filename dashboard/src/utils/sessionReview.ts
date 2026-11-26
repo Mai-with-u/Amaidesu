@@ -14,6 +14,15 @@ export const LATENCY_P90_RED_MS = 30_000;
 /** 慢调用超过 10 笔染黄 */
 export const SLOW_CALLS_YELLOW = 10;
 
+/** 慢调用聚合缺省阈值（毫秒）：后端未配置 profile 阈值时的兜底口径，与聚合侧一致 */
+export const DEFAULT_SLOW_THRESHOLD_MS = 15_000;
+
+/** 慢调用深链的统一耗时下限：取各 profile 阈值的最小值（无配置用缺省） */
+export function minSlowThresholdMs(thresholds: Record<string, number>): number {
+  const values = Object.values(thresholds);
+  return values.length ? Math.min(...values) : DEFAULT_SLOW_THRESHOLD_MS;
+}
+
 /** 决策→发言时延 p90 染色：>30s 红，否则无色 */
 export function latencyLevel(p90Ms: number | null): 'red' | null {
   if (p90Ms !== null && p90Ms > LATENCY_P90_RED_MS) return 'red';
@@ -27,27 +36,71 @@ export function slowCallsLevel(count: number): 'yellow' | null {
 
 // ==================== 水位图（ECharts option 构造） ====================
 
-/** 水位图两条线的展示色（planner 靛蓝 / minecraft 粉，与 mockup 一致） */
-export const WATERLINE_COLORS: Record<string, string> = {
-  planner: '#6366f1',
-  minecraft: '#ec4899',
+/**
+ * 已知 profile → 主题 CSS 变量名。折线颜色随主题换档（深浅两套域色），
+ * 运行时经 readVar 读实际色值，canvas 不解析 CSS 变量所以不能直接写变量名。
+ */
+export const WATERLINE_PROFILE_COLOR_VARS: Record<string, string> = {
+  planner: '--color-planner',
+  minecraft: '--color-game',
 };
 
-/** 兜底配色（未知 profile 依次取用） */
-const FALLBACK_COLORS = ['#14b8a6', '#e6a23c', '#409eff', '#909399'];
-
-export function waterlineColor(profile: string, index: number): string {
-  return WATERLINE_COLORS[profile] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];
-}
+/** 未知 profile 的兜底色变量（按排序下标依次取用，与域色同带） */
+const FALLBACK_COLOR_VARS = ['--color-live', '--color-warning', '--color-primary', '--color-info'];
 
 /**
  * 按 profile 名全集的排序下标取展示色（用表色圈与水位图折线共用同一入口，
  * 保证任意 profile 集合下同一 profile 恒为同色）。已知专色 profile 不受
  * 下标影响；未知 profile 在全集缺席时按下标 0 兜底。
+ *
+ * readVar 读当前主题的 CSS 变量实际色值（useChartPalette 提供随主题重算的实现）。
  */
-export function waterlineColorForProfile(profile: string, allProfiles: string[]): string {
+export function waterlineColorForProfile(
+  profile: string,
+  allProfiles: string[],
+  readVar: (name: string) => string,
+): string {
+  const knownVar = WATERLINE_PROFILE_COLOR_VARS[profile];
+  if (knownVar) return readVar(knownVar);
   const index = [...new Set(allProfiles)].sort().indexOf(profile);
-  return waterlineColor(profile, index < 0 ? 0 : index);
+  const fallbackVar = FALLBACK_COLOR_VARS[(index < 0 ? 0 : index) % FALLBACK_COLOR_VARS.length];
+  return readVar(fallbackVar);
+}
+
+// ==================== 展示标签 ====================
+
+/** 缓存命中率 → 展示文案（未上报显示 —） */
+export function cacheRateLabel(rate: number | null): string {
+  return rate === null ? '—' : `${Math.round(rate * 100)}%`;
+}
+
+/**
+ * 决策触发原因 → 展示文案。
+ * 词表是后端触发原因封闭枚举（src/agents/streamer/trigger_cause.py）的对外字符串
+ * 形态：批次刷新与调试类原值、主动发言类带 proactive: 前缀、控制台调试两种形态。
+ * 未收录的新枚举值原样透出，出现频率高了再补表，不为未知值编造翻译。
+ */
+const TRIGGER_REASON_LABELS: Record<string, string> = {
+  forced: '付费消息触发',
+  batch_full: '弹幕攒满',
+  window_expired: '聚合窗到期',
+  idle_compensation: '冷场补足',
+  'proactive:external': '主动·外部唤醒',
+  'proactive:schedule': '主动·定时开麦',
+  'proactive:cold': '主动·冷场开麦',
+  'proactive:reminder': '主动·递话催醒',
+  'proactive:rundown': '主动·流程单推进',
+  'proactive:game': '主动·游戏待定夺',
+  'proactive:game_lead_idle_fallback': '主动·游戏冷场兜底',
+  'proactive:signoff': '主动·收播道别',
+  'proactive:resume': '主动·断线续播',
+  'dashboard:debug_test': '调试·手动决策',
+  'proactive:dashboard_debug': '调试·主动决策窗',
+  unknown: '未知',
+};
+
+export function triggerReasonLabel(reason: string): string {
+  return TRIGGER_REASON_LABELS[reason] ?? reason;
 }
 
 /**

@@ -1,13 +1,13 @@
 <!--
   SessionReview - 场次复盘页（只读聚合）
 
-  布局：场次档案（archive_lines，可删单行）→ 本场台词（逐句可删）→ 本场记忆线索（按来源筛）→
-  信息 chips → 指标卡（超阈仅染色，沉默/最慢时延卡带"跳转时刻"深链进控制台回看）→
-  流程单执行（单场）→ 观众构成 + 游戏明细（单场，明细逐条锚定跳转）→
-  水位图 + LLM 用量表 → 深入入口（事件回看 / LLM 历史 · 本场预过滤）。全部数字来自后端结构化聚合
-  （GET /api/v1/review），本页不做告警判定；多选合并视图由后端窗口合并、
-  水位图按 session_id 断线留空隙；档案/台词/流程单/观众/游戏明细属单场语义，
-  合并视图不产出。深挖取证不在本页——带数字开 AI 会话。
+  壳只保留三类职责：场次选择协调（useSessionSelection 组合式）、复盘聚合与单场
+  数据的取数编排、页面级错误提示与深入入口；各内容面板在 components/session-review/
+  面板组件族（场次档案复用记忆页的 ArchiveLineList）。面板公共样式在
+  styles/session-review.css（rv- 前缀），面板独有样式在各组件 scoped 块。
+  全部数字来自后端结构化聚合（GET /api/v1/review），本页不做告警判定；
+  多选合并视图由后端窗口合并、水位图按 session_id 断线留空隙；档案/台词/流程单/
+  观众/游戏明细属单场语义，合并视图不产出。深挖取证不在本页——带数字开 AI 会话。
 -->
 <template>
   <div class="session-review">
@@ -74,355 +74,75 @@
 
     <template v-if="review">
       <!-- 场次档案（本场整理出的标题 + 原话；删单行只影响下一场开播的"上一场"回忆） -->
-      <section v-if="archiveSessionId !== null" class="panel archive-panel" aria-label="场次档案">
-        <div class="panel-title archive-panel-title">
-          <span>场次档案</span>
-          <span class="archive-hint">整理自本场台词，下一场开播回忆“上一场”时用</span>
-        </div>
-        <p v-if="archiveError" class="archive-error">{{ archiveError }}</p>
-        <template v-else>
-          <p v-if="archiveActionError" class="archive-error">{{ archiveActionError }}</p>
-          <div v-loading="archiveLoading" class="archive-lines">
-            <ArchiveLineList
-              :items="archiveLines"
-              deletable
-              :busy-line-id="archiveBusyLineId"
-              empty-text="这一场还没有档案行"
-              @delete="removeArchiveLine"
-            />
-          </div>
-        </template>
-      </section>
+      <ReviewArchiveCard
+        v-if="archiveSessionId !== null"
+        :lines="archiveLines"
+        :loading="archiveLoading"
+        :error="archiveError"
+        :action-error="archiveActionError"
+        :busy-line-id="archiveBusyLineId"
+        @delete="removeArchiveLine"
+      />
 
       <!-- 本场台词（直播里说过的每一句；删一句会连带删掉引用它的档案行） -->
-      <section v-if="archiveSessionId !== null" class="panel speech-panel" aria-label="本场台词">
-        <div class="panel-title speech-panel-title">
-          <span>本场台词</span>
-          <span class="speech-hint"
-            >按时间正序；删一句会删掉引用它的档案行，承诺保留但原话标为已删除</span
-          >
-        </div>
-        <p v-if="speechError" class="speech-error">{{ speechError }}</p>
-        <template v-else>
-          <p v-if="speechActionError" class="speech-error">{{ speechActionError }}</p>
-          <div v-loading="speechLoading" class="speech-lines">
-            <ul v-if="speechLines.length > 0" class="speech-list">
-              <li v-for="line in speechLines" :key="line.chat_id" class="speech-item">
-                <span class="mono speech-time">{{ formatTimeHMS(line.timestamp_ms) }}</span>
-                <span class="speech-content" :class="{ 'is-dropped': line.dropped }">
-                  {{ line.content }}
-                </span>
-                <el-tag v-if="line.dropped" size="small" type="info" effect="plain">未送达</el-tag>
-                <el-button
-                  link
-                  size="small"
-                  type="danger"
-                  :loading="speechBusyChatId === line.chat_id"
-                  :disabled="speechBusyChatId !== null"
-                  @click="removeSpeechLine(line)"
-                  >删除这句</el-button
-                >
-              </li>
-            </ul>
-            <p v-else class="speech-empty">这一场还没有台词记录</p>
-          </div>
-        </template>
-      </section>
+      <ReviewSpeechCard
+        v-if="archiveSessionId !== null"
+        :lines="speechLines"
+        :loading="speechLoading"
+        :error="speechError"
+        :action-error="speechActionError"
+        :busy-chat-id="speechBusyChatId"
+        @delete="removeSpeechLine"
+      />
 
       <!-- 本场记忆线索（代码每批推给规划器的旧事：承诺线索与被动想起；用上 = 她点名说了这件事） -->
-      <section v-if="archiveSessionId !== null" class="panel cue-panel" aria-label="本场记忆线索">
-        <div class="panel-title cue-panel-title">
-          <span>本场记忆线索</span>
-          <span class="speech-hint">代码按线索推给规划器的旧事；"用上"是她点名说了这件事</span>
-        </div>
-        <el-radio-group
-          v-if="cueSourceOptions.length > 1"
-          v-model="cueSource"
-          size="small"
-          class="cue-filter"
-          aria-label="按来源筛选"
-        >
-          <el-radio-button value="">全部</el-radio-button>
-          <el-radio-button v-for="source in cueSourceOptions" :key="source" :value="source">
-            {{ cueSourceLabel(source) }}
-          </el-radio-button>
-        </el-radio-group>
-        <p v-if="cueError" class="speech-error">{{ cueError }}</p>
-        <div v-else v-loading="cueLoading" class="speech-lines">
-          <ul v-if="visibleCues.length > 0" class="speech-list">
-            <li v-for="cue in visibleCues" :key="cue.id" class="speech-item cue-item">
-              <span class="mono speech-time">{{ formatTimeHMS(cue.pushed_at_ms) }}</span>
-              <el-tag size="small" effect="plain">{{ cueKindLabel(cue.card_kind) }}</el-tag>
-              <router-link
-                v-if="cue.archive_line_id !== null || cue.commitment_id !== null"
-                class="link mono cue-label"
-                :to="{ name: 'memory' }"
-                >{{ cue.label }}</router-link
-              >
-              <span v-else class="mono cue-label">{{ cue.label }}</span>
-              <span class="speech-content" :class="{ 'is-dropped': cueItemGone(cue) }">
-                {{ cueItemGone(cue) ? '（条目已删掉）' : cue.title }}
-                <span class="cue-why">
-                  {{ cue.sources.map(cueSourceLabel).join(' + ') }}
-                  <template v-if="cueScoreText(cue)"> · {{ cueScoreText(cue) }}</template>
-                </span>
-              </span>
-              <el-tag v-if="cue.self_triggered" size="small" type="warning" effect="plain"
-                >自触发</el-tag
-              >
-              <el-tag v-if="cue.used_at_ms !== null" size="small" type="success" effect="plain">
-                {{ formatTimeHMS(cue.used_at_ms) }} 用上
-              </el-tag>
-              <el-tag v-else size="small" type="info" effect="plain">没用上</el-tag>
-            </li>
-          </ul>
-          <p v-else class="speech-empty">
-            {{ cues.length > 0 ? '这个来源没有推过卡' : '这一场没有推过记忆线索' }}
-          </p>
-        </div>
-      </section>
+      <ReviewCuesCard
+        v-if="archiveSessionId !== null"
+        :items="cues"
+        :loading="cueLoading"
+        :error="cueError"
+      />
 
       <!-- 复盘报告（logs/reviews 可视化页，由直播复盘流程离线生成；仅单场次且有报告时渲染） -->
-      <section v-if="reportSrc" class="panel report-panel" aria-label="复盘报告">
-        <div class="panel-title report-panel-title">
-          <span>复盘报告</span>
-          <a class="link report-open" :href="reportSrc" target="_blank" rel="noopener"
-            >新标签页打开</a
-          >
-        </div>
-        <iframe
-          class="report-frame"
-          :src="reportSrc"
-          sandbox="allow-scripts"
-          title="复盘可视化报告"
-        ></iframe>
-      </section>
+      <ReviewReportFrame v-if="reportSrc" :src="reportSrc" />
 
       <!-- 场次信息 chips（互动类零值降饱和） -->
-      <section class="chips" aria-label="场次信息">
-        <span
-          v-for="chip in chips"
-          :key="chip.label"
-          class="chip mono"
-          :class="{ 'is-dimmed': chip.dimmed }"
-          >{{ chip.label }}</span
-        >
-      </section>
+      <ReviewChipsBar :review="review" />
 
       <!-- 核心指标卡 -->
-      <section class="stats" aria-label="核心指标">
-        <div class="stat">
-          <div class="stat-label">场内发言</div>
-          <div class="stat-value">{{ review.speech.count }}<span class="stat-unit">条</span></div>
-          <div class="stat-sub">口径：live_chat 主播发言行（sender_role=assistant）</div>
-          <div v-if="review.speech.rate_per_min !== null" class="stat-sub">
-            ≈{{ review.speech.rate_per_min }} 条/分钟
-          </div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">最长沉默</div>
-          <div class="stat-value">{{ formatMsAsSeconds(review.speech.longest_silence_ms) }}</div>
-          <div class="stat-sub">相邻发言最大间隔，场次首尾计入边界</div>
-          <router-link v-if="silenceLink" class="link stat-sub" :to="silenceLink">
-            跳转沉默起点 →
-          </router-link>
-        </div>
-        <div class="stat">
-          <div class="stat-label">决策</div>
-          <div class="stat-value">
-            {{ review.decisions.total }}<span class="stat-unit">次</span>
-          </div>
-          <div class="stat-sub">{{ decisionSummary }}</div>
-        </div>
-        <div
-          class="stat"
-          :class="{ 'is-red': latencyLevel(review.decisions.latency.p90_ms) === 'red' }"
-        >
-          <div class="stat-label">决策→发言时延</div>
-          <div class="stat-value">
-            {{ formatMsAsSeconds(review.decisions.latency.p90_ms)
-            }}<span class="stat-unit">· p90</span>
-          </div>
-          <div class="stat-sub">
-            p50 {{ formatMsAsSeconds(review.decisions.latency.p50_ms) }} · max
-            {{ formatMsAsSeconds(review.decisions.latency.max_ms) }} · 样本
-            {{ review.decisions.latency.sample_count }} · 超过 30s 染红（verdict→speech 按 round_id
-            配对）
-          </div>
-          <router-link v-if="latencyMaxLink" class="link stat-sub" :to="latencyMaxLink">
-            跳转最慢一次 →
-          </router-link>
-        </div>
-        <div class="stat">
-          <div class="stat-label">LLM 失败</div>
-          <div class="stat-value">
-            {{ review.llm.overall.failed_calls
-            }}<span class="stat-unit">/ {{ review.llm.overall.calls }} 笔</span>
-          </div>
-          <div class="stat-sub">缓存命中率 {{ cacheRateLabel }}</div>
-        </div>
-        <div
-          class="stat"
-          :class="{ 'is-warn': slowCallsLevel(review.llm.overall.slow_calls) === 'yellow' }"
-        >
-          <div class="stat-label">慢调用</div>
-          <div class="stat-value">
-            {{ review.llm.overall.slow_calls }}<span class="stat-unit">笔</span>
-          </div>
-          <div class="stat-sub">超过 10 笔染黄 · 按各 profile 配置阈值计</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">场内游戏事件</div>
-          <div class="stat-value">{{ review.game.total }}<span class="stat-unit">次</span></div>
-          <div class="stat-sub">{{ gameSummary }}</div>
-        </div>
-      </section>
+      <ReviewMetricCards
+        :review="review"
+        :silence-link="silenceLink"
+        :latency-max-link="latencyMaxLink"
+        :llm-failed-link="llmFailedLink"
+        :llm-slow-link="llmSlowLink"
+      />
 
       <!-- 流程单执行（单场视图；rundown_transitions 事实行重放） -->
-      <section v-if="rundown && rundown.segments.length" class="panel" aria-label="流程单执行">
-        <div class="panel-title">流程单执行</div>
-        <p class="table-note">
-          实际停留为墙钟口径（含暂停）；超预计 25% 染黄、一倍染红（阈值为前端常量）
-        </p>
-        <table class="usage-table">
-          <thead>
-            <tr>
-              <th>环节</th>
-              <th>进入</th>
-              <th class="num">实际停留</th>
-              <th class="num">预计</th>
-              <th class="num">暂停</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(seg, i) in rundown.segments" :key="i">
-              <td>#{{ seg.seg_index }} {{ seg.seg_title || seg.seg_id || '（无标题）' }}</td>
-              <td class="num">{{ formatTimeHMS(seg.entered_at_ms) }}</td>
-              <td class="num" :class="dwellCellClass(seg)">
-                {{ seg.left_at_ms === null ? '→ 收播' : formatDurationMs(seg.dwell_ms) }}
-              </td>
-              <td class="num">
-                {{ seg.expected_ms === null ? '—' : formatDurationMs(seg.expected_ms) }}
-              </td>
-              <td class="num" :class="{ zero: seg.pause_ms === 0 }">
-                {{ seg.pause_ms === 0 ? '—' : formatDurationMs(seg.pause_ms) }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-if="rundown.pause_total_ms > 0" class="table-note">
-          总暂停 {{ formatDurationMs(rundown.pause_total_ms) }}（已含在各段停留内，未从停留扣除）
-        </p>
-      </section>
+      <RundownExecutionCard v-if="rundown && rundown.segments.length" :rundown="rundown" />
 
       <div v-if="review.viewers || review.game.items.length" class="columns">
-        <!-- 观众构成（单场视图） -->
-        <section v-if="review.viewers" class="panel" aria-label="观众构成">
-          <div class="panel-title">观众构成</div>
-          <div class="chips">
-            <span class="chip mono">发言观众 {{ review.viewers.active_total }}</span>
-            <span class="chip mono">新观众 {{ review.viewers.new_viewers }}</span>
-            <span class="chip mono">回头观众 {{ review.viewers.returning_viewers }}</span>
-          </div>
-          <ol v-if="review.viewers.top_speakers.length" class="top-speakers">
-            <li v-for="sp in review.viewers.top_speakers" :key="sp.viewer_id" class="top-speaker">
-              <span class="top-name">{{ sp.user_name || `观众 #${sp.viewer_id}` }}</span>
-              <span class="grow" />
-              <span class="mono top-count">{{ sp.message_count }} 条</span>
-            </li>
-          </ol>
-          <p class="table-note">新/回头按历史首条发言时刻判定（首条在本场 = 新观众）</p>
-        </section>
-
-        <!-- 游戏事件明细（单场视图，逐条锚定跳转回看） -->
-        <section v-if="review.game.items.length" class="panel" aria-label="游戏事件明细">
-          <div class="panel-title">游戏事件明细</div>
-          <ul class="game-items">
-            <li v-for="(item, i) in review.game.items" :key="i" class="game-item">
-              <span class="mono game-time">{{ formatTimeHMS(item.timestamp_ms) }}</span>
-              <span class="game-msg"
-                >[{{ item.game }}/{{ item.event_type }}] {{ item.message }}</span
-              >
-              <router-link class="link game-jump" :to="replayLink(item.timestamp_ms)"
-                >跳转 →</router-link
-              >
-            </li>
-          </ul>
-          <p v-if="review.game.truncated" class="table-note">
-            明细仅显示最近 {{ review.game.items.length }} 条（本场共 {{ review.game.total }} 条）
-          </p>
-        </section>
+        <!-- 观众构成 + 游戏事件明细（单场视图，明细逐条锚定跳转回看） -->
+        <SessionViewersCard v-if="review.viewers" :viewers="review.viewers" />
+        <GameEventsCard
+          v-if="review.game.items.length"
+          :game="review.game"
+          :session-id="singleBrief?.live_session_id ?? 0"
+        />
       </div>
 
       <div class="columns">
-        <!-- 水位图 -->
-        <section class="panel">
-          <div class="panel-title">单笔输入水位（千 tokens，按 Profile）</div>
-          <div ref="chartRef" class="waterline-chart"></div>
-        </section>
-
-        <!-- LLM 用量表 -->
-        <section class="panel">
-          <div class="panel-title">LLM 用量（按 Profile）</div>
-          <table class="usage-table">
-            <thead>
-              <tr>
-                <th>Profile</th>
-                <th class="num">笔数</th>
-                <th class="num">慢调用</th>
-                <th class="num">失败</th>
-                <th class="num">输入</th>
-                <th class="num">缓存</th>
-                <th class="num">输出</th>
-                <th class="num">成本</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in review.llm.by_profile" :key="row.profile_name">
-                <td>
-                  <span class="tier" :style="{ borderColor: profileColor(row.profile_name) }">{{
-                    row.profile_name || 'unknown'
-                  }}</span>
-                </td>
-                <td class="num">{{ row.calls }}</td>
-                <td class="num" :class="{ zero: row.slow_calls === 0 }">{{ row.slow_calls }}</td>
-                <td class="num" :class="{ zero: row.failed_calls === 0 }">
-                  {{ row.failed_calls }}
-                </td>
-                <td class="num">{{ compactNumber(row.prompt_tokens) }}</td>
-                <td class="num">{{ cacheRate(row.cache_hit_rate) }}</td>
-                <td class="num">{{ compactNumber(row.completion_tokens) }}</td>
-                <td class="num">{{ formatCost(row.cost, 2) }}</td>
-              </tr>
-              <tr class="total-row">
-                <td>合计</td>
-                <td class="num">{{ review.llm.overall.calls }}</td>
-                <td class="num" :class="{ zero: review.llm.overall.slow_calls === 0 }">
-                  {{ review.llm.overall.slow_calls }}
-                </td>
-                <td class="num" :class="{ zero: review.llm.overall.failed_calls === 0 }">
-                  {{ review.llm.overall.failed_calls }}
-                </td>
-                <td class="num">{{ compactNumber(review.llm.overall.prompt_tokens) }}</td>
-                <td class="num">{{ cacheRate(review.llm.overall.cache_hit_rate) }}</td>
-                <td class="num">{{ compactNumber(review.llm.overall.completion_tokens) }}</td>
-                <td class="num">{{ formatCost(review.llm.overall.cost, 2) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p class="table-note">
-            成本按计价配置折算；缓存命中率 = cache_hit / (hit + miss)，未上报显示 —
-          </p>
-        </section>
+        <WaterlineChartCard :series="review.waterline" />
+        <LlmUsageCard :llm="review.llm" />
       </div>
 
       <!-- 深入入口 -->
-      <section class="panel">
-        <div class="panel-title">深入入口</div>
-        <div class="links">
-          <router-link class="link" :to="eventReviewLink">事件回看 · 本场预过滤</router-link>
-          <router-link class="link" :to="llmHistoryLink">LLM 历史 · 本场预过滤</router-link>
-          <span class="link-hint"
+      <section class="rv-panel">
+        <div class="rv-panel-title">深入入口</div>
+        <div class="rv-links">
+          <router-link class="rv-link" :to="eventReviewLink">事件回看 · 本场预过滤</router-link>
+          <router-link class="rv-link" :to="llmHistoryLink">LLM 历史 · 本场预过滤</router-link>
+          <span class="rv-link-hint"
             >告警叙事与关键事件拣选不在本页——带着上面的数字开 AI 会话深挖</span
           >
         </div>
@@ -436,59 +156,48 @@
 /**
  * 场次复盘页 —— 单场或多场合并的只读复盘聚合视图
  *
- * keep-alive 生命周期语义：
- * - 本页被外层路由 `<keep-alive>` 缓存，不含持续定时器、事件订阅或 WebSocket；
- * - 首次 `onMounted` 加载场次列表并选中深链参数（`?session=`）或最新已结束场次，
- *   同时跳过紧随首次挂载触发的那一次 `onActivated` 以避免双发请求；
- * - 后续切回页面触发 `onActivated` 时静默刷新场次列表：若带入新的 `?session=` 深链
- *   则切到目标场次；若用户仍停留在之前自动选中的旧默认最新已结束场次且列表出现
- *   更新的已结束场次，自动跟进到最新已结束场次并重拉复盘数据；若用户手动选择了特定
- *   场次或深链场次，则保留用户选择不覆盖。
+ * keep-alive 生命周期语义：本页被外层路由 `<keep-alive>` 缓存，页面自身不含持续
+ * 定时器、事件订阅或 WebSocket；场次选择与 `?session=` 深链的换班协调（含首次
+ * 挂载与切回静默刷新）在 useSessionSelection 组合式内，其 docstring 是该状态机
+ * 规则的事实源。
  */
-import { computed, nextTick, onActivated, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, nextTick, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { EChartsCoreOption } from 'echarts/core';
 import { ledgerApi, liveSessionsApi, reviewApi } from '@/api';
 import type {
   ArchiveLineItem,
-  LiveSessionItem,
   ReviewSessionBrief,
   ReviewSpeechLine,
-  RundownSegmentRun,
   SessionReviewResponse,
   SessionRundownExecutionResponse,
 } from '@/types';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
-import ArchiveLineList from '@/components/memory/ArchiveLineList.vue';
 import { useArchiveLines } from '@/composables/useArchiveLines';
-import { useReviewCues } from '@/composables/useReviewCues';
-import { useReviewSpeech } from '@/composables/useReviewSpeech';
-import { compactNumber } from '@/utils/chartFormat';
-import { formatCost, formatDateTime, formatTimeHMS } from '@/utils/format';
-import { cueItemGone, cueKindLabel, cueScoreText, cueSourceLabel } from '@/utils/memoryCues';
-import {
-  buildWaterlineData,
-  consoleReplayLink,
-  dwellLevel,
-  formatDurationMs,
-  formatMsAsSeconds,
-  latencyLevel,
-  slowCallsLevel,
-  waterlineColorForProfile,
-} from '@/utils/sessionReview';
-import { useChartPalette, useECharts } from '@/composables/useECharts';
+import { useSessionSelection } from '@/composables/session-review/useSessionSelection';
+import { useReviewCues } from '@/composables/session-review/useReviewCues';
+import { useReviewSpeech } from '@/composables/session-review/useReviewSpeech';
+import { consoleReplayLink, minSlowThresholdMs } from '@/utils/sessionReview';
+import ReviewArchiveCard from '@/components/session-review/ReviewArchiveCard.vue';
+import ReviewChipsBar from '@/components/session-review/ReviewChipsBar.vue';
+import ReviewCuesCard from '@/components/session-review/ReviewCuesCard.vue';
+import ReviewMetricCards from '@/components/session-review/ReviewMetricCards.vue';
+import ReviewReportFrame from '@/components/session-review/ReviewReportFrame.vue';
+import ReviewSpeechCard from '@/components/session-review/ReviewSpeechCard.vue';
+import RundownExecutionCard from '@/components/session-review/RundownExecutionCard.vue';
+import SessionViewersCard from '@/components/session-review/SessionViewersCard.vue';
+import WaterlineChartCard from '@/components/session-review/WaterlineChartCard.vue';
+import LlmUsageCard from '@/components/session-review/LlmUsageCard.vue';
+import GameEventsCard from '@/components/session-review/GameEventsCard.vue';
+import '@/styles/session-review.css';
 
-const sessions = ref<LiveSessionItem[]>([]);
-const sessionsLoading = ref(false);
 const refreshing = ref(false);
-const selectedIds = ref<number[]>([]);
-/** 深链参数：场次管理页点"复盘"带 session 进来（多 id 逗号分隔） */
-const route = useRoute();
 const review = ref<SessionReviewResponse | null>(null);
 const loading = ref(false);
 const errorMessage = ref('');
+
+const { sessions, sessionsLoading, selectedIds, loadSessions, onSelectChange, sessionLabel } =
+  useSessionSelection({ errorMessage });
 
 /** 流程单执行回看（单场选择时加载；未装配/无事实行时为 null，面板整体隐藏） */
 const rundown = ref<SessionRundownExecutionResponse | null>(null);
@@ -518,128 +227,8 @@ const {
   remove: deleteSpeech,
 } = useReviewSpeech();
 
-/** 本场记忆线索：只读，按来源本地筛选（切场复位为全部） */
-const {
-  items: cues,
-  visible: visibleCues,
-  loading: cueLoading,
-  error: cueError,
-  source: cueSource,
-  sourceOptions: cueSourceOptions,
-  load: loadCues,
-} = useReviewCues();
-
-const chartRef = ref<HTMLElement | null>(null);
-const palette = useChartPalette();
-
-/** 场次列表请求序号：并发或快速切页时只认最后发起的响应 */
-let sessionsSeq = 0;
-/** 当前选中是否停留在页面自动选中的“最新已结束场次”；用户手动改动或深链命中后置 null */
-let autoSelectedDefaultId: number | null = null;
-/** 用户是否主动操作过下拉框（含手动清空），用于区分“从未选过”与“用户主动清空” */
-let userTouchedSelection = false;
-/** 最近一次已应用的 ?session= 深链原始字符串，用于识别切回页面时是否带入了新的深链 */
-let appliedDeepLinkQuery = '';
-/** Vue keep-alive 首次挂载后会紧接着触发一次 onActivated：置 true 跳过这次重复拉取 */
-let skipNextActivated = false;
-
-/** 解析当前路由 ?session= 里的有效正整数场次 id 列表 */
-function parseDeepLinkSessionIds(raw: unknown): number[] {
-  return String(raw ?? '')
-    .split(',')
-    .map(Number)
-    .filter(id => Number.isFinite(id) && id > 0);
-}
-
-/** 用户手动在下拉框修改或清空场次选择：标记为手动选择并清除已应用深链记录，后续静默刷新不再覆盖 */
-function onSelectChange(): void {
-  userTouchedSelection = true;
-  autoSelectedDefaultId = null;
-  appliedDeepLinkQuery = '';
-}
-
-/**
- * 加载场次列表并按来源模式更新选中态。
- *
- * - initial（首次挂载）：优先应用 ?session= 深链，否则默认选最新已结束场次；
- * - activated（keep-alive 切回静默刷新）/ manual（点工具栏刷新）：
- *   若带入新的 ?session= 深链则切到目标场次；若仍停留在旧自动默认场次（或此前
- *   尚无已结束场次且用户未手动改过选择）且列表出现更新的已结束场次，自动跟进到
- *   最新已结束场次；用户手动选定的特定场次或已有深链保持不动。
- */
-async function loadSessions(
-  mode: 'initial' | 'activated' | 'manual' = 'initial',
-): Promise<boolean> {
-  const seq = ++sessionsSeq;
-  // 切回静默刷新时若已有数据则不闪下拉 loading，首次与手动刷新正常展示加载态
-  const showSpinner = mode !== 'activated' || sessions.value.length === 0;
-  if (showSpinner) sessionsLoading.value = true;
-  try {
-    const resp = await liveSessionsApi.list({ limit: 200 });
-    if (seq !== sessionsSeq) return false;
-    errorMessage.value = '';
-    const items = resp.data.items;
-    sessions.value = items;
-
-    const rawDeepLink = String(route.query.session ?? '').trim();
-    const hasNewDeepLink =
-      rawDeepLink.length > 0 && (mode === 'initial' || rawDeepLink !== appliedDeepLinkQuery);
-    if (hasNewDeepLink) {
-      const deepLinkIds = parseDeepLinkSessionIds(rawDeepLink);
-      const linked = items.filter(item => deepLinkIds.includes(item.live_session_id));
-      appliedDeepLinkQuery = rawDeepLink;
-      if (linked.length) {
-        autoSelectedDefaultId = null;
-        selectedIds.value = linked.map(item => item.live_session_id);
-        return true;
-      }
-      if (mode !== 'initial') return true;
-    }
-
-    const latestEnded = items.find(item => item.ended_at_ms !== null);
-    if (mode === 'initial') {
-      if (latestEnded) {
-        autoSelectedDefaultId = latestEnded.live_session_id;
-        selectedIds.value = [latestEnded.live_session_id];
-      }
-      return true;
-    }
-
-    // 切回页面或点刷新：仅当用户仍停在旧自动默认场次（或初始无可选场次且未手动改过）时，
-    // 自动跟进到最新已结束场次；手动选择或深链场次一律尊重用户当前选择
-    const stayingOnAutoDefault =
-      autoSelectedDefaultId !== null &&
-      selectedIds.value.length === 1 &&
-      selectedIds.value[0] === autoSelectedDefaultId;
-    const waitingForFirstEnded = !userTouchedSelection && selectedIds.value.length === 0;
-    if ((stayingOnAutoDefault || waitingForFirstEnded) && latestEnded) {
-      if (latestEnded.live_session_id !== autoSelectedDefaultId || selectedIds.value.length === 0) {
-        autoSelectedDefaultId = latestEnded.live_session_id;
-        selectedIds.value = [latestEnded.live_session_id];
-      }
-    }
-    return true;
-  } catch (error) {
-    if (seq !== sessionsSeq) return false;
-    errorMessage.value = getApiErrorMessage(error, '场次列表加载失败');
-    return false;
-  } finally {
-    if (seq === sessionsSeq) sessionsLoading.value = false;
-  }
-}
-
-onMounted(() => {
-  skipNextActivated = true;
-  void loadSessions('initial');
-});
-
-onActivated(() => {
-  if (skipNextActivated) {
-    skipNextActivated = false;
-    return;
-  }
-  void loadSessions('activated');
-});
+/** 本场记忆线索：只读加载（按来源的本地筛选在 ReviewCuesCard 内） */
+const { items: cues, loading: cueLoading, error: cueError, load: loadCues } = useReviewCues();
 
 /** 复盘聚合请求序号与在途 Promise：快速切换或手动刷新时防乱序、防双发 */
 let reviewSeq = 0;
@@ -800,164 +389,6 @@ const latencyMaxLink = computed<string | null>(() => {
   return at != null ? replayLink(at) : null;
 });
 
-/** 停留超时染色类（未封口/无预计不参与比较） */
-function dwellCellClass(seg: RundownSegmentRun): string {
-  const level = dwellLevel(seg.dwell_ms, seg.expected_ms, seg.left_at_ms);
-  return level === 'red' ? 'dwell-red' : level === 'yellow' ? 'dwell-yellow' : '';
-}
-
-function sessionLabel(item: LiveSessionItem): string {
-  const title = item.title || `场次 #${item.live_session_id}`;
-  // 进行中场次在列表中显式标注，避免被误当历史场次深链回看
-  const ongoing = item.ended_at_ms === null ? '（进行中）' : '';
-  return `${title}${ongoing} · ${formatDateTime(item.started_at_ms)}`;
-}
-
-/** 单枚信息 chip：dimmed=零值弱信息降饱和展示 */
-interface ReviewChip {
-  label: string;
-  dimmed: boolean;
-}
-
-/** 来源值 → 展示文案（未收录的原值兜底） */
-const SOURCE_LABELS: Record<string, string> = { manual: '手动' };
-
-function sourceLabel(source: string): string {
-  return SOURCE_LABELS[source] ?? source;
-}
-
-const chips = computed<ReviewChip[]>(() => {
-  const r = review.value;
-  if (!r) return [];
-  // 互动类零值 chip 属弱信息（没有互动发生），降饱和弱化；时间/时长/来源等
-  // 信息 chip 恒常显示
-  const list: ReviewChip[] = r.sessions.map(s => ({
-    label: `场次 #${s.live_session_id}${s.title ? ` · ${s.title}` : ''}`,
-    dimmed: false,
-  }));
-  if (r.sessions.length === 1) {
-    const s = r.sessions[0];
-    const endLabel = s.ended_at_ms !== null ? formatTimeHMS(s.ended_at_ms) : '进行中';
-    list.push({ label: `${formatTimeHMS(s.started_at_ms)} – ${endLabel}`, dimmed: false });
-    list.push({ label: formatDurationMs(s.duration_ms), dimmed: false });
-    list.push({ label: `来源 ${sourceLabel(s.source)}`, dimmed: false });
-    list.push({ label: `人气 ${s.heat}`, dimmed: s.heat === 0 });
-    // 累计观看人次（UV 口径；协议无"当前在线"推送，viewer_count 恒 0 不上屏）
-    list.push({ label: `累计观看 ${s.audience_total}`, dimmed: s.audience_total === 0 });
-  } else {
-    list.push({ label: formatDurationMs(r.window_end_ms - r.window_start_ms), dimmed: false });
-    list.push({ label: `${r.sessions.length} 场合并`, dimmed: false });
-  }
-  // 金额为付费折算人民币（银瓜子等免费币种不计入；无可折算金额不追加）
-  const giftCny = r.chips.gift_total_cny;
-  const giftAmount = giftCny != null && giftCny > 0 ? ` · ¥${giftCny.toFixed(2)}` : '';
-  const scCny = r.chips.super_chat_total_cny;
-  const scAmount = scCny != null && scCny > 0 ? ` · ¥${scCny.toFixed(2)}` : '';
-  list.push({ label: `弹幕 ${r.chips.danmaku_count}`, dimmed: r.chips.danmaku_count === 0 });
-  list.push({ label: `进入 ${r.chips.enter_count}`, dimmed: r.chips.enter_count === 0 });
-  list.push({ label: `礼物 ${r.chips.gift_count}${giftAmount}`, dimmed: r.chips.gift_count === 0 });
-  list.push({
-    label: `SC ${r.chips.super_chat_count}${scAmount}`,
-    dimmed: r.chips.super_chat_count === 0,
-  });
-  return list;
-});
-
-const decisionSummary = computed<string>(() => {
-  const d = review.value?.decisions;
-  if (!d) return '';
-  // 分层表述：前段是触发来源分布（计数和=total），后段是 total 的子集
-  //（静默/失败与来源分布有交叠），用分隔符与"其中"措辞区分层次
-  const sources = Object.entries(d.distribution)
-    .slice(0, 3)
-    .map(([reason, count]) => `${reason} ${count}`)
-    .join(' · ');
-  const extras = [
-    d.silent_count ? `静默 ${d.silent_count}` : '',
-    d.failed_count ? `失败 ${d.failed_count}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  if (!sources && !extras) return '无决策记录';
-  return extras ? `${sources} ｜ 其中${extras}` : sources;
-});
-
-const gameSummary = computed<string>(() => {
-  const g = review.value?.game;
-  if (!g || g.total === 0) return '无游戏事件';
-  return (
-    Object.entries(g.by_type)
-      .map(([type, count]) => `${type} ${count}`)
-      .join(' · ') || '无游戏事件'
-  );
-});
-
-const cacheRateLabel = computed<string>(() =>
-  cacheRate(review.value?.llm.overall.cache_hit_rate ?? null),
-);
-
-function cacheRate(rate: number | null): string {
-  return rate === null ? '—' : `${Math.round(rate * 100)}%`;
-}
-
-// profile 名全集：表格色圈与图表折线共用同一取色入口，保证同 profile 同色
-const profileNames = computed<string[]>(() =>
-  review.value ? review.value.llm.by_profile.map(row => row.profile_name) : [],
-);
-
-function profileColor(profile: string): string {
-  return waterlineColorForProfile(profile, profileNames.value);
-}
-
-// 水位图 option：时间轴 + 按 profile 多折线（null 断线留空隙）
-const chartOption = computed<EChartsCoreOption | null>(() => {
-  const r = review.value;
-  if (!r || !r.waterline.length) return null;
-  const data = buildWaterlineData(r.waterline);
-  return {
-    backgroundColor: 'transparent',
-    textStyle: { color: palette.value.textColor, fontFamily: palette.value.monoFont },
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: unknown) => {
-        const list = params as Array<{ seriesName: string; value: [number, number | null] }>;
-        return list
-          .filter(p => p.value?.[1] !== null && p.value?.[1] !== undefined)
-          .map(p => `${p.seriesName}: ${p.value[1]}k tokens`)
-          .join('<br/>');
-      },
-    },
-    legend: { textStyle: { color: palette.value.textColor } },
-    grid: { left: 60, right: 20, top: 36, bottom: 40 },
-    xAxis: {
-      type: 'time',
-      axisLabel: { color: palette.value.textColor },
-      splitLine: { show: false },
-      axisLine: { lineStyle: { color: palette.value.borderColor } },
-    },
-    yAxis: {
-      type: 'value',
-      name: '千 tokens',
-      nameTextStyle: { color: palette.value.textColor },
-      axisLabel: { color: palette.value.textColor },
-      splitLine: { lineStyle: { color: palette.value.borderColorLight } },
-    },
-    series: data.map(s => ({
-      name: s.profile,
-      type: 'line' as const,
-      showSymbol: false,
-      connectNulls: false,
-      data: s.data,
-      lineStyle: { color: profileColor(s.profile), width: 1.5 },
-      itemStyle: { color: profileColor(s.profile) },
-    })),
-  };
-});
-
-// useECharts 需要非空 option：无数据时给空 option（空态由 waterline 图例区自然留白）
-const safeChartOption = computed<EChartsCoreOption>(() => chartOption.value ?? {});
-useECharts(chartRef, safeChartOption);
-
 const eventReviewLink = computed<string>(() => {
   const r = review.value;
   if (!r || !r.sessions.length) return '/live';
@@ -970,6 +401,20 @@ const llmHistoryLink = computed<string>(() => {
   const r = review.value;
   if (!r || !r.window_start_ms) return '/llm/history';
   return `/llm/history?start_time=${r.window_start_ms}&end_time=${r.window_end_ms}`;
+});
+
+/** 失败调用卡深链：时间窗 + 仅失败（无失败调用或无时间窗为 null，卡上不渲染跳转） */
+const llmFailedLink = computed<string | null>(() => {
+  const r = review.value;
+  if (!r || !r.window_start_ms || r.llm.overall.failed_calls === 0) return null;
+  return `${llmHistoryLink.value}&success_only=false`;
+});
+
+/** 慢调用卡深链：时间窗 + 耗时下限（各 profile 阈值最小值，与卡计数同源宽松口径） */
+const llmSlowLink = computed<string | null>(() => {
+  const r = review.value;
+  if (!r || !r.window_start_ms || r.llm.overall.slow_calls === 0) return null;
+  return `${llmHistoryLink.value}&latency_gt_ms=${minSlowThresholdMs(r.llm.slow_thresholds ?? {})}`;
 });
 
 function exportPackage(): void {
@@ -1023,85 +468,6 @@ function exportPackage(): void {
   border-radius: var(--radius-md);
 }
 
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.chip {
-  padding: 4px 10px;
-  border: 1px solid var(--border-color-light);
-  border-radius: 999px;
-  background: var(--bg-card);
-  font-size: 12px;
-  color: var(--text-regular);
-}
-
-.mono {
-  font-family: var(--font-mono);
-}
-
-/* 零值互动 chip：弱信息降饱和（次级文字色 + 半透明） */
-.chip.is-dimmed {
-  color: var(--text-secondary);
-  opacity: 0.6;
-}
-
-/* 用量表零值数字：与降饱和 chip 同口径的弱化 */
-.usage-table .num.zero {
-  color: var(--text-secondary);
-}
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
-}
-
-.stat {
-  padding: 12px 14px;
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-}
-
-.stat-value {
-  font-size: 24px;
-  font-weight: 600;
-  margin: 4px 0;
-}
-
-.stat-unit {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--text-secondary);
-  margin-left: 4px;
-}
-
-.stat-sub {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.stat.is-red {
-  border-color: var(--color-danger);
-  background: var(--color-danger-bg);
-}
-
-.stat.is-red .stat-value {
-  color: var(--color-danger);
-}
-
-.stat.is-warn {
-  border-color: var(--color-warning);
-  background: var(--color-warning-bg);
-}
-
-.stat.is-warn .stat-value {
-  color: var(--color-warning);
-}
-
 .columns {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
@@ -1112,283 +478,5 @@ function exportPackage(): void {
   .columns {
     grid-template-columns: 1fr;
   }
-}
-
-.panel {
-  padding: 14px 16px;
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-}
-
-.panel-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-
-/* 场次档案面板：标题与口径说明同行，错误就地显示 */
-.archive-panel-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.archive-hint {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--text-secondary);
-}
-
-.archive-error {
-  margin: 0 0 8px;
-  font-size: 12px;
-  color: var(--color-danger);
-}
-
-/* 复盘报告（iframe 沙箱嵌入 + 新标签页兜底） */
-.report-panel-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.report-frame {
-  width: 100%;
-  height: 70vh;
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-md);
-  background: #fff;
-}
-
-.waterline-chart {
-  height: 260px;
-}
-
-.usage-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.usage-table th,
-.usage-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-color-light);
-  text-align: left;
-}
-
-.usage-table th {
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.usage-table .num {
-  text-align: right;
-  font-family: var(--font-mono);
-}
-
-.total-row td {
-  font-weight: 600;
-  border-top: 1px solid var(--border-color);
-}
-
-.tier {
-  display: inline-block;
-  padding: 1px 8px;
-  border: 1px solid;
-  border-radius: 999px;
-  font-size: 12px;
-}
-
-.table-note {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.links {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.link {
-  color: var(--color-primary);
-  text-decoration: none;
-  font-size: 13px;
-}
-
-.link:hover {
-  text-decoration: underline;
-}
-
-.link-hint {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-/* 档案 / 台词块：加载与空态都在块内，错误时不渲染列表 */
-.archive-lines,
-.speech-lines {
-  min-height: 40px;
-}
-
-.speech-panel-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.speech-hint {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--text-secondary);
-}
-
-.speech-error {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-danger);
-}
-
-.speech-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 420px;
-  overflow-y: auto;
-}
-
-.speech-item {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 0;
-  border-bottom: 1px dashed var(--border-color-light);
-  font-size: 13px;
-}
-
-.speech-item:last-child {
-  border-bottom: none;
-}
-
-.speech-time {
-  flex: none;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.speech-content {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-
-/* 未送达的台词弱化并划掉：仍列出，方便运营者删掉脏数据 */
-.speech-content.is-dropped {
-  color: var(--text-secondary);
-  text-decoration: line-through;
-}
-
-.cue-filter {
-  margin-bottom: 6px;
-}
-
-.cue-label {
-  flex: none;
-  font-size: 12px;
-}
-
-/* 来源与分数：跟在标题后面的弱化说明 */
-.cue-why {
-  margin-left: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.speech-empty {
-  margin: 0;
-  padding: 8px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-placeholder);
-}
-
-/* 流程单停留超时染色（阈值口径同 dwellLevel 常量） */
-.usage-table .dwell-red {
-  color: var(--color-danger);
-  font-weight: 600;
-}
-
-.usage-table .dwell-yellow {
-  color: var(--color-warning);
-  font-weight: 600;
-}
-
-/* 观众构成 top 列表 */
-.top-speakers {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-}
-
-.top-speaker {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--border-color-light);
-  font-size: 13px;
-}
-
-.top-speaker:last-child {
-  border-bottom: none;
-}
-
-.top-count {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-/* 游戏事件明细行 */
-.game-items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.game-item {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--border-color-light);
-  font-size: 13px;
-}
-
-.game-item:last-child {
-  border-bottom: none;
-}
-
-.game-time {
-  color: var(--text-secondary);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.game-msg {
-  flex: 1;
-  min-width: 0;
-}
-
-.game-jump {
-  flex-shrink: 0;
-  font-size: 12px;
 }
 </style>

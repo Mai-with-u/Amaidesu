@@ -1,21 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildWaterlineData,
+  cacheRateLabel,
   consoleReplayLink,
   dwellLevel,
   formatDurationMs,
   formatMsAsSeconds,
   latencyLevel,
+  minSlowThresholdMs,
   slowCallsLevel,
   splitWaterlinePoints,
-  waterlineColor,
+  triggerReasonLabel,
   waterlineColorForProfile,
   WATERLINE_GAP_MS,
+  WATERLINE_PROFILE_COLOR_VARS,
 } from './sessionReview';
 import type { WaterlinePoint } from '@/types/review';
 
 function point(ts: number, tokens: number, session: number): WaterlinePoint {
   return { timestamp_ms: ts, prompt_tokens: tokens, session_id: session };
+}
+
+/** 测试用 CSS 变量读取替身：变量名 → 稳定色值，模拟主题运行时取色 */
+function fakeReadVar(name: string): string {
+  return `var${name}`;
 }
 
 describe('latencyLevel / slowCallsLevel', () => {
@@ -70,30 +78,53 @@ describe('buildWaterlineData', () => {
 });
 
 describe('配色与格式化', () => {
-  it('已知 profile 用专色，未知 profile 依次取兜底色', () => {
-    expect(waterlineColor('planner', 0)).toBe('#6366f1');
-    expect(waterlineColor('unknown', 0)).toBe(waterlineColor('other', 0));
+  it('已知 profile 按主题变量取色，未知 profile 按排序下标取兜底变量', () => {
+    expect(waterlineColorForProfile('planner', ['planner'], fakeReadVar)).toBe(
+      fakeReadVar(WATERLINE_PROFILE_COLOR_VARS.planner),
+    );
+    expect(waterlineColorForProfile('minecraft', ['planner'], fakeReadVar)).toBe(
+      fakeReadVar(WATERLINE_PROFILE_COLOR_VARS.minecraft),
+    );
+    // 排序下标驱动兜底变量分配：排序后 alpha 第 0、zebra 第 3，取值不同
+    const full = ['minecraft', 'planner', 'zebra-model', 'alpha-model'];
+    expect(waterlineColorForProfile('alpha-model', full, fakeReadVar)).not.toBe(
+      waterlineColorForProfile('zebra-model', full, fakeReadVar),
+    );
+    // 全集缺席时按下标 0 兜底，不抛错
+    expect(waterlineColorForProfile('ghost', [], fakeReadVar)).toBe(
+      waterlineColorForProfile('alpha-model', full, fakeReadVar),
+    );
   });
 
   it('同 profile 在全集任意排列下取色一致（色圈与折线同色）', () => {
     const full = ['minecraft', 'planner', 'zebra-model', 'alpha-model'];
     for (const profile of full) {
-      const fromFull = waterlineColorForProfile(profile, full);
+      const fromFull = waterlineColorForProfile(profile, full, fakeReadVar);
       // 传入子集或乱序全集，同一 profile 色不变
-      expect(waterlineColorForProfile(profile, [...full].reverse())).toBe(fromFull);
+      expect(waterlineColorForProfile(profile, [...full].reverse(), fakeReadVar)).toBe(fromFull);
     }
-    // 排序下标驱动兜底色分配：排序后 alpha 第 0、zebra 第 3
-    expect(waterlineColorForProfile('alpha-model', full)).toBe(waterlineColor('alpha-model', 0));
-    expect(waterlineColorForProfile('zebra-model', full)).toBe(waterlineColor('zebra-model', 3));
-    // 全集缺席时按下标 0 兜底，不抛错
-    expect(waterlineColorForProfile('ghost', [])).toBe(waterlineColor('ghost', 0));
   });
 
-  it('时长与秒标签', () => {
+  it('触发原因映射封闭词表，未收录原样透出', () => {
+    expect(triggerReasonLabel('batch_full')).toBe('弹幕攒满');
+    expect(triggerReasonLabel('proactive:signoff')).toBe('主动·收播道别');
+    expect(triggerReasonLabel('dashboard:debug_test')).toBe('调试·手动决策');
+    expect(triggerReasonLabel('proactive:future_kind')).toBe('proactive:future_kind');
+  });
+
+  it('缓存命中率标签与时长秒标签', () => {
+    expect(cacheRateLabel(null)).toBe('—');
+    expect(cacheRateLabel(0.5)).toBe('50%');
+    expect(cacheRateLabel(0.836)).toBe('84%');
     expect(formatDurationMs(2_052_000)).toBe('34.2 分钟');
     expect(formatDurationMs(7_200_000)).toBe('2 小时');
     expect(formatMsAsSeconds(35_300)).toBe('35.3s');
     expect(formatMsAsSeconds(null)).toBe('—');
+  });
+
+  it('慢调用深链耗时下限取各 profile 阈值最小值，无配置用缺省', () => {
+    expect(minSlowThresholdMs({ planner: 8_000, minecraft: 20_000 })).toBe(8_000);
+    expect(minSlowThresholdMs({})).toBe(15_000);
   });
 });
 

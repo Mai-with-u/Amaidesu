@@ -1,0 +1,195 @@
+/**
+ * 场次复盘页共享样式（SessionReview 壳与 components/session-review/ 各面板共用）。
+ *
+ * 只放跨面板复用的类，带 rv- 前缀防止泄漏进其他页面的同名类；
+ * 各面板独有样式留在各自 SFC 的 scoped 块里。
+ */
+
+/* 面板外框与标题 */
+.rv-panel {
+  padding: 14px 16px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.rv-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+/* 标题行右侧带口径说明的布局（档案/台词/报告等面板共用） */
+.rv-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 标题旁的弱化口径说明 */
+.rv-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* 表格（流程单执行 / LLM 用量） */
+.rv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rv-table th,
+.rv-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color-light);
+  text-align: left;
+}
+
+.rv-table th {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.rv-table .num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+/* 用量表零值数字：与降饱和 chip 同口径的弱化 */
+.rv-table .num--zero {
+  color: var(--text-secondary);
+}
+
+.rv-table .total-row td {
+  font-weight: 600;
+  border-top: 1px solid var(--border-color);
+}
+
+/* 流程单停留超时染色（阈值口径同 dwellLevel 常量） */
+.rv-table .dwell-red {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.rv-table .dwell-yellow {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+/* 表格/面板脚注 */
+.rv-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 信息 chips 条 */
+.rv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rv-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 999px;
+  background: var(--bg-card);
+  font-size: 12px;
+  color: var(--text-regular);
+}
+
+/* 零值互动 chip：弱信息降饱和（次级文字色 + 半透明） */
+.rv-chip--dim {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.rv-mono {
+  font-family: var(--font-mono);
+}
+
+/* 行列表（台词 / 记忆线索） */
+.rv-lines {
+  min-height: 40px;
+}
+
+.rv-line-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.rv-line-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--border-color-light);
+  font-size: 13px;
+}
+
+.rv-line-item:last-child {
+  border-bottom: none;
+}
+
+.rv-line-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.rv-line-content {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 未送达的台词弱化并划掉：仍列出，方便运营者删掉脏数据 */
+.rv-line-content--dropped {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.rv-line-empty {
+  margin: 0;
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-placeholder);
+}
+
+/* 面板内就地错误（加载失败或操作失败）：显示错误、不藏列表 */
+.rv-line-error {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--color-danger);
+}
+
+/* 深入入口的链接行 */
+.rv-links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.rv-link {
+  color: var(--color-primary);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.rv-link:hover {
+  text-decoration: underline;
+}
+
+.rv-link-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
