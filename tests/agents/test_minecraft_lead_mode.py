@@ -43,7 +43,7 @@ from src.modules.agents.factory import instantiate_agent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentLeadChangedPayload
-from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game import GameCommentaryRejectedPayload, GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.llm.payload import Response
@@ -1247,9 +1247,10 @@ async def test_commentary_strip_preserves_concurrent_external_echo_and_does_not_
 
 
 async def test_commentary_premise_guard_rejects_right_after_goal_submit(fake_clock: Any) -> None:
-    """解说前提守卫接线：同批"提交目标后紧跟普通解说"被守卫拒回，解说未经主播受理，模型下一步读到拒收回执。"""
+    """解说前提守卫接线：同批"提交目标后紧跟普通解说"被守卫拒回，解说未经主播受理，并发出结构化观测事件。"""
     server = FakeMaicraft()
     commentaries: List[CommentaryRequest] = []
+    rejected_events: List[GameCommentaryRejectedPayload] = []
     step = [0]
 
     def script(messages: List[Dict[str, Any]]) -> Response:
@@ -1269,7 +1270,14 @@ async def test_commentary_premise_guard_rejects_right_after_goal_submit(fake_clo
         return _resp("解说被守卫拒回，等待目标结果")
 
     env = _make_lead_env(server=server, script=script, fake_clock=fake_clock)
-    agent, llm, _ = await _start_lead_env(env, commentary_guard_window_ms=8000)
+    bus: EventBus = env["bus"]
+
+    async def _on_rejected(event_name: str, payload: GameCommentaryRejectedPayload, source: str) -> None:
+        del event_name, source
+        rejected_events.append(payload)
+
+    bus.on(CoreEvents.GAME_COMMENTARY_REJECTED, _on_rejected, model_class=GameCommentaryRejectedPayload)
+    agent, llm, _ = await _start_lead_env(env, commentary_guard_window_ms=2000)
     coord: LeadCoordinator = env["coordinator"]
 
     async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
@@ -1284,12 +1292,295 @@ async def test_commentary_premise_guard_rejects_right_after_goal_submit(fake_clo
             == "minecraft"
         )
         await _wait_until(lambda: len(llm.seen) >= 2 and not agent.batch_active)
+        await bus.wait_until_drained()
 
         # 解说未送达主播侧解说处理器（守卫在工具执行前拦截）
         assert commentaries == []
-        # 模型下一步读到的工具回执是守卫的拒收文案（含目标编号与重试指引）
+        # 模型下一步读到的工具回执是守卫的拒收文案（含目标编号与“先说打算再下目标”指引）
         step2_text = _texts(llm.seen[1])
         assert "解说暂不受理" in step2_text
+        assert "发起目标前提交解说" in step2_text
+        # 结构化观测事件落地，包含命中条件、阻塞目标编号与当前窗口时长
+        assert len(rejected_events) == 1
+        evt = rejected_events[0]
+        assert evt.game == "minecraft"
+        assert evt.condition == "recently_issued"
+        assert evt.blocking_goal_ids == [1]
+        assert evt.window_ms == 2000
+        assert "解说暂不受理" in evt.reason
+    finally:
+        await _stop_lead_env(env, agent)
+
+
+async def test_commentary_guard_allows_plan_before_execute_and_ignores_auxiliary_abilities(fake_clock: Any) -> None:
+    """同一步先解说再下目标正常放行；chat/find/body_language/timer 辅助能力既不触发条件①也不触发条件②。"""
+    server = FakeMaicraft()
+    commentaries: List[CommentaryRequest] = []
+    rejected_events: List[GameCommentaryRejectedPayload] = []
+    step = [0]
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        step[0] += 1
+        if step[0] == 1:
+            # 同一步先提交解说交代打算，再发起非世界状态变更的辅助能力 chat / find / body_language / timer
+            return _resp(
+                "先说明打算再发辅助能力",
+                calls=[
+                    _call(
+                        "framework_commentary",
+                        {"summary": "打算先打个招呼顺便查一下附近矿脉", "mood": "neutral", "urgency": "normal"},
+                        "c_plan",
+                    ),
+                    _call(
+                        "maicraft_execute",
+                        {
+                            "goal": {
+                                "ability": "maicraft:chat",
+                                "purpose": "游戏公屏打招呼",
+                                "parameters": {"message": "嗨"},
+                            }
+                        },
+                        "c_chat",
+                    ),
+                    _call(
+                        "maicraft_execute",
+                        {"goal": {"ability": "maicraft:find", "purpose": "找铁矿"}},
+                        "c_find",
+                    ),
+                    _call(
+                        "maicraft_execute",
+                        {"goal": {"ability": "maicraft:body_language", "purpose": "点头示意"}},
+                        "c_body",
+                    ),
+                    _call(
+                        "maicraft_execute",
+                        {"goal": {"ability": "maicraft:timer", "purpose": "设倒计时"}},
+                        "c_timer",
+                    ),
+                ],
+            )
+        if step[0] == 2:
+            # 辅助能力刚下达未终态（<2 秒）且期间把 chat 目标收成终态：普通解说依然放行，不受条件①②误杀
+            server.finish(1, status="done", summary="游戏公屏已发出")
+            return _resp(
+                "辅助能力在跑/刚结束时提交解说",
+                calls=[
+                    _call(
+                        "framework_commentary",
+                        {"summary": "刚跟同伴打完招呼准备动身找铁矿", "mood": "happy", "urgency": "normal"},
+                        "c_after_aux",
+                    ),
+                ],
+            )
+        return _resp("等待结果")
+
+    env = _make_lead_env(server=server, script=script, fake_clock=fake_clock, lead_idle_wakeup_s=0.0)
+    bus: EventBus = env["bus"]
+
+    async def _on_rejected(event_name: str, payload: GameCommentaryRejectedPayload, source: str) -> None:
+        del event_name, source
+        rejected_events.append(payload)
+
+    bus.on(CoreEvents.GAME_COMMENTARY_REJECTED, _on_rejected, model_class=GameCommentaryRejectedPayload)
+    agent, llm, _ = await _start_lead_env(env, commentary_guard_window_ms=2000)
+    coord: LeadCoordinator = env["coordinator"]
+
+    async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
+        commentaries.append(req)
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_on_commentary)
+
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="探矿"), target="minecraft") == "minecraft"
+        )
+        await _wait_until(lambda: len(llm.seen) >= 2 and not agent.batch_active)
+        await bus.wait_until_drained()
+
+        assert len(commentaries) == 2
+        assert rejected_events == []
+    finally:
+        await _stop_lead_env(env, agent)
+
+
+async def test_commentary_guard_silence_nudge_exempts_condition1_once_and_keeps_condition2(fake_clock: Any) -> None:
+    """收到 [直播间静默提醒] 后的首次解说豁免条件①、受理后清零；忽略提醒结束本轮后标记清零不跨轮泄漏。"""
+    server = FakeMaicraft()
+    commentaries: List[CommentaryRequest] = []
+    rejected_events: List[GameCommentaryRejectedPayload] = []
+    step = [0]
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        step[0] += 1
+        if step[0] == 1:
+            # 阶段 1 第 1 步：先下达一个普通世界目标 #1
+            return _resp(
+                "先下达采石目标",
+                calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "采圆石"}}, "c_g1")],
+            )
+        if step[0] == 2:
+            # 阶段 1 第 2 步：不调工具自然让出，等待后台目标
+            return _resp("等待采石推进")
+        if step[0] == 3:
+            # 阶段 2（收到静默提醒后）：仅过 500ms（仍在 2 秒窗内），首次解说应豁免条件①成功受理；
+            # 同一步内紧接着再发第二次解说，豁免已消耗，应被条件①拒回；
+            # 本步仅调用 framework_commentary 且首次已受理成功 + 后台有目标，随后自动让出结束本批
+            assert "[直播间静默提醒]" in _texts(messages)
+            return _resp(
+                "收到静默提醒后连续两次解说",
+                calls=[
+                    _call(
+                        "framework_commentary",
+                        {"summary": "正在矿洞采圆石，进度顺利", "mood": "neutral", "urgency": "normal"},
+                        "c_nudge_first",
+                    ),
+                    _call(
+                        "framework_commentary",
+                        {"summary": "马上再补充一句进展", "mood": "neutral", "urgency": "normal"},
+                        "c_nudge_second",
+                    ),
+                ],
+            )
+        if step[0] == 4:
+            # 阶段 3（再次收到静默提醒但模型忽略、不调工具直接结束本轮）：标记应在批次退出时清零
+            assert "[直播间静默提醒]" in _texts(messages)
+            return _resp("眼下暂无新变化，直接结束本轮")
+        if step[0] == 5:
+            # 阶段 4（普通建议唤醒，不含静默提醒）：紧跟刚下达目标 #2 后解说，应被条件①拦截（验证上一轮未泄漏）
+            return _resp(
+                "下达新目标后尝试普通解说",
+                calls=[
+                    _call("maicraft_execute", {"goal": {"ability": "mine", "purpose": "挖铁矿"}}, "c_g2"),
+                    _call(
+                        "framework_commentary",
+                        {"summary": "正在挖铁矿", "mood": "neutral", "urgency": "normal"},
+                        "c_no_leak",
+                    ),
+                ],
+            )
+        return _resp("被拦后让出等待")
+
+    env = _make_lead_env(server=server, script=script, fake_clock=fake_clock, lead_idle_wakeup_s=0.0)
+    bus: EventBus = env["bus"]
+
+    async def _on_rejected(event_name: str, payload: GameCommentaryRejectedPayload, source: str) -> None:
+        del event_name, source
+        rejected_events.append(payload)
+
+    bus.on(CoreEvents.GAME_COMMENTARY_REJECTED, _on_rejected, model_class=GameCommentaryRejectedPayload)
+    agent, llm, _ = await _start_lead_env(env, commentary_guard_window_ms=2000)
+    coord: LeadCoordinator = env["coordinator"]
+
+    async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
+        commentaries.append(req)
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_on_commentary)
+
+    try:
+        # 阶段 1：进入主控下达目标 #1 并让出等待
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="采石挖矿"), target="minecraft")
+            == "minecraft"
+        )
+        await _wait_until(lambda: step[0] >= 2 and not agent.batch_active)
+
+        # 仅推进 500ms（仍在 2000ms 条件①窗内），投递静默提醒
+        fake_clock.tick(500)
+        agent.receive_silence_nudge(silent_ms=80_000)
+        await _wait_until(lambda: step[0] >= 3 and not agent.batch_active)
+        await bus.wait_until_drained()
+
+        # 静默提醒后首次解说豁免条件①成功送达；同批第二次解说恢复条件①拦截
+        assert [c.summary for c in commentaries] == ["正在矿洞采圆石，进度顺利"]
+        assert len(rejected_events) == 1
+        assert rejected_events[0].condition == "recently_issued"
+        assert rejected_events[0].blocking_goal_ids == [1]
+
+        # 阶段 3：推进 3000ms 让 #1 超窗，再发一次静默提醒但模型忽略直接结束本轮
+        fake_clock.tick(3000)
+        agent.receive_silence_nudge(silent_ms=90_000)
+        await _wait_until(lambda: step[0] >= 4 and not agent.batch_active)
+
+        # 阶段 4：用普通观众建议唤醒（非静默提醒），下达新目标 #2 并立即解说 -> 必须被条件①拦截（无跨轮泄漏）
+        assert await agent.receive_suggestion("顺便找点铁矿")
+        await _wait_until(lambda: step[0] >= 6 and not agent.batch_active)
+        await bus.wait_until_drained()
+        assert len(commentaries) == 1
+        assert len(rejected_events) == 2
+        assert rejected_events[1].condition == "recently_issued"
+        assert rejected_events[1].blocking_goal_ids == [2]
+    finally:
+        await _stop_lead_env(env, agent)
+
+
+async def test_commentary_guard_silence_nudge_still_enforces_condition2_when_goal_settles(fake_clock: Any) -> None:
+    """收到 [直播间静默提醒] 后，若本步推理开始时在跑的受守卫目标在本步变为终态，条件②仍 100% 拒回并发事件。"""
+    server = FakeMaicraft()
+    commentaries: List[CommentaryRequest] = []
+    rejected_events: List[GameCommentaryRejectedPayload] = []
+    step = [0]
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        step[0] += 1
+        if step[0] == 1:
+            return _resp(
+                "下达受守卫目标",
+                calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "采圆石"}}, "c_g1")],
+            )
+        if step[0] == 2:
+            return _resp("先让出等待")
+        if step[0] == 3:
+            # 收到静默提醒后，在本步内目标 #1 通过 goal(cancel) 变为终态，紧接的普通解说触发条件②拒回
+            assert "[直播间静默提醒]" in _texts(messages)
+            return _resp(
+                "先取消再提交旧前提解说",
+                calls=[
+                    _call("maicraft_goal", {"operation": "cancel", "goal_id": 1}, "c_cancel"),
+                    _call(
+                        "framework_commentary",
+                        {"summary": "还在采圆石呢", "mood": "neutral", "urgency": "normal"},
+                        "c_stale",
+                    ),
+                ],
+            )
+        return _resp("收到条件②拒回后结束")
+
+    env = _make_lead_env(server=server, script=script, fake_clock=fake_clock, lead_idle_wakeup_s=0.0)
+    bus: EventBus = env["bus"]
+
+    async def _on_rejected(event_name: str, payload: GameCommentaryRejectedPayload, source: str) -> None:
+        del event_name, source
+        rejected_events.append(payload)
+
+    bus.on(CoreEvents.GAME_COMMENTARY_REJECTED, _on_rejected, model_class=GameCommentaryRejectedPayload)
+    agent, llm, _ = await _start_lead_env(env, commentary_guard_window_ms=2000)
+    coord: LeadCoordinator = env["coordinator"]
+
+    async def _on_commentary(req: CommentaryRequest) -> CommentaryAck:
+        commentaries.append(req)
+        return CommentaryAck(accepted=True, spoken=True, reason="spoken")
+
+    coord.bind_commentary_handler(_on_commentary)
+
+    try:
+        assert (
+            await coord.request_game_lead(LeadHandoverContext(segment_title="采石"), target="minecraft") == "minecraft"
+        )
+        await _wait_until(lambda: step[0] >= 2 and not agent.batch_active)
+
+        # 推进 500ms（条件①窗口内）发静默提醒 -> 条件①被豁免，但 #1 在本步变终态，条件②仍必须拦截
+        fake_clock.tick(500)
+        agent.receive_silence_nudge(silent_ms=80_000)
+        await _wait_until(lambda: step[0] >= 4 and not agent.batch_active)
+        await bus.wait_until_drained()
+
+        assert commentaries == []
+        assert len(rejected_events) == 1
+        assert rejected_events[0].condition == "settled_during_step"
+        assert rejected_events[0].blocking_goal_ids == [1]
+        assert rejected_events[0].window_ms == 2000
     finally:
         await _stop_lead_env(env, agent)
 

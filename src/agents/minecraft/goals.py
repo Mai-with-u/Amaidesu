@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
+from .commentary_guard import is_guarded_ability
 from .maicraft import AWAITING_ANSWER, EVENTS, GOAL, EventsPage, GoalRun, MaicraftReply, events_page_of, goal_run_of
 
 logger = get_logger("MinecraftGoals")
@@ -150,11 +151,12 @@ class GoalWatch:
         return [goal.ability for goal in self._goals.values()]
 
     def pending_issuance(self) -> Dict[int, int]:
-        """在跟踪目标（已下达、未收到终态）的下达时刻表：编号 → 下达时刻（单调毫秒）。
+        """受解说前提守卫管辖的在跟踪目标（已下达、未收到终态）下达时刻表：编号 → 下达时刻（单调毫秒）。
 
-        解说前提守卫据此判断"目标刚下达还没回结果"。
+        排除发游戏公屏、查找、肢体动作、设倒计时等非世界状态变更辅助能力，确保它们既不触发条件①
+        瞬态暂扣窗，也不进入条件②步开始快照误杀正常解说。
         """
-        return {goal_id: goal.issued_at_ms for goal_id, goal in self._goals.items()}
+        return {goal_id: goal.issued_at_ms for goal_id, goal in self._goals.items() if is_guarded_ability(goal.ability)}
 
     def clear(self) -> None:
         """换了逻辑任务或连接重建：名单清空，游标保留（流没变时不重读旧事件）。"""

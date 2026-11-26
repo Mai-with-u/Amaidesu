@@ -32,7 +32,7 @@ from src.agents.minecraft.attention_matrix import items_tossed_line
 from src.agents.minecraft.chat_attribution import format_chat_sender
 from src.agents.minecraft.chat_gate import DEFAULT_BATCH_WINDOW_MS, MinecraftChatGate
 from src.agents.minecraft.chosen_death import is_suicide_ability
-from src.agents.minecraft.commentary_guard import CommentaryPremiseGuard, is_exempt
+from src.agents.minecraft.commentary_guard import CommentaryPremiseGuard, GuardRejection, is_exempt
 from src.agents.minecraft.context import (
     FACTS_KEY,
     INSTRUCTION_KEY,
@@ -85,6 +85,7 @@ from src.agents.minecraft.interaction_throttle import InteractionThrottle, playe
 from src.agents.minecraft.known_places import KNOWN_PLACES_KEY, build_known_places_catalog, short_dimension_name
 from src.agents.minecraft.lead_mode import (
     LEAD_MODE_PROMPT_SECTION,
+    SILENCE_NUDGE_PREFIX,
     SpokenEchoBuffer,
     clean_segment_notes,
     format_lead_handover_brief,
@@ -169,7 +170,7 @@ from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
-from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game import GameCommentaryRejectedPayload, GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
 from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
@@ -1208,12 +1209,15 @@ class MinecraftAgent(BaseAgent):
             wait_ms=config.events_wait_ms,
             clock_ms=self._clock_ms,
         )
-        # 解说前提守卫：framework_commentary 提交解说时校验目标结果是否已落定（条件①刚下达未终态、
-        # 条件②本步推理开始后在跟踪名单里变为终态），命中即立即拒回，不阻塞同批后续工具调用
+        # 解说前提守卫：framework_commentary 提交解说时校验受守卫目标是否落稳（条件①刚下达未终态、
+        # 条件②本步推理开始后在受守卫名单里变为终态），命中即立即拒回并发布可观测事件，不阻塞同批后续调用
         self._commentary_guard = CommentaryPremiseGuard(
             window_ms=config.commentary_guard_window_ms,
             clock_ms=self._clock_ms,
         )
+        # 刚收到 [直播间静默提醒] 待消化的标记：出队投递给模型时置位，首次成功受理 framework_commentary
+        # 或本批结束/切换主控/下播时清零；有效期间豁免条件①（不让暖场被 2 秒窗打回），仍保留条件②
+        self._pending_silence_nudge_commentary: bool = False
 
         # 本批 ReAct 是否正在跑；本批期间的身体事件（上报时随 payload 带上任务上下文）
         self._batch_active: bool = False
@@ -1268,6 +1272,7 @@ class MinecraftAgent(BaseAgent):
         self._running = True
         if not self._live_active_injected:
             self._live_active = False
+        self._pending_silence_nudge_commentary = False
         self._worker_task = asyncio.create_task(self._worker())
         self._goals.start()
         if self._event_bus is not None:
@@ -1303,6 +1308,7 @@ class MinecraftAgent(BaseAgent):
         """live.ended 回调：收工即停，未处理消息一并丢弃，不留到下一场突然开跑。"""
         del event_name, source
         self._live_active = False
+        self._pending_silence_nudge_commentary = False
         # 若下播瞬间仍处于游戏自主主控态，先经协调器或本机收手退出主控并取消在跑目标，防止残留主控态跨场
         if self._in_lead_mode:
             if self._lead_coordinator is not None and self._lead_coordinator.is_agent_leading(self.name):
@@ -1327,6 +1333,7 @@ class MinecraftAgent(BaseAgent):
         dropped = len(self._message_queue)
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
+        self._pending_silence_nudge_commentary = False
         self._reset_lead_idle_state()
         # 攒着的互动通知一并作废：下一场开播时冒出上一场的蹲起只是过时的事
         self._interaction_throttle.clear()
@@ -1675,6 +1682,7 @@ class MinecraftAgent(BaseAgent):
         self._release_epoch += 1
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
+        self._pending_silence_nudge_commentary = False
         self._in_lead_mode = True
         self._lead_handover_context = normalized_context
         self._solo_pacing.enter_lead()
@@ -1735,6 +1743,7 @@ class MinecraftAgent(BaseAgent):
         self._set_open_question("")
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
+        self._pending_silence_nudge_commentary = False
         self._reset_lead_idle_state()
         self._pending_handover_summary = ""
         self._task_finished = True
@@ -1911,7 +1920,7 @@ class MinecraftAgent(BaseAgent):
         queue_items = self._wake_queue.items
         replaced = False
         for idx, item in enumerate(queue_items):
-            if isinstance(item, tuple) and len(item) == 2 and str(item[1]).startswith("[直播间静默提醒]"):
+            if isinstance(item, tuple) and len(item) == 2 and str(item[1]).startswith(SILENCE_NUDGE_PREFIX):
                 queue_items[idx] = ("", notice)
                 replaced = True
                 break
@@ -2510,6 +2519,8 @@ class MinecraftAgent(BaseAgent):
         finally:
             self._batch_active = False
             self._interaction_only = False
+            # 本批结束（含模型忽略静默提醒直接让出）：清零待消化标记，防止豁免资格跨轮泄漏
+            self._pending_silence_nudge_commentary = False
 
     async def _run_task_batch(self) -> None:
         self._task_reported = False
@@ -2619,10 +2630,14 @@ class MinecraftAgent(BaseAgent):
                 if opened and started_new:
                     # 只有开新任务的委派原话钉在固定层；中途补充留在普通历史，可随演进被折叠或摘要吸收
                     incoming[INSTRUCTION_KEY] = True
+                if isinstance(content, str) and content.startswith(SILENCE_NUDGE_PREFIX):
+                    # 本步刚把 [直播间静默提醒] 喂给模型：标记首次解说豁免条件①，避免宿主催暖场反被 2 秒窗拦截
+                    self._pending_silence_nudge_commentary = True
                 messages.append(incoming)
-            # 解说前提守卫的步开始快照：排空唤醒队列后、推理前，给当前未决目标名单拍照。
-            # 本步推理期间有快照里的目标变为终态时，稍后的解说提交按"写作期间依据变了"拒回
-            self._commentary_guard.begin_step(self._goals.tracked_ids())
+            # 解说前提守卫的步开始快照：排空唤醒队列后、推理前，给当前受守卫的未决目标名单拍照
+            # （通过 pending_issuance 同源排除非世界状态变更辅助能力）。本步推理期间有快照里的目标变为终态时，
+            # 稍后的解说提交按"写作期间依据变了"拒回
+            self._commentary_guard.begin_step(self._goals.pending_issuance().keys())
             if opening_due:
                 opening_due = False
                 if self._mc_state.dirty:
@@ -2843,15 +2858,24 @@ class MinecraftAgent(BaseAgent):
                     all_commentary_only = False
                 # 记录调用 framework_commentary 前已有的回声快照，仅在本次出声时精准剥离新增的 game_commentary 自产回声
                 pre_commentary_echoes = self._spoken_echo_buffer.snapshot() if is_commentary_call else None
-                # 解说前提守卫：普通解说提交前校验目标结果是否已落定（刚下达未终态 / 写作期间变终态），
-                # 命中即拒回（立即返回工具错误，不调工具、不阻塞同批后续调用）；纠偏与突发高优豁免。
+                # 解说前提守卫：普通解说提交前校验受守卫目标是否落稳（刚下达瞬态窗 / 写作期间变终态），
+                # 命中即拒回并发布可观测事件（立即返回工具错误，不调工具、不阻塞同批后续调用）；
+                # 纠偏与突发高优全豁免；收到 [直播间静默提醒] 后的首次解说仅豁免条件①、保留条件②。
                 # 拒绝算受理失败，"仅解说且受理成功就让出"的分支不会走——模型下一步带着结果回执重写
-                guard_refusal: Optional[str] = None
+                guard_rejection: Optional[GuardRejection] = None
                 if is_commentary_call and not is_exempt(arguments):
-                    guard_refusal = self._commentary_guard.check(self._goals.pending_issuance())
-                if guard_refusal is not None:
-                    self._logger.info(f"解说前提守卫拒回 framework_commentary：{guard_refusal}")
-                    observation: Dict[str, Any] = {"ok": False, "error": guard_refusal, "tool": call.name}
+                    guard_rejection = self._commentary_guard.evaluate(
+                        self._goals.pending_issuance(),
+                        skip_condition1=self._pending_silence_nudge_commentary,
+                    )
+                if guard_rejection is not None:
+                    self._logger.info(
+                        f"解说前提守卫拒回 framework_commentary"
+                        f"（condition={guard_rejection.condition}, goals={list(guard_rejection.blocking_goal_ids)}）："
+                        f"{guard_rejection.message}"
+                    )
+                    await self._emit_commentary_guard_rejected(guard_rejection, round_id=mc_round)
+                    observation: Dict[str, Any] = {"ok": False, "error": guard_rejection.message, "tool": call.name}
                 else:
                     observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 if call.name == "streamer_memory_correct":
@@ -2859,6 +2883,8 @@ class MinecraftAgent(BaseAgent):
                     self._commitment_ledger_dirty = True
                 if is_commentary_call and observation.get("accepted") is True:
                     commentary_succeeded = True
+                    # 首次成功受理 framework_commentary 后消耗静默提醒豁免资格，后续解说恢复常规 2 秒瞬态窗
+                    self._pending_silence_nudge_commentary = False
                     if observation.get("spoken") is True:
                         commentary_spoken = True
                         if pre_commentary_echoes is not None:
@@ -6002,6 +6028,27 @@ class MinecraftAgent(BaseAgent):
 
     async def emit_error(self, message: str, *, scene: str = "") -> None:
         await self._emit_game_event("error", message, scene=scene)
+
+    async def _emit_commentary_guard_rejected(self, rejection: GuardRejection, *, round_id: str = "") -> None:
+        """发布解说前提守卫拒回观测事件（纯复盘统计旁路，失败仅记告警不阻断推理循环）。"""
+        if self._event_bus is None:
+            return
+        payload = GameCommentaryRejectedPayload(
+            game="minecraft",
+            condition=rejection.condition,
+            blocking_goal_ids=list(rejection.blocking_goal_ids),
+            window_ms=rejection.window_ms,
+            reason=rejection.message,
+            round_id=round_id,
+        )
+        try:
+            await self.emit_event(CoreEvents.GAME_COMMENTARY_REJECTED, payload)
+        except Exception as exc:  # noqa: BLE001 - 观测旁路失败不影响主循环
+            self._logger.warning(
+                f"发布 {CoreEvents.GAME_COMMENTARY_REJECTED} 事件失败"
+                f"（condition={rejection.condition}, goals={list(rejection.blocking_goal_ids)}）: {exc}",
+                exc=True,
+            )
 
     # ==================================================================
     # 状态查询（测试/外部）
