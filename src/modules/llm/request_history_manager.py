@@ -127,6 +127,7 @@ class RequestHistoryManager:
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         success_only: Optional[bool] = None,
+        latency_gt_ms: Optional[int] = None,
         page: int = 1,
         page_size: int = 50,
     ) -> Dict[str, Any]:
@@ -138,6 +139,7 @@ class RequestHistoryManager:
             start_time: 开始时间（毫秒时间戳）
             end_time: 结束时间（毫秒时间戳）
             success_only: 是否只返回成功的请求
+            latency_gt_ms: 只返回耗时超过该值（毫秒）的请求
             page: 页码（从 1 开始）
             page_size: 每页数量
 
@@ -154,6 +156,7 @@ class RequestHistoryManager:
             start_time=start_time,
             end_time=end_time,
             success_only=success_only,
+            latency_gt_ms=latency_gt_ms,
             page=page,
             page_size=page_size,
         )

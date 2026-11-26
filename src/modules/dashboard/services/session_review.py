@@ -285,6 +285,7 @@ class SessionReviewAggregator:
         review_llm.by_profile = [
             self._domain_from_row(row, profile_name=str(row.get("profile_name") or "")) for row in profile_rows
         ]
+        review_llm.slow_thresholds = dict(self.slow_thresholds)
 
         points_by_profile: Dict[str, List[WaterlinePoint]] = {}
         for row in series_rows:

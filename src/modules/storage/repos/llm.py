@@ -240,6 +240,7 @@ class LLMRepo(BaseRepo):
         start_time: Optional[int],
         end_time: Optional[int],
         success_only: Optional[bool],
+        latency_gt_ms: Optional[int] = None,
     ) -> "tuple[str, List[Any]]":
         """组装 llm_requests 查询的 WHERE 子句（子句全部为代码内常量）。"""
         clauses: List[str] = []
@@ -259,6 +260,9 @@ class LLMRepo(BaseRepo):
         if success_only is not None:
             clauses.append("success = ?")
             params.append(1 if success_only else 0)
+        if latency_gt_ms is not None:
+            clauses.append("latency_ms > ?")
+            params.append(latency_gt_ms)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
 
@@ -270,6 +274,7 @@ class LLMRepo(BaseRepo):
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         success_only: Optional[bool] = None,
+        latency_gt_ms: Optional[int] = None,
         page: int = 1,
         page_size: int = 50,
     ) -> Dict[str, Any]:
@@ -280,6 +285,7 @@ class LLMRepo(BaseRepo):
             start_time=start_time,
             end_time=end_time,
             success_only=success_only,
+            latency_gt_ms=latency_gt_ms,
         )
 
         def _exec() -> Dict[str, Any]:

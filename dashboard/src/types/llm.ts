@@ -207,6 +207,8 @@ export interface LLMHistoryQueryParams {
   start_time?: number;
   end_time?: number;
   success_only?: boolean;
+  /** 只返回耗时超过该值（毫秒）的请求 */
+  latency_gt_ms?: number;
 }
 
 // 历史列表响应

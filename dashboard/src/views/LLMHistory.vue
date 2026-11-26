@@ -35,6 +35,17 @@
           </el-tag>
         </el-tooltip>
         <el-tag type="info" effect="plain" size="small"> 共 {{ totalRecords }} 条记录 </el-tag>
+        <!-- 深链带入的耗时下限在筛选栏没有对应控件，用可关闭标签显性呈现 -->
+        <el-tag
+          v-if="queryParams.latency_gt_ms !== undefined"
+          closable
+          type="warning"
+          effect="plain"
+          size="small"
+          @close="clearLatencyFilter"
+        >
+          耗时 &gt; {{ queryParams.latency_gt_ms }}ms
+        </el-tag>
       </div>
     </header>
 
@@ -180,6 +191,20 @@ if (
   queryParams.end_time = queryEndTime;
 }
 
+// 直达筛选：场次复盘页经 ?success_only=false 跳入时预置状态筛选（失败调用卡），
+// 同样在 setup 期首拉之前写入
+const querySuccessOnly = String(route.query.success_only ?? '').trim();
+if (querySuccessOnly === 'true' || querySuccessOnly === 'false') {
+  queryParams.success_only = querySuccessOnly === 'true';
+}
+
+// 直达筛选：场次复盘页经 ?latency_gt_ms=（毫秒）跳入时预置耗时筛选（慢调用卡），
+// 同样在 setup 期首拉之前写入
+const queryLatencyGtMs = Number(route.query.latency_gt_ms ?? '');
+if (Number.isFinite(queryLatencyGtMs) && queryLatencyGtMs > 0) {
+  queryParams.latency_gt_ms = queryLatencyGtMs;
+}
+
 // 获取历史数据
 async function fetchHistory() {
   loading.value = true;
@@ -231,9 +256,16 @@ function handleReset() {
   queryParams.start_time = undefined;
   queryParams.end_time = undefined;
   queryParams.success_only = undefined;
+  queryParams.latency_gt_ms = undefined;
   queryParams.page = 1;
   dateRange.value = null;
   fetchHistory();
+}
+
+/** 撤掉耗时下限筛选：值变更由筛选 watcher 统一重查并回写 URL */
+function clearLatencyFilter(): void {
+  queryParams.latency_gt_ms = undefined;
+  queryParams.page = 1;
 }
 
 // 详情加载统一入口：行点击、上一条/下一条都按 request_id 拉完整详情；
@@ -343,8 +375,8 @@ function debouncedFetchHistory() {
   }, 300);
 }
 
-// 筛选状态回写 URL：把 model_name 与时间窗写进 query（replace 不产生历史记录，
-// 空值/默认态删键而非留空串），使筛选结果可直接分享与刷新恢复
+// 筛选状态回写 URL：把模型/用途/状态/耗时下限与时间窗写进 query（replace 不产生
+// 历史记录，空值/默认态删键而非留空串），使筛选结果可直接分享与刷新恢复
 function syncFilterToQuery(): void {
   const query: Record<string, string> = {};
   if (queryParams.model_name) {
@@ -353,6 +385,12 @@ function syncFilterToQuery(): void {
   if (queryParams.start_time !== undefined && queryParams.end_time !== undefined) {
     query.start_time = String(queryParams.start_time);
     query.end_time = String(queryParams.end_time);
+  }
+  if (queryParams.success_only !== undefined) {
+    query.success_only = String(queryParams.success_only);
+  }
+  if (queryParams.latency_gt_ms !== undefined) {
+    query.latency_gt_ms = String(queryParams.latency_gt_ms);
   }
   void router.replace({ query });
 }
@@ -366,12 +404,21 @@ watch(
     const startTime = Number(query.start_time ?? '');
     const endTime = Number(query.end_time ?? '');
     const hasRange = Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime;
+    const successOnlyRaw = String(query.success_only ?? '').trim();
+    const successOnly =
+      successOnlyRaw === 'true' ? true : successOnlyRaw === 'false' ? false : undefined;
+    const latencyGtMs = Number(query.latency_gt_ms ?? '');
+    const latencyFilter = Number.isFinite(latencyGtMs) && latencyGtMs > 0 ? latencyGtMs : undefined;
     const sameModel = modelName === (queryParams.model_name ?? '');
     const sameRange = hasRange
       ? queryParams.start_time === startTime && queryParams.end_time === endTime
       : queryParams.start_time === undefined && queryParams.end_time === undefined;
-    if (sameModel && sameRange) return;
+    const sameSuccess = successOnly === queryParams.success_only;
+    const sameLatency = latencyFilter === queryParams.latency_gt_ms;
+    if (sameModel && sameRange && sameSuccess && sameLatency) return;
     queryParams.model_name = modelName || undefined;
+    queryParams.success_only = successOnly;
+    queryParams.latency_gt_ms = latencyFilter;
     if (hasRange) {
       dateRange.value = [startTime, endTime];
       queryParams.start_time = startTime;
@@ -391,6 +438,7 @@ watch(
     () => queryParams.profile_name,
     dateRange,
     () => queryParams.success_only,
+    () => queryParams.latency_gt_ms,
   ],
   () => {
     syncFilterToQuery();

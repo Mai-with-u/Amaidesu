@@ -238,6 +238,7 @@ async def get_history(
     start_time: Annotated[Optional[int], Query(description="开始时间（毫秒时间戳）")] = None,
     end_time: Annotated[Optional[int], Query(description="结束时间（毫秒时间戳）")] = None,
     success_only: Annotated[Optional[bool], Query(description="只返回成功的请求")] = None,
+    latency_gt_ms: Annotated[Optional[int], Query(ge=0, description="只返回耗时超过该值（毫秒）的请求")] = None,
 ) -> LLMHistoryListResponse:
     """获取请求历史列表"""
     history_manager = server.request_history_manager
@@ -247,6 +248,7 @@ async def get_history(
         start_time=start_time,
         end_time=end_time,
         success_only=success_only,
+        latency_gt_ms=latency_gt_ms,
         page=page,
         page_size=page_size,
     )

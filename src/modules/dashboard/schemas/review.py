@@ -154,6 +154,9 @@ class ReviewLLM(BaseModel):
 
     overall: LLMDomainStats = Field(default_factory=LLMDomainStats)
     by_profile: List[LLMDomainStats] = Field(default_factory=list)
+    # profile → 慢调用阈值（毫秒，与运行期慢调用告警同源）；未配置的 profile 由
+    # 聚合侧用缺省阈值计，前端拿它给慢调用深链换算统一的耗时下限
+    slow_thresholds: Dict[str, int] = Field(default_factory=dict)
 
 
 class WaterlinePoint(BaseModel):

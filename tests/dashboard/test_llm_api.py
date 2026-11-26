@@ -249,6 +249,28 @@ async def test_history_profiles_are_distinct_and_sorted(llm_client, store) -> No
     assert (await client.get("/api/v1/llm/history/profiles")).json() == ["llm_fast", "planner"]
 
 
+async def test_history_filters_by_latency_floor(llm_client, store) -> None:
+    """``latency_gt_ms`` 只返回耗时超过下限的请求（复盘页慢调用卡深链口径）。"""
+    client = await llm_client()
+    base = 1_700_000_000_000
+    for i, latency in enumerate((100, 200, 300)):
+        await store.llm.insert_llm_request(
+            request_id=f"lat-{i}",
+            timestamp_ms=base + i * 1_000,
+            profile_name="replyer",
+            model_name=MODEL_A,
+            prompt_tokens=100,
+            latency_ms=latency,
+        )
+
+    body = (await client.get("/api/v1/llm/history", params={"latency_gt_ms": 150})).json()
+    assert body["total"] == 2
+    assert {item["request_id"] for item in body["items"]} == {"lat-1", "lat-2"}
+
+    unfiltered = (await client.get("/api/v1/llm/history")).json()
+    assert unfiltered["total"] == 3
+
+
 @pytest.mark.parametrize("windows", [None, {MODEL_A: 128_000, MODEL_B: 0}], ids=["no_llm_manager", "with_windows"])
 async def test_usage_context_window_and_latest_prompt(llm_client, store, windows) -> None:
     """窗口来自引擎装配索引（未注入或未配置为 0，前端据此隐藏水位）；水位分子是最新一条 prompt，不是累加。"""

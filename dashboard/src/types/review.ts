@@ -169,6 +169,8 @@ export interface SessionReviewResponse {
   llm: {
     overall: ReviewLLMDomainStats;
     by_profile: ReviewLLMDomainStats[];
+    /** profile → 慢调用阈值毫秒（与运行期告警同源；未配置的 profile 走聚合侧缺省） */
+    slow_thresholds: Record<string, number>;
   };
   waterline: WaterlineSeries[];
   game: {

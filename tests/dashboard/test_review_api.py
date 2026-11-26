@@ -219,6 +219,8 @@ async def test_aggregator_llm_window_and_waterline(store) -> None:
     assert body.llm.overall.cost == pytest.approx(0.5)
     assert body.llm.overall.cache_hit_rate == pytest.approx(900 / 3010)
     assert body.llm.overall.slow_calls == 1  # r1 20s > 15s 阈值
+    # 阈值表原样透出（前端慢调用深链换算统一耗时下限用）
+    assert body.llm.slow_thresholds == {"planner": 15_000, "minecraft": 15_000}
 
     by_profile = {row.profile_name: row for row in body.llm.by_profile}
     assert by_profile["minecraft"].calls == 1 and by_profile["minecraft"].failed_calls == 1
