@@ -17,7 +17,8 @@
 旁路，与思考流同一定位）。
 """
 
+from src.modules.diagnostics.tts_reader import TtsDiagnosticsReader
 from src.modules.diagnostics.tts_recorder import TtsDiagnosticsRecorder
 from src.modules.diagnostics.writer import DiagnosticsWriter
 
-__all__ = ["DiagnosticsWriter", "TtsDiagnosticsRecorder"]
+__all__ = ["DiagnosticsWriter", "TtsDiagnosticsReader", "TtsDiagnosticsRecorder"]

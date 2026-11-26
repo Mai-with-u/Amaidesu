@@ -26,7 +26,8 @@ if TYPE_CHECKING:
 
 logger = get_logger("TtsDiagnosticsRecorder")
 
-_KIND = "tts"
+# TTS 诊断记录在落盘根目录下的种类目录名；读取侧按同一定位文件
+TTS_DIAGNOSTICS_KIND = "tts"
 
 
 class TtsDiagnosticsRecorder:
@@ -62,9 +63,9 @@ class TtsDiagnosticsRecorder:
             record: Dict[str, Any] = data.model_dump()
             record["event"] = event_name
             record.update(extra)
-            self._writer.append(_KIND, record)
+            self._writer.append(TTS_DIAGNOSTICS_KIND, record)
         except Exception as exc:  # noqa: BLE001 记录旁路，失败不传播
             logger.warning(f"TTS 诊断记录写入失败: {exc}")
 
 
-__all__ = ["TtsDiagnosticsRecorder"]
+__all__ = ["TTS_DIAGNOSTICS_KIND", "TtsDiagnosticsRecorder"]
