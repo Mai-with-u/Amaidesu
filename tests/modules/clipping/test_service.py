@@ -26,12 +26,24 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.clipping import NewClipSegment
 from tests.modules.llm.fakes import FakeLLMManager
 
-# 模型给出的选段：一段 60 秒（最短 30 秒、最长 300 秒的约束内）
-_SELECTION_JSON = '[{"start_s": 60, "end_s": 120, "title": "开场寒暄", "reason": "弹幕互动"}]'
+# 模型给出的选段：用合并记录里的行号指起止，从第 1 行到第 3 行
+_SELECTION_JSON = '[{"first_line": 1, "last_line": 3, "title": "开场寒暄", "reason": "弹幕互动"}]'
 
 # 录播文件名里的时刻（本地时区），与录播目录扫描用的是同一套解析
 _RECORDING_NAME = "2026-11-08 20-00-05.mkv"
 _RECORDING_START_MS = int(datetime(2026, 11, 8, 20, 0, 5).timestamp() * 1000)
+
+
+async def _seed_speech(store: SQLiteDatabase, live_session_id: int) -> None:
+    """给场次塞三句相隔一分钟的台词，选段器才有带行号的记录可依。"""
+    for offset_second in (60, 120, 180):
+        await store.chat.insert_live_chat(
+            live_session_id=live_session_id,
+            timestamp_ms=_RECORDING_START_MS + offset_second * 1000,
+            sender_role="assistant",
+            content=f"第 {offset_second} 秒说的话",
+            message_type="text",
+        )
 
 
 async def test_live_ended_starts_auto_selection(
@@ -46,6 +58,7 @@ async def test_live_ended_starts_auto_selection(
 
     session_id = await store.sessions.insert_live_session(started_at_ms=_RECORDING_START_MS, source="manual")
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=_RECORDING_START_MS + 3600_000)
+    await _seed_speech(store, session_id)
 
     registry = BackgroundTaskRegistry(event_bus)
     service = ClippingService(

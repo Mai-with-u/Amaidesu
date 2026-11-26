@@ -24,6 +24,7 @@ import time as time_module
 
 from src.modules.background.registry import BackgroundTaskRegistry, get_registry
 from src.modules.clipping.config_schema import ClippingConfigSchema
+from src.modules.diagnostics.tts_reader import TtsDiagnosticsReader
 from src.modules.clipping.cutter import (
     ClipCutError,
     ClipCutter,
@@ -150,6 +151,7 @@ class ClippingService:
         cutter: Optional[ClipCutter] = None,
         override_store: Optional[RecordingOverrideStore] = None,
         selector: Optional[ClipSelector] = None,
+        voice_log: Optional[TtsDiagnosticsReader] = None,
     ) -> None:
         self._event_bus = event_bus
         self._database = database
@@ -166,6 +168,8 @@ class ClippingService:
                 event_repo=database.events,
                 session_repo=database.sessions,
                 topic_repo=database.topics,
+                game_player_repo=database.game_players,
+                voice_log=voice_log,
                 config=config,
             )
         self._cutter = (

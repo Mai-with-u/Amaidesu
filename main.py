@@ -61,7 +61,7 @@ from src.modules.dashboard.server import (
     is_port_in_use_error,
 )
 from src.modules.dashboard.stream_preview import StreamPreviewHub
-from src.modules.diagnostics import DiagnosticsWriter, TtsDiagnosticsRecorder
+from src.modules.diagnostics import DiagnosticsWriter, TtsDiagnosticsReader, TtsDiagnosticsRecorder
 from src.modules.events import (
     EventBus,
     ensure_registry_consistency,
@@ -679,7 +679,11 @@ async def _assemble_app_components(
 
     # --- 直播切片（[clipping]）：AI 选段 + ffmpeg 切割（enabled 且配了录播目录才订阅下播事件）---
     clipping_service = _build_clipping_service(
-        event_bus=event_bus, config=config, database=database, llm_service=llm_service
+        event_bus=event_bus,
+        config=config,
+        database=database,
+        llm_service=llm_service,
+        diagnostics_writer=diagnostics_writer,
     )
     state["clipping_service"] = clipping_service
 
@@ -1490,8 +1494,12 @@ def _build_clipping_service(
     config: Dict[str, Any],
     database: SQLiteDatabase,
     llm_service: Optional[LLMManager],
+    diagnostics_writer: Optional[DiagnosticsWriter] = None,
 ) -> Optional["ClippingService"]:
-    """按 ``[clipping]`` 装配直播切片编排；未启用时不装配，启用但缺录播目录时装配降级（只在日志说明）。"""
+    """按 ``[clipping]`` 装配直播切片编排；未启用时不装配，启用但缺录播目录时装配降级（只在日志说明）。
+
+    ``diagnostics_writer`` 只用来定位 TTS 诊断记录：选段定起止时读每句台词的真实播放时段。
+    """
     raw = config.get("clipping", {}) if isinstance(config, dict) else {}
     clipping_config = ClippingConfigSchema(**raw) if isinstance(raw, dict) else ClippingConfigSchema()
     if not clipping_config.enabled:
@@ -1502,9 +1510,15 @@ def _build_clipping_service(
         database=database,
         llm_manager=llm_service,
         config=clipping_config,
+        voice_log=_voice_log_of(diagnostics_writer),
     )
     service.start()  # 未配置录播目录时只在日志说明，不订阅
     return service
+
+
+def _voice_log_of(diagnostics_writer: Optional[DiagnosticsWriter]) -> Optional[TtsDiagnosticsReader]:
+    """TTS 诊断记录读取口；诊断落盘没启用时为空（选段退回按估算定起止）。"""
+    return TtsDiagnosticsReader(diagnostics_writer) if diagnostics_writer is not None else None
 
 
 def _streamer_name(config: Dict[str, Any]) -> str:
@@ -1724,6 +1738,7 @@ async def _start_dashboard(
                 database=database,
                 llm_manager=llm_service,
                 config=fresh_config,
+                voice_log=_voice_log_of(event_recorder.diagnostics_writer if event_recorder else None),
             )
             rebuilt.start()
             return rebuilt

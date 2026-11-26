@@ -47,13 +47,13 @@ class ClippingConfigSchema(BaseConfig):
         default=30,
         ge=5,
         title="最短片段秒数",
-        description="AI 提议片段的最短时长（秒），过短的提议会被拒绝",
+        description="AI 提议片段的最短时长（秒），过短的提议会被放弃",
     )
     max_segment_seconds: int = Field(
-        default=300,
+        default=1800,
         ge=10,
         title="最长片段秒数",
-        description="AI 提议片段的最长时长（秒），超长的提议会被截断",
+        description="AI 提议片段的最长时长（秒）；一件事超过时保住结果，把起点往后挪到仍能交代前因的一行",
     )
 
 

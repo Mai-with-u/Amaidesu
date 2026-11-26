@@ -323,6 +323,22 @@ def _check_tts_max_queue(expected: int) -> Callable[[Path], None]:
     return check
 
 
+def _seed_clipping_max_segment(max_seconds: int) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "infra.toml", "2.0.46")
+        doc["clipping"]["max_segment_seconds"] = max_seconds
+        write_doc(d, "infra.toml", doc)
+
+    return seed
+
+
+def _check_clipping_max_segment(expected: int) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        assert read_doc(d, "infra.toml")["clipping"]["max_segment_seconds"] == expected
+
+    return check
+
+
 def _seed_tools_memory_section(d: Path) -> None:
     doc = _rewound(d, "tools.toml", "2.0.40")
     doc["tools"]["memory"] = {"enabled": False, "config": {}}
@@ -892,6 +908,18 @@ CASES = [
     ),
     Case("tts-max-queue-old-default", ("infra.toml",), _seed_tts_max_queue(3), _check_tts_max_queue(6)),
     Case("tts-max-queue-user-kept", ("infra.toml",), _seed_tts_max_queue(8), _check_tts_max_queue(8)),
+    Case(
+        "clipping-max-segment-old-default",
+        ("infra.toml",),
+        _seed_clipping_max_segment(300),
+        _check_clipping_max_segment(1800),
+    ),
+    Case(
+        "clipping-max-segment-user-kept",
+        ("infra.toml",),
+        _seed_clipping_max_segment(900),
+        _check_clipping_max_segment(900),
+    ),
     Case("tools-memory-section-retire", ("tools.toml",), _seed_tools_memory_section, _check_tools_memory_section),
     Case(
         "web-search-bing-entry-old-default",
@@ -952,6 +980,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "disable_game_lead_idle_fallback": ("case", "game-lead-idle-fallback-old-default"),
     "shorten_commentary_guard_window": ("case", "commentary-guard-window-old-default"),
     "widen_tts_max_queue": ("case", "tts-max-queue-old-default"),
+    "widen_clipping_max_segment": ("case", "clipping-max-segment-old-default"),
     # 具名测试函数覆盖
     "builder_scene_transport": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
     "drop_minecraft_builder_section": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),

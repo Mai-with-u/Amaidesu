@@ -1199,6 +1199,14 @@ _widen_tts_max_queue = swap_default("tts.max_queue", 3, 6)
 # 生产钩子登记：infra.toml v2.0.46（[tts].max_queue 默认 3 → 6）
 register_file_hook("infra.toml", "widen_tts_max_queue", "2.0.46", _widen_tts_max_queue)
 
+# infra.toml v2.0.47：AI 选段的单位从"几分钟的片段"改为"一件完整的事"，单件时长上限默认
+# 300 → 1800 秒（一场里值得单独成片的事件通常几十秒到半小时）。仅改写落盘值恰为旧默认
+# 300 的存量文件，用户自设的上限原样保留。
+_widen_clipping_max_segment = swap_default("clipping.max_segment_seconds", 300, 1800)
+
+# 生产钩子登记：infra.toml v2.0.47（[clipping].max_segment_seconds 默认 300 → 1800）
+register_file_hook("infra.toml", "widen_clipping_max_segment", "2.0.47", _widen_clipping_max_segment)
+
 # agents.toml v2.0.54：解说前提守卫暂扣窗默认 8000 → 2000 毫秒（缩短为 2 秒极短瞬态窗，
 # 避免正常行动开局与推进中的实况解说被长窗误拒）。仅改写落盘值恰为旧默认 8000 的存量文件，
 # 用户显式设成其他值的原样保留。
