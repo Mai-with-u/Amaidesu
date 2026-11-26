@@ -607,6 +607,21 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_session_speech_utterance_ids(self, *, live_session_id: int) -> Dict[int, str]:
+        """本场送到观众面前的台词行的发声编号（``live_chat`` 行主键 → ``utterance_id``）；没编号的行不返回。"""
+
+        def _exec() -> Dict[int, str]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT id, utterance_id FROM live_chat"
+                    " WHERE live_session_id=? AND sender_role='assistant'"
+                    " AND dropped_at_ms IS NULL AND utterance_id IS NOT NULL AND utterance_id<>''",
+                    (int(live_session_id),),
+                ).fetchall()
+            return {int(row["id"]): str(row["utterance_id"]) for row in rows}
+
+        return await self._run_in_executor(_exec)
+
     async def count_session_viewer_cohorts(self, *, live_session_id: int, started_at_ms: int) -> Dict[str, int]:
         """单场观众构成：场内发言观众数 / 新观众数（历史首条发言落在本场）。
 
