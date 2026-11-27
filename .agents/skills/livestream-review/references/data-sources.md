@@ -39,7 +39,7 @@
 |------|-----------|---------|
 | 游戏 Agent 提交目标 | `tool.result.maicraft_execute`：`round_id`（模型轮次）、`result.data.goal_id`（带目标编号的才是目标提交）、`status`、`error_message` | 那一轮提交了什么，Mod 当场回了什么 |
 | 目标受理与终态 | `task.changed`：`status`（accepted / succeeded / failed / cancelled）、`snapshot.goal_id` / `ability` / `purpose`、`summary`（终态摘要） | 做没做成，什么时候有的结果 |
-| 游戏 Agent 写解说要点 | `agent.lead.commentary`：`summary`（要点原文）、`mood`、`about_player`、`correction`、`reason`；`tool.result.framework_commentary`：`round_id` | 要点原文与所在的模型轮次。`reason` 的三个取值：dispatched 已出口、throttled_recorded 被节流仅记录、same_round_deduped 同轮去重 |
+| 游戏 Agent 写解说要点 | `agent.lead.commentary`：`summary`（要点原文）、`mood`、`about_player`、`correction`、`reason`；`tool.result.framework_commentary`：`round_id` | 要点原文与所在的模型轮次。`reason` 的三个取值：dispatched 已出口、throttled_recorded 被节流仅记录、same_round_deduped 同轮去重。**注意**：`agent.lead.commentary` 在回复器成句后才发布，量回复器时延须用 `streamer.speech.round_id` 里的起始毫秒或请求全文时戳，不可直接用这两条事件相减 |
 | 回复器成句 | `streamer.speech`：`utterance_id`、`text`、`emotion`、`source`、`reply_to_user_name`、`reply_player_game` | 正式发言与解说要点是否一致（成败、对象有没有翻） |
 | 语音出声 | `tts.utterance.started` / `playback_started` / `finished` / `failed` / `dropped`，按 `utterance_id` 配对 | 观众什么时候听到、有没有丢句。**出声锚点是 playback_started**，started 在合成前就发了 |
 | 现场与互动 | `game.chat.received`（`kind` = player / system、`sender`、`content`）、`game.self.chatted`（`message`）、`game.player.interacted`（`player_name`、`actions`）、`game.milestone`、`game.attention_required`（`message`、`notable`） | 世界记录：谁做了什么、游戏里发生了什么 |
