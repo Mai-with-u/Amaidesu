@@ -17,6 +17,8 @@ import {
   ElRadioButton,
   ElRadioGroup,
   ElSelect,
+  ElTabPane,
+  ElTabs,
   ElTag,
 } from 'element-plus';
 import SessionReview from './SessionReview.vue';
@@ -190,6 +192,8 @@ async function mountInKeepAlive(
         ElRadioButton,
         ElRadioGroup,
         ElSelect,
+        ElTabPane,
+        ElTabs,
         ElTag,
       },
       directives: { loading: () => undefined },
@@ -403,6 +407,28 @@ describe('SessionReview keep-alive 刷新与默认选中跟进', () => {
     await select.vm.$emit('change', [78, 77]);
     await flush();
     expect(wrapper.text()).toContain('选中含彩排场');
+  });
+});
+
+describe('SessionReview 布局分段（体检/明细/材料）', () => {
+  it('单场视图渲染材料段 tab 组，多选合并视图整段不渲染', async () => {
+    api.liveSessionsApi.list.mockResolvedValue({
+      data: {
+        items: [makeSession(78, { ended: true }), makeSession(77, { ended: true })],
+      },
+    });
+
+    const { wrapper } = await mountInKeepAlive();
+    // 单场：档案/台词/线索/报告四合一 tab 在
+    expect(wrapper.find('.material-tabs').exists()).toBe(true);
+
+    // 多选合并：材料段整体不渲染
+    const select = wrapper.findComponent(ElSelect);
+    await select.vm.$emit('update:modelValue', [78, 77]);
+    await select.vm.$emit('change', [78, 77]);
+    await flush();
+    expect(wrapper.find('.material-tabs').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('场次档案');
   });
 });
 

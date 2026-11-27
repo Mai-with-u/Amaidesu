@@ -1,9 +1,10 @@
 <template>
-  <section class="rv-panel" aria-label="场次档案">
-    <div class="rv-panel-title rv-panel-head">
+  <div :class="flat ? undefined : 'rv-panel'" aria-label="场次档案">
+    <div v-if="!flat" class="rv-panel-title rv-panel-head">
       <span>场次档案</span>
       <span class="rv-hint">整理自本场台词，下一场开播回忆“上一场”时用</span>
     </div>
+    <p v-if="flat" class="rv-hint flat-hint">整理自本场台词，下一场开播回忆“上一场”时用</p>
     <p v-if="error" class="rv-line-error">{{ error }}</p>
     <template v-else>
       <p v-if="actionError" class="rv-line-error">{{ actionError }}</p>
@@ -17,7 +18,7 @@
         />
       </div>
     </template>
-  </section>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -37,7 +38,17 @@ defineProps<{
   /** 删除单行的失败原因（加载错误由组合式管；这里只影响提示，不藏列表） */
   actionError: string;
   busyLineId: number | null;
+  /** tab 化呈现：去面板外框与标题（tab 标签已命名），只渲染内容与口径说明 */
+  flat?: boolean;
 }>();
 
 const emit = defineEmits<{ delete: [line: ArchiveLineItem] }>();
 </script>
+
+<style scoped>
+/* flat 形态的口径说明与内容留一行间距 */
+.flat-hint {
+  display: block;
+  margin: 0 0 10px;
+}
+</style>

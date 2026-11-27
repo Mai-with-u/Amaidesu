@@ -5,9 +5,12 @@
   数据的取数编排、页面级错误提示与深入入口；各内容面板在 components/session-review/
   面板组件族（场次档案复用记忆页的 ArchiveLineList）。面板公共样式在
   styles/session-review.css（rv- 前缀），面板独有样式在各组件 scoped 块。
+  布局三段：体检段（时间条→指标卡→决策分布，看数动线）→ 明细段（左列流程单/
+  水位/用量，右列观众/游戏）→ 材料段（档案/台词/线索/报告四合一 tab，复核删行
+  动线，单场语义合并视图整段不渲染）。
   全部数字来自后端结构化聚合（GET /api/v1/review），本页不做告警判定；
-  多选合并视图由后端窗口合并、水位图按 session_id 断线留空隙；档案/台词/流程单/
-  观众/游戏明细属单场语义，合并视图不产出。深挖取证不在本页——带数字开 AI 会话。
+  多选合并视图由后端窗口合并、水位图按 session_id 断线留空隙。深挖取证不在本页
+  ——带数字开 AI 会话。
 -->
 <template>
   <div class="session-review">
@@ -82,43 +85,10 @@
     />
 
     <template v-if="review">
-      <!-- 场次档案（本场整理出的标题 + 原话；删单行只影响下一场开播的"上一场"回忆） -->
-      <ReviewArchiveCard
-        v-if="archiveSessionId !== null"
-        :lines="archiveLines"
-        :loading="archiveLoading"
-        :error="archiveError"
-        :action-error="archiveActionError"
-        :busy-line-id="archiveBusyLineId"
-        @delete="removeArchiveLine"
-      />
-
-      <!-- 本场台词（直播里说过的每一句；删一句会连带删掉引用它的档案行） -->
-      <ReviewSpeechCard
-        v-if="archiveSessionId !== null"
-        :lines="speechLines"
-        :loading="speechLoading"
-        :error="speechError"
-        :action-error="speechActionError"
-        :busy-chat-id="speechBusyChatId"
-        @delete="removeSpeechLine"
-      />
-
-      <!-- 本场记忆线索（代码每批推给规划器的旧事：承诺线索与被动想起；用上 = 她点名说了这件事） -->
-      <ReviewCuesCard
-        v-if="archiveSessionId !== null"
-        :items="cues"
-        :loading="cueLoading"
-        :error="cueError"
-      />
-
-      <!-- 复盘报告（logs/reviews 可视化页，由直播复盘流程离线生成；仅单场次且有报告时渲染） -->
-      <ReviewReportFrame v-if="reportSrc" :src="reportSrc" />
-
       <!-- 场次信息 chips（互动类零值降饱和） -->
       <ReviewChipsBar :review="review" />
 
-      <!-- 场次时间条（单场视图：环节段铺底 + 事件锚点，点击时刻锚定回看） -->
+      <!-- ①体检段：节奏形状在前、异常指标居中、触发构成殿后（单场语义的时间条，合并视图不产出） -->
       <SessionTimeStrip
         v-if="timeStrip"
         :session-id="timeStrip.sessionId"
@@ -129,8 +99,6 @@
         :silence-at-ms="review.speech.longest_silence_start_ms"
         :latency-max-at-ms="review.decisions.latency.max_at_ms"
       />
-
-      <!-- 核心指标卡 -->
       <ReviewMetricCards
         :review="review"
         :silence-link="silenceLink"
@@ -138,33 +106,68 @@
         :llm-failed-link="llmFailedLink"
         :llm-slow-link="llmSlowLink"
       />
-
-      <!-- 决策触发原因全量分布（决策卡副行只展示前 3 项） -->
       <ReviewDecisionBars
         :distribution="review.decisions.distribution"
         :total="review.decisions.total"
       />
 
-      <!-- 流程单执行（单场视图；rundown_transitions 事实行重放） -->
-      <RundownExecutionCard v-if="rundown && rundown.segments.length" :rundown="rundown" />
-
-      <div v-if="review.viewers || review.game.items.length" class="columns">
-        <!-- 观众构成 + 游戏事件明细（单场视图，明细逐条锚定跳转回看） -->
-        <SessionViewersCard v-if="review.viewers" :viewers="review.viewers" />
-        <GameEventsCard
-          v-if="review.game.items.length"
-          :game="review.game"
-          :session-id="singleBrief?.live_session_id ?? 0"
-        />
+      <!-- ②明细段：左列过程与资源（流程单/水位/用量），右列观众与游戏；右列无内容时左列占满 -->
+      <div
+        class="detail-section"
+        :class="{ 'detail-section--single': !(review.viewers || review.game.items.length) }"
+      >
+        <div class="detail-col">
+          <!-- 流程单执行（单场视图；rundown_transitions 事实行重放） -->
+          <RundownExecutionCard v-if="rundown && rundown.segments.length" :rundown="rundown" />
+          <WaterlineChartCard
+            :series="review.waterline"
+            :max-prompt-tokens="review.llm.overall.max_prompt_tokens"
+          />
+          <LlmUsageCard :llm="review.llm" />
+        </div>
+        <div v-if="review.viewers || review.game.items.length" class="detail-col">
+          <!-- 观众构成 + 游戏事件明细（单场视图，明细逐条锚定跳转回看） -->
+          <SessionViewersCard v-if="review.viewers" :viewers="review.viewers" />
+          <GameEventsCard
+            v-if="review.game.items.length"
+            :game="review.game"
+            :session-id="singleBrief?.live_session_id ?? 0"
+          />
+        </div>
       </div>
 
-      <div class="columns">
-        <WaterlineChartCard
-          :series="review.waterline"
-          :max-prompt-tokens="review.llm.overall.max_prompt_tokens"
-        />
-        <LlmUsageCard :llm="review.llm" />
-      </div>
+      <!-- ③材料段：复核材料四合一 tab（删行动线；单场语义，合并视图整段不渲染） -->
+      <el-tabs v-if="archiveSessionId !== null" v-model="materialTab" class="material-tabs">
+        <el-tab-pane label="场次档案" name="archive">
+          <ReviewArchiveCard
+            flat
+            :lines="archiveLines"
+            :loading="archiveLoading"
+            :error="archiveError"
+            :action-error="archiveActionError"
+            :busy-line-id="archiveBusyLineId"
+            @delete="removeArchiveLine"
+          />
+        </el-tab-pane>
+        <el-tab-pane label="本场台词" name="speech">
+          <ReviewSpeechCard
+            flat
+            :lines="speechLines"
+            :loading="speechLoading"
+            :error="speechError"
+            :action-error="speechActionError"
+            :busy-chat-id="speechBusyChatId"
+            @delete="removeSpeechLine"
+          />
+        </el-tab-pane>
+        <el-tab-pane label="本场记忆线索" name="cues">
+          <ReviewCuesCard flat :items="cues" :loading="cueLoading" :error="cueError" />
+        </el-tab-pane>
+        <!-- 复盘报告（logs/reviews 可视化页，由直播复盘流程离线生成；仅单场次且有报告时渲染） -->
+        <el-tab-pane v-if="reportSrc" label="复盘报告" name="report">
+          <ReviewReportFrame flat :src="reportSrc" />
+        </el-tab-pane>
+      </el-tabs>
 
       <!-- 深入入口 -->
       <section class="rv-panel">
@@ -398,6 +401,9 @@ const singleBrief = computed<ReviewSessionBrief | null>(() =>
   review.value && review.value.sessions.length === 1 ? review.value.sessions[0] : null,
 );
 
+/** 材料段当前 tab（档案/台词/线索/报告） */
+const materialTab = ref('archive');
+
 /**
  * 场次时间条窗口（单场语义）：左端=开播、右端=收播；进行中场次右端取聚合窗
  * 右端（后端以当前时刻为窗口右缘）。零宽窗口为 null（组件不渲染）。
@@ -524,14 +530,28 @@ function exportPackage(): void {
   border-radius: var(--radius-md);
 }
 
-.columns {
+/* ②明细段：左列过程与资源、右列观众与游戏；右列无内容（合并视图）左列占满 */
+.detail-section {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
   gap: 16px;
+  align-items: start;
+}
+
+.detail-section--single {
+  grid-template-columns: 1fr;
+}
+
+.detail-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
 
 @media (max-width: 1100px) {
-  .columns {
+  .detail-section,
+  .detail-section--single {
     grid-template-columns: 1fr;
   }
 }

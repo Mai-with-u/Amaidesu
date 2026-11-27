@@ -1,9 +1,12 @@
 <template>
-  <section class="rv-panel" aria-label="本场台词">
-    <div class="rv-panel-title rv-panel-head">
+  <div :class="flat ? undefined : 'rv-panel'" aria-label="本场台词">
+    <div v-if="!flat" class="rv-panel-title rv-panel-head">
       <span>本场台词</span>
       <span class="rv-hint">按时间正序；删一句会删掉引用它的档案行，承诺保留但原话标为已删除</span>
     </div>
+    <p v-if="flat" class="rv-hint flat-hint">
+      按时间正序；删一句会删掉引用它的档案行，承诺保留但原话标为已删除
+    </p>
     <p v-if="error" class="rv-line-error error-first">{{ error }}</p>
     <template v-else>
       <p v-if="actionError" class="rv-line-error">{{ actionError }}</p>
@@ -35,7 +38,7 @@
         <p v-else class="rv-line-empty">这一场还没有台词记录</p>
       </div>
     </template>
-  </section>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -56,6 +59,8 @@ defineProps<{
   error: string;
   actionError: string;
   busyChatId: number | null;
+  /** tab 化呈现：去面板外框与标题（tab 标签已命名），只渲染内容与口径说明 */
+  flat?: boolean;
 }>();
 
 const emit = defineEmits<{ delete: [line: ReviewSpeechLine] }>();
@@ -73,6 +78,12 @@ function emotionTag(line: ReviewSpeechLine): string | null {
 /* 台词加载错误紧贴标题（原页口径），与档案错误留 8px 下边距不同 */
 .error-first {
   margin: 0;
+}
+
+/* flat 形态的口径说明与内容留一行间距 */
+.flat-hint {
+  display: block;
+  margin: 0 0 10px;
 }
 
 /* 点名用上的记忆（约#7/档#41）：跟在台词后的弱化小字 */

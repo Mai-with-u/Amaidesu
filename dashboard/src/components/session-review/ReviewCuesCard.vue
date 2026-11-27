@@ -1,9 +1,12 @@
 <template>
-  <section class="rv-panel" aria-label="本场记忆线索">
-    <div class="rv-panel-title">
+  <div :class="flat ? undefined : 'rv-panel'" aria-label="本场记忆线索">
+    <div v-if="!flat" class="rv-panel-title">
       <span>本场记忆线索</span>
       <span class="rv-hint">代码按线索推给规划器的旧事；"用上"是她点名说了这件事</span>
     </div>
+    <p v-if="flat" class="rv-hint flat-hint">
+      代码按线索推给规划器的旧事；"用上"是她点名说了这件事
+    </p>
     <el-radio-group
       v-if="sourceOptions.length > 1"
       v-model="source"
@@ -49,7 +52,7 @@
         {{ items.length > 0 ? '这个来源没有推过卡' : '这一场没有推过记忆线索' }}
       </p>
     </div>
-  </section>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -75,6 +78,8 @@ const props = defineProps<{
   loading: boolean;
   /** 加载错误：非空时渲染错误、不渲染列表 */
   error: string;
+  /** tab 化呈现：去面板外框与标题（tab 标签已命名），只渲染内容与口径说明 */
+  flat?: boolean;
 }>();
 
 /** 来源筛选：空串 = 全部 */
@@ -94,6 +99,12 @@ watch(
 <style scoped>
 .cue-filter {
   margin-bottom: 6px;
+}
+
+/* flat 形态的口径说明与内容留一行间距 */
+.flat-hint {
+  display: block;
+  margin: 0 0 10px;
 }
 
 .cue-label {
