@@ -152,7 +152,7 @@ from .scene_card import brief_of
 from .speech_dispatcher import SPEECH_PRIORITY_HIGHLIGHT, SPEECH_PRIORITY_NORMAL, SpeechDispatcher
 from .speech_guard import WordFilter, guard
 from .game_ledger import GameLedger
-from .game_now import AgentNow, GameNow, GameSideLog, goal_results_from_ledger
+from .game_now import AgentNow, GameNow, GameSideLog, goal_results_from_ledger, scrub_game_readings
 from .planner_render import Intent, render_social_facts
 from .stats import StreamerStats
 from .talk.deck import TopicDeck
@@ -218,6 +218,12 @@ _LEAD_SYNC_RETRY_INTERVAL_MS = 5_000
 # 游戏主控态下独立进房欢迎通道的短合并窗口（毫秒）：将数秒内同时进房的新观众合为一句由 Replyer 轻量秒迎
 _GAME_LEAD_ENTER_WELCOME_DEBOUNCE_MS = 7_000
 
+# 轻量进房欢迎附带当前游戏活动事实的字符上限：保持短小精悍，不让进房欢迎退化成长篇游戏复述
+_ENTER_WELCOME_ACTIVITY_MAX_CHARS = 60
+
+# 续播重放游戏公屏时的身边距离门槛（格）：超出此距离且未点名主播的玩家发言视作远处旁听，不灌入规划器
+_RESUME_REPLAY_NEARBY_DISTANCE = 24.0
+
 # 主播主动收回或人工显式覆盖的切权原因：与游戏断连/故障引起的被动降级区分（被动降级需唤醒主播圆场）
 _INTENTIONAL_RECLAIM_REASONS = frozenset(
     {
@@ -244,6 +250,10 @@ _ROUND_LIVE_EPOCH: ContextVar[Optional[int]] = ContextVar("streamer_round_live_e
 # 本轮决策回合的触发原因（_execute_round 开头设上、跑完复位）：供话头工作台在窗口渲染与发言收尾中
 # 识别游戏待定夺唤醒、收播道别或断线续播，并发轮次各自隔离
 _ROUND_TRIGGER_CAUSE: ContextVar[Optional[TriggerCause]] = ContextVar("streamer_round_trigger_cause", default=None)
+
+# 本轮弹幕批里的观众昵称（_execute_round 开头设上、跑完复位）：供出声前欢迎去重识别本轮正在回复的观众，
+# 避免对刚被欢迎后发弹幕寒暄的观众正常回礼时被误剥首句
+_ROUND_BATCH_NAMES: ContextVar[Tuple[str, ...]] = ContextVar("streamer_round_batch_names", default=())
 
 
 def _chat_speaker(payload: GameChatPayload) -> str:
@@ -472,6 +482,9 @@ class StreamerAgent(BaseAgent):
         self._last_commentary_round_id: str = ""
         self._last_commentary_summary: str = ""
         self._last_commentary_spoken_ms: Optional[int] = None
+        # 零 I/O 当前游戏活动只读快照（记录最近一条非报错游戏进展或实况解说摘要及时间，供轻量进房欢迎对齐当下活动）
+        self._latest_game_activity_summary: str = ""
+        self._latest_game_activity_ms: int = 0
         # 游戏主控态独立轻量进房欢迎通道（短合并窗防抖 + 串行生成锁 + 待迎队列 + 在途任务）
         self._enter_welcome_debounce_ms: int = max(0, int(enter_welcome_debounce_ms))
         self._enter_welcome_wait: Optional[Callable[[int], Awaitable[None]]] = enter_welcome_wait
@@ -945,7 +958,7 @@ class StreamerAgent(BaseAgent):
         self._reminder_queue: deque[str] = deque(maxlen=_REMINDER_QUEUE_MAX)
         # 进程启动时刻（core.startup 到达即更新）：续播重放以它为界划上一进程窗口。
         # 构造时刻兜底——core.startup 在组件装配完成后才发，构造期先按本进程起步记
-        self._startup_ms: int = now_ms()
+        self._startup_ms: int = self._clock()
         # 本进程那条 core.startup 的事件 id：落盘记录与订阅者拿到的是同一个 id，
         # 找"上一次启动"时据此排除本进程自己的记录（订阅者并发执行，记录器可能先落盘）
         self._startup_event_id: str = ""
@@ -1491,7 +1504,7 @@ class StreamerAgent(BaseAgent):
         启动事件的载荷不带时刻字段，按回调执行时的当前时刻记。
         """
         del event_name, source
-        self._startup_ms = now_ms()
+        self._startup_ms = self._clock()
         self._startup_event_id = payload.id
 
     async def _on_live_started(
@@ -1508,6 +1521,9 @@ class StreamerAgent(BaseAgent):
         """
         del event_name, source
         resumed = payload.resumed
+        # 在首个 await 之前锁定续播重放的诊断流截止时刻：既早于采集器拉取新事件，又兼容开机后手动续播，
+        # 防止后续 await 期间 core.startup 到达推进 _startup_ms 把本进程新事件混入上一进程重放窗口
+        replay_cutoff_ms = min(self._startup_ms, self._clock())
         # 标记开播初始化进行中：避免并发到达的候选游戏就绪通知抢在流程单恢复与记忆摘要刷新前触发半成品交权
         self._live_start_in_progress = True
         try:
@@ -1581,17 +1597,17 @@ class StreamerAgent(BaseAgent):
                 self._game_lead_entered_ms = None
             if resumed:
                 self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
-                # 先从诊断事件流划出上一进程的时间段，递话与玩家聊天的重放共用这一段
-                previous_window = self._previous_process_window()
+                # 先从诊断事件流划出上一进程的时间段，递话、玩家聊天与已聊话题共用入口锁定的 replay_cutoff_ms 上界
+                previous_window = self._previous_process_window(end_ms=replay_cutoff_ms)
                 # 续播重放递话：上一进程里还没送进决策回合的运营留言随重启丢了，从诊断事件流
                 # 补进提醒队列——接回那一轮（或下一轮）以【运营提醒】送达，必达跨重启
-                self._replay_prompts_from_event_log(previous_window)
+                self._replay_prompts_from_event_log(previous_window, end_ms=replay_cutoff_ms)
                 # 续播重放玩家聊天：上一进程最后一轮决策之后玩家在游戏里说的话她还没接，
                 # 随重启丢了；回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
-                self._load_resume_chat_replay(previous_window)
+                self._load_resume_chat_replay(previous_window, end_ms=replay_cutoff_ms)
                 # 续播接回已聊话题：本场前面几个进程里说出口的那几轮按先后重新记进打算账，
                 # 早先讲过的段子（"更早聊过"）不随重启忘掉
-                self._restore_spoken_topics(payload.live_session_id, payload.started_at_ms)
+                self._restore_spoken_topics(payload.live_session_id, payload.started_at_ms, end_ms=replay_cutoff_ms)
                 # 续播认领委派：这一场重启前我派的、没交付完的那件记回手头的事并标成被打断，接回那一轮就看得到
                 await self._restore_interrupted_delegations(payload.live_session_id)
             else:
@@ -1650,32 +1666,38 @@ class StreamerAgent(BaseAgent):
             )
             self._logger.info(f"续播认领：{record.game} 重启前的委派 {record.task_id} 记回手头的事，标成被打断")
 
-    def _previous_process_window(self) -> Optional[Tuple[int, int]]:
+    def _previous_process_window(self, *, end_ms: Optional[int] = None) -> Optional[Tuple[int, int]]:
         """上一进程在诊断事件流里的时间段：（它的 core.startup 时刻, 它最后一条记录的时刻）。
 
-        起点是本进程启动前最近的一条 core.startup（本进程自己那条按事件 id 排除）；
+        起点是 ``cutoff_ms`` 前最近的一条 core.startup（本进程自己那条按事件 id 排除）；
         回扫窗内找不到时退回回扫窗起点。终点取这段里最后一条落盘记录——崩溃不发
         core.shutdown，这是能拿到的最接近"上一进程结束"的时刻；本进程装配期的
         记录也落在 core.startup 之前，混进来时终点偏向本进程启动，重放窗口只会更窄。
         诊断流缺席（目录缺失/没有记录）返回 None，重放降级为不做。
         """
-        scan_start_ms = self._startup_ms - _PROMPT_REPLAY_SCAN_MS
+        cutoff_ms = self._startup_ms if end_ms is None else end_ms
+        scan_start_ms = cutoff_ms - _PROMPT_REPLAY_SCAN_MS
         startups = [
             row
             for row in self._event_log_reader.read_records(
                 event_name=CoreEvents.CORE_STARTUP,
                 start_ms=scan_start_ms,
-                end_ms=self._startup_ms,
+                end_ms=cutoff_ms,
             )
             if not self._startup_event_id or row.get("id") != self._startup_event_id
         ]
         prev_startup_ms = int(startups[-1]["timestamp_ms"]) if startups else scan_start_ms
-        prev_end_ms = self._event_log_reader.latest_record_ms(start_ms=prev_startup_ms, end_ms=self._startup_ms)
+        prev_end_ms = self._event_log_reader.latest_record_ms(start_ms=prev_startup_ms, end_ms=cutoff_ms)
         if prev_end_ms is None:
             return None
         return prev_startup_ms, prev_end_ms
 
-    def _replay_prompts_from_event_log(self, previous_window: Optional[Tuple[int, int]]) -> None:
+    def _replay_prompts_from_event_log(
+        self,
+        previous_window: Optional[Tuple[int, int]],
+        *,
+        end_ms: Optional[int] = None,
+    ) -> None:
         """续播重放递话：上一进程结束前收到、却没来得及送进决策回合的递话补回提醒队列。
 
         对账口径是"收到 − 已送达"：按时间先后走一遍 streamer.prompt_received 与
@@ -1686,14 +1708,13 @@ class StreamerAgent(BaseAgent):
         """
         if previous_window is None:
             return
+        cutoff_ms = self._startup_ms if end_ms is None else end_ms
         prev_startup_ms, prev_end_ms = previous_window
         since_ms = max(prev_startup_ms, prev_end_ms - _PROMPT_REPLAY_RECENT_MS)
         rows = [
             row
             for event_name in (CoreEvents.STREAMER_PROMPT_RECEIVED, CoreEvents.STREAMER_PROMPT_DELIVERED)
-            for row in self._event_log_reader.read_records(
-                event_name=event_name, start_ms=since_ms, end_ms=self._startup_ms
-            )
+            for row in self._event_log_reader.read_records(event_name=event_name, start_ms=since_ms, end_ms=cutoff_ms)
         ]
         # 收到与送达合在一起按时刻排：送达只能划掉它之前收到的那几条
         rows.sort(key=lambda row: int(row.get("timestamp_ms", 0)))
@@ -1730,19 +1751,26 @@ class StreamerAgent(BaseAgent):
         self._logger.info(f"续播重放：已把上一进程没送出去的 {len(chosen)} 条递话补进提醒队列")
         self._flush_kick.set()
 
-    def _restore_spoken_topics(self, live_session_id: int, started_at_ms: int) -> None:
+    def _restore_spoken_topics(
+        self,
+        live_session_id: int,
+        started_at_ms: int,
+        *,
+        end_ms: Optional[int] = None,
+    ) -> None:
         """续播接回已聊话题：本场在前面几个进程里说出口的那几轮，按先后重新记进打算账。
 
         已聊话题（最近几轮与"更早聊过"）只在内存里，程序重启后整份没了，续播场她会把这一场
         早先讲过的段子又当新话题讲。本场每轮决策都写进了诊断事件流（planner.decision，带话题短名、
         话题摘要、指引和说出口的台词），按场次编号挑出说出口的那几轮依次重放：最近几轮放满后更早的
-        自然挪进"更早聊过"，和没重启时同一套规则。开播时刻不早于本进程启动时（载荷没带原场次的
+        自然挪进"更早聊过"，和没重启时同一套规则。开播时刻不早于截止时刻时（载荷没带原场次的
         开播时刻）退回回扫窗起点。诊断流缺席或读不了时降级为不接回，不阻断续播。
         """
-        start_ms = started_at_ms if 0 < started_at_ms < self._startup_ms else self._startup_ms - _PROMPT_REPLAY_SCAN_MS
+        cutoff_ms = self._startup_ms if end_ms is None else end_ms
+        start_ms = started_at_ms if 0 < started_at_ms < cutoff_ms else cutoff_ms - _PROMPT_REPLAY_SCAN_MS
         try:
             rows = self._event_log_reader.read_records(
-                event_name=CoreEvents.PLANNER_DECISION, start_ms=start_ms, end_ms=self._startup_ms
+                event_name=CoreEvents.PLANNER_DECISION, start_ms=start_ms, end_ms=cutoff_ms
             )
         except Exception as exc:  # noqa: BLE001 - 接回是尽力而为，读不了诊断流就不接回
             self._logger.warning(f"续播读不了诊断事件流，已聊话题不接回: {exc}", exc=True)
@@ -1769,39 +1797,63 @@ class StreamerAgent(BaseAgent):
         if restored:
             self._logger.info(f"续播接回已聊话题：本场前面说出口的 {restored} 轮重新记进打算账")
 
-    def _load_resume_chat_replay(self, previous_window: Optional[Tuple[int, int]]) -> None:
+    def _is_resume_replay_chat_relevant(self, payload: GameChatPayload) -> bool:
+        """判定一条重启前玩家游戏公屏发言是否值得在续播时补给规划器。
+
+        过滤依据全部取自事件载荷的结构化事实（不靠正则硬猜）：
+        - 正文带 ``type="self"`` 自提及（采集器判定点名了主播）→ 一律保留；
+        - 载荷携带明确距离且超过身边门槛（``sender_distance > 24`` 格）且未点名主播
+          → 属于远处旁听的旁人闲聊，过滤掉，避免续播兜底灌入后诱导主播误以为有人找自己；
+        - 其余（身边 ≤24 格，或旧版 Mod / 跨维度未上报距离）保守保留。
+        """
+        if self_mention_word(payload):
+            return True
+        if payload.sender_distance is not None and payload.sender_distance > _RESUME_REPLAY_NEARBY_DISTANCE:
+            return False
+        return True
+
+    def _load_resume_chat_replay(
+        self,
+        previous_window: Optional[Tuple[int, int]],
+        *,
+        end_ms: Optional[int] = None,
+    ) -> None:
         """续播重放玩家聊天：只补上一进程里她还没接过的那段尾巴，存一次性缓冲。
 
-        上一进程活着的时候游戏聊天照常进决策回合、她基本都回过了；真正没接的，是上一进程
-        最后一轮台词确实播出了的决策开窗之后才到的那几句（界线取开窗时刻而不是她开口的
-        时刻：她回上一句时刚到的话还没进那一窗）。窗口 = 从那一刻到本进程启动，且不早于
-        上一进程结束前 ``resume_replay_window_ms``；这段里找不到这样的一轮时兜底为整段
-        ``resume_replay_window_ms``，那几句里可能有她已经回过的，提示词标题照实写明。
-        取自诊断事件流的 game.chat.received（kind=player），一行的写法与实时入账同一份
-        （含归属说明）。私聊不重放——当众念出私聊是隐私事故，比实时路径从严。
+        上一进程活着的时候游戏聊天照常进决策回合或由游戏主控处理；真正没接的，是上一进程
+        最后一次真正发声/回复锚点之后才到的那几句：
+        - 主播规划器轮次：取最后一轮台词确实播出了的决策开窗时刻；
+        - 游戏主控期间：同时认可实况解说/突发反应等 ``streamer.speech`` 与游戏公屏回复
+          ``game.self.chatted``，避免游戏主控期间锚点永远落空触发整段 300 秒兜底。
+        窗口 = 从锚点到 ``cutoff_ms``，且不早于上一进程结束前 ``resume_replay_window_ms``；
+        这段里找不到锚点时兜底为整段 ``resume_replay_window_ms``，并按距离/自提及结构化事实
+        滤掉明显属于远处旁听、未指向主播的旁人闲聊。私聊不重放。
         诊断流缺席降级为不重放，不抛错阻断续播。
         """
         window_ms = self.typed_config.resume_replay_window_ms
         if window_ms <= 0 or previous_window is None:
             return
+        cutoff_ms = self._startup_ms if end_ms is None else end_ms
         prev_startup_ms, prev_end_ms = previous_window
         since_ms = max(prev_startup_ms, prev_end_ms - window_ms)
-        # 先划出上一进程最后几分钟，再在这段里找最后一轮台词播出过的决策开窗时刻：
+        # 先划出上一进程最后几分钟，再在这段里找最后一次真正发声或游戏公屏回复锚点：
         # 找到了就只补它之后的尾巴；找不到就整段补，并记一笔兜底原因
-        aired_open_ms = self._last_aired_round_open_ms(since_ms)
+        aired_open_ms = self._last_aired_round_open_ms(since_ms, end_ms=cutoff_ms)
         if aired_open_ms is not None:
             since_ms = max(since_ms, aired_open_ms)
         else:
             self._logger.info(
-                "续播重放：上一进程结束前这段里找不到台词播出过的决策轮（没开 TTS、没落盘或这段没开口），"
+                "续播重放：上一进程结束前这段里找不到台词播出过的决策轮或游戏主控发声/公屏回复记录"
+                "（没开 TTS、没落盘或这段没开口），"
                 f"按结束前 {window_ms // 1000} 秒整段补玩家聊天，其中可能有她已经回过的"
             )
         records = self._event_log_reader.read_records(
             event_name=CoreEvents.GAME_CHAT_RECEIVED,
             start_ms=since_ms,
-            end_ms=self._startup_ms,
+            end_ms=cutoff_ms,
         )
         lines: list[str] = []
+        filtered_distant = 0
         for row in records:
             data = row.get("data")
             if not isinstance(data, dict) or data.get("kind") != "player" or data.get("private"):
@@ -1813,52 +1865,92 @@ class StreamerAgent(BaseAgent):
                 continue
             if not payload.content.strip():
                 continue
+            if not self._is_resume_replay_chat_relevant(payload):
+                filtered_distant += 1
+                continue
             ts = int(row.get("timestamp_ms", 0))
             time_text = datetime.fromtimestamp(ts / 1000).strftime("%H:%M") if ts > 0 else "--:--"
             # 续播重放也是决策参考：提及标注与实时决策回合同款，判据对两种来源一视同仁
             mentioned = self_mention_word(payload)
             mark = f" [提及{mentioned}]" if mentioned else ""
             lines.append(f"{time_text} {_game_chat_line(payload)}{mark}")
+        if filtered_distant:
+            self._logger.info(f"续播重放：已按距离与自提及事实过滤 {filtered_distant} 条远处旁听的旁人公屏闲聊")
         if lines:
             self._resume_chat_replay = lines
             self._logger.info(f"续播重放：已暂存重启前她可能还没回的 {len(lines)} 条玩家发言，下个决策轮注入")
 
-    def _last_aired_round_open_ms(self, start_ms: int) -> Optional[int]:
-        """从 ``start_ms`` 到本进程启动，最后一轮台词确实播出了的决策是什么时候开窗的；没有返回 None。
+    def _last_aired_round_open_ms(self, start_ms: int, *, end_ms: Optional[int] = None) -> Optional[int]:
+        """从 ``start_ms`` 到 ``cutoff_ms``，最后一次真正发声或游戏公屏回复的截断锚点时刻；没有返回 None。
 
-        一轮决策开头发 streamer.stage(planning)，开窗那一刻账本里攒着的游戏聊天都被这一窗
-        取走；收尾的 planner.decision 带这一轮台词的 utterance_id；TTS 开始出声时发同一个
-        utterance_id 的 tts.utterance.started。三者对上才算她看过这批话并且开口回了。
-        静默收场、模型出错、台词还没播进程就崩了的轮次都不算。播放可能早于决策记录落盘，
-        所以三类记录先全部收齐再对账，不依赖先后。
+        三类锚点取最晚者：
+        1. 主播规划器轮次：``streamer.stage(planning)`` + ``planner.decision(utterance_id)`` +
+           ``tts.utterance.started(utterance_id)`` 三者对上时取开窗时刻（保留"开口时刚到的话"）；
+           静默收场、模型出错或台词尚未播出就崩溃的规划器轮次不算；
+        2. 游戏主控期/非规划器口播：``streamer.speech``（如 ``game_commentary`` / ``mouth``，排除仅欢迎
+           B 站观众进房的 ``enter_welcome`` 及未播出的 ``planner`` 轮次）取发声时刻；
+        3. 游戏公屏回复：``game.self.chatted``（游戏侧已在公屏打出回复）取发送时刻。
         """
+        cutoff_ms = self._startup_ms if end_ms is None else end_ms
         opened: dict[str, int] = {}
         utterance_round: dict[str, str] = {}
         aired: set[str] = set()
+        speech_records: list[tuple[int, str, str, str]] = []
+        self_chat_anchors: list[int] = []
         for row in self._event_log_reader.read_records(
-            event_name=(CoreEvents.STREAMER_STAGE, CoreEvents.PLANNER_DECISION, CoreEvents.TTS_UTTERANCE_STARTED),
+            event_name=(
+                CoreEvents.STREAMER_STAGE,
+                CoreEvents.PLANNER_DECISION,
+                CoreEvents.TTS_UTTERANCE_STARTED,
+                CoreEvents.STREAMER_SPEECH,
+                CoreEvents.GAME_SELF_CHATTED,
+            ),
             start_ms=start_ms,
-            end_ms=self._startup_ms,
+            end_ms=cutoff_ms,
         ):
             data = row.get("data")
             if not isinstance(data, dict):
                 continue
             event_name = row.get("event_name")
+            ts_ms = int(row.get("timestamp_ms", 0))
             round_id = str(data.get("round_id") or "")
             utterance_id = str(data.get("utterance_id") or "")
             # 开窗记时刻 → 决策记录把台词挂到这一轮 → 播放记录说明这句真的出声了
             if event_name == CoreEvents.STREAMER_STAGE and data.get("stage") == "planning" and round_id:
-                opened[round_id] = int(row.get("timestamp_ms", 0))
+                opened[round_id] = ts_ms
             elif event_name == CoreEvents.PLANNER_DECISION and round_id and utterance_id:
                 utterance_round[utterance_id] = round_id
             elif event_name == CoreEvents.TTS_UTTERANCE_STARTED and utterance_id:
                 aired.add(utterance_id)
-        aired_opens = [
+            elif event_name == CoreEvents.STREAMER_SPEECH:
+                text = str(data.get("text") or "").strip()
+                if text and ts_ms > 0:
+                    source_tag = str(data.get("source") or "").strip()
+                    speech_records.append((ts_ms, source_tag, round_id, utterance_id))
+            elif event_name == CoreEvents.GAME_SELF_CHATTED:
+                message = str(data.get("message") or "").strip()
+                if message and ts_ms > 0:
+                    self_chat_anchors.append(ts_ms)
+
+        anchors: list[int] = [
             opened[round_id]
             for utterance_id, round_id in utterance_round.items()
             if utterance_id in aired and round_id in opened
         ]
-        return max(aired_opens) if aired_opens else None
+        anchors.extend(self_chat_anchors)
+
+        for ts_ms, source_tag, round_id, utterance_id in speech_records:
+            # 轻量进房欢迎只针对 B 站观众，不能把游戏里玩家刚说的话一并截掉
+            if source_tag == "enter_welcome":
+                continue
+            # 归属规划器轮次的发言沿用开窗+TTS 播出的严格三联口径，避免未播出的规划器轮次提前截断
+            if source_tag == "planner" or (round_id and round_id in opened):
+                if utterance_id and utterance_id in aired and round_id in opened:
+                    anchors.append(opened[round_id])
+                continue
+            anchors.append(ts_ms)
+
+        return max(anchors) if anchors else None
 
     def _drain_resume_replay(self) -> str:
         """取空续播重放缓冲（决策执行器在决策回合入口调用；注入一次制）。"""
@@ -2580,6 +2672,8 @@ class StreamerAgent(BaseAgent):
             if before is not None and before.id != save.id:
                 self._planner.workbench.forget_game(game)
                 self._game_side.forget_game(game)
+                self._latest_game_activity_summary = ""
+                self._latest_game_activity_ms = 0
                 if self._task_ledger is not None:
                     self._task_ledger.clear_provider_outcomes(initiator=game)
                 self._logger.info(f"{game} 从存档「{before.label}」换到「{save.label}」：清掉手头这个游戏的事")
@@ -3156,9 +3250,10 @@ class StreamerAgent(BaseAgent):
         """
         try:
             self._note_game_activity(payload.game)
-            message = self._game_ledger.record_event(
-                payload.game, payload.event_type, payload.message, payload.timestamp_ms or now_ms()
-            )
+            event_ts = payload.timestamp_ms or self._clock()
+            message = self._game_ledger.record_event(payload.game, payload.event_type, payload.message, event_ts)
+            if payload.event_type in ("milestone", "report") and message:
+                self._note_latest_game_activity(message, at_ms=event_ts)
             if self._mouth is not None and payload.event_type != "error" and message:
                 # 非报错的游戏进展与交付留进即时反应的近期背景，使事实快照知道刚做成什么；
                 # 只有高光里程碑（如开箱发现稀罕宝物）才让即时反应当场惊呼一句（P1 高光优先级）
@@ -3536,16 +3631,24 @@ class StreamerAgent(BaseAgent):
         """即时反应发声完成后补记触发由头，让规划器出声前核对时知道即时反应刚才接的是哪件事。"""
         self._spoken_log.record(text, at_ms, source="mouth", trigger=trigger_text)
 
-    async def _reconcile_with_mouth(self, candidate: str, since_ms: int) -> ReconcileVerdict:
+    async def _reconcile_with_mouth(
+        self,
+        candidate: str,
+        since_ms: int,
+        *,
+        replying_names: Iterable[str] = (),
+    ) -> ReconcileVerdict:
         """决策台词出声前核对：剥掉本场重复欢迎，并对照 ``since_ms`` 之后即时反应说出口的话及新到游戏事件裁决。"""
         # 读取当前渲染窗口内尚未欢迎的进房观众名单，避免同一分句同时提到新人与已欢迎者时误杀新人欢迎
         unwelcomed = [name for _uid, name in self._room_state.recent_unwelcomed_enters(now_ms=self._clock()) if name]
+        active_replying = [*_ROUND_BATCH_NAMES.get(), *(name for name in replying_names if name)]
         return await reconcile_with_mouth(
             candidate,
             mouth_entries=self._spoken_log.mouth_since(since_ms),
             new_game_lines=self._game_ledger.pending_lines(),
             welcomed_names=self._room_state.welcomed_names,
             unwelcomed_names=unwelcomed,
+            replying_names=active_replying,
             llm_service=self._llm,
             profile=_PROFILE_VERIFIER,
         )
@@ -3783,6 +3886,61 @@ class StreamerAgent(BaseAgent):
                 notes.append(f"{cleaned_name}：{'，'.join(facts)}")
         return notes
 
+    def _note_latest_game_activity(self, summary: str, *, at_ms: int) -> None:
+        """零 I/O 记录最近一条游戏进展或实况解说摘要及时间，供轻量进房欢迎对齐当下活动。"""
+        cleaned = scrub_game_readings(summary).strip()
+        if not cleaned:
+            return
+        if at_ms >= self._latest_game_activity_ms:
+            self._latest_game_activity_summary = cleaned
+            self._latest_game_activity_ms = at_ms
+
+    def _current_activity_fact(self) -> str:
+        """读取零 I/O 当前游戏活动精简事实（无阻塞 IO、无有效近期活动返回空串）。
+
+        读取优先级：
+        1. 当前主控或活跃游戏在任务账本里正在运行的最新一步目的（``_latest_game_step``）；
+        2. 最近活跃窗（5 分钟）内收到的最新游戏实况解说/里程碑进展摘要；
+        3. 当前手头尚未上报终态的游戏委派原话。
+        超过活跃窗的陈旧记录直接忽略，避免把十几分钟前的旧活动当成此刻正在做的事。
+        """
+        now = self._clock()
+        candidate = ""
+
+        # 1) 优先读主控或活跃游戏此刻在跑的步骤目的（纯内存查 TaskLedger）
+        active_lead = self._active_game_lead_agent()
+        probe_games: List[str] = [active_lead] if active_lead else self._playing_games()
+        for game_name in probe_games:
+            step, _step_at_ms = self._latest_game_step(game_name)
+            cleaned_step = scrub_game_readings(step).strip()
+            if cleaned_step:
+                candidate = cleaned_step
+                break
+
+        # 2) 其次读最近活跃窗内的最新实况解说或游戏进展摘要
+        if not candidate and self._latest_game_activity_summary:
+            if self._latest_game_activity_ms > 0 and (now - self._latest_game_activity_ms) <= _GAME_ACTIVE_WINDOW_MS:
+                candidate = self._latest_game_activity_summary
+
+        # 3) 兜底读手头仍在进行中的委派原话
+        if not candidate:
+            workbench = getattr(self._planner, "workbench", None)
+            delegations = getattr(workbench, "delegations", None)
+            if isinstance(delegations, dict):
+                for delegation in delegations.values():
+                    if not getattr(delegation, "report_kind", "") and getattr(delegation, "instruction", ""):
+                        cleaned_inst = scrub_game_readings(str(delegation.instruction)).strip()
+                        if cleaned_inst:
+                            candidate = cleaned_inst
+                            break
+
+        if not candidate:
+            return ""
+        flat = " ".join(candidate.split())
+        if len(flat) <= _ENTER_WELCOME_ACTIVITY_MAX_CHARS:
+            return flat
+        return f"{flat[:_ENTER_WELCOME_ACTIVITY_MAX_CHARS]}…"
+
     async def _speak_enter_welcome_batch(self, entries: Sequence[Tuple[str, str]]) -> None:
         """把一批刚进房的未欢迎观众直通 Replyer 生成一句点名欢迎并播报，播后仅核销确实点到名的观众。"""
         names = [uname for _uid, uname in entries if uname]
@@ -3793,11 +3951,15 @@ class StreamerAgent(BaseAgent):
                 return
             joined_names = "、".join(names)
             viewer_notes = await self._describe_enter_viewer_facts(entries)
+            activity_fact = self._current_activity_fact()
             fact_lines = [
                 f"刚进直播间待欢迎的观众：{joined_names}",
                 "请用自然热情的口语逐一点名欢迎以上每一位观众，不要漏掉任何人的昵称，不要展开讲游戏操作。",
                 "未附注身份说明的观众只按刚进直播间自然招呼，不凭空猜测对方是不是第一次来。",
+                "只围绕这里给出的事实自然欢迎；若顺口提及当下在做什么，仅限下面给出的当前游戏活动，未给出时只做欢迎不补充活动细节。",
             ]
+            if activity_fact:
+                fact_lines.append(f"当前游戏活动：{activity_fact}")
             if viewer_notes:
                 fact_lines.append("已核实的观众身份事实：" + "；".join(viewer_notes))
             state_facts = "\n".join(fact_lines)
@@ -4429,6 +4591,17 @@ class StreamerAgent(BaseAgent):
         is_signoff = trigger_cause.kind is TriggerKind.SIGNOFF
         live_token = _ROUND_LIVE_EPOCH.set(self._session_epoch if self._live_active and not is_signoff else None)
         cause_token = _ROUND_TRIGGER_CAUSE.set(trigger_cause)
+        # 提取本轮弹幕批里的观众昵称（跳过进房通知 enter，避免已欢迎观众重连进房消息放宽回礼弱词判定），
+        # 供出声前欢迎去重保护对观众弹幕的正常回礼首句
+        batch_names = tuple(
+            dict.fromkeys(
+                name
+                for msg in batch
+                if getattr(msg, "message_type", "danmaku") != "enter"
+                and (name := (getattr(getattr(msg, "user", None), "name", "") or "").strip())
+            )
+        )
+        batch_names_token = _ROUND_BATCH_NAMES.set(batch_names)
         try:
             # 回合开始前先看各游戏眼下在哪个存档（换了存档清掉那个游戏手头的事），再按台账快照重渲
             # 记忆摘要（直播中纠错下一窗生效；表没变、存档没换时逐字节相同，缓存不失效）
@@ -4446,6 +4619,7 @@ class StreamerAgent(BaseAgent):
                 batch, speech=result.get("speech"), batch_persisted=batch_persisted, scope_pk=scope_pk
             )
         finally:
+            _ROUND_BATCH_NAMES.reset(batch_names_token)
             _ROUND_TRIGGER_CAUSE.reset(cause_token)
             _ROUND_LIVE_EPOCH.reset(live_token)
             _CLOSING_SESSION.reset(token)
@@ -4722,10 +4896,12 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"刷新 streamer_memory_correct 可见名单失败: {exc}", exc=True)
 
     def _reset_commentary_state(self) -> None:
-        """清空主播侧实况解说同轮与短间隔防抖锚点，供开播、下播及主控切换共用。"""
+        """清空主播侧实况解说同轮与短间隔防抖锚点及近期活动快照，供开播、下播及主控切换共用。"""
         self._last_commentary_round_id = ""
         self._last_commentary_summary = ""
         self._last_commentary_spoken_ms = None
+        self._latest_game_activity_summary = ""
+        self._latest_game_activity_ms = 0
 
     def _on_lead_changed(self, payload: AgentLeadChangedPayload) -> None:
         """动态主从状态变更监听：记录进入时刻、落账收权摘要，并在游戏故障被动降级时唤醒主播圆场。"""
@@ -4885,7 +5061,9 @@ class StreamerAgent(BaseAgent):
                 )
                 return CommentaryAck(accepted=True, spoken=False, reason="same_round_deduped")
 
-            self._game_ledger.record_event(game_name, "commentary", summary, req.timestamp_ms or now)
+            commentary_ts = req.timestamp_ms or now
+            self._game_ledger.record_event(game_name, "commentary", summary, commentary_ts)
+            self._note_latest_game_activity(summary, at_ms=commentary_ts)
             if self._mouth is not None:
                 self._mouth.note_game(summary)
 

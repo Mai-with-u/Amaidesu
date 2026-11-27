@@ -21,10 +21,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.modules.logging import get_logger
 from src.agents.streamer.paid_viewers import PAID_VIEWER_NOTE
+from src.modules.logging import get_logger
+from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 __all__ = [
     "ASSISTANT_CHANNEL_PREFIX",
@@ -153,6 +154,97 @@ def turn_to_message(turn: Any) -> Dict[str, str]:
     }
 
 
+#: 历史末尾去重回扫短窗口：即使窗口内穿插了轻量进房欢迎或即时反应等 assistant 行，
+#: 也能精准剔除与本批重复的观众消息，同时绝不波及更早的正常历史上下文。
+_ECHO_TAIL_WINDOW = 8
+
+#: 免费银瓜子币种：格式化礼物文案时不按付费人民币折算金额
+_SILVER_CURRENCY = "bilibili_silver_coin"
+
+#: 非观众弹幕批消息类型：去重扫描时始终保留，不与观众批次做文本匹配
+_NON_VIEWER_MESSAGE_TYPES = frozenset({"chapter", "game"})
+
+
+def _positive_int(value: Any) -> int:
+    """提取正整数数值；布尔、None、非整数或非正数一律按 0 处理。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value if value > 0 else 0
+
+
+def _format_yuan(total_price: int, currency: str) -> str:
+    """把平台最小虚拟货币单位（B 站 1000 金瓜子 = 1 元）渲染成简洁金额文本；银瓜子或 0 返回空串。"""
+    if total_price <= 0 or currency == _SILVER_CURRENCY:
+        return ""
+    yuan = total_price / 1000.0
+    if yuan.is_integer():
+        return f"¥{int(yuan)}"
+    return f"¥{yuan:.2f}".rstrip("0").rstrip(".")
+
+
+def _format_batch_item_text(msg: Any, message_type: str) -> str:
+    """将弹幕批载荷正文渲染为简洁可读中文文本；结构化消息缺 content 时按字段拼装，绝不回退裸对象 repr。
+
+    执行顺序：
+    - 优先读取非空 ``content``（兼容弹幕、带正文留言的 SC/上舰与历史文本测试样本）；
+    - ``gift`` / ``super_chat`` / ``guard`` / ``enter`` 载荷正文为空或需补金额时，按结构化子字段
+      渲染为可读中文，缺字段时给出干净兜底文案，避免把 400 字 ``RoomMessagePayload(...)`` 裸串灌进上下文。
+    """
+    raw = _as_str(getattr(msg, "content", None)).strip()
+    if message_type == "gift":
+        if raw:
+            return raw
+        gift = getattr(msg, "gift", None)
+        gift_name = _as_str(_field(gift, "name")).strip() if gift is not None else ""
+        count = _positive_int(_field(gift, "count")) if gift is not None else 0
+        total_price = _positive_int(_field(gift, "total_price")) if gift is not None else 0
+        currency = _as_str(_field(gift, "currency")).strip() if gift is not None else ""
+        price_text = _format_yuan(total_price, currency)
+        if gift_name:
+            base = f"送出 {gift_name} ×{count}" if count >= 1 else f"送出 {gift_name}"
+            return f"{base}（{price_text}）" if price_text else base
+        if count >= 1:
+            return f"送出礼物 ×{count}（{price_text}）" if price_text else f"送出礼物 ×{count}"
+        return f"送出了一份礼物（{price_text}）" if price_text else "送出了一份礼物"
+
+    if message_type == "super_chat":
+        sc = getattr(msg, "sc", None)
+        total_price = _positive_int(_field(sc, "total_price")) if sc is not None else 0
+        currency = _as_str(_field(sc, "currency")).strip() if sc is not None else ""
+        price_text = _format_yuan(total_price, currency)
+        if raw:
+            return f"{raw}（{price_text}）" if price_text else raw
+        return f"发送了醒目留言（{price_text}）" if price_text else "发送了醒目留言"
+
+    if message_type == "guard":
+        if raw:
+            return raw
+        guard = getattr(msg, "guard", None)
+        level = _positive_int(_field(guard, "guard_level")) if guard is not None else 0
+        level_name = GUARD_LEVEL_NAMES.get(level, DEFAULT_GUARD_NAME)
+        guard_num = _positive_int(_field(guard, "guard_num")) if guard is not None else 0
+        guard_unit = _as_str(_field(guard, "guard_unit")).strip() if guard is not None else ""
+        if guard_num >= 1 and guard_unit:
+            return f"开通了 {guard_num}{guard_unit}{level_name}"
+        if guard_num >= 1:
+            return f"开通了 {guard_num} 份{level_name}"
+        return f"开通了{level_name}"
+
+    if message_type == "enter":
+        return raw or "进入直播间"
+
+    if raw:
+        return raw
+    return msg.strip() if isinstance(msg, str) else ""
+
+
+def _turn_role(turn: Any) -> str:
+    """将历史 turn 的角色属性归一为 ``assistant`` 或 ``user``。"""
+    role_raw = getattr(turn, "role", None)
+    role_str = getattr(role_raw, "value", str(role_raw)) if role_raw else "user"
+    return "assistant" if role_str == "assistant" else "user"
+
+
 def batch_item_to_message(msg: Any, *, paid: bool = False) -> Dict[str, str]:
     """弹幕批成员（RoomMessagePayload 鸭子类型）→ 消息 dict（与历史同形）。
 
@@ -161,7 +253,8 @@ def batch_item_to_message(msg: Any, *, paid: bool = False) -> Dict[str, str]:
     """
     user = getattr(msg, "user", None)
     nickname = (getattr(user, "name", None) or getattr(user, "id", None)) if user is not None else None
-    text = getattr(msg, "content", None) or str(msg)
+    message_type = _as_str(getattr(msg, "message_type", None)) or "danmaku"
+    text = _format_batch_item_text(msg, message_type)
     display = _as_str(nickname) or "观众"
     if paid:
         display = f"{display}{PAID_VIEWER_NOTE}"
@@ -170,33 +263,83 @@ def batch_item_to_message(msg: Any, *, paid: bool = False) -> Dict[str, str]:
         "content": canonical_content(
             role="user",
             nickname=display,
-            text=text if isinstance(text, str) else str(text),
-            message_type=getattr(msg, "message_type", "danmaku") or "danmaku",
+            text=text,
+            message_type=message_type,
             message_id=_as_str(getattr(msg, "message_id", None)),
         ),
     }
 
 
 def trim_batch_echo(history: List[Any], batch: List[Any]) -> List[Any]:
-    """剔除历史尾部与本批同源的消息（弹幕先落库再进决策，窗口尾部会与本批重复）。
+    """剔除历史末尾短窗口内与本批同源的观众消息（弹幕先落库再进决策，窗口尾部会与本批重复）。
 
-    按消息 ID 精确匹配、原始文本兜底；只剔尾部连续命中段，更早的同文历史
-    保留为有效上下文。去重在 canonical 化之前做：昵称渲染差异不影响判定。
+    触发条件与执行顺序：
+    1. 仅在历史末尾短窗口（至少 8 条、若单批更长则覆盖整批长度）内自后向前扫描，更早的同文历史保留；
+    2. 遇到 ``assistant`` 行（如轻量进房欢迎、即时反应）或非观众时间线行（``chapter`` / ``game``）时
+       原样保留且不中断扫描，避免穿插的助手发言阻断弹幕去重；
+    3. 优先按 ``message_id`` 精确配额认领；历史行与批消息均无 ID 时，按同角色用户文本（双方均有昵称时
+       要求同昵称）按配额认领，防止不同 ID 的旧同文弹幕被误删。
     """
     if not history or not batch:
         return list(history or [])
-    batch_ids = {_as_str(getattr(msg, "message_id", None)) for msg in batch} - {""}
-    batch_texts = {_as_str(getattr(msg, "content", None)).strip() for msg in batch} - {""}
-    end = len(history)
-    while end > 0:
-        turn = history[end - 1]
-        turn_id = _as_str(getattr(turn, "message_id", None))
+
+    id_quota: Dict[str, int] = {}
+    unid_items: List[Tuple[str, str]] = []
+    for msg in batch:
+        msg_id = _as_str(getattr(msg, "message_id", None)).strip()
+        if msg_id:
+            id_quota[msg_id] = id_quota.get(msg_id, 0) + 1
+            continue
+        message_type = _as_str(getattr(msg, "message_type", None)) or "danmaku"
+        msg_text = _format_batch_item_text(msg, message_type).strip()
+        if not msg_text:
+            continue
+        user = getattr(msg, "user", None)
+        msg_sender = _as_str(getattr(user, "name", None) if user is not None else None).strip()
+        unid_items.append((msg_text, msg_sender))
+
+    window_len = max(_ECHO_TAIL_WINDOW, len(batch))
+    window_start = max(0, len(history) - window_len)
+    drop_indices: set[int] = set()
+
+    for idx in range(len(history) - 1, window_start - 1, -1):
+        turn = history[idx]
+        # 保留穿插在末尾短窗口里的主播发言与游戏/章节时间线行，且不阻断继续向前核对本批回显
+        if _turn_role(turn) == "assistant":
+            continue
+        turn_type = _as_str(getattr(turn, "message_type", None))
+        if turn_type in _NON_VIEWER_MESSAGE_TYPES:
+            continue
+
+        turn_id = _as_str(getattr(turn, "message_id", None)).strip()
+        if turn_id:
+            if id_quota.get(turn_id, 0) > 0:
+                drop_indices.add(idx)
+                id_quota[turn_id] -= 1
+            continue
+
+        if not unid_items:
+            continue
         turn_text = _as_str(getattr(turn, "content", None)).strip()
-        if (turn_id and turn_id in batch_ids) or (turn_text and turn_text in batch_texts):
-            end -= 1
-        else:
+        if not turn_text:
+            continue
+        turn_sender = _as_str(getattr(turn, "sender_name", None)).strip()
+        matched_pos: Optional[int] = None
+        for pos in range(len(unid_items) - 1, -1, -1):
+            item_text, item_sender = unid_items[pos]
+            if item_text != turn_text:
+                continue
+            if item_sender and turn_sender and item_sender != turn_sender:
+                continue
+            matched_pos = pos
             break
-    return list(history[:end])
+        if matched_pos is not None:
+            drop_indices.add(idx)
+            unid_items.pop(matched_pos)
+
+    if not drop_indices:
+        return list(history)
+    return [turn for idx, turn in enumerate(history) if idx not in drop_indices]
 
 
 #: 消息 ID 的引用写法：Planner 照着 canonical 行尾的 ``[id:…]`` 填 target，可能连括号一起抄
