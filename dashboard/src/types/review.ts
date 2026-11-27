@@ -10,9 +10,6 @@ export interface ReviewLLMDomainStats {
   slow_calls: number;
   prompt_tokens: number;
   completion_tokens: number;
-  total_tokens: number;
-  cache_hit_tokens: number;
-  cache_miss_tokens: number;
   cache_hit_rate: number | null;
   cost: number;
   max_prompt_tokens: number;
@@ -23,7 +20,6 @@ export interface ReviewSessionBrief {
   live_session_id: number;
   title: string | null;
   source: string;
-  platform: string;
   started_at_ms: number;
   ended_at_ms: number | null;
   duration_ms: number;
@@ -101,7 +97,7 @@ export interface ReviewCueItem {
   commitment_id: number | null;
   /** 命中来源：danmaku 观众弹幕 / self 她的台词 / place 游戏地点 / situation 游戏情境 / game 游戏开着 */
   sources: string[];
-  /** 分数明细：意思相近写 cosine/rank/fused，地点写 distance；触发词 keywords 与地点名 place 由后端按档案行现查，行删了就没有 */
+  /** 分数明细：意思相近写 cosine/rank，地点写 distance；触发词 keywords 与地点名 place 由后端按档案行现查，行删了就没有 */
   detail: Record<string, unknown>;
   /** 只由她自己的台词触发（防打转的统计口径） */
   self_triggered: boolean;

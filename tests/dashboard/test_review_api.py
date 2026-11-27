@@ -620,7 +620,8 @@ async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> N
     ], "指向的档案行删掉后，那条记录跟着删"
     assert items[0]["used_at_ms"] == BASE + 5_000 and items[0]["sources"] == ["danmaku"]
     assert items[0]["detail"] == {"keyword_index": [1], "how": ["exact"], "keywords": ["女仆"]}
-    assert items[1]["detail"] == {"cosine": 0.71, "rank": 1, "fused": 0.03} and items[1]["used_at_ms"] is None
+    # fused 是检索融合分（调参内部口径），不出运营者面
+    assert items[1]["detail"] == {"cosine": 0.71, "rank": 1} and items[1]["used_at_ms"] is None
     assert items[3]["detail"] == {"distance": 12, "place": "北边农场"}, "地点名按档案行现查，记录里的原词不给"
     assert items[4]["detail"] == {}
 

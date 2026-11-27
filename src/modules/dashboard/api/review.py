@@ -263,7 +263,8 @@ def _cue_detail(card_kind: str, stored: Dict[str, Any], line: Optional[Any]) -> 
 
     记录本身只存编号和分数（第几个触发词、距离、余弦），删观众、删行之后复盘里看不到原词。
     """
-    detail = {key: value for key, value in stored.items() if key not in _RAW_WORD_KEYS}
+    # fused 是检索融合分（调参内部口径），不给运营者面
+    detail = {key: value for key, value in stored.items() if key not in _RAW_WORD_KEYS and key != "fused"}
     if line is None:
         return detail
     indexes = stored.get("keyword_index")

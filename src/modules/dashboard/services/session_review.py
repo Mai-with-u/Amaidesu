@@ -118,7 +118,6 @@ def _to_brief(row: Dict[str, object], now_ms: Optional[int] = None) -> ReviewSes
         live_session_id=int(row["id"]),  # type: ignore[index]
         title=row.get("title"),  # type: ignore[arg-type]
         source=str(row.get("source") or "manual"),
-        platform=str(row.get("platform") or ""),
         started_at_ms=started,
         ended_at_ms=ended,
         duration_ms=max(0, right - started),
@@ -318,9 +317,6 @@ class SessionReviewAggregator:
             slow_calls=int(row.get("slow_calls") or 0),  # type: ignore[arg-type]
             prompt_tokens=int(row.get("prompt_tokens") or 0),  # type: ignore[arg-type]
             completion_tokens=int(row.get("completion_tokens") or 0),  # type: ignore[arg-type]
-            total_tokens=int(row.get("total_tokens") or 0),  # type: ignore[arg-type]
-            cache_hit_tokens=hit,
-            cache_miss_tokens=miss,
             cache_hit_rate=cache_hit_rate(hit, miss),
             cost=float(row.get("cost") or 0.0),  # type: ignore[arg-type]
             max_prompt_tokens=int(row.get("max_prompt_tokens") or 0),  # type: ignore[arg-type]

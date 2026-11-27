@@ -15,7 +15,6 @@ class ReviewSessionBrief(BaseModel):
     live_session_id: int
     title: Optional[str] = None
     source: str = "manual"
-    platform: str = ""
     started_at_ms: int
     ended_at_ms: Optional[int] = None
     duration_ms: int = 0
@@ -141,9 +140,7 @@ class LLMDomainStats(BaseModel):
     slow_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    total_tokens: int = 0
-    cache_hit_tokens: int = 0
-    cache_miss_tokens: int = 0
+    # 缓存 hit/miss 原始 token 数不出聚合面（明细在 LLM 历史页统计条），只给比率
     cache_hit_rate: Optional[float] = None
     cost: float = 0.0
     max_prompt_tokens: int = 0
