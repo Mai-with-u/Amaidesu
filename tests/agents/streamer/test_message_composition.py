@@ -6,10 +6,18 @@ from dataclasses import dataclass
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from src.agents.streamer import canonical
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.room import (
+    GiftInfo,
+    GuardInfo,
+    RoomMessagePayload,
+    RoomMessageUser,
+    SuperChatInfo,
+)
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.models import ToolExecutionResult
 
@@ -83,6 +91,118 @@ def test_canonical_mapping() -> None:
     )
     assert speak == {"role": "assistant", "content": "[直播间] 晚上好"}
     assert canonical.to_text_view([history_msg, speak]) == "小明: 来个落地水 [id:m9]\n主播: [直播间] 晚上好"
+
+
+@pytest.mark.parametrize(
+    ("msg", "expected_content"),
+    [
+        # B 站付费礼物（content 为空串）：渲染为简洁中文礼物名 × 数量与金额，绝不回退 RoomMessagePayload repr
+        (
+            RoomMessagePayload(
+                message_type="gift",
+                message_id="g1",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+                gift=GiftInfo(name="小星星", count=2, total_price=2000, currency="bilibili_gold_coin"),
+            ),
+            "[礼物] 观众甲: 送出 小星星 ×2（¥2） [id:g1]",
+        ),
+        # 免费银瓜子礼物：不附人民币金额
+        (
+            RoomMessagePayload(
+                message_type="gift",
+                message_id="g2",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+                gift=GiftInfo(name="辣条", count=5, total_price=500, currency="bilibili_silver_coin"),
+            ),
+            "[礼物] 观众甲: 送出 辣条 ×5 [id:g2]",
+        ),
+        # 礼物子结构缺失：干净兜底文案
+        (
+            RoomMessagePayload(
+                message_type="gift",
+                message_id="g3",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+                gift=None,
+            ),
+            "[礼物] 观众甲: 送出了一份礼物 [id:g3]",
+        ),
+        # 醒目留言空正文 + 金额：渲染金额兜底
+        (
+            RoomMessagePayload(
+                message_type="super_chat",
+                message_id="sc1",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+                sc=SuperChatInfo(total_price=50000, currency="bilibili_gold_coin"),
+            ),
+            "[醒目留言] 观众甲: 发送了醒目留言（¥50） [id:sc1]",
+        ),
+        # 醒目留言带正文 + 金额：正文后附金额
+        (
+            RoomMessagePayload(
+                message_type="super_chat",
+                message_id="sc2",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="主播加油呀",
+                sc=SuperChatInfo(total_price=30000, currency="bilibili_gold_coin"),
+            ),
+            "[醒目留言] 观众甲: 主播加油呀（¥30） [id:sc2]",
+        ),
+        # 上舰（content 为空串）：按等级与周期格式化
+        (
+            RoomMessagePayload(
+                message_type="guard",
+                message_id="gd1",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+                guard=GuardInfo(guard_level=3, guard_num=1, guard_unit="月", total_price=138000),
+            ),
+            "[上舰] 观众甲: 开通了 1月舰长 [id:gd1]",
+        ),
+        # 上舰子结构缺失：干净兜底文案
+        (
+            RoomMessagePayload(
+                message_type="guard",
+                message_id="gd2",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+                guard=None,
+            ),
+            "[上舰] 观众甲: 开通了大航海 [id:gd2]",
+        ),
+        # 进房（content 为空串）：简洁中文文案
+        (
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="e1",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+            ),
+            "[入场] 观众甲: 进入直播间 [id:e1]",
+        ),
+        # 空弹幕：不回退 str(msg) 裸对象串
+        (
+            RoomMessagePayload(
+                message_type="danmaku",
+                message_id="d1",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+            ),
+            "观众甲:  [id:d1]",
+        ),
+    ],
+)
+def test_batch_item_to_message_formats_structured_payloads_without_repr_fallback(
+    msg: RoomMessagePayload,
+    expected_content: str,
+) -> None:
+    """礼物/SC/上舰/进房等结构化消息在 content 为空时渲染简洁中文，绝不泄露 RoomMessagePayload repr。"""
+    rendered = canonical.batch_item_to_message(msg)
+    assert rendered == {"role": "user", "content": expected_content}
+    assert "RoomMessagePayload" not in rendered["content"]
 
 
 # 提及标注：规划器行尾挂 [提及…]（采集器判定的点名事实，提示词判据锚它），回复器剥掉

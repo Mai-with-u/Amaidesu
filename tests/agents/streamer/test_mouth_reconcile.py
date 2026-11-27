@@ -28,6 +28,7 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.planner import PlannerDecisionPayload
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
@@ -64,30 +65,78 @@ def test_mentions_name_handles_shortened_nicknames(name: str, speech: str, expec
 
 
 @pytest.mark.parametrize(
-    ("speech", "welcomed", "unwelcomed", "expected_text", "expected_stripped"),
+    ("speech", "welcomed", "unwelcomed", "replying", "expected_text", "expected_stripped"),
     [
         # 整条只有重复欢迎（含孤立前导叹词）：剥空后调用方按重复处理不再发声
-        ("诶，欢迎玩家甲上线呀！", {"玩家甲"}, set(), "", True),
+        ("诶，欢迎玩家甲上线呀！", {"玩家甲"}, set(), set(), "", True),
         # 逗号切分：前半句重复欢迎、后半句为邀请/进展，只剥前半句欢迎、保留后半句
-        ("诶，欢迎玩家甲上线呀，快来一起玩！", {"玩家甲"}, set(), "快来一起玩！", True),
+        ("诶，欢迎玩家甲上线呀，快来一起玩！", {"玩家甲"}, set(), set(), "快来一起玩！", True),
         # 逗号切分：前半句欢迎新人、后半句顺口提到已欢迎者，只剥后半句并保留句末标点不误杀新人欢迎
-        ("欢迎新人乙进直播间，欢迎玩家甲也来啦！", {"玩家甲"}, {"新人乙"}, "欢迎新人乙进直播间！", True),
+        ("欢迎新人乙进直播间，欢迎玩家甲也来啦！", {"玩家甲"}, {"新人乙"}, set(), "欢迎新人乙进直播间！", True),
         # 同一分句同时点到未欢迎观众和已欢迎观众：因保护未欢迎名单绝不剥除该分句
-        ("欢迎新人乙和玩家甲一起来玩！", {"玩家甲"}, {"新人乙"}, "欢迎新人乙和玩家甲一起来玩！", False),
+        ("欢迎新人乙和玩家甲一起来玩！", {"玩家甲"}, {"新人乙"}, set(), "欢迎新人乙和玩家甲一起来玩！", False),
         # 前半句顺口重复欢迎、后半句是新的游戏进展：只剥前半句欢迎，保留后半句
-        ("欢迎 Player_abc 来啦！这边橡树苗还差两棵没种完。", {"Player_abc"}, set(), "这边橡树苗还差两棵没种完。", True),
+        (
+            "欢迎 Player_abc 来啦！这边橡树苗还差两棵没种完。",
+            {"Player_abc"},
+            set(),
+            set(),
+            "这边橡树苗还差两棵没种完。",
+            True,
+        ),
         # 正常互动里提到名字但不是欢迎招呼：原样保留不误剥
-        ("玩家甲刚才递给我的铁镐还挺顺手的。", {"玩家甲"}, set(), "玩家甲刚才递给我的铁镐还挺顺手的。", False),
+        ("玩家甲刚才递给我的铁镐还挺顺手的。", {"玩家甲"}, set(), set(), "玩家甲刚才递给我的铁镐还挺顺手的。", False),
+        # 回礼首句保护：已欢迎观众随后发弹幕问好，日常问候词（好呀/你好/晚上好/哈喽/嗨）绝不被误剥
+        (
+            "观众甲好呀！正好我这就去整理仓库。",
+            {"观众甲"},
+            set(),
+            {"观众甲"},
+            "观众甲好呀！正好我这就去整理仓库。",
+            False,
+        ),
+        ("观众甲晚上好！今天准备把铁路修通。", {"观众甲"}, set(), set(), "观众甲晚上好！今天准备把铁路修通。", False),
+        (
+            "哈喽观众甲，刚才那块矿石已经挖完啦。",
+            {"观众甲"},
+            set(),
+            {"观众甲"},
+            "哈喽观众甲，刚才那块矿石已经挖完啦。",
+            False,
+        ),
+        # 本轮正在回复观众甲弹幕时的顺口呼应（来啦）保留，但显式重复进房欢迎仍剥除
+        (
+            "观众甲来啦！今天打算去看看新村庄。",
+            {"观众甲"},
+            set(),
+            {"观众甲"},
+            "观众甲来啦！今天打算去看看新村庄。",
+            False,
+        ),
+        (
+            "欢迎观众甲来到直播间！今天打算去看看新村庄。",
+            {"观众甲"},
+            set(),
+            {"观众甲"},
+            "今天打算去看看新村庄。",
+            True,
+        ),
     ],
 )
 def test_strip_duplicate_greetings_preserves_non_greeting_clauses(
     speech: str,
     welcomed: set[str],
     unwelcomed: set[str],
+    replying: set[str],
     expected_text: str,
     expected_stripped: bool,
 ) -> None:
-    assert strip_duplicate_greetings(speech, welcomed, unwelcomed_names=unwelcomed) == (
+    assert strip_duplicate_greetings(
+        speech,
+        welcomed,
+        unwelcomed_names=unwelcomed,
+        replying_names=replying,
+    ) == (
         expected_text,
         expected_stripped,
     )
@@ -531,3 +580,181 @@ async def test_reconcile_protects_unwelcomed_viewer_in_same_clause_end_to_end() 
     split_clause = await agent._reconcile_with_mouth("欢迎新人乙进直播间，欢迎观众甲也来啦！", since_ms=clock_now)
     assert split_clause.action == "trim"
     assert split_clause.speech == "欢迎新人乙进直播间！"
+
+
+async def test_reply_greeting_to_welcomed_viewer_danmaku_is_not_stripped_end_to_end() -> None:
+    """已欢迎观众随后发弹幕「主播你好」，主播正常回礼首句（观众甲好呀 / 观众甲来啦）经完整决策轮不被误剥。"""
+    clock_now = 10_000
+    bus = EventBus()
+    spoken_events: List[str] = []
+
+    async def _on_speech(_name: str, payload: StreamerSpeechPayload, _source: str) -> None:
+        spoken_events.append(payload.text)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _on_speech, model_class=StreamerSpeechPayload)
+    registry = ToolRegistry()
+
+    llm = FakeLLMManager(
+        responses=[
+            Response(
+                success=True,
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="c_greet_1",
+                        name="streamer_reply",
+                        arguments={
+                            "target": "m_hi",
+                            "topic_summary": "观众甲发弹幕问好",
+                            "topic_tag": "问好互动",
+                            "reply_guidance": "自然回礼并说明接下来去整理仓库",
+                            "emotion": "happy",
+                            "emotion_intensity": 0.6,
+                            "is_novel": True,
+                        },
+                    )
+                ],
+            ),
+            Response(success=True, content="观众甲好呀！正好我这就去整理仓库。", request_id="r_greet_1"),
+            Response(
+                success=True,
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="c_greet_2",
+                        name="streamer_reply",
+                        arguments={
+                            "target": "m_here",
+                            "topic_summary": "观众甲发弹幕说自己来啦",
+                            "topic_tag": "问好互动",
+                            "reply_guidance": "自然呼应并继续盖房子",
+                            "emotion": "happy",
+                            "emotion_intensity": 0.6,
+                            "is_novel": True,
+                        },
+                    )
+                ],
+            ),
+            Response(success=True, content="观众甲来啦！今天接着把木屋封顶。", request_id="r_greet_2"),
+        ]
+    )
+    agent = make_streamer_agent(
+        {"mouth": {"enabled": False}},
+        llm=llm,
+        event_bus=bus,
+        tool_registry=registry,
+        clock=lambda: clock_now,
+    )
+    agent._register_tools()
+    await agent._on_live_started(
+        CoreEvents.LIVE_STARTED,
+        LiveStartedPayload(live_session_id=1, started_at_ms=clock_now),
+        "test",
+    )
+    # 模拟 5 秒前轻量进房欢迎已欢迎过观众甲
+    agent._room_state.mark_welcomed(user_id="viewer_a", user_name="观众甲")
+
+    res_hi = await agent._execute_round(
+        [
+            RoomMessagePayload(
+                message_type="danmaku",
+                message_id="m_hi",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="主播你好",
+                timestamp_ms=clock_now + 5_000,
+            )
+        ],
+        forced=False,
+        trigger_cause=TriggerCause(kind=TriggerKind.WINDOW_EXPIRED, source=TriggerSource.TICK),
+    )
+    res_here = await agent._execute_round(
+        [
+            RoomMessagePayload(
+                message_type="danmaku",
+                message_id="m_here",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="我来啦",
+                timestamp_ms=clock_now + 8_000,
+            )
+        ],
+        forced=False,
+        trigger_cause=TriggerCause(kind=TriggerKind.WINDOW_EXPIRED, source=TriggerSource.TICK),
+    )
+    await bus.wait_until_drained()
+
+    assert res_hi["speech"] == "观众甲好呀！正好我这就去整理仓库。"
+    assert res_here["speech"] == "观众甲来啦！今天接着把木屋封顶。"
+    assert spoken_events == [
+        "观众甲好呀！正好我这就去整理仓库。",
+        "观众甲来啦！今天接着把木屋封顶。",
+    ]
+
+
+async def test_enter_message_in_batch_does_not_relax_weak_greeting_stripping() -> None:
+    """批次内仅含 message_type='enter' 时不把观众放入 replying_names，已欢迎观众的弱迎客词（来啦）仍被剥除。"""
+    clock_now = 20_000
+    bus = EventBus()
+    spoken_events: List[str] = []
+
+    async def _on_speech(_name: str, payload: StreamerSpeechPayload, _source: str) -> None:
+        spoken_events.append(payload.text)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _on_speech, model_class=StreamerSpeechPayload)
+    registry = ToolRegistry()
+
+    llm = FakeLLMManager(
+        responses=[
+            Response(
+                success=True,
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="c_enter_1",
+                        name="streamer_reply",
+                        arguments={
+                            "target": "m_enter_rejoin",
+                            "topic_summary": "继续盖房子",
+                            "topic_tag": "建筑进度",
+                            "reply_guidance": "顺口继续聊盖房子",
+                            "emotion": "happy",
+                            "emotion_intensity": 0.5,
+                            "is_novel": True,
+                        },
+                    )
+                ],
+            ),
+            Response(success=True, content="观众甲来啦！今天继续把屋顶封上。", request_id="r_enter_1"),
+        ]
+    )
+    agent = make_streamer_agent(
+        {"mouth": {"enabled": False}},
+        llm=llm,
+        event_bus=bus,
+        tool_registry=registry,
+        clock=lambda: clock_now,
+    )
+    agent._register_tools()
+    await agent._on_live_started(
+        CoreEvents.LIVE_STARTED,
+        LiveStartedPayload(live_session_id=2, started_at_ms=clock_now),
+        "test",
+    )
+    agent._room_state.mark_welcomed(user_id="viewer_a", user_name="观众甲")
+
+    res = await agent._execute_round(
+        [
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="m_enter_rejoin",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                content="",
+                timestamp_ms=clock_now + 2_000,
+            )
+        ],
+        forced=False,
+        trigger_cause=TriggerCause(kind=TriggerKind.WINDOW_EXPIRED, source=TriggerSource.TICK),
+    )
+    await bus.wait_until_drained()
+
+    assert res["speech"] == "今天继续把屋顶封上。"
+    assert spoken_events == ["今天继续把屋顶封上。"]

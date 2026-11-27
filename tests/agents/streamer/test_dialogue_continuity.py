@@ -283,6 +283,60 @@ def test_trim_batch_echo_drops_only_tail_copy_of_batch() -> None:
     assert [turn.content for turn in trimmed] == ["拉", "要不要拉一下？"]
 
 
+@pytest.mark.parametrize(
+    ("history", "batch", "expected_contents"),
+    [
+        # 弹幕落库后 115ms 穿插 enter_welcome（assistant 行）：保留 assistant 且精准剔除同 message_id 弹幕
+        (
+            [
+                FakeTurn(role="viewer", content="早安呀", sender_name="观众甲", message_id="m0"),
+                FakeTurn(role="viewer", content="主播你好", sender_name="观众甲", message_id="m1"),
+                FakeTurn(role="assistant", content="欢迎观众甲来直播间呀！", message_type="speak"),
+            ],
+            [_msg("主播你好", "m1", user=RoomMessageUser(id="viewer_a", name="观众甲"))],
+            ["早安呀", "欢迎观众甲来直播间呀！"],
+        ),
+        # 无 message_id 时穿插 assistant 行：按同角色用户文本匹配剔除，且不误伤更早一轮同文历史
+        (
+            [
+                FakeTurn(role="viewer", content="666", sender_name="观众甲", message_id=""),
+                FakeTurn(role="assistant", content="谢谢夸奖", message_type="speak"),
+                FakeTurn(role="viewer", content="666", sender_name="观众甲", message_id=""),
+                FakeTurn(role="assistant", content="欢迎观众乙进来坐！", message_type="speak"),
+            ],
+            [_msg("666", "", user=RoomMessageUser(id="viewer_a", name="观众甲"))],
+            ["666", "谢谢夸奖", "欢迎观众乙进来坐！"],
+        ),
+        # 无 message_id 且不同观众发同文：仅剔同昵称回显，保留另一位观众的原话
+        (
+            [
+                FakeTurn(role="viewer", content="冲呀", sender_name="观众甲", message_id=""),
+                FakeTurn(role="assistant", content="欢迎观众乙！", message_type="speak"),
+            ],
+            [_msg("冲呀", "", user=RoomMessageUser(id="viewer_b", name="观众乙"))],
+            ["冲呀", "欢迎观众乙！"],
+        ),
+        # 超出末尾 8 条短窗口的更早同文无 ID 历史不被误删
+        (
+            [
+                FakeTurn(role="viewer", content="你好", sender_name="观众甲", message_id=""),
+                *(FakeTurn(role="assistant", content=f"填充发言{i}", message_type="speak") for i in range(8)),
+            ],
+            [_msg("你好", "", user=RoomMessageUser(id="viewer_a", name="观众甲"))],
+            ["你好", *(f"填充发言{i}" for i in range(8))],
+        ),
+    ],
+)
+def test_trim_batch_echo_handles_interleaved_assistant_and_tail_window(
+    history: List[FakeTurn],
+    batch: List[RoomMessagePayload],
+    expected_contents: List[str],
+) -> None:
+    """历史末尾短窗口内穿插 assistant 消息不阻断去重，且只精准剔除本批重复观众消息。"""
+    trimmed = canonical.trim_batch_echo(history, batch)
+    assert [turn.content for turn in trimmed] == expected_contents
+
+
 # Planner
 
 
