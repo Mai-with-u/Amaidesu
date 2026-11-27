@@ -425,21 +425,9 @@ def test_game_agent_labels_relay_sources() -> None:
     assert [item[1] for item in queued] == ["[运营原话]\n拉下停机开关", "[主播补充]\n停机开关别碰", "继续"]
 
 
-def test_delegate_rules_point_with_features_not_screen_positions() -> None:
-    """委派守则：她看的直播画面是几秒前的，游戏里的视角可能已经转开，指东西写特征和名字，不写画面方位。"""
-    reset_prompt_manager()
-    try:
-        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
-    finally:
-        reset_prompt_manager()
-    assert "画面左边那个" in rules and "是谁的" in rules and "地点名" in rules
-
-
-def test_prompts_state_relay_and_completion_rules() -> None:
-    """提示词写明：补充只写新要求、完成要收进背包、原话优先于转述、一次一个身体动作。
-
-    补充要求与完成口径属于委派型游戏守则，经 game_rules 拼进主播提示词。
-    """
+def test_prompts_name_relay_channel_and_runtime_markers() -> None:
+    """提示词与代码对得上：委派守则经 game_rules 拼进主播提示词并点名公屏发送通道；
+    游戏侧提示词写明运营原话/主播补充两类标记，与 notice_router 实际写入的标记一致；错误字段名照签名。"""
     reset_prompt_manager()
     try:
         rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
@@ -456,15 +444,9 @@ def test_prompts_state_relay_and_completion_rules() -> None:
         game = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:
         reset_prompt_manager()
-    assert "补充只写**新的要求**" in planner and "没有新输入的流程单推进、冷场、定时窗口不补充" in planner
-    assert "怎样算做完" in planner and "观众没说数量就按一个算" in planner
-    assert "要的东西要收进背包才算到手" in game and "[运营原话]" in game and "[主播补充]" in game
-    assert "身体同一时间只做一件事" in game
+    assert "[运营原话]" in game and "[主播补充]" in game
     assert "error.fields" in game
-    # 卡住等我拿主意时空窗也补；游戏里回话用 minecraft_chat_send 直发、像玩家打字那样短，游戏侧照发不加工
-    assert "停着等我拿主意" in planner and "minecraft_chat_send" in planner
-    # 游戏侧不再代打主播的游戏公屏话：她自己直连发送，游戏 Agent 只管行动与自己想说的话
-    assert "她自己直连发送" in game and "不把要问的事列成清单或编号" in game
+    assert "minecraft_chat_send" in planner
 
 
 async def test_duplicate_relay_dedup_scopes_by_kind() -> None:

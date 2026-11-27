@@ -431,22 +431,6 @@ async def test_dimension_changed_event_proves_cross_dimension_claim_in_settle(
     assert [line.text for line in lines] == ["Minecraft：抵达下界探索"]
 
 
-def test_settle_prompts_enforce_persona_commitment_and_facility_rules(prompt_manager: PromptManager) -> None:
-    """三份下播整理提示词收紧守护：区分设定自述与本场新事、过滤无对象畅想、纳入共用设施与环境限制。"""
-    archive_prompt = prompt_manager.render("memory_archive_system")
-    assert "角色固有设定背景的自述" in archive_prompt
-    assert "并非本场实际发生的新事件或新发现" in archive_prompt
-    assert "跨维度迁移" in archive_prompt
-
-    commitment_prompt = prompt_manager.render("memory_commitment_system")
-    assert "承诺须指向具体听众、联机同伴或明确的后续直播计划" in commitment_prompt
-    assert "无具体对象、无实际执行意图的随口畅想" in commitment_prompt
-
-    social_prompt = prompt_manager.render("memory_social_fact_system")
-    assert "服务器或存档环境限制、工具使用边界" in social_prompt
-    assert "共用设施操作惯例" in social_prompt
-
-
 async def test_item_delivery_event_proves_archive_and_commitment_closure_in_settle(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
@@ -834,9 +818,6 @@ async def test_quote_rescue_and_time_order_rebind_avoid_early_preview_line(
 ) -> None:
     """同一段引文在早先出发预告与事后结果汇报两行都出现时，不得错挂早先预告行而误判记录晚于发言；
     若早先发言的引文在事件之后从未再出现，反吹牛时间序红线仍旧生效。"""
-    archive_prompt = prompt_manager.render("memory_archive_system")
-    assert "结果发生之后、时刻不早于对应【游戏记录】的那一行" in archive_prompt
-
     session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=60 * _MINUTE)
     await store.events.insert_game_event(

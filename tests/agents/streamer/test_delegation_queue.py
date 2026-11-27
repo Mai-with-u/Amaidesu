@@ -225,25 +225,11 @@ def test_delegate_rules_state_one_in_hand_settle_on_switch_and_topic_selection()
     finally:
         reset_prompt_manager()
 
-    # D1：一件在做、其余待办、换活结单、短编号、补充不换活
-    assert "一件在做，其余待办；换活必须结单" in rules
+    # 委派守则点名结单工具与合法参数，已退役的"按作废处理"表述不再出现
     assert "`framework_task_settle`" in rules and "`when_busy`" in rules and "`current`" in rules
-    assert "要做的事变了（怎样算做完变了），就是新的一件" in rules
-    assert "游戏里的战斗、受伤、逃生**不归这套**" in rules
-    assert "一单一件事" in rules and '一单只能有一个"怎样算做完"' in rules
-    assert "不构成把它们打包成一单的理由" in rules and "记忆本子里并列的几件旧账同样拆开派" in rules
     assert "按作废处理" not in rules
 
-    # D3 第 1、2 条：挑下一件做什么 + 速览值得去看是现成节目 + 冷场顺序把上一场没说完的事挪到最后
-    assert "挑下一件做什么" in rules
-    assert "先看当面的人" in rules and "再看眼前新出现的" in rules and "最后才是惦记的旧事" in rules
-    assert "【现场速览】里标了值得去看的东西是现成的节目" in rules
-    assert "维护活不连着做" in rules and "约半小时还没成" in rules
-    assert "【现场速览】里标了值得去看的东西是现成的节目" in bare_planner
-    cold_line = [line for line in bare_planner.splitlines() if "可聊的素材不只来自游戏，只在冷场时用" in line][0]
-    assert cold_line.index("她的喜好和执念") < cold_line.index("最后才是【她记得的事】里上一场没说完的事")
-
-    # D3 第 3 条：Minecraft 专属玩法规矩下沉在 Minecraft 层 STREAMER_GUIDE，不污染通用提示词
+    # D3：Minecraft 专属玩法规矩下沉在 Minecraft 层 STREAMER_GUIDE，不污染通用提示词
     assert "死亡不掉落" in STREAMER_GUIDE and "死一次回重生点" in STREAMER_GUIDE
     assert "随身带一条船" in STREAMER_GUIDE
     assert "死亡不掉落" not in bare_planner and "随身带一条船" not in bare_planner

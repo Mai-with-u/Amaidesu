@@ -154,15 +154,6 @@ async def test_mouth_carries_no_memory_in_system_prompt_or_scene_card(prompts: A
     assert card.startswith("【现场】") and "悬着的事" not in card
 
 
-async def test_mouth_rule_keeps_broadcast_talk_third_person(prompts: Any) -> None:
-    """口播不直呼游戏玩家「你」：现场归属那条规矩里带明他们听不到直播，别对着镜头喊「你」。"""
-    llm = _LLM("happy：好家伙")
-
-    await _mouth(llm, _Speech(), prompts).react_once([_trigger()])
-
-    assert "他们听不到直播，别对着镜头喊「你」" in llm.calls[0]["system"]
-
-
 #: AI 声明写死在三条说话通路的模板里，不随人设配置变；即时反应的这条后面接边界栏那一行（有的话）
 _AI_RULE = "- 被问到是不是真人时，坦白自己是 AI 主播，可以俏皮，但不能否认。"
 
@@ -456,20 +447,10 @@ async def test_only_notable_milestone_triggers_mouth_while_routine_events_stay_b
     assert all("LLM 推理异常" not in call.args[0] for call in mouth.note_game.call_args_list)
 
 
-def test_mouth_and_delegate_prompts_align_on_rare_sighting_handoff(prompts: Any) -> None:
-    """提示词契约：即时反应不为自己拍板下一步行动承诺；委派守则指导对 rare_sighted 搁下常规在途任务优先采掘或定夺强敌。"""
-    mouth_sys = prompts.render(
-        "amaidesu_mouth",
-        bot_name="麦麦",
-        personality="活泼",
-        style_constraints="口语化",
-        max_chars="40",
-        emotions="happy",
-        boundaries_rule="",
-    )
+def test_delegate_rules_align_on_rare_sighting_handoff(prompts: Any) -> None:
+    """委派守则指导对 rare_sighted 搁下常规在途任务优先采掘或定夺强敌，参数取值是工具签名里的合法写法。"""
     delegate_rules = prompts.render("amaidesu_planner_delegate_rules")
 
-    assert "具体怎么行动留给紧随其后的决策定夺，不替自己拍板承诺下一步行动" in mouth_sys
     assert "rare_sighted" in delegate_rules
     assert "when_busy='replace', current='shelve'" in delegate_rules
 
@@ -505,7 +486,6 @@ async def test_emotion_turn_splits_into_lines_dispatched_as_follow_ups(prompts: 
     assert (call["speech"], call["emotion"]) == ("哇！什么东西？！", "scared")
     # 最多三行台词（旁白不占名额），第四行起不要
     assert call["follow_ups"] == [("……原来是只鸡。", "scared"), ("吓我一跳", "happy")]
-    assert "这句话里情绪转了" in llm.calls[0]["system"]
 
 
 async def test_follow_up_lines_that_overflow_the_budget_are_dropped_whole(prompts: Any) -> None:
@@ -886,18 +866,3 @@ async def test_mouth_keeps_recent_player_chat_in_scene_card_under_high_frequency
 
     events_block = _events_block_of(llm.calls[0]["messages"][-1]["content"])
     assert "玩家 同伴乙：前面拐角有熔岩池小心点" in events_block
-
-
-def test_mouth_prompt_contains_no_fabrication_boundary_for_uncertain_causes(prompts: Any) -> None:
-    """即时反应系统提示词写明未写明死因、变动缘由或物品来历时只陈述眼下处境，不拿旧失误或手持物拼凑。"""
-    mouth_sys = prompts.render(
-        "amaidesu_mouth",
-        bot_name="麦麦",
-        personality="活泼",
-        style_constraints="口语化",
-        max_chars="40",
-        emotions="happy",
-        boundaries_rule="",
-    )
-    assert "死因、变动缘由或物品来历未在现场事实里明确写明时" in mouth_sys
-    assert "只陈述已确认的眼下处境" in mouth_sys

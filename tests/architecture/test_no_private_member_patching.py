@@ -32,7 +32,7 @@ from tests.architecture._ast_cache import TESTS_ROOT as TESTS, parsed_py_files
 ALLOWED_PRIVATE_PATCHES: dict[str, str] = {
     # agents/test_minecraft_attention_collector.py：采集器内部就绪检查，无公有接缝
     # （行号随该文件用例增删整体平移）
-    "agents/test_minecraft_attention_collector.py:567": "collector._ensure_ready",
+    "agents/test_minecraft_attention_collector.py:550": "collector._ensure_ready",
     # dashboard/test_system_api_v2.py：系统信息装配的内部聚合项与 changelog 路径常量
     "dashboard/test_system_api_v2.py:241": "system_api._build_component_items",
     "dashboard/test_system_api_v2.py:260": "system_api._CHANGELOG_PATH",

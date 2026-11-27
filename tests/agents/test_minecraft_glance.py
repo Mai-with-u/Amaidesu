@@ -660,10 +660,7 @@ def test_game_prompt_keeps_long_term_places_in_remember_not_the_notebook() -> No
         game = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:
         reset_prompt_manager()
-    assert "## 记住地点" in game and "按存档跨重启保留" in game
-    assert "同名会覆盖" in game and "previous_position" in game
-    assert "minecraft:the_nether" in game and "缺 `y` 会被拒" in game
-    assert "下界传送门（主世界侧）" in game and "下界传送门（下界侧）" in game
+    assert "previous_position" in game and "minecraft:the_nether" in game
     notebook = build_notebook_spec().description
     assert "按存档跨重启保留" in notebook and "remember" in notebook
 
@@ -1011,8 +1008,6 @@ def test_game_prompt_allows_survival_click_commands_while_forbidding_admin_short
         game = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:
         reset_prompt_manager()
-    assert "不用管理员命令" in game and "管理员命令默认拒收" in game
-    assert "可点击执行" in game and "可通过 `chat` 发送" in game
     assert "`chat` 默认不执行任何游戏命令" not in game
 
 

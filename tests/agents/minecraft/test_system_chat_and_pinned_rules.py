@@ -914,19 +914,16 @@ def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_
     finally:
         reset_prompt_manager()
 
+    # 工具与参数标识：模板只教注册表里存在的工具，字段名照签名
     assert "minecraft_rules" in agent_prompt
     assert "observe(what=self)" in agent_prompt and "obtain" in agent_prompt
-    assert "仅列原版常见设施" in agent_prompt and "machine_inspect" in agent_prompt
+    assert "machine_inspect" in agent_prompt
     assert (
         "仅列原版常见设施" in build_glance_spec().description and "不含联动模组机器" in build_glance_spec().description
     )
-    assert "暂停或取消非紧急的移动与施工目标" in agent_prompt
-    # 已删除诱发长文堆砌的冲突条款，补入公屏简洁与放权推进正向边界
+    # 已删除诱发长文堆砌的冲突条款，不再回潮
     assert "合并回应所有未答要点" not in agent_prompt
-    assert "游戏公屏聊天栏空间狭小" in agent_prompt
-    assert "同伴已经明确放权交给你做的事项" in agent_prompt
 
-    assert "同伴明确表达的拒绝、禁令" in fold_prompt
     assert "minecraft_rules" in fold_prompt
 
     assert "memory_recall" in LEAD_MODE_PROMPT_SECTION

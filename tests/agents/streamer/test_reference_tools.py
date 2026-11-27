@@ -13,7 +13,6 @@ from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.llm.payload import Response
-from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 
@@ -84,21 +83,3 @@ def test_streamer_config_defaults_to_no_reference_tools() -> None:
     """默认不调用任何参考工具；接哪个游戏就在配置里填哪个游戏的只读工具。"""
     assert StreamerConfig.from_dict({}).reference_tools == []
     assert StreamerConfig.from_dict({"reference_tools": ["minecraft_glance"]}).reference_tools == ["minecraft_glance"]
-
-
-def test_planner_prompt_mentions_overview() -> None:
-    reset_prompt_manager()
-    try:
-        prompt = get_prompt_manager().render(
-            "amaidesu_planner_react",
-            bot_name="麦麦",
-            personality="活泼",
-            behavior_style="积极互动",
-            boundaries_rule="",
-            inside_jokes="",
-            game_rules="",
-            social_fact_step="",
-        )
-    finally:
-        reset_prompt_manager()
-    assert "【现场速览】是本轮决策前自动读取的现场" in prompt

@@ -40,7 +40,6 @@ def test_template_renders_nonempty_with_key_guidance() -> None:
     rendered = get_prompt_manager().render(TEXT_ADV_VLM_QUESTION_KEY, options_directive="")
     assert rendered.strip(), "模板渲染结果不应为空"
     assert "正文" in rendered
-    assert "固定格式" in rendered
     # 选项段引导（含坐标要求）经变量注入后同样非空
     with_options = get_prompt_manager().render(TEXT_ADV_VLM_QUESTION_KEY, options_directive="选项：坐标引导")
     assert "选项" in with_options

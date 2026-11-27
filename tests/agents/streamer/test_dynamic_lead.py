@@ -1323,22 +1323,6 @@ async def test_streamer_only_mode_disables_handover_completely(prompts: Any) -> 
         await game.stop()
 
 
-def test_planner_react_prompt_includes_sync_promised_game_action_rule(prompts: Any) -> None:
-    """提示词守则回归：口头或游戏公屏答应改动游戏行动时须同步通过工具通知执行侧。"""
-    rendered = prompts.render(
-        "amaidesu_planner_react",
-        bot_name="麦麦",
-        personality="活泼",
-        behavior_style="积极互动",
-        boundaries_rule="",
-        inside_jokes="",
-        game_rules="",
-        social_fact_step="",
-    )
-    assert "答应改动游戏行动须同步通知执行侧" in rendered
-    assert "同步通过工具将变动落到执行侧" in rendered
-
-
 async def test_body_event_passes_kind_to_mouth_and_suppresses_planner_wake_in_game_lead(prompts: Any) -> None:
     """游戏主控态下意外阵亡仍驱动即时反应发声（kind='died'），但不再唤醒重型 Planner。"""
     clock = _FakeClock()

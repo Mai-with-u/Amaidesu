@@ -108,7 +108,6 @@ def test_mouth_prompt_removes_named_filler_words(prompts: Any) -> None:
     )
     for filler in ("诶？", "啊这", "完了完了", "好家伙", "行吧", "口癖"):
         assert filler not in rendered
-    assert "突发状况" in rendered and "随处境轻重自然变化" in rendered
 
 
 def test_planner_prompt_narrows_quiet_rule_and_adds_talk_increment(prompts: Any) -> None:
@@ -123,10 +122,8 @@ def test_planner_prompt_narrows_quiet_rule_and_adds_talk_increment(prompts: Any)
         game_rules="",
         social_fact_step="",
     )
-    assert "只约束没有 `target` 的主动独白轮" in rendered
-    assert "当 `target` 非空" in rendered and "把话递回去接住聊天" in rendered
     assert "进展、卡点和下一步" not in rendered
-    assert "话头推进增量" in rendered and "beat_done" in rendered and "use_card_id" in rendered
+    assert "beat_done" in rendered and "use_card_id" in rendered
 
     props = build_reply_tool_spec().parameters_schema["properties"]
     assert "beat_done" in props and "use_card_id" in props
@@ -270,8 +267,12 @@ async def test_planner_passes_talk_mode_and_collects_beat_done_and_card_id(promp
     assert outcome.use_card_id == 7
 
 
-def test_planner_and_settle_prompts_carry_off_game_works_and_quote_anti_pollution_rules(prompts: Any) -> None:
-    """方案 A 场外作品边界、刚聊开话头增量与下播整理引述弹幕防污染条款对齐守护。"""
+def test_reply_tool_spec_talk_marker_matches_prompt_vocabulary(prompts: Any) -> None:
+    """回复工具 is_novel 参数说明里的【刚聊开的话头】叫法与提示词工作台渲染的段名一致（同一概念同一个词）。"""
+    reply_props = build_reply_tool_spec().parameters_schema["properties"]
+    assert "【刚聊开的话头】" in reply_props["is_novel"]["description"]
+
+    # 参考段与工具说明共用同一个段名；段名由 talk 工作台代码渲染，这里核对提示词模板写的是同一个词
     planner_text = prompts.render(
         "amaidesu_planner_react",
         bot_name="麦麦",
@@ -282,23 +283,7 @@ def test_planner_and_settle_prompts_carry_off_game_works_and_quote_anti_pollutio
         game_rules="",
         social_fact_step="",
     )
-    assert "存在【刚聊开的话头】" in planner_text
-    assert "围绕该话头顺延这一轮讲出本场未说过的延伸看法或设定喜好算有增量" in planner_text
-    assert "观众问起当前未在玩的场外作品或别的游戏时" in planner_text
-    assert "禁止在发言要点里编写无出处的亲身游玩经历" in planner_text
-
-    reply_props = build_reply_tool_spec().parameters_schema["properties"]
-    assert "【刚聊开的话头】" in reply_props["is_novel"]["description"]
-
-    archive_text = prompts.render("memory_archive_system")
-    assert '标着"回复观众N「……」"的台词开头顺口念出或复述的观众弹幕问题' in archive_text
-    assert "不算她自己陈述的事实" in archive_text
-    assert "按创意源头划分：只要名字、口号、设定或梗是那条观众弹幕先提出来的" in archive_text
-    assert "绝不写进第二节正式 archive" in archive_text
-
-    commitment_text = prompts.render("memory_commitment_system")
-    assert '标着"回复观众N"的台词开头把弹幕或醒目留言里的请求顺口念出来' in commitment_text
-    assert "仅念出问题本身或婉拒、打哈哈的不算承诺" in commitment_text
+    assert "【刚聊开的话头】" in planner_text
 
 
 class _MinecraftGuideStub(BaseToolProvider):

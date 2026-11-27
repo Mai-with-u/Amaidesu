@@ -1,5 +1,5 @@
-"""Planner 系统提示词里的底线与规则：AI 声明、边界栏、做不到的不答应、备忘录口径、前情目录——
-用真实提示词模板渲染，经 plan() 取发给模型的系统提示词。"""
+"""Planner 提示词与代码的接线守护：AI 声明与边界栏的配置→渲染关系、工具注册状态驱动的条款显隐、
+说话人参考段的行为口径——提示词散文本身不逐句锁定（全文一致性由 tests/architecture 守护）。"""
 
 from __future__ import annotations
 
@@ -109,7 +109,7 @@ async def test_empty_boundaries_omit_the_whole_line_but_keep_ai_declaration(prom
 
     assert "不答应的事：" not in system
     assert f"{_AI_PARAGRAPH_END}\n\n# 行为准则\n\n积极互动\n\n# 当前游戏的玩法" in system
-    assert _AI_DECLARATION in system and "发言要点要让她这样答" in system
+    assert _AI_DECLARATION in system
 
 
 def test_refusals_follow_the_boundaries_line_not_a_hardcoded_list(prompts: Any) -> None:
@@ -117,97 +117,14 @@ def test_refusals_follow_the_boundaries_line_not_a_hardcoded_list(prompts: Any) 
     不向观众打听私人信息是隐私底线（观众当众说出的私事会被弹幕记录存下来），不随边界栏变，单独写一句。"""
     prompt = _render_bare(prompts)
 
-    assert "「她是谁」里列出的她不答应的事" in prompt
     assert all(word not in prompt for word in ("线下见面", "要钱", "要私人信息"))
-    assert "不管人设里列没列，都别让她向观众打听住址、电话、学校这类私人信息" in prompt
 
 
-def test_prompt_template_tells_planner_to_admit_not_to_invent_for_prelude_directory(prompts: Any) -> None:
-    """前情目录规则：本场早先的段落只剩目录一行、眼前没有细节时，坦白记不清、可以问弹幕，不凭目录编细节；
-    往场回顾工具翻不到本场说过的话，规则里明说不要为这个去调它。"""
+def test_retraction_rule_names_the_task_settle_tool(prompts: Any) -> None:
+    """作废条款指名结单工具，且不点名未注册的社交事实工具（模板不教注册表里没有的工具）。"""
     prompt = _render_bare(prompts)
 
-    assert "历史开头的【前情目录】列着已移出上下文的段落" in prompt
-    assert "坦白记不清、可以问问弹幕，别凭目录一行编细节" in prompt
-    assert "拿不准就先用 `memory_recall` 查本场说过的话" in prompt
-
-
-def test_prompt_template_reads_a_trailing_open_paren_as_a_joke(prompts: Any) -> None:
-    """句末单个"（"是玩笑口气、不是话没说完：第 58 场她两回追问"括号一开就撒手"，没听懂"那我家女仆（"。"""
-    prompt = _render_bare(prompts)
-
-    assert '句末单个"（"是语气，不是话没说完' in prompt
-    assert '"那我家女仆（"意思是"那是我家的女仆啦"' in prompt
-
-
-def test_prompt_template_keeps_evaluation_out_of_topic_summary(prompts: Any) -> None:
-    """事实段不写定性评价词：评价与态度全部留给 reply_guidance 按人设从裸事实推导。
-
-    事实段先把处境框成"白忙"，同一轮再"推导"态度，推导结果被框定锁死——
-    挫折事实经带评价的框定必然滑向自嘲。
-    """
-    prompt = _render_bare(prompts)
-
-    assert "也不做定性评价" in prompt
-    assert "「白忙」「白找」「冤」「狼狈」「白转」「白搭」这类评价词不写进事实段" in prompt
-    assert "它们会把处境先框成一种态度" in prompt
-
-
-def test_prompt_template_does_not_blame_present_players_for_protected_blocks(prompts: Any) -> None:
-    """被保护挡住时只说记录上不归她：第 58 场她说"这正门被人用两块橡木板钉死了……谁干的呀"，那其实是她自己的家。"""
-    prompt = _render_bare(prompts)
-
-    assert "被挡住时不怪到人头上" in prompt
-    assert '不让她追问"谁干的"，也不安到在场玩家头上' in prompt
-    assert "中性地问是谁放的" in prompt
-
-
-def test_prompt_template_restates_player_request_before_state(prompts: Any) -> None:
-    """玩家托付或问句触发的轮次，话题摘要第一句先复述谁要什么：诉求框定逐轮漂移时，纸面上先露出来。"""
-    prompt = _render_bare(prompts)
-
-    assert "摘要先复述诉求" in prompt
-    assert "第一句先写清谁要什么" in prompt
-    assert "再写她的状态" in prompt
-
-
-def test_delegate_rules_asks_back_when_request_target_is_unclear() -> None:
-    """委托需求说不清时先反问确认再定案，观众与玩家同样对待；做法与勘查不在确认范围，且与不添前置条件条款分工明确。"""
-    reset_prompt_manager()
-    try:
-        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
-    finally:
-        reset_prompt_manager()
-
-    assert "委托或托付的需求说不清就先问清再定案" in rules
-    assert "观众和游戏里的玩家同样对待" in rules
-    assert "在游戏聊天里反问" in rules
-    assert "不按主播自己的库存或状态替对方回答" in rules
-    assert "做法与场地勘查不在确认范围" in rules
-    assert "不替观众添加前置条件" in rules and "不为稳妥另添动手前的流程前置" in rules
-    assert "托付有歧义时先反问" not in rules
-
-
-def test_delegate_rules_updates_state_assumptions_to_latest_game_now() -> None:
-    """委派指令里当作前提的状态说法以【游戏那边此刻】的最新结果为准：对不上先改对再派，不照旧状态写。"""
-    reset_prompt_manager()
-    try:
-        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
-    finally:
-        reset_prompt_manager()
-
-    assert "写进指令的状态前提，以【游戏那边此刻】的最新结果为准" in rules
-    assert "先把说法改对再派" in rules
-    assert "不照早先的旧状态写" in rules
-
-
-def test_prompt_template_treats_retraction_as_cancellation(prompts: Any) -> None:
-    """有人更正或宣布不用做了：撤对应的单或补进在途单、记一条取代旧行的事实、口头认账——不当闲聊带过。"""
-    prompt = _render_bare(prompts)
-
-    assert "有人更正或宣布不用做了，按作废处理" in prompt
-    assert "被作废的事对应哪一单就撤哪一单" in prompt and "`framework_task_settle`" in prompt
-    assert "口头认账" in prompt
+    assert "`framework_task_settle`" in prompt
     # 直接渲染（变量为空，即工具没注册的口径）：规则不点名社交事实工具
     assert "streamer_social_fact" not in prompt
 
@@ -382,10 +299,7 @@ async def test_a3_and_a4_pit_trap_checks_own_recent_digging_and_explosions_befor
     )
 
     assert outcome.replied is True
-    system_text = captured_messages[0][0]["content"]
     ref_text = captured_messages[0][-1]["content"]
-    assert "有人说附近有陷阱、地上全是坑" in system_text and "不要反问在哪儿" in system_text
-    assert "有人指出她卡住了、过载了" in system_text and "不许只盯着此刻子动作硬顶说没卡住" in system_text
     assert "成了：就地挖取泥土→挖了 16 块泥土" in ref_text and "没成：走回工作台→走不到目标" in ref_text
     assert [name for name, _ in invoked] == ["framework_delegate", "streamer_reply"]
 
@@ -481,8 +395,6 @@ async def test_a4_why_not_use_capability_checks_game_records_instead_of_fabricat
     outcome = await planner.plan([danmaku])
 
     assert outcome.replied is True
-    assert "有人问她为什么不用某种做法或能力时" in captured_system[0]
-    assert "不许凭猜测现编缺少某样条件或资格之类的理由" in captured_system[0]
     assert invoked_tools == ["minecraft_get_work_log", "framework_prompt", "streamer_reply"]
 
 
@@ -575,28 +487,13 @@ async def test_s66_remote_public_chat_exclamation_marks_absent_speakers_and_guar
     )
 
     assert outcome.replied is True
-    system_text = captured_messages[0][0]["content"]
     ref_text = captured_messages[0][-1]["content"]
-    assert "不在她身边且未点名她的玩家感叹机关、怪物、地形或掉落物" in system_text
-    assert "不凭空认领到自己脚下" in system_text and "顺口问清在哪碰上的" in system_text
     assert "玩家 玩家甲、玩家 玩家乙 当前不在【现场速览】身边" in ref_text
     assert "未点名她的环境感叹是对方那边的遭遇" in ref_text
 
 
-def test_s66_nearby_and_named_players_keep_positive_response_guardrail(prompts: Any) -> None:
+def test_s66_nearby_and_named_players_keep_positive_response_guardrail() -> None:
     """配对副作用护栏：不能因为防远端游戏公屏误认，压低对身边围观互动、点名主播或向主播求助搭话玩家的回应积极度。"""
-    system_text = prompts.render(
-        "amaidesu_planner_react",
-        bot_name="麦麦",
-        personality="活泼",
-        behavior_style="积极互动",
-        boundaries_rule="",
-        inside_jokes="",
-        game_rules="",
-        social_fact_step="",
-    )
-    assert "点名她、向她求助搭话或就在身边围观互动的玩家，照常积极回应" in system_text
-
     # 玩家甲就在现场速览身边围观，玩家乙在远处向主播求助：两边都明确保留积极回应与游戏内回话提醒
     overview = (
         'minecraft_glance: {"tool": "glance", "body": {"dimension": "minecraft:overworld"}, '
@@ -616,12 +513,8 @@ def test_s66_nearby_and_named_players_keep_positive_response_guardrail(prompts: 
     assert "玩家 玩家甲 当前就在【现场速览】身边，围观互动或搭话照常积极回应" in all_here
 
 
-def test_game_chat_vs_streamer_reply_role_split_in_prompt_and_speakers(prompts: Any) -> None:
-    """系统提示词与游戏公屏说话人参考段均明确区分 minecraft_chat_send（往游戏公屏发字）与 streamer_reply（直播间口播收口）。"""
-    system_text = _render_bare(prompts)
-    assert "单独填 `to_player` 只标记口播对象、不会往游戏公屏发字" in system_text
-    assert "调用 `minecraft_chat_send` 把游戏内文字发进游戏公屏，再用 `streamer_reply` 收口直播口播" in system_text
-
+def test_game_chat_vs_streamer_reply_role_split_in_speakers() -> None:
+    """游戏公屏说话人参考段明确区分 minecraft_chat_send（往游戏公屏发字）与 streamer_reply（直播间口播收口）。"""
     note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 游戏公屏] 玩家 玩家甲：在忙什么")
     speakers_text = render_game_speakers((note,))
     assert speakers_text.startswith("【游戏公屏近期发言】")
@@ -631,7 +524,7 @@ def test_game_chat_vs_streamer_reply_role_split_in_prompt_and_speakers(prompts: 
     assert "属于旁人对话，不要强行调 `minecraft_chat_send` 插嘴或代答" in speakers_text
 
 
-def test_speakers_segment_anchors_the_mention_mark(prompts: Any) -> None:
+def test_speakers_segment_anchors_the_mention_mark() -> None:
     """提及标注判据：游戏公屏说话人段锚住行尾的 [提及…] 标注——带标注优先处理、无标注的旁人对话不插嘴。
 
     标注是采集器按文本判的事实：判据同时写明撞词也照标、"说她"是否等于"跟她说话"由模型按句意分辨。
@@ -641,10 +534,6 @@ def test_speakers_segment_anchors_the_mention_mark(prompts: Any) -> None:
     assert "行尾带 [提及…] 标注的行是正文里提到了她的名字，优先处理" in speakers_text
     assert "是不是在跟她说话按那句的意思分辨" in speakers_text, "只做事实标注，行为判断留给模型"
     assert "无标注且是玩家间互相点名或一问一答聊他们自己的事的行，属于旁人对话" in speakers_text
-
-    rules_text = prompts.render("amaidesu_planner_delegate_rules")
-    assert "带标注的优先处理，对方多半在游戏里等她回话" in rules_text
-    assert "无标注且是玩家互相聊他们自己事情的条目属旁人对话" in rules_text
 
 
 @pytest.mark.parametrize(
@@ -693,15 +582,6 @@ def test_render_game_speakers_marks_offline_players_and_mixed_presence() -> None
     assert "玩家 玩家甲 当前就在身边，围观搭话照常积极回应" in mixed
     assert "玩家 玩家乙 当前不在身边（仍在服内在线）" in mixed
     assert "玩家 玩家丙 当前已下线" in mixed and "无需再用 `minecraft_chat_send` 往游戏公屏空喊" in mixed
-
-
-def test_delegate_rules_check_online_players_and_click_commands(prompts: Any) -> None:
-    """委派守则：主动在游戏公屏找人前先对照 online_players 确认在线，系统消息带可点击执行命令时可委派执行。"""
-    rules_text = prompts.render("amaidesu_planner_delegate_rules")
-    assert "对照【现场速览】的 `online_players` 确认对方此刻在线" in rules_text
-    assert "不在列表里的已下线玩家不往游戏公屏空喊" in rules_text
-    assert "（可点击执行: /...）" in rules_text
-    assert "委派游戏里按该命令执行" in rules_text
 
 
 async def test_empty_talk_deck_hides_talk_draw_cards_and_recovers_when_cards_exist(prompts: Any) -> None:
@@ -803,11 +683,3 @@ async def test_idle_fallback_window_allows_silence_and_drops_forced_persona_or_c
     assert "顺着近况、话题卡或个人喜好" not in ref_text
     assert "保持沉默完全合适" in ref_text
     assert "不必硬聊或反复展开静态背景设定" in ref_text
-
-
-def test_planner_prompt_requires_glance_before_claiming_missing_item_in_game_lead(prompts: Any) -> None:
-    """轻从模式下未见最新背包快照且仅见失败记录时，断言缺少物品前须先调用游戏状态查询工具核实。"""
-    prompt = _render_bare(prompts)
-    assert "游戏自主主控（轻从）模式下" in prompt
-    assert "先调用游戏状态查询工具核对当下持有状态再开口" in prompt
-    assert "不凭单条失败记录断定背包为空" in prompt

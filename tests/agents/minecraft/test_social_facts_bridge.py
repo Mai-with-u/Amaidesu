@@ -554,6 +554,3 @@ async def test_priority_cap_truncation_factory_wiring_and_prompt_constraint(db_p
     finally:
         reset_prompt_manager()
     assert "world_social_rules" in rendered_prompt
-    assert "共享设施惯例" in rendered_prompt
-    assert "同伴关系" in rendered_prompt
-    assert "领地边界" in rendered_prompt

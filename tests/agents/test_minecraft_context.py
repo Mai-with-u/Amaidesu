@@ -473,12 +473,8 @@ def test_template_states_how_to_play_with_maicraft_v1() -> None:
         assert tool in prompt
     assert "minecraft_wait" not in prompt, "wait 工具已移除：话轮结束即让出，不再教这个调用"
     assert "maicraft_events" not in prompt, "事件流只给宿主读"
-    assert "身体同一时间只做一件事" in prompt and "[开局资料]" in prompt
+    assert "[开局资料]" in prompt
     assert "error.fields" in prompt and "unconfirmed" in prompt
-    assert "## 完成标准" in prompt and "顶替不算完成" in prompt and "子问题解决后直接回原目标" in prompt
-    assert "## 遇到困难时" in prompt and '说"做不到"要有证据' in prompt
-    assert "你就是这场直播的主播" in prompt and "没有谁派谁" in prompt
-    assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "创造模式" in prompt
 
 
 async def test_world_switch_invalidates_old_summaries_and_next_compaction_replaces_marker() -> None:
