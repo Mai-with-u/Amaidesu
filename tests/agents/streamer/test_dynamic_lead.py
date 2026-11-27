@@ -67,6 +67,7 @@ from src.modules.storage.repos.viewers import ViewerPresenceStats
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
+from src.modules.tools.tasks import TaskLedger
 from src.modules.types.game_save import GameSave
 from tests.agents.streamer.helpers import ActiveSessionStub, FakeRoundExecutor, make_streamer_agent
 from tests.modules.llm.fakes import FakeLLMManager
@@ -3849,6 +3850,155 @@ async def test_enter_welcome_stays_neutral_for_unknown_and_annotates_verified_vi
         assert "老友甲：来过多次的老观众" in facts_verified
         assert "阿法：游戏里的熟人（账号 PlayerAlpha，常叫：阿法）" in facts_verified
         assert "ForgottenPlayer" not in facts_verified and "小忘：" not in facts_verified
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_enter_welcome_injects_zero_io_activity_fact_and_omits_stale_activity(prompts: Any) -> None:
+    """轻量进房欢迎注入零 I/O 当前活动只读快照（优先在跑步骤，其次近期解说摘要），过期旧活动省略且给出防编造边界。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speech_emitted = asyncio.Event()
+
+    async def _on_speech(_name: str, _payload: StreamerSpeechPayload, _src: str) -> None:
+        speech_emitted.set()
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _on_speech, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    replyer_calls: List[Dict[str, Any]] = []
+
+    class _RecordingReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode
+            return 70 if has_target else 30
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            replyer_calls.append(dict(kwargs))
+            names = "、".join(kwargs.get("keep_names") or ())
+            if names:
+                return {"speech": f"欢迎{names}来直播间呀！", "llm_request_id": f"req_act_{len(replyer_calls)}"}
+            return {"speech": "刚回到地面准备整理仓库啦！", "llm_request_id": f"req_comm_{len(replyer_calls)}"}
+
+    task_ledger = TaskLedger()
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "proactive": {"enabled": True}},
+        prompt=prompts,
+        replyer=_RecordingReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        task_ledger=task_ledger,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        enter_welcome_debounce_ms=0,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=909, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 场景 1：游戏主控在任务账本中有正在运行的步骤（含坐标与内部编号）-> 脱敏后写入当前游戏活动事实
+        task_ledger.register(
+            task_id="step_1",
+            provider=game.name,
+            tool="move",
+            initiator=game.name,
+            executor=game.name,
+            source="provider",
+            status="running",
+            snapshot={"purpose": "前往 (-120, 64, 88) 整理仓库箱子 goal_id=12"},
+        )
+        await bus.emit(
+            CoreEvents.ROOM_MESSAGE_ENTER,
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="enter_act_1",
+                content="",
+                user=RoomMessageUser(id="viewer_a", name="观众甲"),
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        facts_step = replyer_calls[-1]["state_facts"]
+        assert "当前游戏活动：前往那里整理仓库箱子" in facts_step
+        assert "(-120, 64, 88)" not in facts_step and "goal_id" not in facts_step
+        assert "未给出时只做欢迎不补充活动细节" in facts_step
+
+        # 场景 2：在跑步骤结束，但刚收到一条近期实况解说 -> 回退到近期实况解说摘要
+        task_ledger.update("step_1", "succeeded")
+        clock.advance(5_000)
+        ack = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(
+                game=game.name,
+                summary="刚回到地面营地准备扩建温室",
+                urgency="normal",
+                timestamp_ms=clock(),
+            ),
+        )
+        assert ack.accepted is True
+
+        speech_emitted.clear()
+        clock.advance(10_000)
+        await bus.emit(
+            CoreEvents.ROOM_MESSAGE_ENTER,
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="enter_act_2",
+                content="",
+                user=RoomMessageUser(id="viewer_b", name="观众乙"),
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        facts_commentary = replyer_calls[-1]["state_facts"]
+        assert "当前游戏活动：刚回到地面营地准备扩建温室" in facts_commentary
+
+        # 场景 3：13 分钟后没有新的在跑步骤也没有新的近期活动 -> 省略过期旧活动，仅保留防编造边界
+        speech_emitted.clear()
+        clock.advance(13 * 60 * 1000)
+        await bus.emit(
+            CoreEvents.ROOM_MESSAGE_ENTER,
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="enter_act_3",
+                content="",
+                user=RoomMessageUser(id="viewer_c", name="观众丙"),
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        facts_stale = replyer_calls[-1]["state_facts"]
+        assert "当前游戏活动：" not in facts_stale
+        assert "扩建温室" not in facts_stale
+        assert "未给出时只做欢迎不补充活动细节" in facts_stale
     finally:
         await agent.stop()
         await game.stop()

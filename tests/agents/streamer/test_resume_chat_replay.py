@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -189,3 +190,212 @@ async def test_planner_reference_contains_replay_section_only_when_present() -> 
     assert "程序中断期间" not in with_replay, "不再把重启前还活着时的话说成中断期间的话"
     without_replay, _ = await planner._assemble_reference([], None, None, **common)
     assert "【重启前可能还没回的话】" not in without_replay
+
+
+@pytest.mark.parametrize(
+    ("anchor_event", "anchor_data"),
+    [
+        (
+            CoreEvents.STREAMER_SPEECH,
+            {
+                "utterance_id": "utt_comm_1",
+                "round_id": "commentary_1",
+                "text": "刚回到地面整理一下箱子！",
+                "emotion": "happy",
+                "emotion_intensity": 0.5,
+                "source": "game_commentary",
+            },
+        ),
+        (
+            CoreEvents.GAME_SELF_CHATTED,
+            {
+                "game": "minecraft",
+                "message": "收到啦，这就过去看看！",
+            },
+        ),
+    ],
+)
+async def test_replay_anchors_on_game_lead_speech_and_self_chat(
+    resume_bus: EventBus,
+    tmp_path: Path,
+    anchor_event: str,
+    anchor_data: Dict[str, object],
+) -> None:
+    """游戏主控热重启期间无 planner.decision 时，认可 streamer.speech 与 game.self.chatted 作截断锚点，不兜底灌全段。"""
+    events_dir = tmp_path / "events"
+    t_now = now_ms()
+    t_anchor = t_now - 90_000
+    _write_record(events_dir, event_name=CoreEvents.CORE_STARTUP, ts_ms=t_now - 60 * _MINUTE_MS, data={})
+    _chat(events_dir, t_now - 180_000, "锚点前游戏主控已消化的话", sender="玩家甲")
+    _write_record(events_dir, event_name=anchor_event, ts_ms=t_anchor, data=anchor_data)
+    # 轻量进房欢迎只欢迎 B 站观众，不得将玩家在锚点后发的游戏公屏一并截断
+    _chat(events_dir, t_anchor + 10_000, "锚点后刚发的游戏公屏", sender="玩家甲", sender_distance=10.0)
+    _write_record(
+        events_dir,
+        event_name=CoreEvents.STREAMER_SPEECH,
+        ts_ms=t_anchor + 20_000,
+        data={
+            "utterance_id": "utt_enter_1",
+            "round_id": "enter_welcome_1",
+            "text": "欢迎观众甲来直播间！",
+            "emotion": "happy",
+            "emotion_intensity": 0.5,
+            "source": "enter_welcome",
+        },
+    )
+
+    text = await _resume_and_collect_replay(resume_bus, events_dir)
+
+    assert "锚点前游戏主控已消化的话" not in text
+    assert "锚点后刚发的游戏公屏" in text
+
+
+async def test_replay_filters_distant_unmentioned_chatter_while_keeping_nearby_and_mentioned(
+    resume_bus: EventBus,
+    tmp_path: Path,
+) -> None:
+    """续播重放按距离与自提及结构化事实过滤远处未点名的旁人闲聊，保留身边同伴、点名主播及无距离兼容记录。"""
+    events_dir = tmp_path / "events"
+    t_now = now_ms()
+    _write_record(events_dir, event_name=CoreEvents.CORE_STARTUP, ts_ms=t_now - 60 * _MINUTE_MS, data={})
+    # 远处未点名旁人闲聊（>24 格且无 self mention）→ 必须过滤
+    _chat(events_dir, t_now - 120_000, "远处两人闲聊今天去哪", sender="玩家甲", sender_distance=85.0)
+    # 远处但显式点名主播（type="self"）→ 保留
+    _chat(
+        events_dir,
+        t_now - 110_000,
+        "麦麦你能过来帮我看下机器吗",
+        sender="玩家乙",
+        sender_distance=120.0,
+        mentions=[{"name": "麦麦", "type": "self", "id": ""}],
+    )
+    # 身边同伴（<=24 格）→ 保留
+    _chat(events_dir, t_now - 100_000, "我把铁锭放你旁边箱子啦", sender="玩家丙", sender_distance=12.0)
+    # 旧版 Mod 未报距离（sender_distance=None）→ 保守保留
+    _chat(events_dir, t_now - 90_000, "无距离字段的兼容消息", sender="玩家丁")
+
+    text = await _resume_and_collect_replay(resume_bus, events_dir)
+
+    assert "远处两人闲聊今天去哪" not in text
+    assert "麦麦你能过来帮我看下机器吗" in text
+    assert "[提及麦麦]" in text
+    assert "我把铁锭放你旁边箱子啦" in text
+    assert "无距离字段的兼容消息" in text
+
+
+async def test_resume_replay_locks_cutoff_before_await_when_core_startup_advances(
+    resume_bus: EventBus,
+    tmp_path: Path,
+) -> None:
+    """热重启续播在 _on_live_started await 期间遇到 core.startup 推进 _startup_ms 时，重放仍锁定入口截止时刻，不混入本进程新事件。"""
+    events_dir = tmp_path / "events"
+    t_boot = 1_800_000_000_000
+    clock_now = t_boot
+
+    def _clock() -> int:
+        return clock_now
+
+    # 上一进程启动、早期已消化锚点与锚点后的未回复尾巴
+    _write_record(events_dir, event_name=CoreEvents.CORE_STARTUP, ts_ms=t_boot - 30 * _MINUTE_MS, data={})
+    _chat(events_dir, t_boot - 120_000, "上一进程锚点前已消化的话", sender="玩家甲", sender_distance=8.0)
+    _write_record(
+        events_dir,
+        event_name=CoreEvents.STREAMER_SPEECH,
+        ts_ms=t_boot - 60_000,
+        data={
+            "utterance_id": "utt_prev_comm",
+            "round_id": "commentary_prev",
+            "text": "上一进程刚解说完！",
+            "emotion": "happy",
+            "emotion_intensity": 0.5,
+            "source": "game_commentary",
+        },
+    )
+    _chat(events_dir, t_boot - 15_000, "上一进程真正没回的尾巴", sender="玩家甲", sender_distance=8.0)
+    _write_record(
+        events_dir,
+        event_name=CoreEvents.STREAMER_PROMPT_RECEIVED,
+        ts_ms=t_boot - 10_000,
+        data={"content": "上一进程未送达递话", "source": "operator"},
+    )
+
+    startup_seen = asyncio.Event()
+
+    async def _on_startup_seen(_name: str, _payload: CoreStartupPayload, _source: str) -> None:
+        startup_seen.set()
+
+    class _StartupRaceMaigoBridge:
+        """在 _on_live_started 的 await 期间模拟 core.startup 并发到达并写入本进程新事件。"""
+
+        inject_topic_cards = False
+        inject_person_cues = False
+
+        def update_save_id(self, save_id: object) -> None:
+            del save_id
+
+        def render_brief_extension(self) -> str:
+            return ""
+
+        async def ensure_checked_out(self, payload: object, *, save_id: object = None) -> None:
+            nonlocal clock_now
+            del payload, save_id
+            # 模拟热重启中采集器已启动、本进程新事件先落盘，随后 core.startup 把 _startup_ms 推进到 t_boot + 5s
+            _write_record(
+                events_dir,
+                event_name=CoreEvents.STREAMER_SPEECH,
+                ts_ms=t_boot + 2_000,
+                data={
+                    "utterance_id": "utt_new_proc",
+                    "round_id": "commentary_new",
+                    "text": "本进程新发出的解说",
+                    "emotion": "happy",
+                    "emotion_intensity": 0.5,
+                    "source": "game_commentary",
+                },
+            )
+            _chat(events_dir, t_boot + 3_000, "本进程刚收到的新游戏公屏", sender="玩家乙", sender_distance=6.0)
+            _write_record(
+                events_dir,
+                event_name=CoreEvents.STREAMER_PROMPT_RECEIVED,
+                ts_ms=t_boot + 3_500,
+                data={"content": "本进程刚收到的新递话", "source": "operator"},
+            )
+            clock_now = t_boot + 5_000
+            await resume_bus.emit(
+                CoreEvents.CORE_STARTUP,
+                CoreStartupPayload(event=CoreEvents.CORE_STARTUP, message="Amaidesu 并发启动完成"),
+                source="Main",
+            )
+            # 当前正处在 live.started 回调内，不能调用 bus.wait_until_drained() 自等；改等后注册的观测回调落位
+            await asyncio.wait_for(startup_seen.wait(), timeout=2.0)
+
+    executor = FakeRoundExecutor()
+    executor.drain_reminders = True
+    agent = make_streamer_agent(
+        {"background": {"enabled": False}, "mouth": {"enabled": False}, "resume_replay_window_ms": 5 * _MINUTE_MS},
+        event_bus=resume_bus,
+        events_dir=events_dir,
+        round_executor=executor,
+        tool_registry=ToolRegistry(),
+        maigo_bridge=_StartupRaceMaigoBridge(),
+        clock=_clock,
+    )
+    await agent.start()
+    resume_bus.on(CoreEvents.CORE_STARTUP, _on_startup_seen, model_class=CoreStartupPayload)
+    try:
+        # 模拟热重启前置恢复：live.started(resumed=True) 先于 core.startup 触发
+        await resume_bus.emit(
+            CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=80, resumed=True), source="test"
+        )
+        await wait_until(lambda: len(executor.calls) >= 1, what="续播接回那一轮执行")
+        await resume_bus.wait_until_drained()
+    finally:
+        await agent.stop()
+
+    replayed_chat = executor.window_resume_replay[0]
+    replayed_reminders = executor.window_reminders[0]
+    assert "上一进程真正没回的尾巴" in replayed_chat, "本进程新发声不应覆盖上一进程锚点把旧尾巴吃掉"
+    assert "上一进程锚点前已消化的话" not in replayed_chat
+    assert "本进程刚收到的新游戏公屏" not in replayed_chat, "本进程新游戏聊天绝不能混入上一进程重放"
+    assert "上一进程未送达递话" in replayed_reminders
+    assert "本进程刚收到的新递话" not in replayed_reminders, "本进程新递话绝不能误当上一进程递话重放"
