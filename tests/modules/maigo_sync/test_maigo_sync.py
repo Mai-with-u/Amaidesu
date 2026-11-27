@@ -21,6 +21,7 @@ from src.modules.maigo_sync import (
     MaiGORejected,
     MaiGOSyncConfigSchema,
 )
+from src.modules.maigo_sync.backfill import StartupHistoryBackfiller
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL
 
@@ -628,3 +629,56 @@ async def test_startup_backfill_high_signal_idempotent_and_resumable(tmp_path: P
     assert len(fed_hits) == 1
     assert "QQ群" in fed_hits[0]["text"]
     await bridge.stop()
+
+
+async def test_startup_backfill_chunked_archive_binds_external_episode_id(tmp_path: Path) -> None:
+    """单场 L0 原件超过单批上限拆片推送时，第 2 片及之后必须附带 external_episode_id。"""
+    db_file = tmp_path / "amaidesu_chunk.db"
+    state_file = tmp_path / "backfill_chunk_state.json"
+    now_val = 1_800_000_000_000
+    recent_t = now_val - 3_600_000
+
+    db = SQLiteDatabase(db_file)
+    await db.initialize()
+    try:
+        sid = await db.sessions.insert_live_session(
+            stream_id="live-chunk-1",
+            platform="bilibili",
+            kind=SESSION_KIND_LIVE,
+            started_at_ms=recent_t,
+            title="分片绑定测试场",
+        )
+        for idx in range(5):
+            await db.events.insert_game_event(
+                live_session_id=sid,
+                game="minecraft",
+                event_type="milestone",
+                message=f"分片测试事件第 {idx + 1} 条",
+                timestamp_ms=recent_t + idx * 1000,
+                save_id="save-chunk-1",
+                save_name="测试档",
+            )
+    finally:
+        await db.close()
+
+    client = _StubMaiGOClient()
+    backfiller = StartupHistoryBackfiller(
+        db_path=db_file,
+        state_path=state_file,
+        client=client,
+        branch_id="amaidesu",
+        since_days=30,
+        batch_size=2,
+        batch_interval_ms=0,
+        clock_ms=lambda: now_val,
+    )
+    sent = await backfiller.run()
+    assert sent >= 5
+    # 5 条游戏事件按 batch_size=2 拆成 3 片：第 1 片传完整 episode，第 2/3 片携带 external_episode_id
+    assert len(client.archive_batches) == 3
+    assert client.archive_batches[0].get("episode") is not None
+    assert client.archive_batches[0]["episode"]["external_episode_id"] == str(sid)
+    assert "external_episode_id" not in client.archive_batches[0]
+    for follow_batch in client.archive_batches[1:]:
+        assert follow_batch.get("episode") is None
+        assert follow_batch.get("external_episode_id") == str(sid)

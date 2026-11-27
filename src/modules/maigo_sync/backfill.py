@@ -701,6 +701,16 @@ class StartupHistoryBackfiller:
             if not (l1_sids or l1_cids or archive_batches or world_records or knowledge_relations or kg_sids or sf_ids):
                 return 0
 
+            # 启动前输出总量概览，便于直播机控制台观察本次历史回填规模
+            total_arc_records = sum(len(batch.get("records") or ()) for _, batch in archive_batches)
+            logger.info(
+                "MaiGO 启动历史回填开始: "
+                f"L1 事件 {len(l1_events)} 条（{len(l1_sids)} 场） / "
+                f"L0 原件 {len(archive_batches)} 场（{total_arc_records} 条） / "
+                f"世界笔记与同伴 {len(world_records)} 条 / "
+                f"L2 关系 {len(knowledge_relations)} 条"
+            )
+
             sent_total = 0
 
             # 1. 回填 L1 主线事件
@@ -718,13 +728,18 @@ class StartupHistoryBackfiller:
                     if idx + self._batch_size < len(l1_events) and self._batch_interval_s > 0:
                         await asyncio.sleep(self._batch_interval_s)
                 await asyncio.to_thread(self._write_state_sync, new_l1_sids=l1_sids, new_cids=l1_cids)
+                if l1_events:
+                    logger.info(f"MaiGO L1 主线回填完成: 送达 {len(l1_events)} 条（{len(l1_sids)} 场）")
 
             # 2. 回填 L0 原件书库（按场次分批写入，每场成功后即时推进状态，支持断点续传）
             ingest_archive_fn = getattr(self._client, "ingest_archive", None)
             if callable(ingest_archive_fn):
-                for sid, batch_payload in archive_batches:
+                total_sessions = len(archive_batches)
+                for ep_idx, (sid, batch_payload) in enumerate(archive_batches, start=1):
                     records = list(batch_payload.get("records") or ())
                     episode = batch_payload.get("episode")
+                    ext_ep_id = str((episode or {}).get("external_episode_id") or sid)
+                    ep_title = str((episode or {}).get("title") or f"场次 {sid}")
                     try:
                         if not records:
                             await ingest_archive_fn(
@@ -734,16 +749,23 @@ class StartupHistoryBackfiller:
                         else:
                             for idx in range(0, len(records), self._batch_size):
                                 sub = records[idx : idx + self._batch_size]
-                                body = {
+                                # 首片携带完整 episode 建档；后续分片携带 external_episode_id 保持归属场次绑定
+                                body: Dict[str, Any] = {
                                     "branch_id": self._branch_id,
                                     "episode": episode if idx == 0 else None,
                                     "records": sub,
                                 }
+                                if idx > 0:
+                                    body["external_episode_id"] = ext_ep_id
                                 await ingest_archive_fn(body)
                                 sent_total += len(sub)
                                 if idx + self._batch_size < len(records) and self._batch_interval_s > 0:
                                     await asyncio.sleep(self._batch_interval_s)
                         await asyncio.to_thread(self._write_state_sync, new_arc_sids=[sid])
+                        logger.info(
+                            f"MaiGO L0 原件回填进度 [{ep_idx}/{total_sessions}]: "
+                            f"场次 {sid}（{ep_title}，本场 {len(records)} 条，累计 {sent_total} 条）"
+                        )
                     except MaiGORejected as exc:
                         logger.warning(f"MaiGO L0 原件书库场次 {sid} 被拒收（跳过）: {exc}")
                     except Exception as exc:  # noqa: BLE001
@@ -764,6 +786,7 @@ class StartupHistoryBackfiller:
                         if idx + self._batch_size < len(world_records) and self._batch_interval_s > 0:
                             await asyncio.sleep(self._batch_interval_s)
                     await asyncio.to_thread(self._write_state_sync, new_world_keys=world_keys)
+                    logger.info(f"MaiGO 世界笔记与同伴名册回填完成: 送达 {len(world_records)} 条")
 
             # 3. 回填 L2 实体关系图谱（社交事实与玩家互动）
             ingest_kg_fn = getattr(self._client, "ingest_knowledge", None)
@@ -781,6 +804,8 @@ class StartupHistoryBackfiller:
                     if idx + self._batch_size < len(knowledge_relations) and self._batch_interval_s > 0:
                         await asyncio.sleep(self._batch_interval_s)
                 await asyncio.to_thread(self._write_state_sync, new_kg_sids=kg_sids, new_sf_ids=sf_ids)
+                if knowledge_relations:
+                    logger.info(f"MaiGO L2 实体关系图谱回填完成: 送达 {len(knowledge_relations)} 条")
 
             if sent_total > 0:
                 logger.info(
