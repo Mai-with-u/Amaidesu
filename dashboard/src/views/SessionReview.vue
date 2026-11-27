@@ -109,6 +109,18 @@
       <!-- 场次信息 chips（互动类零值降饱和） -->
       <ReviewChipsBar :review="review" />
 
+      <!-- 场次时间条（单场视图：环节段铺底 + 事件锚点，点击时刻锚定回看） -->
+      <SessionTimeStrip
+        v-if="timeStrip"
+        :session-id="timeStrip.sessionId"
+        :start-ms="timeStrip.startMs"
+        :end-ms="timeStrip.endMs"
+        :segments="rundown?.segments ?? []"
+        :game-items="review.game.items"
+        :silence-at-ms="review.speech.longest_silence_start_ms"
+        :latency-max-at-ms="review.decisions.latency.max_at_ms"
+      />
+
       <!-- 核心指标卡 -->
       <ReviewMetricCards
         :review="review"
@@ -116,6 +128,12 @@
         :latency-max-link="latencyMaxLink"
         :llm-failed-link="llmFailedLink"
         :llm-slow-link="llmSlowLink"
+      />
+
+      <!-- 决策触发原因全量分布（决策卡副行只展示前 3 项） -->
+      <ReviewDecisionBars
+        :distribution="review.decisions.distribution"
+        :total="review.decisions.total"
       />
 
       <!-- 流程单执行（单场视图；rundown_transitions 事实行重放） -->
@@ -180,6 +198,8 @@ import { useReviewSpeech } from '@/composables/session-review/useReviewSpeech';
 import { consoleReplayLink, minSlowThresholdMs } from '@/utils/sessionReview';
 import ReviewArchiveCard from '@/components/session-review/ReviewArchiveCard.vue';
 import ReviewChipsBar from '@/components/session-review/ReviewChipsBar.vue';
+import ReviewDecisionBars from '@/components/session-review/ReviewDecisionBars.vue';
+import SessionTimeStrip from '@/components/session-review/SessionTimeStrip.vue';
 import ReviewCuesCard from '@/components/session-review/ReviewCuesCard.vue';
 import ReviewMetricCards from '@/components/session-review/ReviewMetricCards.vue';
 import ReviewReportFrame from '@/components/session-review/ReviewReportFrame.vue';
@@ -360,6 +380,19 @@ async function removeSpeechLine(line: ReviewSpeechLine): Promise<void> {
 const singleBrief = computed<ReviewSessionBrief | null>(() =>
   review.value && review.value.sessions.length === 1 ? review.value.sessions[0] : null,
 );
+
+/**
+ * 场次时间条窗口（单场语义）：左端=开播、右端=收播；进行中场次右端取聚合窗
+ * 右端（后端以当前时刻为窗口右缘）。零宽窗口为 null（组件不渲染）。
+ */
+const timeStrip = computed<{ sessionId: number; startMs: number; endMs: number } | null>(() => {
+  const brief = singleBrief.value;
+  const r = review.value;
+  if (!brief || !r) return null;
+  const endMs = brief.ended_at_ms ?? r.window_end_ms;
+  if (endMs <= brief.started_at_ms) return null;
+  return { sessionId: brief.live_session_id, startMs: brief.started_at_ms, endMs };
+});
 
 /** 场次档案挂在单场语义上：合并视图不拉档案（没有对应的单场） */
 const archiveSessionId = computed<number | null>(() => singleBrief.value?.live_session_id ?? null);
