@@ -638,3 +638,55 @@ async def test_set_session_kind_requeues_migrated_rehearsal(store: SQLiteDatabas
     assert row is not None and row.kind == "live" and row.settled_at_ms is None
     pending = await store.sessions.list_sessions_pending_settle(limit=10)
     assert [item.id for item in pending] == [pk]
+
+
+async def test_attribution_does_not_fall_back_to_previous_ended_session_while_residual_pending(
+    store: SQLiteDatabase, bus: EventBus
+) -> None:
+    """存在待决残留场次（如重启恢复前场次 80 未结账）时，归属解析不得回退错贴前一场已结束场次 79。"""
+    old_manager = _make_manager(store, bus)
+    await old_manager.start()
+    prev_ended = await _open_with_chat(store, old_manager)
+    await old_manager.close_session()
+    dangling = await _open_with_chat(store, old_manager)
+    # 模拟进程未结账场次 80 即重启：新实例启动后 80 位于 pending_residual_pks
+    restarted = _make_manager(store, bus)
+    await restarted.start()
+
+    assert restarted.pending_residual_pks == [dangling]
+    assert await restarted.resolve_pk() is None
+    assert await restarted.resolve_attribution_pk() is None, "待决残留期间不得回退贴成前一场已结场次"
+
+    # 若用户选择收尾残留场次，收尾后最近一场已结束场次应更新为刚收尾的场次而非过期缓存
+    assert await restarted.discard_residual(dangling) is True
+    assert await restarted.resolve_attribution_pk() == dangling
+    assert prev_ended != dangling
+
+
+async def test_preattach_resume_sets_active_pk_before_deferred_live_started_emit(
+    store: SQLiteDatabase, bus: EventBus
+) -> None:
+    """热重启前置挂接（emit_event=False）立即接管归属，待订阅方就位后由 emit_deferred_resume 补发事件。"""
+    prev_ended = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
+    await store.sessions.close_live_session(live_session_id=prev_ended, ended_at_ms=2_000)
+    dangling = await store.sessions.insert_live_session(started_at_ms=3_000, source="manual")
+
+    manager = _make_manager(store, bus)
+    collector = _Collector(bus)
+    await manager.start()
+
+    assert await manager.resume_session(dangling, emit_event=False) is True
+    await bus.wait_until_drained()
+    assert manager.active_pk == dangling
+    assert await manager.resolve_pk() == dangling
+    assert await manager.resolve_attribution_pk() == dangling
+    assert manager.pending_residual_pks == []
+    assert collector.started == [], "前置挂接阶段尚不广播 live.started"
+
+    assert await manager.emit_deferred_resume() is True
+    await bus.wait_until_drained()
+    assert len(collector.started) == 1
+    assert collector.started[0].live_session_id == dangling
+    assert collector.started[0].resumed is True
+    # 幂等：二次补发不再重复广播
+    assert await manager.emit_deferred_resume() is False
