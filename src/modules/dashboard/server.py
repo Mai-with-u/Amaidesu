@@ -66,6 +66,16 @@ from src.modules.dashboard.websocket.handler import WebSocketHandler
 #: 这一点只是让"新进程已创建"与旧进程开始清理之间有个交接间隔
 RESTART_SPAWN_DELAY_S = 0.5
 
+#: 热重启交接时向新进程透传当前进行中场次主键的环境变量名，
+#: 让新进程在流程单加载与采集器启动之前完成场次续播挂接
+RESTART_RESUME_SESSION_ENV = "AMAIDESU_RESTART_RESUME_SESSION_ID"
+
+#: uvicorn 优雅停机等待活跃连接关闭的上限（秒）：避免残留 keep-alive/WS 连接把停机拖满 5s 强取消
+_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_S = 2
+
+#: 停机时主动关闭单个 WebSocket 连接的宽限（秒）
+_WS_CLOSE_TIMEOUT_S = 1.0
+
 #: Windows 端口已被占用错误码（WSAEADDRINUSE）
 _WINERROR_ADDRINUSE = 10048
 
@@ -150,6 +160,7 @@ class DashboardServer:
         exit_func: Optional[Callable[[int], None]] = None,
         shutdown_journal: Optional[ShutdownJournal] = None,
         instance_lock: Optional[Any] = None,
+        shutdown_callback: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -295,6 +306,14 @@ class DashboardServer:
         self._shutdown_journal = shutdown_journal
         # 单实例进程锁：热重启清理完毕后显式释放，便于交接中的新进程无缝接管
         self._instance_lock = instance_lock
+        # 完整热重启停机回调（由组合根注入：按依赖反向停采集器/Agent/Dashboard/EventBus/LLM 落库收敛/SQLite/锁）
+        self._shutdown_callback: Optional[Callable[[], Awaitable[None]]] = shutdown_callback
+        # 当前存活的 /ws 连接句柄集合：停机时主动发送关闭帧唤醒 receive_text，避免阻断 uvicorn 优雅退出
+        self._active_ws_sockets: set[WebSocket] = set()
+
+    def set_shutdown_callback(self, callback: Optional[Callable[[], Awaitable[None]]]) -> None:
+        """注入热重启完整停机回调（供组合根在全量组件就绪后回填）。"""
+        self._shutdown_callback = callback
 
     async def start(self) -> None:
         """启动 Dashboard 服务器"""
@@ -368,6 +387,7 @@ class DashboardServer:
                 port=self.port,
                 log_level="warning",
                 ws=WebSocketsSansIOProtocol,
+                timeout_graceful_shutdown=_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_S,
             )
             server = uvicorn.Server(config)
             self._server = server
@@ -410,7 +430,11 @@ class DashboardServer:
                     if self.event_broadcaster:
                         await self.event_broadcaster.push_history_to_client(client_id)
 
-                await ws_handler.run_client_handler(websocket, on_connected=push_history)
+                self._active_ws_sockets.add(websocket)
+                try:
+                    await ws_handler.run_client_handler(websocket, on_connected=push_history)
+                finally:
+                    self._active_ws_sockets.discard(websocket)
 
             self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
 
@@ -509,10 +533,12 @@ class DashboardServer:
                 pass
             self._heartbeat_task = None
 
-        # 先排干全部 WS 客户端 writer task，再让 uvicorn 优雅关闭：
-        # 否则连接被 uvicorn 关闭后残留 writer 仍可能 send，报"connection is closing"
+        # 先排干全部 WS 客户端 writer task，再主动关闭活跃 /ws 连接唤醒 receive_text，
+        # 最后触发 uvicorn 优雅退出：避免浏览器长连把 shutdown 拖满 5s 强取消
         if self.ws_handler is not None:
             await self.ws_handler.shutdown()
+
+        await self._close_active_ws_sockets()
 
         if self._server:
             # 优雅关闭：should_exit 让 main_loop 正常退出并触发 uvicorn shutdown，
@@ -523,7 +549,8 @@ class DashboardServer:
                 try:
                     await asyncio.wait_for(server_task, timeout=5.0)
                 except asyncio.TimeoutError:
-                    self.logger.warning("Dashboard 服务器未在 5s 内优雅退出，强制取消")
+                    self.logger.warning("Dashboard 服务器未在 5s 内优雅退出，强制退出并取消任务")
+                    self._server.force_exit = True
                     server_task.cancel()
                     try:
                         await server_task
@@ -534,6 +561,24 @@ class DashboardServer:
 
         if self._vite_dev:
             await self._vite_dev.stop()
+
+    async def _close_active_ws_sockets(self) -> None:
+        """停机前主动关闭所有存活的 /ws 连接，避免 uvicorn 等待长连断开而超时。"""
+        sockets = list(self._active_ws_sockets)
+        self._active_ws_sockets.clear()
+        if not sockets:
+            return
+
+        async def _close_one(ws: WebSocket) -> None:
+            close_fn = getattr(ws, "close", None)
+            if not callable(close_fn):
+                return
+            try:
+                await asyncio.wait_for(close_fn(code=1001), timeout=_WS_CLOSE_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - 已断开或半开连接忽略
+                self.logger.debug(f"关闭 /ws 客户端连接失败（已忽略）: {exc}")
+
+        await asyncio.gather(*(_close_one(ws) for ws in sockets), return_exceptions=True)
 
     async def cleanup(self) -> None:
         """清理资源"""
@@ -571,8 +616,16 @@ class DashboardServer:
         self.logger.info("准备重启服务进程...")
         await asyncio.sleep(RESTART_SPAWN_DELAY_S)
         try:
-            # 透传热重启交接信号，让新进程等待旧进程完成停机清理并释放单实例锁后再接管
+            # 透传热重启交接信号，让新进程等待旧进程完成停机清理并释放单实例锁后再接管；
+            # 若旧进程正处于直播场次中，同步透传场次主键以便新进程在流程单加载与采集器启动前前置挂接续播
             child_env = {**os.environ, RESTART_HANDOFF_ENV: "1"}
+            active_session_pk = (
+                getattr(self.session_manager, "active_pk", None) if self.session_manager is not None else None
+            )
+            if isinstance(active_session_pk, int) and active_session_pk > 0:
+                child_env[RESTART_RESUME_SESSION_ENV] = str(active_session_pk)
+            else:
+                child_env.pop(RESTART_RESUME_SESSION_ENV, None)
             subprocess.Popen(
                 [sys.executable] + sys.argv,
                 cwd=os.getcwd(),
@@ -583,26 +636,96 @@ class DashboardServer:
             self.logger.exception("拉起新进程失败，放弃重启（当前进程保持运行）")
             return
 
+        def _release_lock_safely() -> None:
+            if self._instance_lock is None:
+                return
+            try:
+                self._instance_lock.release()
+            except Exception as exc:  # noqa: BLE001 - 退出前释锁失败不得阻断进程退出
+                self.logger.warning(f"兜底释放单实例锁失败（继续退出）: {exc}", exc=True)
+
+        def _exit_after_lock_release(code: int) -> None:
+            # 无论正常收口、超时强退还是异常兜底，退出动作前都确保单实例锁已释放
+            _release_lock_safely()
+            self._exit_func(code)
+
+        journal = self._shutdown_journal if self._shutdown_journal is not None else ShutdownJournal()
         guard = ShutdownGuard(
             timeout_s=self.shutdown_timeout_s,
-            journal=self._shutdown_journal,
-            exit_func=self._exit_func,
+            journal=journal,
+            exit_func=_exit_after_lock_release,
         )
-        cleaned = await guard.run(self._shutdown_sequence)
+        try:
+            cleaned = await guard.run(self._shutdown_sequence)
+        except BaseException as exc:
+            # 新进程已经成功拉起：即便清理链路抛出 CancelledError 或异常，也必须留证、
+            # 释放单实例锁并退出旧进程，严禁旧进程滞留成僵尸或后续误把续播场次结账
+            reason = f"热重启清理中断（{type(exc).__name__}: {exc}）"
+            self.logger.warning(f"{reason}，兜底释放锁并强制退出旧进程", exc=True)
+            journal.record(reason)
+            journal.dump_stacks(reason)
+            _exit_after_lock_release(0)
+            return
         if not cleaned:
             # 真实运行时进程已被守卫强制退出，走到这里只可能是退出动作被替换
             self.logger.warning("停机清理未在时限内完成，已留证并请求强制退出")
             return
         self.logger.info("重启清理完成，进程即将退出")
-        self._exit_func(0)
+        _exit_after_lock_release(0)
 
     async def _shutdown_sequence(self) -> None:
-        """停机清理序列：Dashboard 停止 → 资源引用清理 → SQLite 连接落盘 → 释放单实例锁。"""
-        await self.stop()
-        await self.cleanup()
+        """停机清理序列：优先走组合根完整停机链，缺席时按“停运行组件 → 停控制台 → 等 LLM 落库 → 关 SQLite → 释锁”兜底。"""
+        if self._shutdown_callback is not None:
+            await self._shutdown_callback()
+            return
+        await self._stop_runtime_components_before_storage()
+        try:
+            await self.stop()
+            await self.cleanup()
+        except Exception as exc:  # noqa: BLE001 - 控制台停止失败不得阻断后续 LLM 收敛与落盘关库
+            self.logger.warning(f"Dashboard 停机异常（继续完成 LLM 收敛与数据库关闭）: {exc}", exc=True)
+        await self._settle_llm_before_storage_close()
         await self._close_shared_storage()
         if self._instance_lock is not None:
             self._instance_lock.release()
+
+    async def _stop_runtime_components_before_storage(self) -> None:
+        """无完整停机回调时的兜底清理：先停采集器、模拟器与 Agent，避免停库后仍有在途任务写库。"""
+        steps: list[tuple[str, Any, tuple[str, ...]]] = [
+            ("CollectorManager", self.collector_manager, ("stop_all", "cleanup_all")),
+            ("SimulatorService", self.simulator_service, ("stop", "cleanup")),
+            ("AgentManager", self.agent_manager, ("stop_supervisor", "stop_all", "cleanup_all")),
+        ]
+        for label, component, method_names in steps:
+            if component is None:
+                continue
+            for method_name in method_names:
+                fn = getattr(component, method_name, None)
+                if not callable(fn):
+                    continue
+                try:
+                    result = fn()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as exc:  # noqa: BLE001 - 单组件清理失败不阻断其余收尾
+                    self.logger.warning(f"{label}.{method_name} 失败（继续其余收尾）: {exc}", exc=True)
+
+    async def _settle_llm_before_storage_close(self) -> None:
+        """关闭共享 SQLite 前等待在途 LLM 调用与出账落库收敛，并清理 LLM 客户端。"""
+        if self.llm_manager is None:
+            return
+        wait_fn = getattr(self.llm_manager, "wait_in_flight_settled", None)
+        if callable(wait_fn):
+            try:
+                await wait_fn(timeout_s=5.0)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(f"等待在途 LLM 出账落库收敛失败（继续关闭存储）: {exc}", exc=True)
+        cleanup_fn = getattr(self.llm_manager, "cleanup", None)
+        if callable(cleanup_fn):
+            try:
+                await cleanup_fn()
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(f"LLMManager.cleanup 失败（继续关闭存储）: {exc}", exc=True)
 
     async def _close_shared_storage(self) -> None:
         """关闭注入仓储的 SQLite 连接，确保 WAL/事务落盘。

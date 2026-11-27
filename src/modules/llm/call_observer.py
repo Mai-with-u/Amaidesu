@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -77,6 +78,28 @@ class CallObserver:
         self._model_index = model_index
         # 价格表（{model_identifier: {price_in, price_out, ...}}），费用计算唯一口径（按引用共享）
         self._model_prices = model_prices
+        # 在途出账落库计数与收敛事件：停机关闭 SQLite 前经此等待所有写库收口，避免提前关库丢账
+        self._writes_in_flight: int = 0
+        self._writes_idle = asyncio.Event()
+        self._writes_idle.set()
+
+    @property
+    def writes_in_flight(self) -> int:
+        """当前正在执行的出账落库操作数（只读观测）。"""
+        return self._writes_in_flight
+
+    async def wait_writes_idle(self, *, timeout_s: float = 5.0) -> bool:
+        """等待当前所有在途的 LLM 出账落库完成；全部落完返回 True，超时返回 False。"""
+        if self._writes_in_flight == 0:
+            return True
+        try:
+            await asyncio.wait_for(self._writes_idle.wait(), timeout=max(0.01, float(timeout_s)))
+        except asyncio.TimeoutError:
+            self.logger.warning(
+                f"等待 LLM 出账落库收敛超时（{timeout_s:.1f}s，仍有 {self._writes_in_flight} 笔在写），继续停机"
+            )
+            return False
+        return True
 
     async def record_call(
         self,
@@ -106,25 +129,32 @@ class CallObserver:
             kwargs: 实际发起调用的参数（请求参数快照的唯一输入）
             start_time: 调用起点（``time.time()`` 秒，耗时按差值换算毫秒）
         """
-        breakdown: Optional[ContextBreakdown] = None
-        if result.success:
-            breakdown = self._build_context_breakdown(
+        self._writes_in_flight += 1
+        self._writes_idle.clear()
+        try:
+            breakdown: Optional[ContextBreakdown] = None
+            if result.success:
+                breakdown = self._build_context_breakdown(
+                    request_id=request_id,
+                    profile_name=profile_name,
+                    model_name=model_name,
+                    result=result,
+                    kwargs=kwargs,
+                )
+            await self._record_call_outcome(
                 request_id=request_id,
                 profile_name=profile_name,
                 model_name=model_name,
+                request_type=request_type,
                 result=result,
                 kwargs=kwargs,
+                start_time=start_time,
+                breakdown=breakdown,
             )
-        await self._record_call_outcome(
-            request_id=request_id,
-            profile_name=profile_name,
-            model_name=model_name,
-            request_type=request_type,
-            result=result,
-            kwargs=kwargs,
-            start_time=start_time,
-            breakdown=breakdown,
-        )
+        finally:
+            self._writes_in_flight = max(0, self._writes_in_flight - 1)
+            if self._writes_in_flight == 0:
+                self._writes_idle.set()
 
     async def _record_call_outcome(
         self,

@@ -54,7 +54,12 @@ from src.modules.dashboard.instance_lock import (
     SingleInstanceLock,
     resolve_instance_lock_path,
 )
-from src.modules.dashboard.server import DashboardPortInUseError, DashboardServer, is_port_in_use_error
+from src.modules.dashboard.server import (
+    RESTART_RESUME_SESSION_ENV,
+    DashboardPortInUseError,
+    DashboardServer,
+    is_port_in_use_error,
+)
 from src.modules.dashboard.stream_preview import StreamPreviewHub
 from src.modules.diagnostics import DiagnosticsWriter, TtsDiagnosticsRecorder
 from src.modules.events import (
@@ -362,6 +367,17 @@ class AppComponents:
     instance_lock: Optional[SingleInstanceLock] = None
 
 
+def _parse_positive_session_id(raw: Optional[str]) -> Optional[int]:
+    """解析热重启交接透传的正整数场次主键；缺失或非法格式返回 None。"""
+    if not raw:
+        return None
+    text = raw.strip()
+    if not text.isdigit():
+        return None
+    value = int(text)
+    return value if value > 0 else None
+
+
 async def create_app_components(
     config: Dict[str, Any],
     config_service: ConfigService,
@@ -374,6 +390,7 @@ async def create_app_components(
     log_streamer_persist_dir: Optional[str] = None,
     startup_effects: bool = True,
     acquire_instance_lock: bool = True,
+    resume_session_id: Optional[int] = None,
 ) -> AppComponents:
     """组合根：构造并连接所有核心组件。
 
@@ -410,8 +427,10 @@ async def create_app_components(
         maibot_sync_reporter
     """
     # --- 单实例进程锁（先于数据库初始化与采集器建连，任何模式下双开立即拦截，零外部副作用）---
-    # 立即消费热重启交接信号避免泄漏给子进程：仅 WebUI 热重启拉起的新进程等待旧进程释锁，普通双开 0ms 立即拒绝
+    # 立即消费热重启交接信号与待续播场次号避免泄漏给子进程：仅 WebUI 热重启拉起的新进程等待旧进程释锁，普通双开 0ms 立即拒绝
     restart_handoff = bool(os.environ.pop(RESTART_HANDOFF_ENV, ""))
+    env_resume_session_id = _parse_positive_session_id(os.environ.pop(RESTART_RESUME_SESSION_ENV, ""))
+    effective_resume_session_id = resume_session_id if resume_session_id is not None else env_resume_session_id
     instance_lock: Optional[SingleInstanceLock] = None
     if acquire_instance_lock:
         lock_path = resolve_instance_lock_path(config, base_dir=Path(_BASE_DIR))
@@ -464,6 +483,7 @@ async def create_app_components(
             log_streamer_persist_dir=log_streamer_persist_dir,
             startup_effects=startup_effects,
             instance_lock=instance_lock,
+            resume_session_id=effective_resume_session_id,
             state=(
                 state := {
                     "database": database,
@@ -538,6 +558,7 @@ async def _assemble_app_components(
     log_streamer_persist_dir: Optional[str],
     startup_effects: bool,
     instance_lock: Optional[SingleInstanceLock],
+    resume_session_id: Optional[int],
     state: Dict[str, Any],
 ) -> AppComponents:
     """组合根实际装配体；每步就绪后同步登记到 ``state`` 供异常路径统一清理。"""
@@ -568,6 +589,13 @@ async def _assemble_app_components(
     state["session_manager"] = session_manager
     if session_manager_auto_start:
         await session_manager.start()
+        # 热重启续播前置挂接：在拦截器注册、流程单加载与采集器/Agent 启动之前先行认领活跃场次，
+        # 确保启动期产生的首个事件（rundown.changed、早到游戏事件、首批 LLM 用量）即归属恢复场次，
+        # 边界事件 live.started(resumed=True) 留待下方全部订阅方就位后统一广播
+        if resume_session_id is not None:
+            attached = await session_manager.resume_session(resume_session_id, emit_event=False)
+            if not attached:
+                logger.warning(f"热重启透传的待续播场次 #{resume_session_id} 不在待决残留列表中，跳过自动挂接")
 
     # --- 本地诊断记录落盘（LLM 正文/事件流/TTS 记录 → logs/ 平铺子目录）---
     diagnostics_cfg_raw = config.get("diagnostics", {}) if isinstance(config, dict) else {}
@@ -675,10 +703,8 @@ async def _assemble_app_components(
             llm_service=llm_service,
         )
         # 启用的 Agent 带的附属采集器（例如 Minecraft 的身体事件流、聊天流）随 Agent 一同装上，
-        # 和通用采集器一起由 start_all 启动；它们不在 collectors.toml 的名单里
+        # 具体启动放在第 ② 段（Agent 订阅与前置续播挂接就位后）统一执行，避免早到事件无订阅方接住
         _register_companion_collectors(collector_manager, agents_for_companions, event_bus)
-        await collector_manager.start_all()
-        logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
 
     # --- SimulatorService（开发基础设施；第 ① 段只构造，setup 在第 ② 段）---
     # 默认 enabled=false 生产零装配；构造需存储仓储（人设/礼物/世界窗口）
@@ -1122,9 +1148,16 @@ async def _assemble_app_components(
         agent_manager.start_supervisor()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
-    # --- 装配第 ② 段：启动/触发（进入本段前所有 event_bus.on 已就位）---
+    # --- 装配第 ② 段：启动/触发（进入本段前所有 event_bus.on 与热重启续播场次挂接已就位）---
     # 契约：第 ① 段只构造与接线，不改变业务运行态；触发类组件在此段启动，
-    # 保证边界事件（live.started 等）发出时订阅方已就位。
+    # 保证边界事件（live.started 等）与采集器早到事件发出时订阅方和场次归属均已就位。
+    if session_manager_auto_start:
+        await session_manager.emit_deferred_resume()
+
+    if collector_manager is not None:
+        await collector_manager.start_all()
+        logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
+
     # SimulatorService 只装配不启动（启用与生成分离，生成循环由
     # 用户在 WebUI 显式发起，重启后不自动恢复）。
     if simulator_service is not None:
@@ -1247,7 +1280,7 @@ async def _assemble_app_components(
         logger.info("StreamPreviewHub 已绑定 dashboard WS 通道")
 
     # --- 组件装配完成 ---
-    return AppComponents(
+    components = AppComponents(
         event_bus=event_bus,
         llm_service=llm_service,
         dashboard_server=dashboard_server,
@@ -1271,6 +1304,21 @@ async def _assemble_app_components(
         lead_coordinator=lead_coordinator,
         instance_lock=instance_lock,
     )
+    # 绑定热重启完整停机回调：走与正常退出相同的反向清理链（停采集器/Agent → 停控制台 →
+    # 等 StorageLedger/EventBus/在途 LLM 出账收敛 → 关 SQLite → 释放单实例锁），
+    # 仅跳过 close_session 以保留进行中场次供新进程前置续播
+    if dashboard_server is not None:
+        set_shutdown_cb = getattr(dashboard_server, "set_shutdown_callback", None)
+        if callable(set_shutdown_cb):
+            set_shutdown_cb(
+                lambda: run_shutdown(
+                    components,
+                    diagnostics_writer=state.get("diagnostics_writer"),
+                    settle_active_session=False,
+                    reraise_cancelled=False,
+                )
+            )
+    return components
 
 
 # ---------------------------------------------------------------------------
@@ -1842,8 +1890,10 @@ async def run_shutdown(
     components: AppComponents,
     *,
     diagnostics_writer: Optional[DiagnosticsWriter] = None,
+    settle_active_session: bool = True,
+    reraise_cancelled: bool = True,
 ) -> None:
-    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard；场次结账在事件历史/总线拆除之前（live.ended 要被记录）；随后事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），诊断落盘线程冲刷收尾，最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
+    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard；场次结账（热重启时跳过以保留续播场次）在事件历史/总线拆除之前（live.ended 要被记录）；随后事件历史/StorageLedger（先等在途写入落库再解绑），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程、清理 EventBus，等待在途 LLM 调用与出账落库收敛后清理 LLMManager、冲刷诊断落盘线程，最后关闭 SQLiteDatabase 并释放单实例锁。"""
     event_bus = components.event_bus
     llm_service = components.llm_service
     dashboard_server = components.dashboard_server
@@ -1864,13 +1914,24 @@ async def run_shutdown(
 
     _saw_cancelled = False
 
+    def _is_external_cancel() -> bool:
+        """判断当前停机任务是否正被外部取消（如 ShutdownGuard 超时强退），外部取消不得被内部吞掉拖延收敛。"""
+        task = asyncio.current_task()
+        return task is not None and task.cancelling() > 0
+
     async def safe_log(coro, name: str):
         nonlocal _saw_cancelled
         try:
             return await coro
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            # 异常消息可能为空（如 CancelledError），带上类型名与堆栈才有排查上下文
+        except asyncio.CancelledError as e:
+            if _is_external_cancel():
+                # 外部超时或强制取消：立刻向外传播，不继续跑后续带超时的清理步骤
+                logger.warning(f"{name} 收到外部取消信号，中止剩余停机步骤")
+                raise
+            _saw_cancelled = True
+            logger.error(f"{name} 失败: {type(e).__name__}: {e}", exc=True)
+        except Exception as e:
+            # 异常消息可能为空，带上类型名与堆栈才有排查上下文
             logger.error(f"{name} 失败: {type(e).__name__}: {e}", exc=True)
 
     # 关闭起点广播：趁 EventHistoryRecorder 还在订阅，先落 core.shutdown；
@@ -1909,21 +1970,26 @@ async def run_shutdown(
         try:
             await dashboard_server.stop()
             await dashboard_server.cleanup()
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            # 异常消息可能为空（如 CancelledError），带上类型名与堆栈才有排查上下文
+        except asyncio.CancelledError as e:
+            if _is_external_cancel():
+                logger.warning("Dashboard 停机收到外部取消信号，中止剩余停机步骤")
+                raise
+            _saw_cancelled = True
+            logger.error(f"Dashboard 停止失败: {type(e).__name__}: {e}", exc=True)
+        except Exception as e:
+            # 异常消息可能为空，带上类型名与堆栈才有排查上下文
             logger.error(f"Dashboard 停止失败: {type(e).__name__}: {e}", exc=True)
         logger.info("Dashboard 已停止")
 
     # 场次结账先于事件历史/总线拆除：close_session 发出的 live.ended 必须
-    # 在事件历史记录器与 EventBus 还活着时广播，否则回看时间线缺下播标记
-    # （进行中场次在进程退出时收口：live.ended 事件 + 结束时间；空场次整行
-    # 丢弃；无显式场次时 close_session 返回 False 静默跳过）。
+    # 在事件历史记录器与 EventBus 还活着时广播，否则回看时间线缺下播标记；
+    # 热重启路径传 settle_active_session=False，保留进行中场次行供新进程无缝续播。
     if session_manager is not None:
-        await safe_log(
-            session_manager.close_session(reason="进程退出"),
-            "live_sessions 场次结账",
-        )
+        if settle_active_session:
+            await safe_log(
+                session_manager.close_session(reason="进程退出"),
+                "live_sessions 场次结账",
+            )
         await safe_log(session_manager.stop(), "LiveSessionManager.stop")
 
     if event_recorder is not None:
@@ -1936,18 +2002,17 @@ async def run_shutdown(
                 logger.debug(f"event_history cleanup: {e}")
         logger.info("事件历史记录器已停止")
 
-    # TTS 合成诊断记录摘除订阅；诊断落盘线程随后冲刷收尾（正文本体可能
-    # 尚在队列，停机前必须落盘——取证材料不可静默丢失）
+    # TTS 合成诊断记录摘除订阅；诊断落盘线程留待在途 LLM 调用出账完成后再统一冲刷收尾
     if tts_diagnostics_recorder is not None:
         await safe_log(tts_diagnostics_recorder.stop(), "TtsDiagnosticsRecorder")
     if diagnostics_writer is None and event_recorder is not None:
         diagnostics_writer = event_recorder.diagnostics_writer
-    if diagnostics_writer is not None:
-        diagnostics_writer.stop()
-        logger.info("诊断记录落盘线程已收工")
 
     if storage_ledger is not None:
         logger.info("正在停止 StorageLedger...")
+        wait_writes_fn = getattr(storage_ledger, "wait_writes_idle", None)
+        if callable(wait_writes_fn):
+            await safe_log(wait_writes_fn(timeout_ms=5_000), "StorageLedger.wait_writes_idle")
         await safe_log(storage_ledger.stop(), "StorageLedger")
         logger.info("StorageLedger 已停止")
 
@@ -1992,14 +2057,23 @@ async def run_shutdown(
     # 切片编排：摘除下播事件订阅（EventBus.off 幂等；在途切割任务随进程收口终止）
     if clipping_service is not None:
         await safe_log(clipping_service.stop_async(), "ClippingService.stop")
-    logger.info("正在清理 LLMManager...")
+    logger.info("等待在途 LLM 调用出账收敛并清理 LLMManager...")
     if llm_service is not None:
+        wait_settled_fn = getattr(llm_service, "wait_in_flight_settled", None)
+        if callable(wait_settled_fn):
+            await safe_log(wait_settled_fn(timeout_s=5.0), "LLMManager.wait_in_flight_settled")
         await safe_log(llm_service.cleanup(), "LLMManager.cleanup")
     logger.info("核心服务已关闭")
+
+    # 在途 LLM 调用与事件历史全部收敛后，冲刷诊断落盘线程确保最后几条请求正文落盘
+    if diagnostics_writer is not None:
+        diagnostics_writer.stop()
+        logger.info("诊断记录落盘线程已收工")
 
     if components.privacy_service is not None:
         await safe_log(components.privacy_service.close(), "PrivacyService.close")
 
+    # 最后才关闭 SQLite 连接管理器，确保全部 Agent、事件、StorageLedger 与在途 LLM 出账均已落库
     if database is not None:
         logger.info("正在关闭 SQLiteDatabase...")
         await safe_log(database.close(), "SQLiteDatabase.close")
@@ -2010,7 +2084,7 @@ async def run_shutdown(
 
     logger.info("Amaidesu 应用程序已关闭。")
 
-    if _saw_cancelled:
+    if _saw_cancelled and reraise_cancelled:
         raise asyncio.CancelledError()
 
 

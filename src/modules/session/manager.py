@@ -122,6 +122,10 @@ class LiveSessionManager:
         # 生命周期：start() 检测填入 → resume_session/discard_residual/open_session
         # （自动收尾）逐个移出；行被 delete_session 删除时同步移除
         self._pending_residual_pks: List[int] = []
+        # 启动期前置挂接续播场次后暂存的 live.started(resumed=True) 载荷：
+        # 先在启动极早期认领 active_pk 保证流程单/采集器首条事件即归属续播场次，
+        # 待全部 Agent/记录器完成订阅后再经 emit_deferred_resume() 广播
+        self._deferred_resume_payload: Optional[LiveStartedPayload] = None
         # 归属回退用：最近一场已结束且行留存的场次主键（惰性装载后缓存）
         self._last_ended_pk: Optional[int] = None
         self._last_ended_loaded: bool = False
@@ -237,12 +241,17 @@ class LiveSessionManager:
         """待决残留场次主键（上次进程未正常退出留下的未结账场次），等用户拍板。"""
         return list(self._pending_residual_pks)
 
-    async def resume_session(self, live_session_id: int) -> bool:
-        """续播待决残留场次：接回为本进程的进行中场次，广播 ``live.started(resumed=True)``。
+    async def resume_session(self, live_session_id: int, *, emit_event: bool = True) -> bool:
+        """续播待决残留场次：接回为本进程的进行中场次，默认立即广播 ``live.started(resumed=True)``。
 
         场次行本就是未结账态，接回是纯内存操作（``_active_pk`` 认领）——归属
         解析、落库、主播对话历史全部接上，同一场直播不被切断。已有进行中场次
         时拒绝（不变量：至多一个显式进行中场次）；不是待决残留时返回 False。
+
+        当 ``emit_event=False``（热重启启动前置挂接）时，只立即认领 ``_active_pk``
+        并将 ``live.started(resumed=True)`` 载荷暂存，确保流程单加载与采集器拉取的
+        首个事件就归属该续播场次；随后所有订阅方就位后由 :meth:`emit_deferred_resume`
+        补发该边界事件。
         """
         async with self._lock:
             if live_session_id not in self._pending_residual_pks:
@@ -259,21 +268,46 @@ class LiveSessionManager:
             self._active_source = row.source or "manual"
             self._active_kind = row.kind
             self._pending_residual_pks.remove(row.id)
+            payload = LiveStartedPayload(
+                live_session_id=row.id,
+                source=self._active_source,
+                kind=row.kind,
+                title=row.title,
+                room_id=row.stream_id,
+                platform=row.platform or self._platform,
+                started_at_ms=int(row.started_at_ms),
+                resumed=True,
+            )
+            if emit_event:
+                self._deferred_resume_payload = None
+                await self._event_bus.emit(
+                    CoreEvents.LIVE_STARTED,
+                    payload,
+                    source="LiveSessionManager",
+                )
+                logger.info(f"场次已续播: id={row.id} title={row.title!r}（中断场接回，live.started 带 resumed=True）")
+            else:
+                self._deferred_resume_payload = payload
+                logger.info(
+                    f"热重启续播场次已前置挂接: id={row.id} title={row.title!r}（待订阅方就位后广播 live.started）"
+                )
+            return True
+
+    async def emit_deferred_resume(self) -> bool:
+        """广播启动期前置挂接所暂存的 ``live.started(resumed=True)`` 事件（幂等）。"""
+        async with self._lock:
+            payload = self._deferred_resume_payload
+            self._deferred_resume_payload = None
+            if payload is None or self._active_pk != payload.live_session_id:
+                return False
             await self._event_bus.emit(
                 CoreEvents.LIVE_STARTED,
-                LiveStartedPayload(
-                    live_session_id=row.id,
-                    source=self._active_source,
-                    kind=row.kind,
-                    title=row.title,
-                    room_id=row.stream_id,
-                    platform=row.platform or self._platform,
-                    started_at_ms=int(row.started_at_ms),
-                    resumed=True,
-                ),
+                payload,
                 source="LiveSessionManager",
             )
-            logger.info(f"场次已续播: id={row.id} title={row.title!r}（中断场接回，live.started 带 resumed=True）")
+            logger.info(
+                f"热重启续播边界事件已广播: id={payload.live_session_id} title={payload.title!r}（resumed=True）"
+            )
             return True
 
     async def discard_residual(self, live_session_id: int) -> bool:
@@ -303,6 +337,8 @@ class LiveSessionManager:
             )
         await self._sessions.close_live_session(live_session_id=live_session_id, ended_at_ms=ended)
         self._pending_residual_pks.remove(live_session_id)
+        # 残留场次已补写结束时刻成为新的已结场次：清空旧缓存以便下次归属查询拿到最新结果
+        await self._forget_last_ended()
         logger.warning(
             f"残留场次已收尾: id={live_session_id} title={row.title!r}（ended_at_ms 补为最后活动时刻 {ended}；{reason}）"
         )
@@ -498,6 +534,10 @@ class LiveSessionManager:
         if self._active_pk is not None:
             return self._active_pk
         if self._attribution_blocked:
+            return None
+        # 存在待决残留场次（尚未决定续播还是收尾）时，严禁回退到更早的已结束场次，
+        # 避免重启恢复间隙的早到事件（流程单加载/游戏事件等）错贴前一场已结场次号
+        if self._pending_residual_pks:
             return None
         return await self._load_last_ended_pk()
 

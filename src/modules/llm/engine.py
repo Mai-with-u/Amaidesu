@@ -557,6 +557,10 @@ class LLMManager:
             model_index=self._models,
             model_prices=self._model_prices,
         )
+        # 在途 LLM 调用计数与收敛事件：停机清理在关闭 SQLite 前经此等待全部在途调用与出账收敛
+        self._in_flight_calls: int = 0
+        self._in_flight_idle = asyncio.Event()
+        self._in_flight_idle.set()
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -997,6 +1001,22 @@ class LLMManager:
             Response：首个成功的模型响应；全部失败则返回 success=False 且
             ``error`` 字段列出尝试过的所有模型名。
         """
+        self._in_flight_calls += 1
+        self._in_flight_idle.clear()
+        try:
+            return await self._call_with_failover_impl(profile_name, method, **kwargs)
+        finally:
+            self._in_flight_calls = max(0, self._in_flight_calls - 1)
+            if self._in_flight_calls == 0:
+                self._in_flight_idle.set()
+
+    async def _call_with_failover_impl(
+        self,
+        profile_name: str,
+        method: str,
+        **kwargs: Any,
+    ) -> Response:
+        """故障切换调用主体（由 :meth:`_call_with_failover` 包裹在途调用计数）。"""
         profile = self._get_profile(profile_name)
         models_to_try = self._select_models_for_call(profile)
 
@@ -1285,6 +1305,29 @@ class LLMManager:
         return None, last_error or "未知错误", last_llm_error
 
     # === 清理 ===
+
+    @property
+    def in_flight_count(self) -> int:
+        """当前在途 LLM 调用数与在途出账落库数之和的上限观测值。"""
+        return self._in_flight_calls + self._observer.writes_in_flight
+
+    async def wait_in_flight_settled(self, *, timeout_s: float = 5.0) -> bool:
+        """等待在途 LLM 调用与 CallObserver 出账落库全部收敛；全部收口返回 True，超时返回 False。
+
+        停机清理在关闭 SQLite 连接管理器之前调用本方法，防止刚返回的在途调用写账撞到已关闭的库。
+        """
+        budget = max(0.01, float(timeout_s))
+        deadline = time.monotonic() + budget
+        if self._in_flight_calls > 0:
+            try:
+                await asyncio.wait_for(self._in_flight_idle.wait(), timeout=budget)
+            except asyncio.TimeoutError:
+                self.logger.warning(
+                    f"等待在途 LLM 调用收敛超时（{budget:.1f}s，仍有 {self._in_flight_calls} 个调用未返回），继续停机"
+                )
+                return False
+        remaining = max(0.01, deadline - time.monotonic())
+        return await self._observer.wait_writes_idle(timeout_s=remaining)
 
     async def cleanup(self) -> None:
         """清理所有 provider 客户端资源（按 id 去重）"""
