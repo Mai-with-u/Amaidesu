@@ -104,9 +104,13 @@ class _FakeResponse:
         self.headers = {"Content-Type": content_type}
         self.content = _FakeContent(*(body or [b""])) if status == 200 else _FakeContent()
         self._error_text = error_text
+        self.closed = False
 
     async def text(self) -> str:
         return self._error_text
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakeContext:
@@ -288,10 +292,51 @@ async def test_stream_synthesize_error_event_without_message_still_fails() -> No
 
 
 async def test_stream_synthesize_raises_with_server_message_on_http_error() -> None:
-    """HTTP 非 200 抛简短业务异常，携带服务端错误描述（便于直接看懂原因）。"""
+    """HTTP 非 200 抛简短业务异常，携带服务端错误描述与 status_code（便于上层按状态码决策重试）。"""
     body = json.dumps({"error": {"message": "Incorrect API key provided."}})
     client = make_client()
     client._session = _FakeSession(_FakeResponse(401, error_text=body))  # type: ignore[assignment]
 
-    with pytest.raises(OpenAITTSApiError, match="HTTP 401.*Incorrect API key"):
+    with pytest.raises(OpenAITTSApiError, match="HTTP 401.*Incorrect API key") as exc_info:
         await _collect(client)
+    assert exc_info.value.status_code == 401
+
+
+def test_api_error_status_code_is_optional() -> None:
+    """OpenAITTSApiError 保持位置参数兼容，缺省 status_code 为 None。"""
+    err = OpenAITTSApiError("连接超时")
+    assert str(err) == "连接超时"
+    assert err.status_code is None
+
+
+async def test_stream_synthesize_closes_response_immediately_on_aclose() -> None:
+    """调用方硬打断关闭异步生成器（GeneratorExit）时，底层 HTTP 响应立即 close 释放远端槽位。"""
+    response = _FakeResponse(200, [b"\x01\x00", b"\x02\x00"])
+    client = make_client(stream_format="audio")
+    client._session = _FakeSession(response)  # type: ignore[assignment]
+
+    stream = client.stream_synthesize("你好")
+    first = await stream.__anext__()
+    assert first == b"\x01\x00"
+    assert response.closed is False
+
+    await stream.aclose()
+    assert response.closed is True
+
+
+async def test_stream_synthesize_ignores_response_close_error_on_aclose() -> None:
+    """半开/断连状态底层 response.close() 抛出 RuntimeError 时不得向外传播或掩盖关闭语义。"""
+
+    class _ExplodingCloseResponse(_FakeResponse):
+        def close(self) -> None:
+            self.closed = True
+            raise RuntimeError("socket already closed")
+
+    response = _ExplodingCloseResponse(200, [b"\x01\x00", b"\x02\x00"])
+    client = make_client(stream_format="audio")
+    client._session = _FakeSession(response)  # type: ignore[assignment]
+
+    stream = client.stream_synthesize("你好")
+    assert await stream.__anext__() == b"\x01\x00"
+    await stream.aclose()
+    assert response.closed is True

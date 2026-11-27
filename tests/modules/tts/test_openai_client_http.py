@@ -276,3 +276,17 @@ async def test_provider_synthesizes_end_to_end_against_real_server(event_bus) ->
         assert finished.duration_ms == 50
     finally:
         await server.close()
+
+
+async def test_stream_synthesize_carries_http_503_status_code_over_real_http() -> None:
+    """真实 HTTP 503：异常携带 status_code=503，供 Provider 精准触发短退避重试。"""
+    server = TestServer(_speech_app([], status=503))
+    await server.start_server()
+    client = make_client(str(server.make_url("/v1/audio/speech")))
+    try:
+        with pytest.raises(OpenAITTSApiError, match="HTTP 503") as exc_info:
+            await _collect(client)
+        assert exc_info.value.status_code == 503
+    finally:
+        await client.close()
+        await server.close()

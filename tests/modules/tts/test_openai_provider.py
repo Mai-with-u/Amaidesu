@@ -12,7 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import numpy as np
 import pytest
 
-from src.modules.events.payloads.utterance import UtteranceFailedPayload, is_failure_reported
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.utterance import (
+    UtteranceFailedPayload,
+    UtteranceFinishedPayload,
+    is_failure_reported,
+)
 from src.modules.tts.backends.openai.client import OpenAITTSApiError
 from src.modules.tts.backends.openai.provider import DTYPE, SAMPLE_RATE, OpenAITTSProvider
 from tests.modules.tts.helpers import make_audio_manager, record_lifecycle, setup_with_audio_manager
@@ -244,3 +249,246 @@ async def test_odd_length_chunks_are_stitched_not_dropped(event_bus) -> None:
     assert [int(chunk.size) for chunk in written] == [1200, 1200]
     (finished,) = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FINISHED]
     assert isinstance(finished, UtteranceFinishedPayload) and finished.duration_ms == 100
+
+
+# ----- HTTP 503 短退避重试与硬打断流释放 -----
+
+
+def _sequenced_client(attempts: list[list[bytes] | Exception]) -> MagicMock:
+    """按尝试序号依次产出预设流结果或异常的客户端替身（支持“先吐块再抛错”）。"""
+    client = MagicMock()
+    client.close = AsyncMock()
+    index = {"n": 0}
+
+    def _make_stream(_text: str):
+        step = attempts[index["n"]]
+        index["n"] += 1
+
+        async def _gen():
+            if isinstance(step, Exception):
+                raise step
+            for item in step:
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+
+        return _gen()
+
+    client.stream_synthesize = MagicMock(side_effect=_make_stream)
+    return client
+
+
+@pytest.mark.parametrize(
+    ("busy_failures", "expected_sleeps"),
+    [
+        (1, [0.15]),
+        (2, [0.15, 0.3]),
+        (3, [0.15, 0.3, 0.5]),
+    ],
+    ids=["succeed-on-2nd", "succeed-on-3rd", "succeed-on-4th"],
+)
+async def test_http_503_retries_with_backoff_and_succeeds(
+    event_bus,
+    busy_failures: int,
+    expected_sleeps: list[float],
+) -> None:
+    """硬打断交接期遇 HTTP 503（未写出任何 PCM 块）按短退避重试，恢复后正常出声不发 failed。"""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    provider = OpenAITTSProvider(config=dict(CONFIGURED), event_bus=event_bus, sleep_fn=fake_sleep)
+    captured = record_lifecycle(event_bus)
+    attempts: list[list[bytes] | Exception] = [
+        OpenAITTSApiError("接口返回 HTTP 503: TTS is busy, please retry later.", status_code=503)
+        for _ in range(busy_failures)
+    ]
+    attempts.append([b"\x01\x00" * 1200])
+    client = _sequenced_client(attempts)
+    await _started(provider, client)
+
+    await provider.handle_speech("你好", utterance_id="utt_503_ok")
+    await event_bus.cleanup()
+
+    assert sleeps == expected_sleeps
+    assert client.stream_synthesize.call_count == busy_failures + 1
+    assert provider.render_count == 1
+    assert provider.error_count == 0
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED, CoreEvents.TTS_UTTERANCE_FINISHED]
+    finished = captured[1][1]
+    assert isinstance(finished, UtteranceFinishedPayload) and finished.duration_ms == 50
+
+
+async def test_http_503_exhausts_retries_and_emits_failed(event_bus) -> None:
+    """连续 503 耗尽全部重试次数后走既有失败收尾：关流丢弃预缓冲、计错误、发 failed 并抛出。"""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    provider = OpenAITTSProvider(config=dict(CONFIGURED), event_bus=event_bus, sleep_fn=fake_sleep)
+    captured = record_lifecycle(event_bus)
+    attempts: list[list[bytes] | Exception] = [
+        OpenAITTSApiError("接口返回 HTTP 503: TTS is busy", status_code=503) for _ in range(4)
+    ]
+    client = _sequenced_client(attempts)
+    mgr = await _started(provider, client)
+
+    with pytest.raises(OpenAITTSApiError, match="HTTP 503") as exc_info:
+        await provider.handle_speech("你好", utterance_id="utt_503_exhausted")
+    await event_bus.cleanup()
+
+    assert exc_info.value.status_code == 503
+    assert sleeps == [0.15, 0.3, 0.5]
+    assert client.stream_synthesize.call_count == 4
+    assert provider.error_count == 1
+    mgr.stop_stream.assert_called_with(discard_pending=True)
+    failed_events = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FAILED]
+    assert len(failed_events) == 1 and isinstance(failed_events[0], UtteranceFailedPayload)
+
+
+@pytest.mark.parametrize("status_code", [401, 429, 500, None])
+async def test_non_503_api_error_does_not_retry(event_bus, status_code: int | None) -> None:
+    """非 503 错误（或无状态码的连接错误）绝不重试，立刻走失败路径。"""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    provider = OpenAITTSProvider(config=dict(CONFIGURED), event_bus=event_bus, sleep_fn=fake_sleep)
+    captured = record_lifecycle(event_bus)
+    client = _sequenced_client([OpenAITTSApiError("upstream error", status_code=status_code)])
+    mgr = await _started(provider, client)
+
+    with pytest.raises(OpenAITTSApiError):
+        await provider.handle_speech("你好", utterance_id="utt_non503")
+    await event_bus.cleanup()
+
+    assert sleeps == []
+    assert client.stream_synthesize.call_count == 1
+    assert provider.error_count == 1
+    mgr.stop_stream.assert_called_with(discard_pending=True)
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED, CoreEvents.TTS_UTTERANCE_FAILED]
+
+
+async def test_http_503_after_first_pcm_chunk_does_not_retry(event_bus) -> None:
+    """已向声卡写出首块 PCM（total_samples > 0）后遇 503 不得重试，防止重复播开头叠音。"""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    provider = OpenAITTSProvider(config=dict(CONFIGURED), event_bus=event_bus, sleep_fn=fake_sleep)
+    captured = record_lifecycle(event_bus)
+    client = _sequenced_client(
+        [
+            [
+                b"\x01\x00" * 240,
+                OpenAITTSApiError("接口返回 HTTP 503: mid-stream busy", status_code=503),  # type: ignore[list-item]
+            ]
+        ]
+    )
+    mgr = await _started(provider, client)
+
+    with pytest.raises(OpenAITTSApiError, match="HTTP 503"):
+        await provider.handle_speech("你好", utterance_id="utt_mid_503")
+    await event_bus.cleanup()
+
+    assert sleeps == []
+    assert client.stream_synthesize.call_count == 1
+    assert mgr.write_chunk.call_count == 1
+    mgr.stop_stream.assert_called_with(discard_pending=True)
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED, CoreEvents.TTS_UTTERANCE_FAILED]
+
+
+async def test_cancellation_during_503_backoff_exits_immediately(event_bus) -> None:
+    """退避等待期间收到取消必须立即退出、走取消收尾，绝不吞取消也不再重试。"""
+    entered_backoff = asyncio.Event()
+    never_finish = asyncio.Event()
+
+    async def blocking_sleep(_seconds: float) -> None:
+        entered_backoff.set()
+        await never_finish.wait()
+
+    provider = OpenAITTSProvider(config=dict(CONFIGURED), event_bus=event_bus, sleep_fn=blocking_sleep)
+    captured = record_lifecycle(event_bus)
+    client = _sequenced_client(
+        [
+            OpenAITTSApiError("接口返回 HTTP 503: busy", status_code=503),
+            [b"\x01\x00" * 240],
+        ]
+    )
+    mgr = await _started(provider, client)
+
+    task = asyncio.create_task(provider.handle_speech("你好", utterance_id="utt_backoff_cancel"))
+    await entered_backoff.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await event_bus.cleanup()
+
+    assert client.stream_synthesize.call_count == 1
+    assert provider.error_count == 0
+    mgr.stop_stream.assert_called_with(discard_pending=True)
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED]
+
+
+async def test_cancellation_mid_write_closes_stream_generator_immediately() -> None:
+    """写声卡期间收到硬打断取消时，handle_speech 必须显式关闭合成流生成器，不等待 GC 才释放连接。"""
+    stream_closed = asyncio.Event()
+
+    async def _slow_stream(_text: str):
+        try:
+            yield b"\x01\x00" * 120
+            yield b"\x02\x00" * 120
+        finally:
+            stream_closed.set()
+
+    client = MagicMock()
+    client.close = AsyncMock()
+    client.stream_synthesize = MagicMock(side_effect=_slow_stream)
+
+    provider = OpenAITTSProvider(config=dict(CONFIGURED))
+    mgr = await _started(provider, client)
+    mgr.write_chunk.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.handle_speech("你好", utterance_id="utt_stream_aclose")
+
+    assert stream_closed.is_set() is True
+
+
+async def test_cancellation_preserves_cancelled_error_when_stream_aclose_raises(event_bus) -> None:
+    """硬打断取消期间若合成流 aclose() 抛出 RuntimeError，必须保留原始 CancelledError、不计错误、不发 failed。"""
+    aclose_called = False
+
+    class _ExplodingCloseStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> bytes:
+            return b"\x01\x00" * 120
+
+        async def aclose(self) -> None:
+            nonlocal aclose_called
+            aclose_called = True
+            raise RuntimeError("half-open socket close failed")
+
+    client = MagicMock()
+    client.close = AsyncMock()
+    client.stream_synthesize = MagicMock(side_effect=lambda _text: _ExplodingCloseStream())
+
+    provider = OpenAITTSProvider(config=dict(CONFIGURED), event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    mgr = await _started(provider, client)
+    mgr.write_chunk.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.handle_speech("你好", utterance_id="utt_aclose_raises")
+    await event_bus.cleanup()
+
+    assert aclose_called is True
+    assert provider.error_count == 0
+    mgr.stop_stream.assert_called_with(discard_pending=True)
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED]

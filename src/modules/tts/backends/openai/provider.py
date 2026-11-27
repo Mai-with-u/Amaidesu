@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -46,6 +46,10 @@ CHANNELS = 1
 DTYPE = np.int16
 # 单个样本的字节数：传输块边界可能切在半个样本之间，拼接残字节时用它对齐
 _SAMPLE_BYTES = np.dtype(DTYPE).itemsize
+# 远端单并发推理机硬打断交接期返回 HTTP 503 时的默认短退避重试间隔（毫秒）
+DEFAULT_BUSY_RETRY_DELAYS_MS: Tuple[int, ...] = (150, 300, 500)
+# 触发短退避重试的远端繁忙状态码
+_HTTP_SERVICE_UNAVAILABLE = 503
 
 
 class OpenAITTSProvider:
@@ -66,6 +70,9 @@ class OpenAITTSProvider:
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
         audio_sink: Optional[Any] = None,
+        *,
+        busy_retry_delays_ms: Sequence[int] = DEFAULT_BUSY_RETRY_DELAYS_MS,
+        sleep_fn: Optional[Callable[[float], Awaitable[None]]] = None,
     ) -> None:
         self.config = config
         self.event_bus = event_bus
@@ -81,6 +88,10 @@ class OpenAITTSProvider:
         self.instructions = self.typed_config.instructions
         self.speed = self.typed_config.speed
         self.stream_format = self.typed_config.stream_format
+
+        # HTTP 503 短退避重试参数与可注入异步等待函数（测试注入零耗时等待以确定性验证退避序列）
+        self._busy_retry_delays_ms: Tuple[int, ...] = tuple(max(0, int(ms)) for ms in busy_retry_delays_ms)
+        self._sleep_fn: Callable[[float], Awaitable[None]] = sleep_fn if sleep_fn is not None else asyncio.sleep
 
         self.client: Optional[OpenAITTSClient] = None
         self.audio_manager: Any = None
@@ -199,24 +210,64 @@ class OpenAITTSProvider:
                 # 累计写往声卡的 PCM 样本数（单声道：ndarray.size 即样本数），
                 # finished 事件的 duration_ms 由"样本数 ÷ 采样率"精确计算
                 total_samples = 0
-                # 传输块边界不保证按样本对齐（一个 int16 样本占 2 字节，块可能切在
-                # 半个样本之间）：不足一个样本的尾字节留到下一块拼，不能直接丢——
-                # 丢了会让相邻样本错位，听感上是持续的杂音
-                leftover = b""
-                async for pcm_bytes in self.client.stream_synthesize(final_text):  # type: ignore[union-attr]
-                    data = leftover + pcm_bytes
-                    usable = len(data) - len(data) % _SAMPLE_BYTES
-                    leftover = data[usable:]
-                    chunk = np.frombuffer(data[:usable], dtype=DTYPE)
-                    if chunk.size == 0:
-                        continue
-                    in_flight_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.write_chunk, chunk))
-                    await in_flight_task
-                    total_samples += int(chunk.size)
-                if leftover:
-                    # 流结束仍剩半个样本：接口实现异常，丢弃并留痕（不值得为半个
-                    # 样本失败整句，但静默丢字节会让音频问题无从追查）
-                    self.logger.warning(f"流结束时残留半个样本（{len(leftover)} 字节，已丢弃）")
+                attempt = 0
+                while True:
+                    # 传输块边界不保证按样本对齐（一个 int16 样本占 2 字节，块可能切在
+                    # 半个样本之间）：不足一个样本的尾字节留到下一块拼，不能直接丢——
+                    # 丢了会让相邻样本错位，听感上是持续的杂音；每次重试尝试重置残字节
+                    leftover = b""
+                    retry_delay_ms: Optional[int] = None
+                    synth_stream = self.client.stream_synthesize(final_text)  # type: ignore[union-attr]
+                    try:
+                        async for pcm_bytes in synth_stream:
+                            data = leftover + pcm_bytes
+                            usable = len(data) - len(data) % _SAMPLE_BYTES
+                            leftover = data[usable:]
+                            chunk = np.frombuffer(data[:usable], dtype=DTYPE)
+                            if chunk.size == 0:
+                                continue
+                            in_flight_task = asyncio.create_task(
+                                asyncio.to_thread(self.audio_manager.write_chunk, chunk)
+                            )
+                            await in_flight_task
+                            total_samples += int(chunk.size)
+                        if leftover:
+                            # 流结束仍剩半个样本：接口实现异常，丢弃并留痕（不值得为半个
+                            # 样本失败整句，但静默丢字节会让音频问题无从追查）
+                            self.logger.warning(f"流结束时残留半个样本（{len(leftover)} 字节，已丢弃）")
+                        break
+                    except OpenAITTSApiError as exc:
+                        # 仅当尚未写出任何音频样本且远端返回 HTTP 503（繁忙）时执行有界短退避重试：
+                        # 硬打断旧流后远端推理机可能需要数百毫秒释放单并发槽位；已出声或非 503 立即放弃
+                        if (
+                            total_samples == 0
+                            and exc.status_code == _HTTP_SERVICE_UNAVAILABLE
+                            and attempt < len(self._busy_retry_delays_ms)
+                        ):
+                            retry_delay_ms = self._busy_retry_delays_ms[attempt]
+                            attempt += 1
+                            self.logger.warning(
+                                f"TTS 推理机繁忙（HTTP 503），{retry_delay_ms}ms 后进行第 "
+                                f"{attempt}/{len(self._busy_retry_delays_ms)} 次重试: utterance_id={utterance_id}"
+                            )
+                        else:
+                            raise
+                    finally:
+                        # 无论正常结束、异常失败还是写声卡期被硬打断取消，均立即关闭异步生成器释放 HTTP 连接；
+                        # 关闭自身异常只记 debug，绝不覆盖正在传播的 CancelledError 或业务异常
+                        aclose = getattr(synth_stream, "aclose", None)
+                        if callable(aclose):
+                            try:
+                                await aclose()
+                            except Exception as close_exc:  # noqa: BLE001
+                                self.logger.debug(
+                                    f"关闭 TTS 合成流异常（已忽略，保留原始异常）: {close_exc}",
+                                    exc=True,
+                                )
+
+                    if retry_delay_ms is not None:
+                        # 先释放旧流再进入短退避；期间收到 CancelledError 直接向外传播至取消分支，绝不吞取消也不再重试
+                        await self._sleep_fn(retry_delay_ms / 1000.0)
 
                 # 收尾放工作线程等待回调流播完余量，期间被取消则由取消分支立即 abort 唤醒
                 in_flight_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.stop_stream))

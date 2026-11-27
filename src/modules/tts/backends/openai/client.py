@@ -28,6 +28,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -67,6 +68,10 @@ class OpenAITTSApiError(Exception):
     把日志刷成数百行 traceback；本异常只保留对排查有用的简短信息（状态码
     + 服务端错误描述），原始异常经 ``__cause__`` 保留供调试器查看。
     """
+
+    def __init__(self, message: str, *, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code: Optional[int] = status_code
 
 
 class OpenAITTSClient:
@@ -144,26 +149,40 @@ class OpenAITTSClient:
         收到多少音频就往下游交多少——不按帧对齐、不做缓冲重组，块边界由
         服务端下发节奏决定。响应形态按 ``Content-Type`` 分流：事件流解析出
         每块音频，连续字节流直接透传。HTTP 非 200 抛
-        :class:`OpenAITTSApiError`，服务端错误描述截断保留。
+        :class:`OpenAITTSApiError`（携带 ``status_code``），服务端错误描述截断保留。
 
-        取消语义：调用方取消后本异步生成器随 GC 关闭，aiohttp 的请求上下文
-        退出即释放连接（被取消句数量级低，不做显式提前关闭）。
+        取消语义：调用方取消或显式关闭生成器（``CancelledError`` / ``GeneratorExit``）
+        时，立即主动关闭底层 HTTP 响应连接，避免单并发远端推理机槽位悬空。
         """
         session = await self._ensure_session()
         try:
             async with session.post(
                 self.base_url, headers=self._build_headers(), json=self._build_payload(text)
             ) as response:
-                if response.status != 200:
-                    body = await response.text()
-                    raise OpenAITTSApiError(f"接口返回 HTTP {response.status}: {self._error_detail(body)}")
-                if _SSE_CONTENT_TYPE in response.headers.get("Content-Type", ""):
-                    async for pcm in self._iter_sse_audio(response.content):
-                        yield pcm
-                else:
-                    async for chunk in response.content.iter_any():
-                        if chunk:
-                            yield chunk
+                try:
+                    if response.status != 200:
+                        body = await response.text()
+                        raise OpenAITTSApiError(
+                            f"接口返回 HTTP {response.status}: {self._error_detail(body)}",
+                            status_code=response.status,
+                        )
+                    if _SSE_CONTENT_TYPE in response.headers.get("Content-Type", ""):
+                        async for pcm in self._iter_sse_audio(response.content):
+                            yield pcm
+                    else:
+                        async for chunk in response.content.iter_any():
+                            if chunk:
+                                yield chunk
+                except (asyncio.CancelledError, GeneratorExit):
+                    # 硬打断或提前关闭生成器时立刻断开底层响应流，尽快通知远端释放并发槽位；
+                    # 半开/断连状态关流若抛异常只记 debug，绝不覆盖正在传播的 CancelledError / GeneratorExit
+                    close_fn = getattr(response, "close", None)
+                    if callable(close_fn):
+                        try:
+                            close_fn()
+                        except Exception as close_exc:  # noqa: BLE001
+                            self.logger.debug(f"取消路径关闭响应流异常（已忽略）: {close_exc}", exc=True)
+                    raise
         except aiohttp.ClientError as e:
             raise OpenAITTSApiError(f"连接 OpenAI 失败（{type(e).__name__}）: {e}") from e
 
