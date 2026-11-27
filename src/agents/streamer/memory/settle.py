@@ -2262,21 +2262,78 @@ class SessionSettler:
         material: SettleMaterial,
         *,
         include_game_chats: bool = False,
+        preferred_line_number: Optional[int] = None,
+        prefer: Optional[Callable[[Union[SettleSpeechLine, "GameChatLine"]], bool]] = None,
     ) -> Optional[Tuple[Union[SettleSpeechLine, "GameChatLine"], str]]:
         """全场检索兜底：所引行没过逐字校验时，在本场台词行里逐字检索这条引文。
 
-        找到就返回（那一行, 校验过的引文），后续按实际所在行取时刻与存档——引文锚得回
-        真实台词即算过，行号从必须精确降为优先依据；哪一行都锚不回则返回 None，照旧拒。
+        触发条件：模型填的行号没通过逐字引文校验时调用。
+        执行顺序：收集本场逐字包含 ``quote`` 的全部候选行 -> 仅命中一行直接返回
+        -> 多行同文命中时，优先挑满足 ``prefer``（如能通过游戏记录时间序核验）的候选行，
+        同档内按距所引行号 ``preferred_line_number`` 最近优先，仍并列时取时刻更晚的行，
+        避免早先出发预告发言截胡事后汇报并错挂 ``evidence_chat_id``。
         承诺的行宇宙还含她在游戏公屏打的行（与该处校验可及的行同一套）。
         超过 MAX_QUOTE_CHARS 的引文逐行校验自带长度上限，同样拒。
         """
-        candidates: List[Union[SettleSpeechLine, "GameChatLine"]] = list(material.lines_by_number.values())
-        if include_game_chats:
-            candidates.extend(material.players.lines_by_number.values())
-        for candidate in candidates:
+        matches: List[Tuple[Optional[int], Union[SettleSpeechLine, "GameChatLine"], str]] = []
+        for number, candidate in material.lines_by_number.items():
             verified = self._verified_quote(candidate, quote)
             if verified is not None:
-                return candidate, verified
+                matches.append((number, candidate, verified))
+        if include_game_chats:
+            for chat in material.players.lines_by_number.values():
+                verified = self._verified_quote(chat, quote)
+                if verified is not None:
+                    matches.append((None, chat, verified))
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0][1], matches[0][2]
+
+        # 多条台词均逐字包含同一引文时：优先保留满足核验谓词的候选，再按行号就近与较晚时刻排序
+        pool = matches
+        if prefer is not None:
+            preferred_pool = [item for item in matches if prefer(item[1])]
+            if preferred_pool:
+                pool = preferred_pool
+
+        def _rank(item: Tuple[Optional[int], Union[SettleSpeechLine, "GameChatLine"], str]) -> Tuple[int, int, int]:
+            num, cand, _ = item
+            if preferred_line_number is not None:
+                dist = abs(num - preferred_line_number) if num is not None else 10**9
+            else:
+                dist = 0
+            return (dist, -int(cand.timestamp_ms), -(num or 0))
+
+        best = min(pool, key=_rank)
+        return best[1], best[2]
+
+    def _later_proven_line(
+        self,
+        verified_quote: str,
+        *,
+        current_line: SettleSpeechLine,
+        raw: Dict[str, Any],
+        claim_text: str,
+        material: SettleMaterial,
+        game: str,
+        allow_infer: bool = True,
+    ) -> Optional[SettleSpeechLine]:
+        """当完成类引文被模型直接挂到早于事件发生的同文预告行上时，查找更晚且能通过记录核验的逐字同文行。
+
+        触发条件：原行已过逐字校验，但 ``_proven`` 未通过时调用。
+        执行顺序：按时间顺序扫描本场晚于 ``current_line`` 且同样逐字包含 ``verified_quote`` 的台词行，
+        返回首条能让 ``_proven`` 通过的行；若事后并无同文发言或记录本身不能作证则返回 None。
+        """
+        current_id = int(current_line.id)
+        current_ts = int(current_line.timestamp_ms)
+        for candidate in material.lines_by_number.values():
+            if int(candidate.id) == current_id or int(candidate.timestamp_ms) <= current_ts:
+                continue
+            if self._verified_quote(candidate, verified_quote) is None:
+                continue
+            if self._proven(raw, claim_text, material, game, candidate, allow_infer=allow_infer):
+                return candidate
         return None
 
     def _quote_rescue_note(
@@ -2462,10 +2519,35 @@ class SessionSettler:
             if not title:
                 missed.append(UnregisteredItem(kind="archive", quote=quote, reason="没有标题"))
                 continue
+            game_name = _game_of(raw.get("game"), material)
+            requested_num = _as_line_number(raw.get("line"))
             verified = self._verified_quote(line, quote)
             if verified is None:
-                # 行号引错但引文逐字对是模型的常见失误：全场检索兜底，后续按实际所在行取时刻与存档
-                found = self._quote_found_anywhere(quote, material)
+                # 行号引错但引文逐字对是模型的常见失误：全场检索兜底时结合游戏记录时间序与所引行号就近选择，
+                # 防止同一短语在早先出发预告句里也出现时误抓回早先发言
+                prefer_fn: Optional[Callable[[Union[SettleSpeechLine, "GameChatLine"]], bool]] = None
+                if game_name is not None and material.game_records and is_done_claim(f"{title} {quote}"):
+                    claim_probe = f"{title} {quote}"
+                    game_probe = game_name
+
+                    def _prefer_archive_line(
+                        cand: Union[SettleSpeechLine, "GameChatLine"],
+                        *,
+                        raw_item: Dict[str, Any] = raw,
+                        probe_text: str = claim_probe,
+                        probe_game: str = game_probe,
+                    ) -> bool:
+                        return isinstance(cand, SettleSpeechLine) and self._proven(
+                            raw_item, probe_text, material, probe_game, cand
+                        )
+
+                    prefer_fn = _prefer_archive_line
+                found = self._quote_found_anywhere(
+                    quote,
+                    material,
+                    preferred_line_number=requested_num,
+                    prefer=prefer_fn,
+                )
                 if found is None:
                     missed.append(
                         UnregisteredItem(
@@ -2499,13 +2581,27 @@ class SessionSettler:
                     )
                 )
                 continue
-            game_name = _game_of(raw.get("game"), material)
             # 游戏里做成了什么：要有一条不晚于她这句的游戏记录撑着，嘴上说做好了不算。没核实到的照写，
             # 写成"她说……（游戏记录里没核实到）"、不当稳定的事，也强制禁止标为名场面（防吹牛当名场面沉淀）；
             # 单场新事至多保留前 2 条名场面，超出部分自动降为普通进展
-            unverified = game_name is not None and not self._proven(
-                raw, f"{title} {verified}", material, game_name, line
-            )
+            claim_text = f"{title} {verified}"
+            unverified = game_name is not None and not self._proven(raw, claim_text, material, game_name, line)
+            if unverified and game_name is not None:
+                # 若模型错把完成说法的引文直接填成了早于事件发生的同文预告行，仅当本场存在更晚且逐字同文、
+                # 又能通过游戏记录时间序核验的台词行时自动改挂，既纠正 evidence_chat_id 又避免误标未核实
+                later_line = self._later_proven_line(
+                    verified,
+                    current_line=line,
+                    raw=raw,
+                    claim_text=claim_text,
+                    material=material,
+                    game=game_name,
+                )
+                if later_line is not None:
+                    line = later_line
+                    unverified = False
+                    if rescued_requested is None:
+                        rescued_requested = raw.get("line")
             is_unverified = unverified or title.endswith(UNVERIFIED_MARK)
             is_highlight = highlight_guard.allows(raw.get("highlight") is True, unverified=is_unverified)
             save = material.saves.save_at(game_name, int(line.timestamp_ms))
@@ -2642,7 +2738,12 @@ class SessionSettler:
             if verified is None:
                 # 行号引错但引文逐字对是模型的常见失误：全场检索兜底（行宇宙含她在游戏公屏打的行），
                 # 后续按实际所在行认对谁、去重
-                found = self._quote_found_anywhere(quote, material, include_game_chats=True)
+                found = self._quote_found_anywhere(
+                    quote,
+                    material,
+                    include_game_chats=True,
+                    preferred_line_number=_as_line_number(raw.get("line")),
+                )
                 if found is None:
                     missed.append(
                         UnregisteredItem(
@@ -2819,10 +2920,32 @@ class SessionSettler:
                     )
                 )
                 continue
+            game = open_by_id[int(commitment_id)].game
             verified = self._verified_quote(line, quote)
             if verified is None:
-                # 行号引错但引文逐字对是模型的常见失误：全场检索兜底，了结记到实际所在行上
-                found = self._quote_found_anywhere(quote, material)
+                # 行号引错但引文逐字对是模型的常见失误：全场检索兜底，优先选满足游戏记录时间序且距所引行号最近的台词行
+                closure_prefer: Optional[Callable[[Union[SettleSpeechLine, "GameChatLine"]], bool]] = None
+                if game and material.game_records and is_done_claim(quote):
+                    closure_game = game
+
+                    def _prefer_closure_line(
+                        cand: Union[SettleSpeechLine, "GameChatLine"],
+                        *,
+                        raw_item: Dict[str, Any] = raw,
+                        probe_quote: str = quote,
+                        probe_game: str = closure_game,
+                    ) -> bool:
+                        return isinstance(cand, SettleSpeechLine) and self._proven(
+                            raw_item, probe_quote, material, probe_game, cand, allow_infer=False
+                        )
+
+                    closure_prefer = _prefer_closure_line
+                found = self._quote_found_anywhere(
+                    quote,
+                    material,
+                    preferred_line_number=_as_line_number(raw.get("line")),
+                    prefer=closure_prefer,
+                )
                 if found is None:
                     missed.append(
                         UnregisteredItem(
@@ -2838,14 +2961,27 @@ class SessionSettler:
                 # 留痕先记着所引行号，条目过了后面全部守卫、真了结时才写进报告
                 rescued_requested = raw.get("line")
             # 挂了游戏的承诺说"做完了"：必须显式引一条撑得住的游戏记录编号（不靠语义兜底结案）；说做不到、不做了的不用
-            game = open_by_id[int(commitment_id)].game
             if game and not self._proven(raw, verified, material, game, line, allow_infer=False):
-                missed.append(
-                    UnregisteredItem(
-                        kind="commitment", what=f"了结 #{commitment_id}", quote=verified, reason=_UNPROVEN_REASON
-                    )
+                later_line = self._later_proven_line(
+                    verified,
+                    current_line=line,
+                    raw=raw,
+                    claim_text=verified,
+                    material=material,
+                    game=game,
+                    allow_infer=False,
                 )
-                continue
+                if later_line is not None:
+                    line = later_line
+                    if rescued_requested is None:
+                        rescued_requested = raw.get("line")
+                else:
+                    missed.append(
+                        UnregisteredItem(
+                            kind="commitment", what=f"了结 #{commitment_id}", quote=verified, reason=_UNPROVEN_REASON
+                        )
+                    )
+                    continue
             if rescue_notes is not None and rescued_requested is not None:
                 rescue_notes.append(
                     self._quote_rescue_note(material, f"了结 #{commitment_id}", rescued_requested, line)

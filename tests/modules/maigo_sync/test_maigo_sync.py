@@ -21,6 +21,7 @@ from src.modules.maigo_sync import (
     MaiGORejected,
     MaiGOSyncConfigSchema,
 )
+from src.modules.maigo_sync import bridge as maigo_bridge_mod
 from src.modules.maigo_sync.backfill import StartupHistoryBackfiller
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL
@@ -83,6 +84,7 @@ class _StubMaiGOClient:
         self.recall_calls: List[Dict[str, Any]] = []
         self.recall_response: Dict[str, Any] = {"ok": True, "text": "", "strong_hit": False, "hits": []}
         self.fail_checkout: Optional[Exception] = None
+        self.fail_heartbeat: Optional[Exception] = None
         self.fail_checkin_times: int = 0
         self.fail_post_after: Optional[int] = None
         self.checkin_error: Exception = RuntimeError("MaiGO 离线")
@@ -96,6 +98,8 @@ class _StubMaiGOClient:
 
     async def heartbeat(self, checkout_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         self.heartbeats.append((checkout_id, dict(payload)))
+        if self.fail_heartbeat is not None:
+            raise self.fail_heartbeat
         return {"ok": True, "checkout_id": checkout_id, "consumed_count": len(payload.get("consumed_seed_ids") or [])}
 
     async def checkin(self, checkout_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -457,7 +461,11 @@ async def test_startup_backfill_high_signal_idempotent_and_resumable(tmp_path: P
             stream_id="live-1", platform="bilibili", kind=SESSION_KIND_LIVE, started_at_ms=recent_t, title="主线建家"
         )
         rehearsal_sid = await db.sessions.insert_live_session(
-            stream_id="reh-1", platform="bilibili", kind=SESSION_KIND_REHEARSAL, started_at_ms=recent_t + 100, title="彩排"
+            stream_id="reh-1",
+            platform="bilibili",
+            kind=SESSION_KIND_REHEARSAL,
+            started_at_ms=recent_t + 100,
+            title="彩排",
         )
         chat_id = await db.chat.insert_live_chat(
             live_session_id=live_sid,
@@ -601,7 +609,11 @@ async def test_startup_backfill_high_signal_idempotent_and_resumable(tmp_path: P
     all_arc_records = [rec for batch in client.archive_batches for rec in (batch.get("records") or ())]
     rec_types = {rec["record_type"] for rec in all_arc_records}
     assert {"archive_line", "game_event", "timeline_chunk", "speech", "work_doc", "creature"} <= rec_types
-    assert any(batch.get("episode", {}).get("overview", "").startswith("今晚在海边建好了高炉仓库") for batch in client.archive_batches if batch.get("episode"))
+    assert any(
+        batch.get("episode", {}).get("overview", "").startswith("今晚在海边建好了高炉仓库")
+        for batch in client.archive_batches
+        if batch.get("episode")
+    )
     assert any("高炉试运行成功" in rec["content"] for rec in all_arc_records)
     assert any("高炉配料表" in rec["content"] for rec in all_arc_records)
     assert any("小花" in rec["title"] for rec in all_arc_records)
@@ -621,8 +633,18 @@ async def test_startup_backfill_high_signal_idempotent_and_resumable(tmp_path: P
         "ok": True,
         "strong_hit": True,
         "hits": [
-            {"item_type": "event", "item_id": 11, "text": "[2026-11-25 · QQ群] 群里答应大家做灯塔", "occurred_at_ms": now_val},
-            {"item_type": "record", "item_id": 12, "text": "[2026-11-24 · 直播《建家》] 本地直播原话", "occurred_at_ms": now_val},
+            {
+                "item_type": "event",
+                "item_id": 11,
+                "text": "[2026-11-25 · QQ群] 群里答应大家做灯塔",
+                "occurred_at_ms": now_val,
+            },
+            {
+                "item_type": "record",
+                "item_id": 12,
+                "text": "[2026-11-24 · 直播《建家》] 本地直播原话",
+                "occurred_at_ms": now_val,
+            },
         ],
     }
     fed_hits = await bridge.recall_cross_branch("灯塔", limit=3)
@@ -682,3 +704,86 @@ async def test_startup_backfill_chunked_archive_binds_external_episode_id(tmp_pa
     for follow_batch in client.archive_batches[1:]:
         assert follow_batch.get("episode") is None
         assert follow_batch.get("external_episode_id") == str(sid)
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_suffix"),
+    [
+        (lambda: TimeoutError(), "TimeoutError"),
+        (lambda: TimeoutError("   "), "TimeoutError"),
+        (lambda: RuntimeError("连接重置"), "RuntimeError: 连接重置"),
+    ],
+)
+async def test_bridge_exception_warnings_include_class_name_without_trailing_colon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exc_factory: Any,
+    expected_suffix: str,
+) -> None:
+    """异常消息为空串（如 TimeoutError/httpx.ReadTimeout）时告警日志带出异常类名且不留悬空冒号。"""
+    warnings: List[str] = []
+
+    def _capture_warning(msg: str, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        warnings.append(str(msg))
+
+    monkeypatch.setattr(maigo_bridge_mod.logger, "warning", _capture_warning)
+
+    bus = EventBus()
+    client = _StubMaiGOClient()
+    pending_path = tmp_path / "pending.jsonl"
+    bridge = MaiGOBridge(
+        event_bus=bus,
+        client=client,
+        pending_log_path=pending_path,
+        retry_delays_ms=(),
+        clock_ms=lambda: 20_000,
+    )
+    try:
+        # 1) 开播签出失败
+        client.fail_checkout = exc_factory()
+        assert (
+            await bridge.ensure_checked_out(
+                LiveStartedPayload(live_session_id=88, kind=SESSION_KIND_LIVE, started_at_ms=10_000)
+            )
+            is False
+        )
+        assert any("MaiGO 开播签出失败" in line and line.endswith(f": {expected_suffix}") for line in warnings), (
+            warnings
+        )
+
+        # 2) 正常签出后验证心跳失败、下播签入失败与离线补推失败日志均携带异常类名且无悬空冒号
+        warnings.clear()
+        client.fail_checkout = None
+        assert (
+            await bridge.ensure_checked_out(
+                LiveStartedPayload(live_session_id=89, kind=SESSION_KIND_LIVE, started_at_ms=11_000)
+            )
+            is True
+        )
+
+        client.fail_heartbeat = exc_factory()
+        assert await bridge.flush_heartbeat() is False
+        assert any("MaiGO 心跳上报失败" in line and line.endswith(f": {expected_suffix}") for line in warnings), (
+            warnings
+        )
+
+        warnings.clear()
+        client.fail_checkin_times = 1
+        client.checkin_error = exc_factory()
+        assert await bridge.push_settled_session(89) is False
+        assert any(
+            "MaiGO 下播签入失败（checkout=chk-101）" in line and line.endswith(f": {expected_suffix}")
+            for line in warnings
+        ), warnings
+        assert pending_path.exists()
+
+        warnings.clear()
+        client.fail_checkin_times = 1
+        client.checkin_error = exc_factory()
+        assert await bridge.replay_pending_checkins() == 0
+        assert any("MaiGO 补推签入失败" in line and line.endswith(f": {expected_suffix}") for line in warnings), (
+            warnings
+        )
+    finally:
+        await bridge.stop()

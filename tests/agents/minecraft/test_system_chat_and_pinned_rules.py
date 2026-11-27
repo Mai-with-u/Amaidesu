@@ -12,6 +12,7 @@ from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
 from src.agents.minecraft.context import FACTS_KEY, INSTRUCTION_KEY
 from src.agents.minecraft.lead_mode import LEAD_MODE_PROMPT_SECTION
 from src.agents.minecraft.state import MAX_PINNED_RULES, MAX_RULE_CHARS
+from src.agents.minecraft.tools import build_glance_spec
 from src.agents.streamer.memory.recall import (
     MEMORY_RECALL_SPEC,
     MEMORY_RECALL_TOOL_NAME,
@@ -915,6 +916,10 @@ def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_
 
     assert "minecraft_rules" in agent_prompt
     assert "observe(what=self)" in agent_prompt and "obtain" in agent_prompt
+    assert "仅列原版常见设施" in agent_prompt and "machine_inspect" in agent_prompt
+    assert (
+        "仅列原版常见设施" in build_glance_spec().description and "不含联动模组机器" in build_glance_spec().description
+    )
     assert "暂停或取消非紧急的移动与施工目标" in agent_prompt
     # 已删除诱发长文堆砌的冲突条款，补入公屏简洁与放权推进正向边界
     assert "合并回应所有未答要点" not in agent_prompt

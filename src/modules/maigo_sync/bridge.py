@@ -81,6 +81,13 @@ def _normalize_external_id(platform: str, external_id: str) -> str:
     return cleaned
 
 
+def _format_exc(exc: BaseException) -> str:
+    """格式化异常摘要为带类名的可读文本；异常消息为空时仅返回类名，避免日志留悬空冒号。"""
+    name = type(exc).__name__
+    detail = str(exc).strip()
+    return f"{name}: {detail}" if detail else name
+
+
 class MaiGOBridge:
     """Amaidesu 与 MaiGO 之间的薄同步桥梁。
 
@@ -200,7 +207,7 @@ class MaiGOBridge:
         try:
             await self._client.close()
         except Exception as exc:  # noqa: BLE001 - 关闭清理阶段仅记录异常
-            logger.warning(f"关闭 MaiGO HTTP 客户端失败: {exc}", exc=exc)
+            logger.warning(f"关闭 MaiGO HTTP 客户端失败: {_format_exc(exc)}", exc=exc)
 
     async def ensure_checked_out(
         self,
@@ -239,7 +246,7 @@ class MaiGOBridge:
                 raw = await self._client.checkout(request_body)
             except Exception as exc:  # noqa: BLE001 - 服务端不可达或拒收时安全降级为单机模式
                 self._failed_checkout_sessions.add(sid)
-                logger.warning(f"MaiGO 开播签出失败（场次 {sid} 降级为单机模式）: {exc}", exc=exc)
+                logger.warning(f"MaiGO 开播签出失败（场次 {sid} 降级为单机模式）: {_format_exc(exc)}", exc=exc)
                 return False
 
             checkout_id = str(raw.get("checkout_id") or "").strip()
@@ -516,9 +523,9 @@ class MaiGOBridge:
                     await self._client.checkin(checkout_id, body)
                     delivered += 1
                 except MaiGORejected as exc:
-                    logger.warning(f"MaiGO 补推签入被服务端拒收（丢弃记录 {checkout_id}）: {exc}")
+                    logger.warning(f"MaiGO 补推签入被服务端拒收（丢弃记录 {checkout_id}）: {_format_exc(exc)}")
                 except Exception as exc:  # noqa: BLE001 - 服务端仍离线则保留后续记录留待下次启动
-                    logger.warning(f"MaiGO 补推签入失败（保留 {len(records) - idx} 条待下次启动）: {exc}")
+                    logger.warning(f"MaiGO 补推签入失败（保留 {len(records) - idx} 条待下次启动）: {_format_exc(exc)}")
                     remaining.append(item)
                     stop_batch = True
             await asyncio.to_thread(self._pending_log.rewrite, remaining)
@@ -694,10 +701,10 @@ class MaiGOBridge:
             return
         exc = task.exception()
         if exc is not None:
-            logger.warning(f"MaiGO 后台任务 {task.get_name()} 异常退出: {exc}", exc=exc)
+            logger.warning(f"MaiGO 后台任务 {task.get_name()} 异常退出: {_format_exc(exc)}", exc=exc)
 
     def _log_throttled_warning(self, prefix: str, exc: Exception) -> None:
-        msg = f"{type(exc).__name__}: {exc}"
+        msg = _format_exc(exc)
         if msg != self._last_error_text:
             self._last_error_text = msg
             logger.warning(f"{prefix}（后续同因降为 debug）: {msg}")
@@ -715,11 +722,11 @@ class MaiGOBridge:
                 logger.info(f"MaiGO 下播签入成功: session={state.live_session_id}, checkout={state.checkout_id}")
                 return True
             except MaiGORejected as exc:
-                logger.warning(f"MaiGO 下播签入被服务端拒收（不再重试）: {exc}")
+                logger.warning(f"MaiGO 下播签入被服务端拒收（不再重试）: {_format_exc(exc)}")
                 state.checked_in = True
                 return False
             except Exception as exc:  # noqa: BLE001 - 暂时失败继续下一档退避，最后落盘待补推
-                logger.warning(f"MaiGO 下播签入失败（checkout={state.checkout_id}）: {exc}")
+                logger.warning(f"MaiGO 下播签入失败（checkout={state.checkout_id}）: {_format_exc(exc)}")
 
         state.checked_in = True
         self._sessions.pop(state.live_session_id, None)
@@ -729,5 +736,5 @@ class MaiGOBridge:
                     await asyncio.to_thread(self._pending_log.append, state.checkout_id, payload)
                     logger.info(f"MaiGO 下播签入已写入待补推队列: checkout={state.checkout_id}")
                 except OSError as exc:
-                    logger.warning(f"写入 MaiGO 待补推队列失败: {exc}", exc=exc)
+                    logger.warning(f"写入 MaiGO 待补推队列失败: {_format_exc(exc)}", exc=exc)
         return False

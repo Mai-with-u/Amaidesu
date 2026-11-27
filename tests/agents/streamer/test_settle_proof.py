@@ -822,3 +822,146 @@ async def test_commitment_closure_requires_explicit_evidence_and_disallows_fuzzy
     assert session is not None and session.settle_report is not None
     report = SettleReport.model_validate_json(session.settle_report)
     assert any(item.what == f"了结 #{comm_id}" and "游戏记录里没核实到" in item.reason for item in report.unregistered)
+
+
+async def test_quote_rescue_and_time_order_rebind_avoid_early_preview_line(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """同一段引文在早先出发预告与事后结果汇报两行都出现时，不得错挂早先预告行而误判记录晚于发言；
+    若早先发言的引文在事件之后从未再出现，反吹牛时间序红线仍旧生效。"""
+    archive_prompt = prompt_manager.render("memory_archive_system")
+    assert "结果发生之后、时刻不早于对应【游戏记录】的那一行" in archive_prompt
+
+    session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=60 * _MINUTE)
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="milestone",
+        message="矿洞宝箱获得音乐唱片",
+        timestamp_ms=20 * _MINUTE,
+    )
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="item_delivery",
+        message="从箱子取出了 3 个钻石",
+        timestamp_ms=20 * _MINUTE + 17_000,
+    )
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="task_succeeded",
+        message="黑曜石门框搭建完成",
+        timestamp_ms=24 * _MINUTE,
+    )
+    await store.events.insert_game_event(
+        live_session_id=session_id,
+        game="Minecraft",
+        event_type="milestone",
+        message="清空秘银宝箱",
+        timestamp_ms=35 * _MINUTE,
+    )
+
+    chat_early_preview = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=11 * _MINUTE,
+        sender_role="assistant",
+        content="出发下矿开箱，看看能不能摸到音乐唱片、凑齐三颗钻石",
+        message_type="speech",
+    )
+    chat_early_portal = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=12 * _MINUTE,
+        sender_role="assistant",
+        content="回头把黑曜石门框搭好准备去下界",
+        message_type="speech",
+    )
+    chat_early_bluff = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=13 * _MINUTE,
+        sender_role="assistant",
+        content="秘银宝箱已经全部清完啦",
+        message_type="speech",
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=19 * _MINUTE,
+        sender_role="assistant",
+        content="顺着矿洞继续往深处探索",
+        message_type="speech",
+    )
+    chat_after_event = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=21 * _MINUTE,
+        sender_role="assistant",
+        content="真下矿开箱摸到音乐唱片、凑齐三颗钻石啦",
+        message_type="speech",
+    )
+    chat_after_portal = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=25 * _MINUTE,
+        sender_role="assistant",
+        content="黑曜石门框搭好啦，随时可以点火",
+        message_type="speech",
+    )
+
+    archive = [
+        # 场景 1：行号偏移（填了相邻第 4 行而非第 5 行），全场检索兜底须落到事件后的第 5 行而非早 9 分钟的第 1 行
+        {
+            "line": 4,
+            "title": "Minecraft：下矿开箱摸到音乐唱片、凑齐三颗钻石",
+            "quote": "摸到音乐唱片、凑齐三颗钻石",
+            "game": "Minecraft",
+            "evidence": "记录#1、记录#2",
+        },
+        # 场景 2：模型直接填了早先预告第 2 行，但同文原话在第 6 行事后发言逐字存在且能通过核验 -> 改挂第 6 行
+        {
+            "line": 2,
+            "title": "Minecraft：黑曜石门框搭好了",
+            "quote": "黑曜石门框搭好",
+            "game": "Minecraft",
+            "evidence": "记录#3",
+        },
+        # 场景 3：早先发言原话在事件（35 分钟）后从未再次播出 -> 反吹牛红线仍拦截，保持原行并标未核实
+        {
+            "line": 3,
+            "title": "Minecraft：秘银宝箱全部清完",
+            "quote": "秘银宝箱已经全部清完啦",
+            "game": "Minecraft",
+            "evidence": "记录#4",
+        },
+    ]
+    llm = FakeLLMManager(
+        responses=[
+            Response(success=True, content=json.dumps({"archive": archive}, ensure_ascii=False)),
+            Response(success=True, content='{"commitments": []}'),
+        ]
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 10_000,
+    )
+
+    assert await settler.settle_session(session_id) is True
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [(line.text, line.evidence_chat_id) for line in lines] == [
+        ("Minecraft：下矿开箱摸到音乐唱片、凑齐三颗钻石", chat_after_event),
+        ("Minecraft：黑曜石门框搭好了", chat_after_portal),
+        ("Minecraft：她说秘银宝箱全部清完（游戏记录里没核实到）", chat_early_bluff),
+    ]
+    assert all(line.evidence_chat_id not in (chat_early_preview, chat_early_portal) for line in lines)
+    session = await store.sessions.get_live_session(live_session_id=session_id)
+    assert session is not None and session.settle_report is not None
+    report = SettleReport.model_validate_json(session.settle_report)
+    assert report.unverified_claims == 1
+    assert len(report.quote_rescues) == 2
+    assert any("第 5 行" in note and "非所引第 4 行" in note for note in report.quote_rescues)
+    assert any("第 6 行" in note and "非所引第 2 行" in note for note in report.quote_rescues)
