@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 
 class FakeEventBus:
@@ -91,3 +91,27 @@ def fake_client_factory() -> Callable[..., FakeMcpClient]:
     """
     FakeMcpClient.instances = []
     return FakeMcpClient
+
+
+class PrimedCollector(NamedTuple):
+    """``make_primed_collector`` 的产物：采集器实例、它接上的替身客户端与配套的假事件总线。"""
+
+    collector: Any  # 采集器实例
+    client: Any  # FakeMcpClient 最近实例
+    bus: Any  # 本工厂新建的假事件总线
+
+
+async def make_primed_collector(
+    collector_cls: Any, *, config: Optional[Dict[str, Any]] = None, **kwargs: Any
+) -> PrimedCollector:
+    """造一个已接上替身连接、游标已建立的采集器：灌一页事件、drain_once 一次即可断言。
+
+    替身客户端在预置页读完后的默认回复是空页，工厂的首读因此只建立游标
+    （stream-A / cursor 0），不补发任何事件；kwargs 原样透传给采集器构造
+    （例如聊天采集器的 ``self_mention_names``）。
+    """
+    bus = FakeEventBus()
+    collector = collector_cls(config=config or {}, event_bus=bus, client_factory=fake_client_factory(), **kwargs)
+    assert await collector.drain_once() is True
+    client = FakeMcpClient.instances[-1]
+    return PrimedCollector(collector=collector, client=client, bus=bus)

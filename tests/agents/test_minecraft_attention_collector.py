@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pytest
 from pydantic import ValidationError
@@ -34,30 +34,17 @@ from .minecraft_collector_fakes import FakeEventBus as _FakeEventBus
 from .minecraft_collector_fakes import FakeMcpClient as _FakeClient
 from .minecraft_collector_fakes import events_page as _page
 from .minecraft_collector_fakes import fake_client_factory
+from .minecraft_collector_fakes import make_primed_collector
 
 
 def _event(cursor: int, kind: str, message: str = "", goal_id: int = -1, **extra: Any) -> Dict[str, Any]:
     return {"cursor": cursor, "kind": kind, "goal_id": goal_id, "message": message, **extra}
 
 
-def _collector(bus: _FakeEventBus, clock: Optional[Callable[[], int]] = None) -> MaicraftAttentionCollector:
-    """接替身客户端的采集器（MCP 客户端经构造工厂注入；要控时间时注入时钟）。"""
-    if clock is None:
-        return MaicraftAttentionCollector(config={}, event_bus=bus, client_factory=fake_client_factory())  # type: ignore[arg-type]
-    return MaicraftAttentionCollector(  # type: ignore[arg-type]
-        config={}, event_bus=bus, client_factory=fake_client_factory(), clock=clock
-    )
-
-
-async def _primed(
-    bus: _FakeEventBus, cursor: int = 5, clock: Optional[Callable[[], int]] = None
-) -> tuple[MaicraftAttentionCollector, _FakeClient]:
-    collector = _collector(bus, clock)
-    assert await collector._ensure_ready() is True
-    client = _FakeClient.instances[-1]
-    client.pages.append(_page([], cursor=cursor))
-    await collector._drain()
-    return collector, client
+async def _advance_cursor(collector: MaicraftAttentionCollector, client: _FakeClient, cursor: int) -> None:
+    """把游标推进到指定位置：一页"提醒"事件不转出（采集器对它静默），正好借它挪游标。"""
+    client.pages.append(_page([_event(cursor, "reminder", "计时到点")], cursor=cursor))
+    assert await collector.drain_once() is True
 
 
 # 契约面
@@ -265,15 +252,17 @@ def test_body_payload_requires_game_and_kind() -> None:
 async def test_first_read_skips_the_backlog_without_forwarding() -> None:
     """首读拿到的是流里最早保留的事件：翻到最新再开始，陈年事件不灌进系统。"""
     bus = _FakeEventBus()
-    collector = _collector(bus)
+    collector = MaicraftAttentionCollector(  # type: ignore[arg-type]
+        config={}, event_bus=bus, client_factory=fake_client_factory()
+    )
     assert await collector._ensure_ready() is True
     client = _FakeClient.instances[-1]
     client.pages.append(_page([_event(1, "temporary_task_started", "被威胁")], cursor=1, has_more=True))
     client.pages.append(_page([_event(2, "temporary_task_finished", "自卫结束")], cursor=2))
 
-    await collector._drain()
+    await collector.drain_once()
 
-    assert collector._cursor == 2 and collector._stream_id == "stream-A"
+    assert collector.stream_position == ("stream-A", 2)
     assert bus.events == []
     assert client.read_calls[0]["arguments"] == {"wait_ms": 0}
     assert client.read_calls[1]["arguments"] == {"stream_id": "stream-A", "after_cursor": 1, "wait_ms": 0}
@@ -281,8 +270,8 @@ async def test_first_read_skips_the_backlog_without_forwarding() -> None:
 
 async def test_incremental_read_forwards_only_body_encounters() -> None:
     """增量读取：只把身体遭遇转出去，目标运行的事件留给游戏 Agent。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
+    await _advance_cursor(collector, client, 5)
     client.pages.append(
         _page(
             [
@@ -294,7 +283,7 @@ async def test_incremental_read_forwards_only_body_encounters() -> None:
         )
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert [name for name, _ in bus.events] == [
         CoreEvents.GAME_BODY_REFLEX_STARTED,
@@ -309,13 +298,12 @@ async def test_incremental_read_forwards_only_body_encounters() -> None:
     assert "-9" not in dumped and "cursor" not in dumped
     second = client.read_calls[-1]["arguments"]
     assert second == {"stream_id": "stream-A", "after_cursor": 5, "wait_ms": 25_000}
-    assert collector._cursor == 8
+    assert collector.stream_position == ("stream-A", 8)
 
 
 async def test_hurt_carries_the_attacker_through_to_the_payload() -> None:
     """Mod 在 hurt 事件上铺的攻击者字段透传进 attacked 的 attacker；没带时保持空串。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     client.pages.append(
         _page(
             [
@@ -333,7 +321,7 @@ async def test_hurt_carries_the_attacker_through_to_the_payload() -> None:
         )
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert [name for name, _ in bus.events] == [CoreEvents.GAME_BODY_ATTACKED, CoreEvents.GAME_BODY_ATTACKED]
     with_attacker, without = bus.events[0][1], bus.events[1][1]
@@ -344,8 +332,7 @@ async def test_hurt_carries_the_attacker_through_to_the_payload() -> None:
 
 async def test_step_finished_forwards_to_milestone_without_coordinates() -> None:
     """步进完成 → game.milestone：结论句原样转出（去坐标/观察编号），目标完成仍不转发。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     client.pages.append(
         _page(
             [
@@ -356,7 +343,7 @@ async def test_step_finished_forwards_to_milestone_without_coordinates() -> None
         )
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert [name for name, _ in bus.events] == [CoreEvents.GAME_MILESTONE]
     name, payload = bus.events[0]
@@ -370,26 +357,24 @@ async def test_step_finished_forwards_to_milestone_without_coordinates() -> None
 
 async def test_step_finished_milestone_carries_the_save_of_its_page() -> None:
     """步进完成转出的里程碑带着这一页所在的存档；旧版 Mod 的页没有 world，存档留空。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     page = _page([_event(6, "step_finished", "水车搭好了", goal_id=3)], cursor=6)
     page["world"] = {"id": "aaa", "name": "老家", "source": "world_id_file"}
     client.pages.append(page)
     client.pages.append(_page([_event(7, "step_finished", "屋顶封好了", goal_id=3)], cursor=7))
 
-    await collector._drain()
-    await collector._drain()
+    await collector.drain_once()
+    await collector.drain_once()
 
     saves = [(payload.save_id, payload.save_name) for _name, payload in bus.events]
     assert saves == [("aaa", "老家"), ("", "")]
 
 
 async def test_finished_temporary_task_is_marked_resolved() -> None:
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     client.pages.append(_page([_event(6, "temporary_task_finished", "自卫结束，回到打点；位移 2 格")], cursor=6))
 
-    await collector._drain()
+    await collector.drain_once()
 
     name, payload = bus.events[0]
     assert name == CoreEvents.GAME_BODY_REFLEX_FINISHED and payload.resolved is True
@@ -397,8 +382,7 @@ async def test_finished_temporary_task_is_marked_resolved() -> None:
 
 async def test_death_during_a_suicide_is_told_as_going_home() -> None:
     """寻死跑着的时候死了：给主播的话换成"回家"，不当事故讲；寻死结束后再死照常讲。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     client.pages.append(
         _page(
             [
@@ -411,7 +395,7 @@ async def test_death_during_a_suicide_is_told_as_going_home() -> None:
         )
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     chosen, accident = [payload for name, payload in bus.events if name == CoreEvents.GAME_BODY_DIED]
     assert chosen.summary == CHOSEN_DEATH_LINE and "不是出事" in chosen.summary
@@ -420,15 +404,14 @@ async def test_death_during_a_suicide_is_told_as_going_home() -> None:
 
 async def test_stale_suicide_does_not_soften_a_later_death() -> None:
     """寻死的结束事件漏读：记下的编号放久了作废，之后真出事照常讲。"""
-    bus = _FakeEventBus()
     now = [0]
-    collector, client = await _primed(bus, cursor=5, clock=lambda: now[0])
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector, clock=lambda: now[0])
     client.pages.append(_page([_event(6, "started", "开始：maicraft:suicide", goal_id=9)], cursor=6))
-    await collector._drain()
+    await collector.drain_once()
 
     now[0] = 11 * 60 * 1000
     client.pages.append(_page([_event(7, "character_died", "Alex被苦力怕炸死了")], cursor=7))
-    await collector._drain()
+    await collector.drain_once()
 
     [(_, payload)] = bus.events
     assert payload.summary != CHOSEN_DEATH_LINE
@@ -436,14 +419,13 @@ async def test_stale_suicide_does_not_soften_a_later_death() -> None:
 
 async def test_food_taken_from_others_reaches_the_streamer_with_how_to_answer() -> None:
     """拿了别人家的吃的：转给主播一句话（主人名留着、坐标去掉）和主人来问时怎么接。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     detail = {"whose": "player", "owner": "Steve", "at": {"x": 12, "y": 64, "z": -8}, "items": []}
     event = _event(6, "others_food_taken", "饿到饱食度 3，从 Steve 家的箱子（12, 64, -8）拿了 2 个面包")
     event["others_food_taken"] = detail
     client.pages.append(_page([event], cursor=6))
 
-    await collector._drain()
+    await collector.drain_once()
 
     [(name, payload)] = bus.events
     assert name == CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN and payload.source_event_type == "others_food_taken"
@@ -453,28 +435,27 @@ async def test_food_taken_from_others_reaches_the_streamer_with_how_to_answer() 
 
 async def test_stream_change_resets_cursor_without_forwarding_history() -> None:
     """换了世界或 Mod 重启：事件流换新编号，只重新建立游标，旧流和新流的积压都不转发。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     client.pages.append(
         _page([_event(1, "temporary_task_started", "被威胁")], cursor=1, stream_id="stream-B", status="stream_changed")
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert bus.events == []
-    assert collector._stream_id == "stream-B" and collector._cursor == 1
+    assert collector.stream_position == ("stream-B", 1)
 
 
 async def test_read_failure_keeps_cursor_and_surfaces_to_the_loop() -> None:
     """读取失败：游标不动（那一段事件不能因此永久丢失），异常上抛给采集循环处理重连。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
+    await _advance_cursor(collector, client, 5)
     client.read_error = RuntimeError("boom")
 
     with pytest.raises(RuntimeError):
-        await collector._drain()
+        await collector.drain_once()
 
-    assert collector._cursor == 5
+    assert collector.stream_position == ("stream-A", 5)
     assert bus.events == []
 
 
@@ -530,7 +511,9 @@ def _unavailable_warnings(cap: Any) -> List[Dict[str, Any]]:
 
 async def test_unavailable_reported_once_per_reason(loguru_capture: Any) -> None:
     """同因不可用只 warning 一次；理由变化、或接上之后再次失败，才重新报。"""
-    collector = _collector(_FakeEventBus())
+    collector = MaicraftAttentionCollector(  # type: ignore[arg-type]
+        config={}, event_bus=_FakeEventBus(), client_factory=fake_client_factory()
+    )
     cap = loguru_capture  # fixture 已进入捕获，不要再 with（会重复计数）
 
     collector._report_unavailable("连接失败（RuntimeError: boom）")
@@ -576,8 +559,7 @@ async def test_player_body_language_reaches_the_streamer_as_play_not_as_an_attac
     """别的玩家冲角色蹲起、拍一下：单独成一种叙事转给主播，动作照说、方位去掉，口径是俏皮接、不提血量。"""
     assert classify("player_body_language") == "player_body_language"
     assert classify("hurt") == "attacked", "真挨打照旧归 attacked"
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     client.pages.append(
         _page(
             [
@@ -592,7 +574,7 @@ async def test_player_body_language_reaches_the_streamer_as_play_not_as_an_attac
         )
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     [(first_name, first), (second_name, second)] = bus.events
     assert first_name == second_name == CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE
@@ -604,13 +586,12 @@ async def test_player_body_language_reaches_the_streamer_as_play_not_as_an_attac
 
 async def test_follow_status_passes_the_followed_player_through() -> None:
     """跟随状况跟的是玩家时带着他：原样透传进身体事件，叙事那句不变，也不记玩家互动。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     followed = _event(6, "follow_status", "跟丢了在找：他过了门")
     followed["player"] = {"name": "Steve", "uuid": "uuid-steve"}
     client.pages.append(_page([followed, _event(7, "follow_status", "跟着的羊走远了")], cursor=7))
 
-    await collector._drain()
+    await collector.drain_once()
 
     [(name, steve), (_, sheep)] = bus.events
     assert name == CoreEvents.GAME_BODY_FOLLOW_STATUS
@@ -621,15 +602,14 @@ async def test_follow_status_passes_the_followed_player_through() -> None:
 
 async def test_body_language_with_a_player_uuid_also_records_the_interaction() -> None:
     """带玩家 UUID 的肢体动作：叙事照发，后面再发打招呼与送东西两条玩家互动（只给存储记账）。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     event = _event(
         6, "player_body_language", "玩家 Alex（e4）朝你扔了 3 个面包（e9），落在你左侧 1 格；他在你左前方 2 格"
     )
     event["player"] = {"name": "Alex", "uuid": "uuid-alex", "id": "e4"}
     client.pages.append(_page([event], cursor=6))
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert [name for name, _ in bus.events] == [
         CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
@@ -646,8 +626,7 @@ async def test_body_language_with_a_player_uuid_also_records_the_interaction() -
 async def test_rare_sighting_forwards_boss_and_rare_ore_without_numbers() -> None:
     """眼前撞见 Boss 或露出天然稀有矿脉：转成 game.body.rare_sighted，去格数与观察编号，带细类供分桶冷却。"""
     assert classify("rare_sighting") == "rare_sighted"
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     boss_event = _event(6, "rare_sighting", "眼前看见了监守者（e3）（前方 12 格）")
     boss_event["rare_sighting"] = {
         "category": "boss",
@@ -675,7 +654,7 @@ async def test_rare_sighting_forwards_boss_and_rare_ore_without_numbers() -> Non
     }
     client.pages.append(_page([boss_event, ore_vein, single_ore], cursor=8))
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert [name for name, _ in bus.events] == [
         CoreEvents.GAME_BODY_RARE_SIGHTED,
@@ -692,13 +671,12 @@ async def test_rare_sighting_forwards_boss_and_rare_ore_without_numbers() -> Non
 
 async def test_rare_loot_marks_notable_milestone_while_step_finished_stays_routine() -> None:
     """开箱发现稀罕战利品标 notable=True 供即时反应惊呼；常规步进完成保持 notable=False 只留背景。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     loot = _event(6, "rare_loot_found", "打开战利品箱（-311, 59, 73）开出了附魔金苹果 ×1，已经拿走", goal_id=12)
     step = _event(7, "step_finished", "采集完成：8 个圆石进了背包", goal_id=12)
     client.pages.append(_page([loot, step], cursor=7))
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert [name for name, _ in bus.events] == [CoreEvents.GAME_MILESTONE, CoreEvents.GAME_MILESTONE]
     loot_payload, step_payload = bus.events[0][1], bus.events[1][1]
@@ -708,8 +686,7 @@ async def test_rare_loot_marks_notable_milestone_while_step_finished_stays_routi
 
 async def test_suicide_marks_death_intentional_and_unseen_hurt_hides_attacker() -> None:
     """寻死回家的死讯标 intentional=True；未见凶手的暗箭挨打保留媒介白话且不带攻击者身份。"""
-    bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector)
     client.pages.append(
         _page(
             [
@@ -723,7 +700,7 @@ async def test_suicide_marks_death_intentional_and_unseen_hurt_hides_attacker() 
         )
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     chosen, accident, unseen_arrow = [payload for _, payload in bus.events]
     assert chosen.kind == "died" and chosen.intentional is True
@@ -737,7 +714,7 @@ async def test_items_tossed_forwards_delivery_event_with_save_and_details() -> N
     assert classify("items_tossed") == "items_tossed"
     bus = _FakeEventBus()
     now_tick = 1_795_000_123_000
-    collector, client = await _primed(bus, cursor=5, clock=lambda: now_tick)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector, clock=lambda: now_tick)
     event = _event(6, "items_tossed", "朝 PlayerA（e4）扔出了 3 个 minecraft:diamond（12, 64, -8）")
     event["items_tossed"] = {
         "to": "PlayerA",
@@ -749,7 +726,7 @@ async def test_items_tossed_forwards_delivery_event_with_save_and_details() -> N
     page["world"] = {"id": "save-a", "name": "联机二周目", "source": "world_id_file"}
     client.pages.append(page)
 
-    await collector._drain()
+    await collector.drain_once()
 
     [(name, payload)] = bus.events
     assert name == CoreEvents.GAME_BODY_ITEMS_TOSSED
@@ -768,7 +745,7 @@ async def test_items_tossed_forwards_delivery_event_with_save_and_details() -> N
 async def test_items_tossed_falls_back_to_structured_fields_when_message_is_blank() -> None:
     """items_tossed 缺少 message 时由结构化 items_tossed 拼出客观交付句。"""
     bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5, clock=lambda: 1_795_000_200_000)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector, clock=lambda: 1_795_000_200_000)
     event = _event(6, "items_tossed", "")
     event["items_tossed"] = {
         "to": "PlayerB",
@@ -777,7 +754,7 @@ async def test_items_tossed_falls_back_to_structured_fields_when_message_is_blan
     }
     client.pages.append(_page([event], cursor=6))
 
-    await collector._drain()
+    await collector.drain_once()
 
     [(name, payload)] = bus.events
     assert name == CoreEvents.GAME_BODY_ITEMS_TOSSED
@@ -788,7 +765,7 @@ async def test_items_tossed_falls_back_to_structured_fields_when_message_is_blan
 async def test_others_things_stored_forwards_save_and_action_details() -> None:
     """往他人容器存物时，others_things_touched 携带 save_id/save_name 与 action='stored' 供存储台账记 item_delivery。"""
     bus = _FakeEventBus()
-    collector, client = await _primed(bus, cursor=5, clock=lambda: 1_795_000_300_000)
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector, clock=lambda: 1_795_000_300_000)
     detail = {
         "action": "stored",
         "owner": "PlayerA",
@@ -803,7 +780,7 @@ async def test_others_things_stored_forwards_save_and_action_details() -> None:
     page["world"] = {"id": "save-a", "name": "联机二周目", "source": "world_id_file"}
     client.pages.append(page)
 
-    await collector._drain()
+    await collector.drain_once()
 
     [(name, payload)] = bus.events
     assert name == CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED

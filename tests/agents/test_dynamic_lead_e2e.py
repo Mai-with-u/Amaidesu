@@ -1685,7 +1685,7 @@ async def test_e2e_live_commitment_ledger_delivery_progress_and_done_closure(
         assert await collector._ensure_ready() is True
         collector_client = _FakeCollectorClient.instances[-1]
         collector_client.pages.append(_collector_page([], cursor=5))
-        await collector._drain()
+        await collector.drain_once()
         try:
             # 让视野中存在 PlayerA（带 UUID），使开局即可按在场玩家拉取权威承诺账本
             rig.server.scene_view["entities"] = [
@@ -1743,7 +1743,7 @@ async def test_e2e_live_commitment_ledger_delivery_progress_and_done_closure(
             )
             toss_page["world"] = {"id": "save_e2e_1", "name": "联机冒险二周目", "source": "world_id_file"}
             collector_client.pages.append(toss_page)
-            await collector._drain()
+            await collector.drain_once()
             await rig.bus.wait_until_drained()
 
             delivered_events = await db.events.list_session_game_events(live_session_id=live_sid)
@@ -1808,7 +1808,7 @@ async def test_e2e_live_commitment_ledger_delivery_progress_and_done_closure(
             )
             stored_page["world"] = {"id": "save_e2e_1", "name": "联机冒险二周目", "source": "world_id_file"}
             collector_client.pages.append(stored_page)
-            await collector._drain()
+            await collector.drain_once()
             await rig.bus.wait_until_drained()
 
             rig.server.body_event(

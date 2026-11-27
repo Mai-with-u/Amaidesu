@@ -132,6 +132,22 @@ class MaicraftEventsCollector(BaseCollector):
                 backoff.reset()
             yield None
 
+    async def drain_once(self) -> bool:
+        """单步处理一批：确保连接后带游标读一页并逐条转发。
+
+        返回连接是否就绪（False = 未连上，本轮什么都没读）。
+        首次调用只建立游标，接手前的事件不补发；与采集循环走同一条读取路径。
+        """
+        if not await self._ensure_ready():
+            return False
+        await self._drain()
+        return True
+
+    @property
+    def stream_position(self) -> tuple[Optional[str], int]:
+        """当前游标位置 ``(stream_id, cursor)`` 的只读快照；尚未建立游标时 ``stream_id`` 为 ``None``。"""
+        return (self._stream_id, self._cursor)
+
     def _report_unavailable(self, reason: str) -> None:
         """记录"流不可用"：同因只 warning 一次，重复降 debug；恢复时 ``_ensure_ready`` 复位特征串。"""
         if reason == self._unavailable_reason:

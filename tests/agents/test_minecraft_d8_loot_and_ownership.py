@@ -15,10 +15,8 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 
-from .minecraft_collector_fakes import FakeEventBus as _CollectorBus
-from .minecraft_collector_fakes import FakeMcpClient as _FakeClient
+from .minecraft_collector_fakes import make_primed_collector
 from .minecraft_collector_fakes import events_page as _page
-from .minecraft_collector_fakes import fake_client_factory
 from .minecraft_v1_fakes import FakeMaicraft, _call, _resp, _texts, _wait_until, make_minecraft_agent
 
 
@@ -46,17 +44,7 @@ def _others_touched_event(
 
 async def test_attention_collector_forwards_others_things_touched_and_rare_loot_found() -> None:
     """采集器：动了别人东西发身体事件（去坐标、带玩家身份与认账口径）；开出稀罕战利品转 game.milestone。"""
-    bus = _CollectorBus()
-    collector = MaicraftAttentionCollector(
-        config={},
-        event_bus=bus,  # type: ignore[arg-type]
-        client_factory=fake_client_factory(),
-        clock=lambda: 1000,
-    )
-    assert await collector._ensure_ready() is True
-    client = _FakeClient.instances[-1]
-    client.pages.append(_page([], cursor=5))
-    await collector._drain()
+    collector, client, bus = await make_primed_collector(MaicraftAttentionCollector, clock=lambda: 1000)
 
     rare_event = {
         "cursor": 6,
@@ -72,7 +60,7 @@ async def test_attention_collector_forwards_others_things_touched_and_rare_loot_
     }
     offline_event = _others_touched_event(owner="一位不在线的玩家", cursor=8)
     client.pages.append(_page([rare_event, _others_touched_event(cursor=7), offline_event], cursor=8))
-    await collector._drain()
+    await collector.drain_once()
 
     assert len(bus.events) == 3
     m_name, m_payload = bus.events[0]

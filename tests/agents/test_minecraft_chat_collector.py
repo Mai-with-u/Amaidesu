@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict
 
 import pytest
 
@@ -34,7 +34,8 @@ from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game_chat import GameChatPayload
 
-from .minecraft_collector_fakes import FakeEventBus, FakeMcpClient, events_page, fake_client_factory
+from .minecraft_collector_fakes import FakeMcpClient, events_page
+from .minecraft_collector_fakes import make_primed_collector
 
 _STEVE_ID = "8667ba71-b85a-4004-af54-457a9734eed7"
 
@@ -53,23 +54,10 @@ def _chat(
     return event
 
 
-async def _primed(
-    config: Optional[Dict[str, Any]] = None,
-    self_mention_names: Tuple[str, ...] = (),
-) -> Tuple[MaicraftChatCollector, FakeMcpClient, FakeEventBus]:
-    """接上替身并完成首次读取：流里已有一条接手前的聊天，游标停在 3。"""
-    bus = FakeEventBus()
-    collector = MaicraftChatCollector(  # type: ignore[arg-type]
-        config=config or {},
-        event_bus=bus,
-        client_factory=fake_client_factory(),
-        self_mention_names=self_mention_names,
-    )
-    assert await collector._ensure_ready() is True
-    client = FakeMcpClient.instances[-1]
-    client.pages.append(events_page([_chat(3, "接手前说的话")], cursor=3))
-    await collector._drain()
-    return collector, client, bus
+async def _advance_cursor(collector: MaicraftChatCollector, client: FakeMcpClient, cursor: int) -> None:
+    """把游标推进到指定位置：一条空白聊天不转出（采集器对它静默），正好借它挪游标。"""
+    client.pages.append(events_page([_chat(cursor, "   ")], cursor=cursor))
+    assert await collector.drain_once() is True
 
 
 def test_attribution_tells_machine_lines_from_people() -> None:
@@ -132,7 +120,7 @@ def test_companion_collectors_receive_the_streamer_bot_name() -> None:
 
 async def test_player_chat_mentioning_her_is_marked_in_mentions() -> None:
     """玩家聊天正文含人设名或账号名时，payload 的 mentions 追加 type="self" 条目；不含与系统消息不标。"""
-    collector, client, bus = await _primed(self_mention_names=("麦麦",))
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector, self_mention_names=("麦麦",))
     client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     client.pages.append(
         events_page(
@@ -145,7 +133,7 @@ async def test_player_chat_mentioning_her_is_marked_in_mentions() -> None:
             cursor=7,
         )
     )
-    await collector._drain()
+    await collector.drain_once()
     persona_line, account_line, plain, system_line = (payload for _, payload in bus.events)
     assert [(m.name, m.type, m.id) for m in persona_line.mentions] == [("麦麦", SELF_MENTION_TYPE, "")]
     assert [(m.name, m.type) for m in account_line.mentions] == [("Alex", SELF_MENTION_TYPE)], (
@@ -157,7 +145,7 @@ async def test_player_chat_mentioning_her_is_marked_in_mentions() -> None:
 
 async def test_game_reported_mentions_stay_and_self_entry_is_appended() -> None:
     """游戏报的点名词照旧在前，自提及条目追加在后；同一条上互不挤掉。"""
-    collector, client, bus = await _primed(self_mention_names=("麦麦",))
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector, self_mention_names=("麦麦",))
     client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     line = {
         "cursor": 4,
@@ -168,7 +156,7 @@ async def test_game_reported_mentions_stay_and_self_entry_is_appended() -> None:
         "mentions": [{"name": "苦力怕", "type": "minecraft:creeper", "uuid": "0f0e0d0c-0b0a-4908-8706-050403020100"}],
     }
     client.pages.append(events_page([line], cursor=4))
-    await collector._drain()
+    await collector.drain_once()
     [(_, payload)] = bus.events
     assert [(m.name, m.type, m.id) for m in payload.mentions] == [
         ("苦力怕", "minecraft:creeper", "0f0e0d0c-0b0a-4908-8706-050403020100"),
@@ -207,7 +195,7 @@ def test_chat_lines_sent_as_system_messages_are_attributed() -> None:
 
 async def test_collector_drops_own_echo_and_reads_account_once() -> None:
     """账号名在这条连接上只读一次；自己的回显不转，别人的话按玩家发言转出；重连后重新认。"""
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     client.pages.append(
         events_page(
@@ -219,7 +207,7 @@ async def test_collector_drops_own_echo_and_reads_account_once() -> None:
             cursor=6,
         )
     )
-    await collector._drain()
+    await collector.drain_once()
 
     assert [(p.kind, p.sender, p.content) for _, p in bus.events] == [
         ("player", "Steve", "不是我的"),
@@ -232,48 +220,48 @@ async def test_collector_drops_own_echo_and_reads_account_once() -> None:
     reconnected = FakeMcpClient.instances[-1]
     reconnected.replies["observe"] = {"ok": True, "data": {"name": "Steve"}}
     reconnected.pages.append(events_page([{"cursor": 7, "kind": "system", "text": "<Steve> 换号了"}], cursor=7))
-    await collector._drain()
+    await collector.drain_once()
     assert len(bus.events) == 2, "重连后按新读到的账号名认回显"
 
 
 async def test_unknown_account_keeps_line_as_system_and_retries() -> None:
     """读不到账号名时这一行照系统消息转出、不当成别人搭话，下一行再试着读。"""
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     client.replies["observe"] = {"ok": False, "error": {"code": "not_in_world", "message": "不在世界里"}}
     client.pages.append(events_page([{"cursor": 4, "kind": "system", "text": "<Alex> 在吗"}], cursor=4))
-    await collector._drain()
+    await collector.drain_once()
     [(_, payload)] = bus.events
     assert (payload.kind, payload.sender, payload.note) == ("system", "", NOTE_SPEAKER_UNCONFIRMED)
 
     client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     client.pages.append(events_page([{"cursor": 5, "kind": "system", "text": "<Alex> 在吗"}], cursor=5))
-    await collector._drain()
+    await collector.drain_once()
     assert len(bus.events) == 1, "读到账号名后认出是自己的回显，不再转出"
     assert [call["name"] for call in client.read_calls].count("observe") == 2
 
 
 async def test_unsigned_line_is_forwarded_with_a_note() -> None:
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     line = {"cursor": 4, "kind": "player", "sender": "Alex", "text": '<Alex> [name:"x"]'}
     client.pages.append(events_page([line], cursor=4))
-    await collector._drain()
+    await collector.drain_once()
     [(_, payload)] = bus.events
     assert payload.kind == "player" and payload.sender == "Alex"
     assert payload.content == '[name:"x"]' and "没有发言人凭据" in payload.note
 
 
 async def test_checked_line_is_forwarded_without_a_note() -> None:
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     line = {"cursor": 4, "kind": "player", "sender": "Steve", "sender_online": True, "text": "不是我的"}
     client.pages.append(events_page([line], cursor=4))
-    await collector._drain()
+    await collector.drain_once()
     [(_, payload)] = bus.events
     assert (payload.kind, payload.sender, payload.content, payload.note) == ("player", "Steve", "不是我的", "")
 
 
 async def test_death_line_carries_who_died_and_its_template() -> None:
     """死亡播报的死者、凶手按出现先后带 UUID 转出，模板编号一并转出；没有 UUID 的点名不要。"""
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     line = {
         "cursor": 4,
         "kind": "system",
@@ -286,7 +274,7 @@ async def test_death_line_carries_who_died_and_its_template() -> None:
         "translation_key": "death.attack.explosion.player",
     }
     client.pages.append(events_page([line], cursor=4))
-    await collector._drain()
+    await collector.drain_once()
     [(_, payload)] = bus.events
     assert [(m.name, m.id) for m in payload.mentions] == [
         ("莫莫酒狐", "5f2b9c1e-0d4a-4c1b-9e7f-1a2b3c4d5e6f"),
@@ -357,15 +345,17 @@ def test_collector_metadata_and_registration() -> None:
 
 
 async def test_reads_the_chat_topic_and_does_not_replay_history() -> None:
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
+    await _advance_cursor(collector, client, 3)
 
     assert client.read_calls[0]["arguments"] == {"topic": "chat", "wait_ms": 0}
     assert bus.events == [], "接手前的聊天不补发"
-    assert collector._cursor == 3
+    assert collector.stream_position == ("stream-A", 3)
 
 
 async def test_player_and_system_messages_become_game_chat_events() -> None:
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
+    await _advance_cursor(collector, client, 3)
     client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     client.pages.append(
         events_page(
@@ -378,7 +368,7 @@ async def test_player_and_system_messages_become_game_chat_events() -> None:
         )
     )
 
-    await collector._drain()
+    await collector.drain_once()
 
     assert [name for name, _ in bus.events] == [CoreEvents.GAME_CHAT_RECEIVED] * 3
     said, joined, long_one = (payload for _, payload in bus.events)
@@ -399,13 +389,13 @@ async def test_player_and_system_messages_become_game_chat_events() -> None:
 
 async def test_the_online_check_from_the_game_is_passed_on() -> None:
     """Mod 核对过发言人此刻在线的照转；控制台、命令方块借名发的是 False，存储不为它建玩家。"""
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     checked = _chat(4, "来切磋")
     checked["sender_online"] = True
     borrowed = {"cursor": 5, "kind": "player", "sender": "Server", "sender_online": False, "text": "[Server] 重启"}
     client.pages.append(events_page([checked, borrowed], cursor=5))
 
-    await collector._drain()
+    await collector.drain_once()
 
     first, second = (payload for _, payload in bus.events)
     assert (first.sender_id, first.sender_online) == (_STEVE_ID, True)
@@ -414,15 +404,15 @@ async def test_the_online_check_from_the_game_is_passed_on() -> None:
 
 async def test_chat_carries_the_save_of_its_page() -> None:
     """聊天带着这一页所在的存档：存储据此记在哪个存档见过这位玩家；旧版 Mod 的页没有 world，存档留空。"""
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
     page = events_page([_chat(4, "来切磋")], cursor=4)
     page["world"] = {"id": "aaa", "name": "老家", "source": "world_id_file", "online_mode": "off"}
     client.pages.append(page)
     client.pages.append(events_page([_chat(5, "还在吗")], cursor=5))
 
-    await collector._drain()
-    await collector._drain()
+    await collector.drain_once()
+    await collector.drain_once()
 
     assert [(payload.save_id, payload.save_name, payload.save_online_mode) for _, payload in bus.events] == [
         ("aaa", "老家", "off"),
@@ -431,32 +421,32 @@ async def test_chat_carries_the_save_of_its_page() -> None:
 
 
 async def test_private_messages_are_forwarded_and_marked() -> None:
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     client.pages.append(events_page([_chat(4, "悄悄跟你说", private=True), _chat(5, "   ")], cursor=5))
 
-    await collector._drain()
+    await collector.drain_once()
 
     # 私聊照转并标出来，主播据此不在直播里念；空白消息不转，游标照样往后走。
     assert [(payload.content, payload.private) for _, payload in bus.events] == [("悄悄跟你说", True)]
-    assert collector._cursor == 5
+    assert collector.stream_position == ("stream-A", 5)
 
 
 async def test_each_forwarded_line_gets_its_own_message_id() -> None:
     """每条转出的游戏公屏消息带随机短串消息号，两条不同。"""
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     lines = [
         {"cursor": 4, "kind": "player", "sender": "Steve", "sender_online": True, "text": "一"},
         {"cursor": 5, "kind": "player", "sender": "Steve", "sender_online": True, "text": "二"},
     ]
     client.pages.append(events_page(lines, cursor=5))
-    await collector._drain()
+    await collector.drain_once()
     ids = [payload.message_id for _, payload in bus.events]
     assert len(ids) == 2 and all(ids) and ids[0] != ids[1]
 
 
 async def test_sender_distance_forwarded_for_players_and_none_for_system_or_invalid() -> None:
     """玩家消息有效非负 sender_distance 原样透传；系统消息、缺失或非法数值恒为 None。"""
-    collector, client, bus = await _primed()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
     lines = [
         {
             "cursor": 4,
@@ -486,7 +476,7 @@ async def test_sender_distance_forwarded_for_players_and_none_for_system_or_inva
         {"cursor": 8, "kind": "system", "text": "服务器即将重启", "sender_distance": 4.0},
     ]
     client.pages.append(events_page(lines, cursor=8))
-    await collector._drain()
+    await collector.drain_once()
 
     got = [(payload.kind, payload.content, payload.sender_distance) for _, payload in bus.events]
     assert got == [

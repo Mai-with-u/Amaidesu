@@ -14,7 +14,7 @@ from src.agents.minecraft.lead_mode import (
 )
 from src.modules.agents.lead import LeadHandoverContext
 from src.modules.events.payloads.game_chat import GameChatPayload
-from tests.agents.minecraft_collector_fakes import FakeEventBus, FakeMcpClient, events_page, fake_client_factory
+from tests.agents.minecraft_collector_fakes import events_page, make_primed_collector
 
 
 @pytest.mark.parametrize(
@@ -35,16 +35,7 @@ def test_extract_chat_detail_safely_normalizes_upstream_values(raw_event: Dict[s
 
 async def test_chat_collector_forwards_system_advancement_with_detail() -> None:
     """聊天采集器收到带 detail 的成就事件时稳定转出并透传 detail 描述。"""
-    bus = FakeEventBus()
-    collector = MaicraftChatCollector(  # type: ignore[arg-type]
-        config={},
-        event_bus=bus,
-        client_factory=fake_client_factory(),
-    )
-    assert await collector._ensure_ready() is True
-    client = FakeMcpClient.instances[-1]
-    client.pages.append(events_page([{"cursor": 1, "kind": "system", "text": "接手前"}], cursor=1))
-    await collector._drain()
+    collector, client, bus = await make_primed_collector(MaicraftChatCollector)
 
     advancement_event = {
         "cursor": 2,
@@ -54,7 +45,7 @@ async def test_chat_collector_forwards_system_advancement_with_detail() -> None:
         "translation_key": "chat.type.advancement.task",
     }
     client.pages.append(events_page([advancement_event], cursor=2))
-    await collector._drain()
+    await collector.drain_once()
 
     assert len(bus.events) == 1
     _event_name, payload = bus.events[0]
