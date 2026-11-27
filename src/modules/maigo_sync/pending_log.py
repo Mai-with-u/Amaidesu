@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
+from src.modules.storage.privacy import mask_names_in_text
 
 __all__ = [
     "CachedPersonEntry",
@@ -16,13 +17,59 @@ __all__ = [
     "CachedTopicCard",
     "PendingCheckinLog",
     "extract_archive_lines",
+    "extract_game_events",
     "extract_interactions",
+    "extract_key_speeches",
     "extract_promises",
     "extract_session_meta",
+    "extract_social_facts",
+    "extract_work_docs",
     "format_brief_extension",
+    "format_interaction_fact",
 ]
 
 logger = get_logger("MaiGOBridge")
+
+_CROSS_SESSION_MASK_LABEL = "某位观众"
+_NOISY_GAME_EVENT_TYPES = frozenset({"chat", "body", "safety", "move", "heartbeat"})
+
+
+def _clean_compact(raw: Any, *, max_len: int = 360) -> str:
+    compact = " ".join(str(raw or "").split()).strip()
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 1].rstrip() + "…"
+
+
+def format_interaction_fact(name: str, kind: str, raw_fact: Any) -> str:
+    """把玩家互动的结构化 fact（字典、JSON 串或纯文本）转成人类可读的具体事实。"""
+    parsed: Any = raw_fact
+    if isinstance(raw_fact, str):
+        stripped = raw_fact.strip()
+        if stripped.startswith("{"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = stripped
+        else:
+            parsed = stripped
+    if isinstance(parsed, dict):
+        desc = str(
+            parsed.get("summary") or parsed.get("text") or parsed.get("note") or parsed.get("what") or ""
+        ).strip()
+        if desc:
+            return _clean_compact(f"{name}：{desc}", max_len=400)
+        item = str(parsed.get("item") or "").strip()
+        if item:
+            cnt = parsed.get("count")
+            cnt_part = f"×{cnt}" if isinstance(cnt, (int, float)) and int(cnt) > 1 else ""
+            return _clean_compact(f"与 {name} 互动（{kind}：{item}{cnt_part}）", max_len=400)
+        count_val = parsed.get("count")
+        if isinstance(count_val, (int, float)) and int(count_val) > 1:
+            return _clean_compact(f"与 {name} 发生游戏互动（{kind}，共 {int(count_val)} 次）", max_len=400)
+    elif isinstance(parsed, str) and parsed:
+        return _clean_compact(f"{name}：{parsed}", max_len=400)
+    return _clean_compact(f"与 {name} 发生游戏互动（{kind}）", max_len=400)
 
 
 @dataclass(frozen=True)
@@ -237,16 +284,236 @@ async def extract_interactions(game_player_repo: Any, sid: int) -> List[Dict[str
             continue
         kind = str(getattr(inter, "kind", "") or "interaction")
         name = str(getattr(player, "name", "") or "玩家")
+        fact_text = format_interaction_fact(name, kind, getattr(inter, "fact", None))
         results.append(
             {
                 "platform": str(getattr(player, "game", "") or "minecraft"),
                 "external_id": str(getattr(player, "uuid", "") or ""),
                 "display_name": name,
-                "summary": f"与 {name} 发生游戏互动（{kind}）"[:1000],
+                "summary": fact_text[:1000],
+                "kind": kind[:64],
+                "fact": fact_text[:1000],
                 "visibility": "public",
             }
         )
     return results
+
+
+async def extract_game_events(
+    event_repo: Any,
+    sid: int,
+    *,
+    fallback_save: Optional[str] = None,
+    limit: int = 120,
+) -> List[Dict[str, Any]]:
+    """提取本场游戏进展与里程碑事件写入 L0 原件书库。"""
+    if event_repo is None:
+        return []
+    list_fn = getattr(event_repo, "list_session_game_events", None)
+    if not callable(list_fn):
+        return []
+    try:
+        rows = await list_fn(live_session_id=sid, limit=limit)
+    except Exception as exc:  # noqa: BLE001 - 单源失败不阻断签入
+        logger.warning(f"读取场次 {sid} 游戏事件失败（签入跳过游戏原件）: {exc}", exc=exc)
+        return []
+    items: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows or ()):
+        etype = str(getattr(row, "event_type", "") or "").strip().lower()
+        if etype in _NOISY_GAME_EVENT_TYPES:
+            continue
+        msg = _clean_compact(getattr(row, "message", ""), max_len=800)
+        if not msg:
+            continue
+        game = str(getattr(row, "game", "") or "game").strip()
+        ts = int(getattr(row, "timestamp_ms", 0) or 0)
+        save_id = str(getattr(row, "save_id", "") or "").strip() or fallback_save
+        items.append(
+            {
+                "idempotency_key": f"checkin-ge-{sid}-{ts}-{idx}",
+                "record_type": "game_event",
+                "actor_role": "self",
+                "visibility": "public",
+                "occurred_at_ms": ts,
+                "save_id": save_id,
+                "title": f"{game}:{etype or 'event'}"[:120],
+                "content": msg,
+                "verbatim": "",
+                "metadata": {"game": game, "event_type": etype},
+            }
+        )
+    return items
+
+
+async def extract_key_speeches(
+    chat_repo: Any,
+    sid: int,
+    *,
+    viewer_repo: Any = None,
+    fallback_save: Optional[str] = None,
+    min_chars: int = 8,
+    max_items: int = 150,
+) -> List[Dict[str, Any]]:
+    """提取本场已播出的主播高信噪比台词（剔除未播出 dropped 行并遮去观众昵称）写入 L0。"""
+    if chat_repo is None:
+        return []
+    list_fn = getattr(chat_repo, "list_session_speech_for_settle", None)
+    if not callable(list_fn):
+        return []
+    try:
+        rows = await list_fn(live_session_id=sid)
+    except Exception as exc:  # noqa: BLE001 - 单源失败不阻断签入
+        logger.warning(f"读取场次 {sid} 主播台词失败（签入跳过台词原件）: {exc}", exc=exc)
+        return []
+
+    known_names: List[str] = []
+    names_fn = getattr(viewer_repo, "list_known_names", None) if viewer_repo is not None else None
+    if callable(names_fn):
+        try:
+            known_names = [str(n) for n in (await names_fn() or ()) if n]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"读取已知观众昵称失败（继续按原台词脱敏）: {exc}", exc=exc)
+
+    items: List[Dict[str, Any]] = []
+    for row in rows or ():
+        if len(items) >= max_items:
+            break
+        if getattr(row, "dropped_at_ms", None) is not None:
+            continue
+        raw_text = _clean_compact(getattr(row, "content", ""), max_len=600)
+        if len(raw_text) < min_chars:
+            continue
+        masked = mask_names_in_text(raw_text, known_names, _CROSS_SESSION_MASK_LABEL)
+        chat_id = int(getattr(row, "id", 0) or 0)
+        ts = int(getattr(row, "timestamp_ms", 0) or 0)
+        items.append(
+            {
+                "idempotency_key": f"checkin-speech-{sid}-{chat_id or len(items)}",
+                "record_type": "speech",
+                "actor_role": "self",
+                "visibility": "public",
+                "occurred_at_ms": ts,
+                "save_id": fallback_save,
+                "title": "主播原话",
+                "content": masked,
+                "verbatim": masked,
+                "metadata": {},
+            }
+        )
+    return items
+
+
+async def extract_work_docs(
+    work_docs_repo: Any,
+    sid: int,
+    *,
+    save_id: Optional[str],
+    game: str = "minecraft",
+    occurred_at_ms: int = 0,
+) -> List[Dict[str, Any]]:
+    """提取当前游戏存档的工作笔记、未完待办与钉住规矩作为 L0 存档原件。"""
+    if work_docs_repo is None or not save_id:
+        return []
+    get_fn = getattr(work_docs_repo, "get_work_docs", None)
+    if not callable(get_fn):
+        return []
+    try:
+        doc = await get_fn(game=game, save_id=save_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"读取存档 {save_id} 工作笔记失败（跳过）: {exc}", exc=exc)
+        return []
+    if doc is None:
+        return []
+    parts: List[str] = []
+    notebook = str(getattr(doc, "notebook", "") or "").strip()
+    if notebook:
+        parts.append(notebook[:2200])
+    todos = getattr(doc, "todos", None) or ()
+    open_todos = [
+        str(t.get("content") or "").strip()
+        for t in todos
+        if isinstance(t, dict)
+        and str(t.get("status") or "pending").lower() not in ("completed", "done", "cancelled", "canceled")
+        and str(t.get("content") or "").strip()
+    ]
+    if open_todos:
+        parts.append("待办：" + "；".join(open_todos[:12]))
+    rules = [str(r).strip() for r in (getattr(doc, "pinned_rules", None) or ()) if isinstance(r, str) and r.strip()]
+    if rules:
+        parts.append("规矩：" + "；".join(rules[:8]))
+    body = "\n".join(parts)[:3500]
+    if not body:
+        return []
+    save_name = _clean_compact(getattr(doc, "save_name", ""), max_len=80) or save_id
+    ts = int(getattr(doc, "updated_at_ms", 0) or occurred_at_ms)
+    return [
+        {
+            "idempotency_key": f"checkin-workdoc-{sid}-{save_id}-{ts}",
+            "record_type": "work_doc",
+            "actor_role": "self",
+            "visibility": "public",
+            "occurred_at_ms": ts,
+            "save_id": save_id,
+            "title": f"存档工作笔记（{save_name}）"[:200],
+            "content": body,
+            "verbatim": "",
+            "metadata": {"game": game},
+        }
+    ]
+
+
+async def extract_social_facts(
+    social_fact_repo: Any,
+    *,
+    sid: int,
+    save_id: Optional[str] = None,
+    limit: int = 80,
+) -> List[Dict[str, Any]]:
+    """提取当前游戏环境现行社交事实，映射为 MaiGO L2 实体关系事实边。"""
+    if social_fact_repo is None:
+        return []
+    list_fn = getattr(social_fact_repo, "list_active_facts", None)
+    if not callable(list_fn):
+        return []
+    try:
+        rows = await list_fn(save_id=save_id, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"读取场次 {sid} 游戏社交事实失败（跳过）: {exc}", exc=exc)
+        return []
+    items: List[Dict[str, Any]] = []
+    for fact in rows or ():
+        text = _clean_compact(getattr(fact, "text", ""), max_len=800)
+        if not text:
+            continue
+        fid = int(getattr(fact, "id", 0) or 0)
+        game = str(getattr(fact, "game", "") or "minecraft").strip()
+        f_save = str(getattr(fact, "save_id", "") or "").strip() or save_id
+        save_name = _clean_compact(getattr(fact, "save_name", ""), max_len=80) or f_save or game
+        fkind = str(getattr(fact, "kind", "") or "social_fact").strip()
+        quote = _clean_compact(getattr(fact, "quote", ""), max_len=600)
+        upd_ms = int(getattr(fact, "updated_at_ms", 0) or getattr(fact, "created_at_ms", 0) or 0)
+        items.append(
+            {
+                "idempotency_key": f"amaidesu-sf-{fid}-{upd_ms}",
+                "subject": {
+                    "entity_type": "project" if f_save else "concept",
+                    "canonical_key": f"{game}:{f_save or 'global'}",
+                    "name": save_name,
+                    "save_id": f_save,
+                    "visibility": "public",
+                    "seen_at_ms": upd_ms,
+                },
+                "predicate": fkind,
+                "object_text": fkind,
+                "fact_text": text,
+                "quote": quote,
+                "visibility": "public",
+                "save_id": f_save,
+                "external_episode_id": str(sid),
+                "occurred_at_ms": upd_ms,
+            }
+        )
+    return items
 
 
 class PendingCheckinLog:

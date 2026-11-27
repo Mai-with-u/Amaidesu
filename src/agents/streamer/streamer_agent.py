@@ -542,6 +542,7 @@ class StreamerAgent(BaseAgent):
         # 社交事实读取失败的正式告警只发一次（每进程一条 core.error），后续失败仅记日志
         self._social_facts_alert_emitted = False
         self._event_repo = event_repo
+        self._work_docs_repo = work_docs_repo
         # 隐私服务：线索推送要按配置的短语表判定"忘了我"与撤回（缺失时不出遗忘回执）
         self._privacy_service = privacy_service
         self._logger = get_logger("StreamerAgent")
@@ -879,6 +880,7 @@ class StreamerAgent(BaseAgent):
                 social_fact_repo=social_fact_repo,
                 work_docs_repo=work_docs_repo,
                 short_term_recall=self._query_active_short_term_recall if self._lead_coordinator is not None else None,
+                cross_branch_recall=self._query_cross_branch_recall if self._maigo_bridge is not None else None,
             )
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None
@@ -2033,10 +2035,35 @@ class StreamerAgent(BaseAgent):
                     commitments_repo=self._commitments_repo,
                     sessions_repo=self._sessions_repo,
                     game_player_repo=self._game_player_repo,
+                    event_repo=self._event_repo,
+                    social_fact_repo=self._social_fact_repo,
+                    chat_repo=self._chat_repo,
+                    viewer_repo=self._viewer_repo,
+                    work_docs_repo=self._work_docs_repo,
                     save_id=self._primary_save_id(),
                 )
             except Exception as exc:  # noqa: BLE001 - 跨端签入失败不阻塞下播收尾
                 self._logger.warning(f"MaiGO 下播签入异常（场次 {live_session_id} 照常收尾）: {exc}", exc=exc)
+
+    async def _query_cross_branch_recall(self, query: str, limit: int) -> List[RecallEntry]:
+        """场中联邦回忆回调：向 MaiGO 短超时拉取其他分支（QQ群/B站/X等）的高置信度记录。"""
+        if self._maigo_bridge is None:
+            return []
+        hits = await self._maigo_bridge.recall_cross_branch(query, limit=limit)
+        entries: List[RecallEntry] = []
+        for idx, hit in enumerate(hits):
+            text = str(hit.get("text") or "").strip()
+            if not text:
+                continue
+            entries.append(
+                RecallEntry(
+                    source="cross_branch",
+                    source_id=int(hit.get("item_id") or (idx + 1)),
+                    timestamp_ms=int(hit.get("occurred_at_ms") or now_ms()),
+                    text=f"- 【跨端回忆】{text}",
+                )
+            )
+        return entries
 
     async def _write_session_overview(self, live_session_id: int) -> None:
         """给这一场写概览（给人看的这场发生了什么）；失败只记日志，不牵连任何账本。"""

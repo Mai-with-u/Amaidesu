@@ -20,9 +20,13 @@ from src.modules.maigo_sync.pending_log import (
     CachedTopicCard,
     PendingCheckinLog,
     extract_archive_lines,
+    extract_game_events,
     extract_interactions,
+    extract_key_speeches,
     extract_promises,
     extract_session_meta,
+    extract_social_facts,
+    extract_work_docs,
     format_brief_extension,
 )
 from src.modules.storage.models.talk_card import TalkCard
@@ -365,6 +369,61 @@ class MaiGOBridge:
         self._last_error_text = ""
         return True
 
+    async def recall_cross_branch(
+        self,
+        query: str,
+        *,
+        limit: int = 3,
+        timeout_ms: int = 800,
+    ) -> List[Dict[str, Any]]:
+        """场中联邦回忆：向 MaiGO 短超时拉取其他分支（QQ群/B站/X/跨端约定）的高置信度记录。
+
+        触发条件：主播调用 ``memory_recall(scope="all")`` 时并行执行；
+        降级约束：客户端未实现 ``recall``、服务端离线或超时均静默返回空列表，绝不拖慢直播决策。
+        """
+        cleaned = (query or "").strip()
+        recall_fn = getattr(self._client, "recall", None)
+        if not cleaned or not callable(recall_fn):
+            return []
+        try:
+            raw = await recall_fn(
+                query=cleaned[:120],
+                days=0,
+                limit=max(1, min(int(limit), 5)),
+                target_visibility="public",
+                branch_id=self._branch_id,
+                high_confidence_only=True,
+                include_structured=True,
+                timeout_ms=timeout_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 - 联邦回忆失败静默放行，不影响本地检索
+            self._log_throttled_warning("MaiGO 场中跨端回忆查询失败", exc)
+            return []
+
+        if not isinstance(raw, dict):
+            return []
+        hits = raw.get("hits")
+        results: List[Dict[str, Any]] = []
+        if isinstance(hits, list):
+            for item in hits:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if not text:
+                    continue
+                # 跳过来自本地直播归档的条目，避免与 Amaidesu 本地混合检索重复占坑
+                if "· 直播《" in text or "· 直播间" in text:
+                    continue
+                results.append(
+                    {
+                        "item_type": str(item.get("item_type") or "cross_branch"),
+                        "item_id": int(item.get("item_id") or 0),
+                        "text": text,
+                        "occurred_at_ms": int(item.get("occurred_at_ms") or self._clock_ms()),
+                    }
+                )
+        return results[: max(1, int(limit))]
+
     async def push_settled_session(
         self,
         live_session_id: int,
@@ -373,9 +432,14 @@ class MaiGOBridge:
         commitments_repo: Any = None,
         sessions_repo: Any = None,
         game_player_repo: Any = None,
+        event_repo: Any = None,
+        social_fact_repo: Any = None,
+        chat_repo: Any = None,
+        viewer_repo: Any = None,
+        work_docs_repo: Any = None,
         save_id: Optional[str] = None,
     ) -> bool:
-        """下播整理完成后读取本场结构化成品并执行签入；离线失败时落盘待补推。"""
+        """下播整理完成后读取本场结构化成品、L0 原件与 L2 社交事实并执行签入；离线失败时落盘待补推。"""
         sid = int(live_session_id)
         state = self._sessions.get(sid)
         if state is None or state.checked_in:
@@ -405,6 +469,14 @@ class MaiGOBridge:
             fallback_save=effective_save,
         )
         interactions = await extract_interactions(game_player_repo, sid)
+        game_event_records = await extract_game_events(event_repo, sid, fallback_save=effective_save)
+        speech_records = await extract_key_speeches(
+            chat_repo, sid, viewer_repo=viewer_repo, fallback_save=effective_save
+        )
+        work_doc_records = await extract_work_docs(
+            work_docs_repo, sid, save_id=effective_save, occurred_at_ms=int(ended_ms)
+        )
+        social_facts = await extract_social_facts(social_fact_repo, sid=sid, save_id=effective_save)
         consumed = sorted(self._all_consumed_seed_ids | set(self._pending_consumed_seed_ids))
         payload: Dict[str, Any] = {
             "ended_at_ms": int(ended_ms),
@@ -412,8 +484,10 @@ class MaiGOBridge:
             "save_id": effective_save,
             "save_summary": "",
             "archive_lines": archive_lines,
+            "archive_records": [*game_event_records, *speech_records, *work_doc_records],
             "promises": promises,
             "interactions": interactions,
+            "social_facts": social_facts,
             "consumed_seed_ids": consumed,
             "discarded": False,
         }

@@ -445,11 +445,13 @@ class MemoryRecallService:
         social_fact_repo: Any = None,
         work_docs_repo: Any = None,
         short_term_recall: Optional[Callable[[str, str, int], Awaitable[Sequence[RecallEntry]]]] = None,
+        cross_branch_recall: Optional[Callable[[str, int], Awaitable[Sequence[RecallEntry]]]] = None,
     ) -> None:
         self._chat_repo = chat_repo
         self._social_fact_repo = social_fact_repo
         self._work_docs_repo = work_docs_repo
         self._short_term_recall = short_term_recall
+        self._cross_branch_recall = cross_branch_recall
         self._search = search
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
@@ -558,14 +560,15 @@ class MemoryRecallService:
         )
 
         effective_query = " ".join(effective)
-        indexed, work_docs, short_term = await asyncio.gather(
+        indexed, work_docs, short_term, cross_branch = await asyncio.gather(
             self._indexed_hits(effective_query, context, archive_bounds),
             self._work_doc_hits(effective_query, context),
             self._short_term_hits(effective_query, context),
+            self._cross_branch_hits(effective_query, context),
         )
 
-        # 合并当前存档工作文档、本场短期高信号记忆与混合检索结果，去重并严守 8 条上限：
-        # 本场或历史强命中并存时，工作文档与短期记忆各预留前排配额，其余给跨场检索，空余名额再用余量补齐。
+        # 合并当前存档工作文档、本场短期高信号记忆、本地混合检索与跨端联邦回忆，去重并严守 8 条上限：
+        # 本地强命中优先占前排，空余名额或无本地强命中时并入跨端高置信记录（至多 3 条）。
         hits: List[RecallEntry] = []
         seen_keys: Set[Tuple[str, int]] = set()
         seen_norms: List[Tuple[str, str]] = []
@@ -616,6 +619,14 @@ class MemoryRecallService:
             )
             _append_unique_entries(
                 hits,
+                cross_branch,
+                seen_keys,
+                seen_norms,
+                max_add=3,
+                max_total=MAX_RESULTS,
+            )
+            _append_unique_entries(
+                hits,
                 work_docs,
                 seen_keys,
                 seen_norms,
@@ -630,7 +641,7 @@ class MemoryRecallService:
                 max_add=MAX_RESULTS,
                 max_total=MAX_RESULTS,
             )
-        elif work_docs or short_term:
+        elif work_docs or short_term or cross_branch:
             if scope == SCOPE_THIS_STREAM:
                 _append_unique_entries(
                     hits,
@@ -665,6 +676,14 @@ class MemoryRecallService:
                     max_add=MAX_RESULTS,
                     max_total=MAX_RESULTS,
                 )
+                _append_unique_entries(
+                    hits,
+                    cross_branch,
+                    seen_keys,
+                    seen_norms,
+                    max_add=3,
+                    max_total=MAX_RESULTS,
+                )
             if indexed.hits:
                 _append_unique_entries(
                     hits,
@@ -687,7 +706,7 @@ class MemoryRecallService:
 
         danmaku_budget = (
             max(0, WEAK_MATCH_MAX_RESULTS - len(hits))
-            if (indexed.weak_only and not work_docs and not short_term)
+            if (indexed.weak_only and not work_docs and not short_term and not cross_branch)
             else max(0, MAX_RESULTS - len(hits))
         )
         raw_danmaku = await self._danmaku_hits(context)
@@ -701,7 +720,9 @@ class MemoryRecallService:
             max_total=MAX_RESULTS,
         )
 
-        show_weak_notice = bool(hits) and indexed.weak_only and not work_docs and not short_term and danmaku_added == 0
+        show_weak_notice = (
+            bool(hits) and indexed.weak_only and not work_docs and not short_term and not cross_branch and danmaku_added == 0
+        )
         if order != ORDER_RELEVANT:
             hits.sort(key=lambda hit: hit.timestamp_ms, reverse=newest_first)
 
@@ -719,7 +740,24 @@ class MemoryRecallService:
         outcome = RecallOutcome(text="\n".join(lines), entries=tuple(hits), vector_used=indexed.vector_used)
         work_detail = f"、工作笔记 {len(work_docs)}" if work_docs else ""
         short_detail = f"、本场短期 {len(short_term)}" if short_term else ""
-        return outcome, f"{indexed.detail}{work_detail}{short_detail}、弹幕 {danmaku_added}，给出 {len(hits)} 条"
+        cross_detail = f"、跨端 {len(cross_branch)}" if cross_branch else ""
+        return outcome, f"{indexed.detail}{work_detail}{short_detail}{cross_detail}、弹幕 {danmaku_added}，给出 {len(hits)} 条"
+
+    async def _cross_branch_hits(self, query: str, context: _RecallContext) -> List[RecallEntry]:
+        """在 scope=all 时并行查询 MaiGO 跨端分支高置信度记录，并按本场遮名表脱敏。"""
+        if self._cross_branch_recall is None or context.scope != SCOPE_ALL:
+            return []
+        try:
+            raw_entries = await self._cross_branch_recall(query, 3)
+        except Exception as exc:  # noqa: BLE001 - 跨端联邦回忆异常绝不影响本地记忆召回
+            logger.warning(f"回忆工具查询跨端分支失败（本次仅用本地记忆）: {exc}", exc=exc)
+            return []
+        masked_entries: List[RecallEntry] = []
+        for entry in raw_entries or ():
+            clean_text = mask_names_in_text(entry.text, context.names, CROSS_SESSION_MASK_LABEL)
+            if clean_text:
+                masked_entries.append(replace(entry, text=clean_text))
+        return masked_entries[:3]
 
     async def _indexed_hits(
         self, query: str, context: _RecallContext, archive_bounds: Sequence[Tuple[int, int]]

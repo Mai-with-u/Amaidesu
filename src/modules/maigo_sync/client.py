@@ -26,6 +26,23 @@ class MaiGOClient(Protocol):
 
     async def post_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]: ...
 
+    async def ingest_archive(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    async def ingest_knowledge(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    async def recall(
+        self,
+        *,
+        query: str,
+        days: int = 30,
+        limit: int = 3,
+        target_visibility: str = "public",
+        branch_id: str = "",
+        high_confidence_only: bool = True,
+        include_structured: bool = True,
+        timeout_ms: Optional[int] = None,
+    ) -> Dict[str, Any]: ...
+
     async def close(self) -> None: ...
 
 
@@ -82,6 +99,53 @@ class HttpMaiGOClient:
     async def post_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         """批量上报历史或增量经历事件（依赖服务端 idempotency_key 去重）。"""
         return await self._post_json("/api/v1/events", {"events": list(events)})
+
+    async def ingest_archive(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """按场次批量写入 L0 原件书库（游戏事件、原话、分段实录、笔记与同伴名册）。"""
+        return await self._post_json("/api/v1/archive/ingest", payload)
+
+    async def ingest_knowledge(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """批量写入 L2 实体节点与关系事实（游戏社交事实与玩家互动详情）。"""
+        return await self._post_json("/api/v1/knowledge/ingest", payload)
+
+    async def recall(
+        self,
+        *,
+        query: str,
+        days: int = 30,
+        limit: int = 3,
+        target_visibility: str = "public",
+        branch_id: str = "",
+        high_confidence_only: bool = True,
+        include_structured: bool = True,
+        timeout_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """按关键词查询 MaiGO 跨端记忆（供场中联邦回忆，超时或故障由调用方降级放行）。"""
+        session = await self._get_session()
+        params: Dict[str, str] = {
+            "query": query,
+            "days": str(int(days)),
+            "limit": str(int(limit)),
+            "target_visibility": target_visibility,
+        }
+        if branch_id.strip():
+            params["branch_id"] = branch_id.strip()
+        if high_confidence_only:
+            params["high_confidence_only"] = "true"
+        if include_structured:
+            params["include_structured"] = "true"
+        req_timeout = (
+            aiohttp.ClientTimeout(total=max(0.1, timeout_ms / 1000.0)) if timeout_ms is not None else self._timeout
+        )
+        target = f"{self._base_url}/api/v1/views/recall"
+        async with session.get(target, params=params, headers=self._headers, timeout=req_timeout) as response:
+            if response.status >= 300:
+                detail = (await response.text())[:300]
+                if 400 <= response.status < 500:
+                    raise MaiGORejected(f"HTTP {response.status}: {detail}")
+                raise RuntimeError(f"HTTP {response.status}: {detail}")
+            data = await response.json()
+            return dict(data) if isinstance(data, dict) else {}
 
     async def close(self) -> None:
         """关闭底层 HTTP 会话连接池（幂等）。"""
