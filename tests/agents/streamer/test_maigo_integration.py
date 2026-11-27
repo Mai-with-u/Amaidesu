@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.agents.streamer.memory.cues import MemoryCueProvider
+from src.agents.streamer.memory.recall import SCOPE_ALL, SCOPE_THIS_STREAM, MemoryRecallService, RecallEntry
 from src.agents.streamer.talk.deck import TopicDeck
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.live import LiveStartedPayload
@@ -213,4 +214,52 @@ async def test_memory_cues_cross_channel_person_and_forgetting_guard(tmp_path: P
     finally:
         await bridge.stop()
         await privacy.close()
+        await db.close()
+
+
+async def test_memory_recall_federates_cross_branch_in_all_scope_only(tmp_path: Path) -> None:
+    """验证 memory_recall 仅在 scope=all 时并行召回跨端分支并对已知观众昵称遮名。"""
+    db = SQLiteDatabase(tmp_path / "recall_fed.db")
+    await db.initialize()
+    try:
+        sid = await db.sessions.insert_live_session(started_at_ms=1_000_000)
+        await db.execute(
+            "INSERT INTO viewers (id, platform, account_id, user_name, name_seen_ms, last_active_ms) "
+            "VALUES (1, 'bilibili', 'u-1', '测试老粉丙', 1000000, 1000000)"
+        )
+        called_queries: List[str] = []
+
+        async def _fake_cross_branch(query: str, limit: int) -> List[RecallEntry]:
+            del limit
+            called_queries.append(query)
+            return [
+                RecallEntry(
+                    source="cross_branch",
+                    source_id=501,
+                    timestamp_ms=999_000,
+                    text="- 【跨端回忆】[2026-11-26 · QQ群] 下午和 测试老粉丙 一起吐槽手工粘土翻车",
+                )
+            ]
+
+        svc = MemoryRecallService(
+            chat_repo=db.chat,
+            commitments_repo=db.commitments,
+            archive_repo=db.archive,
+            viewer_repo=db.viewers,
+            current_session_provider=lambda: sid,
+            cross_branch_recall=_fake_cross_branch,
+            clock=lambda: 1_001_000,
+        )
+
+        # scope=all 并行查出跨端记录，并自动把已知观众昵称遮蔽成“某位观众”
+        all_out = await svc.recall("粘土 翻车", scope=SCOPE_ALL)
+        assert "【跨端回忆】" in all_out and "手工粘土翻车" in all_out
+        assert "测试老粉丙" not in all_out and "某位观众" in all_out
+        assert len(called_queries) == 1
+
+        # scope=this_stream 只查本场，绝不触发跨端联邦查询
+        this_out = await svc.recall("粘土 翻车", scope=SCOPE_THIS_STREAM)
+        assert "【跨端回忆】" not in this_out
+        assert len(called_queries) == 1
+    finally:
         await db.close()

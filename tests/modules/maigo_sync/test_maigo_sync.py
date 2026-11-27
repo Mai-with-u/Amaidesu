@@ -77,6 +77,10 @@ class _StubMaiGOClient:
         self.heartbeats: List[Tuple[str, Dict[str, Any]]] = []
         self.checkins: List[Tuple[str, Dict[str, Any]]] = []
         self.posted_batches: List[List[Dict[str, Any]]] = []
+        self.archive_batches: List[Dict[str, Any]] = []
+        self.knowledge_batches: List[Dict[str, Any]] = []
+        self.recall_calls: List[Dict[str, Any]] = []
+        self.recall_response: Dict[str, Any] = {"ok": True, "text": "", "strong_hit": False, "hits": []}
         self.fail_checkout: Optional[Exception] = None
         self.fail_checkin_times: int = 0
         self.fail_post_after: Optional[int] = None
@@ -108,6 +112,40 @@ class _StubMaiGOClient:
             raise ConnectionError("MaiGO 暂不可达")
         self.posted_batches.append([dict(item) for item in events])
         return {"ok": True, "accepted": len(events), "deduplicated": 0}
+
+    async def ingest_archive(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.archive_batches.append(dict(payload))
+        return {"ok": True, "accepted": len(payload.get("records") or [])}
+
+    async def ingest_knowledge(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.knowledge_batches.append(dict(payload))
+        return {"ok": True, "relations_accepted": len(payload.get("relations") or [])}
+
+    async def recall(
+        self,
+        *,
+        query: str,
+        days: int = 30,
+        limit: int = 3,
+        target_visibility: str = "public",
+        branch_id: str = "",
+        high_confidence_only: bool = True,
+        include_structured: bool = True,
+        timeout_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        self.recall_calls.append(
+            {
+                "query": query,
+                "days": days,
+                "limit": limit,
+                "target_visibility": target_visibility,
+                "branch_id": branch_id,
+                "high_confidence_only": high_confidence_only,
+                "include_structured": include_structured,
+                "timeout_ms": timeout_ms,
+            }
+        )
+        return dict(self.recall_response)
 
     async def close(self) -> None:
         self.closed = True
@@ -493,6 +531,39 @@ async def test_startup_backfill_high_signal_idempotent_and_resumable(tmp_path: P
             fact={"item": "苹果", "count": 1},
             at_ms=recent_t + 450,
         )
+        await db.sessions.update_live_session_overview(
+            live_session_id=live_sid,
+            overview="今晚在海边建好了高炉仓库并挖出了第一批矿石。",
+            updated_at_ms=recent_t + 500,
+        )
+        await db.events.insert_game_event(
+            live_session_id=live_sid,
+            game="minecraft",
+            event_type="milestone",
+            message="解锁成就：高炉试运行成功",
+            timestamp_ms=recent_t + 120,
+            save_id="save-ocean-1",
+            save_name="海洋一号档",
+        )
+        await db.execute(
+            "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary) VALUES (?, ?, ?, ?)",
+            (live_sid, recent_t + 10, recent_t + 200, "前半小时铺铁轨，后半小时建高炉仓库"),
+        )
+        await db.execute(
+            "INSERT INTO game_work_docs (game, save_id, save_name, notebook, todos, pinned_rules, updated_session_id, updated_at_ms) "
+            "VALUES ('minecraft', 'save-ocean-1', '海洋一号档', '高炉配料表与红石线路笔记', '[{\"content\":\"补矿车\",\"status\":\"pending\"}]', '[]', ?, ?)",
+            (live_sid, recent_t + 480),
+        )
+        await db.execute(
+            "INSERT INTO game_creatures (game, world_key, creature_key, type, kind, name, nickname, updated_at_ms) "
+            "VALUES ('minecraft', 'save-ocean-1', 'uuid:dog-1', 'wolf', 'wolf', '狼', '小花', ?)",
+            (recent_t + 490,),
+        )
+        await db.execute(
+            "INSERT INTO game_social_facts (game, save_id, save_name, kind, text, quote, status, created_session_id, created_at_ms, updated_at_ms) "
+            "VALUES ('minecraft', 'save-ocean-1', '海洋一号档', 'members', '好友甲负责照看海岸农场', '我来看着农场', 'active', ?, ?, ?)",
+            (live_sid, recent_t + 460, recent_t + 460),
+        )
     finally:
         await db.close()
 
@@ -515,16 +586,45 @@ async def test_startup_backfill_high_signal_idempotent_and_resumable(tmp_path: P
 
     client.fail_post_after = None
     sent = await bridge.run_startup_backfill()
-    assert sent == 3
+    assert sent >= 6
     assert state_file.exists()
 
+    # L1 仅推送高信噪比档案行与公开承诺，玩家互动已分流至 L2 知识图谱不再污染 L1
     all_events = [ev for batch in client.posted_batches for ev in batch]
     summaries = [ev["summary"] for ev in all_events]
     assert "在海边建成高炉仓库" in summaries
     assert "周末继续铺设铁路" in summaries
-    assert any("好友甲" in s and "面包" in s for s in summaries)
     assert not any("彩排测试" in s or "某观众" in s or "遗忘玩家" in s for s in summaries)
 
-    # 再次运行保持幂等，不再重复推送已标记完成的场次与约定
+    # L0 原件书库包含场次 overview、game_events、timeline_summary、遮名主播原话、work_docs 与 creatures
+    all_arc_records = [rec for batch in client.archive_batches for rec in (batch.get("records") or ())]
+    rec_types = {rec["record_type"] for rec in all_arc_records}
+    assert {"archive_line", "game_event", "timeline_chunk", "speech", "work_doc", "creature"} <= rec_types
+    assert any(batch.get("episode", {}).get("overview", "").startswith("今晚在海边建好了高炉仓库") for batch in client.archive_batches if batch.get("episode"))
+    assert any("高炉试运行成功" in rec["content"] for rec in all_arc_records)
+    assert any("高炉配料表" in rec["content"] for rec in all_arc_records)
+    assert any("小花" in rec["title"] for rec in all_arc_records)
+
+    # L2 实体关系图谱包含现行社交事实与带真实物品事实的非遗忘玩家互动（严禁遗忘玩家入库）
+    all_relations = [rel for batch in client.knowledge_batches for rel in (batch.get("relations") or ())]
+    facts = [rel["fact_text"] for rel in all_relations]
+    assert any("照看海岸农场" in f for f in facts)
+    assert any("好友甲" in f and "面包" in f for f in facts)
+    assert not any("遗忘玩家" in f for f in facts)
+
+    # 再次运行保持幂等，不再重复推送已标记完成的场次、原件与关系
     assert await bridge.run_startup_backfill() == 0
+
+    # 验证场中跨端联邦回忆：保留 QQ群/B站 命中并剔除本地直播间回声
+    client.recall_response = {
+        "ok": True,
+        "strong_hit": True,
+        "hits": [
+            {"item_type": "event", "item_id": 11, "text": "[2026-11-25 · QQ群] 群里答应大家做灯塔", "occurred_at_ms": now_val},
+            {"item_type": "record", "item_id": 12, "text": "[2026-11-24 · 直播《建家》] 本地直播原话", "occurred_at_ms": now_val},
+        ],
+    }
+    fed_hits = await bridge.recall_cross_branch("灯塔", limit=3)
+    assert len(fed_hits) == 1
+    assert "QQ群" in fed_hits[0]["text"]
     await bridge.stop()
