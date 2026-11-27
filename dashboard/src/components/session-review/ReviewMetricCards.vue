@@ -178,4 +178,21 @@ const gameSummary = computed<string>(() => {
 .stat.is-warn .stat-value {
   color: var(--color-warning);
 }
+
+/* 异常优先：复盘的扫视路径=排查路径，染红染黄卡前置（order）并在宽屏放大一档（跨两列）；
+   窄屏网格只有单列，跨列会溢出故退回单列 */
+.stat.is-red {
+  order: -2;
+}
+
+.stat.is-warn {
+  order: -1;
+}
+
+@media (min-width: 560px) {
+  .stat.is-red,
+  .stat.is-warn {
+    grid-column: span 2;
+  }
+}
 </style>

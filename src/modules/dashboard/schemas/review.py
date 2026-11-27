@@ -45,7 +45,7 @@ class ReviewSpeech(BaseModel):
     rate_per_min: Optional[float] = None
     longest_silence_ms: Optional[int] = None
     longest_silence_start_ms: Optional[int] = None
-    """最长沉默区间的起点时刻（= 沉默前最后一条发言；零/单点发言为 None）。"""
+    """最长沉默区间的起点时刻（= 沉默前最后一条发言或场次开始；仅零时长窗口为 None）。"""
 
 
 class ReviewSpeechItem(BaseModel):

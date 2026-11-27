@@ -162,7 +162,7 @@ export interface SessionReviewResponse {
     count: number;
     rate_per_min: number | null;
     longest_silence_ms: number | null;
-    /** 最长沉默区间起点（=沉默前最后一条发言；零/单点发言外的锚定跳转目标） */
+    /** 最长沉默区间起点（=沉默前最后一条发言或场次开始，回看锚定跳转目标；零时长窗口为 null） */
     longest_silence_start_ms: number | null;
   };
   decisions: ReviewDecisions;
