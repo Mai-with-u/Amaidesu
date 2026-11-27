@@ -1,4 +1,4 @@
-// useReviewSpeech 的测试：本场台词加载与删除的状态机
+// useSessionReviewSpeech 的测试：本场台词加载与删除的状态机
 //
 // 覆盖：加载成功、切场清空与过期响应丢弃、错误态、空场次清空、
 // 删除成功返回回执、删除失败写文案并返回 null、busy 标记复位。
@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reviewApi } from '@/api';
-import { useReviewSpeech } from './useReviewSpeech';
+import { useSessionReviewSpeech } from './useSessionReviewSpeech';
 
 vi.mock('@/api', () => ({ reviewApi: { listSpeech: vi.fn(), deleteSpeech: vi.fn() } }));
 
@@ -37,7 +37,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-describe('useReviewSpeech', () => {
+describe('useSessionReviewSpeech', () => {
   beforeEach(() => {
     listSpeechMock.mockReset();
     deleteSpeechMock.mockReset();
@@ -45,7 +45,7 @@ describe('useReviewSpeech', () => {
 
   it('加载成功后写入台词并结束 loading', async () => {
     listSpeechMock.mockResolvedValueOnce(listOk([line(1), line(2, true)]));
-    const state = useReviewSpeech();
+    const state = useSessionReviewSpeech();
 
     const pending = state.load(7);
     expect(state.loading.value).toBe(true);
@@ -63,7 +63,7 @@ describe('useReviewSpeech', () => {
     listSpeechMock
       .mockReturnValueOnce(first.promise as never)
       .mockReturnValueOnce(second.promise as never);
-    const state = useReviewSpeech();
+    const state = useSessionReviewSpeech();
     state.items.value = [line(99)];
 
     const older = state.load(1);
@@ -81,7 +81,7 @@ describe('useReviewSpeech', () => {
 
   it('加载失败写文案并清空台词；空场次清空且不发请求', async () => {
     listSpeechMock.mockRejectedValueOnce(new Error('boom'));
-    const state = useReviewSpeech();
+    const state = useSessionReviewSpeech();
     state.items.value = [line(1)];
 
     await state.load(3);
@@ -98,7 +98,7 @@ describe('useReviewSpeech', () => {
   it('删除成功返回回执并复位 busy', async () => {
     const payload = { deleted: true, archive_lines_removed: 2, commitments_cleared: 1 };
     deleteSpeechMock.mockResolvedValueOnce({ data: payload } as never);
-    const state = useReviewSpeech();
+    const state = useSessionReviewSpeech();
 
     const pending = state.remove(42);
     expect(state.busyChatId.value).toBe(42);
@@ -109,7 +109,7 @@ describe('useReviewSpeech', () => {
 
   it('删除失败写 actionError、保留列表、返回 null 并复位 busy', async () => {
     deleteSpeechMock.mockRejectedValueOnce(new Error('404 找不到这句台词'));
-    const state = useReviewSpeech();
+    const state = useSessionReviewSpeech();
     state.items.value = [line(1)];
 
     const result = await state.remove(42);

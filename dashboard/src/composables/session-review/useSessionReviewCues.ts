@@ -12,7 +12,7 @@ import type { ReviewCueItem } from '@/types';
 import { reviewApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 
-export function useReviewCues() {
+export function useSessionReviewCues() {
   const items = ref<ReviewCueItem[]>([]);
   const loading = ref(false);
   /** 加载错误：非空时页面不渲染列表 */

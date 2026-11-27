@@ -20,7 +20,7 @@ import {
   ElTag,
 } from 'element-plus';
 import SessionReview from './SessionReview.vue';
-import type { LiveSessionItem, SessionReviewResponse } from '@/types';
+import type { LiveSessionItem, SessionKind, SessionReviewResponse } from '@/types';
 
 const api = vi.hoisted(() => ({
   liveSessionsApi: {
@@ -73,13 +73,13 @@ const KeepAliveHost = defineComponent({
 
 function makeSession(
   id: number,
-  options: { title?: string; ended?: boolean; startedAtMs?: number } = {},
+  options: { title?: string; ended?: boolean; startedAtMs?: number; kind?: SessionKind } = {},
 ): LiveSessionItem {
   const startedAt = options.startedAtMs ?? 1_700_000_000_000 + id * 3_600_000;
   return {
     live_session_id: id,
     source: 'manual',
-    kind: 'live',
+    kind: options.kind ?? 'live',
     title: options.title ?? `第 ${id} 场`,
     notes: null,
     room_id: 'room-1',
@@ -367,6 +367,42 @@ describe('SessionReview keep-alive 刷新与默认选中跟进', () => {
     await router.push({ path: '/review', query: { session: '76' } });
     await flush();
     expect(api.reviewApi.get).toHaveBeenLastCalledWith([76]);
+  });
+
+  it('默认选中跳过彩排场，取最新已结束的正式场', async () => {
+    api.liveSessionsApi.list.mockResolvedValue({
+      data: {
+        items: [
+          makeSession(79, { title: '彩排场', ended: true, kind: 'rehearsal' }),
+          makeSession(78, { title: '正式场', ended: true }),
+        ],
+      },
+    });
+
+    await mountInKeepAlive();
+
+    expect(api.reviewApi.get).toHaveBeenLastCalledWith([78]);
+  });
+
+  it('选中含彩排场时页头出警示条，只选正式场时不出', async () => {
+    api.liveSessionsApi.list.mockResolvedValue({
+      data: {
+        items: [
+          makeSession(78, { title: '正式场', ended: true }),
+          makeSession(77, { title: '彩排场', ended: true, kind: 'rehearsal' }),
+        ],
+      },
+    });
+
+    const { wrapper } = await mountInKeepAlive();
+    expect(wrapper.text()).not.toContain('选中含彩排场');
+
+    // 手动把彩排场并进选择：警示条出现
+    const select = wrapper.findComponent(ElSelect);
+    await select.vm.$emit('update:modelValue', [78, 77]);
+    await select.vm.$emit('change', [78, 77]);
+    await flush();
+    expect(wrapper.text()).toContain('选中含彩排场');
   });
 });
 

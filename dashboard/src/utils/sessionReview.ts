@@ -131,12 +131,15 @@ export function splitWaterlinePoints(points: WaterlinePoint[]): [number, number 
       prev !== null &&
       (prev.session_id !== point.session_id ||
         point.timestamp_ms - prev.timestamp_ms > WATERLINE_GAP_MS);
+    // 零输入笔在对数轴上不可画（log(0) 无定义），按断点处理
+    const valueK = point.prompt_tokens / 1000;
+    const value = valueK > 0 ? valueK : null;
     if (isBoundary) {
       // 断点：前段收尾 null + 新段起点（两线段间留出空窗）
       data.push([prev!.timestamp_ms, null]);
-      data.push([point.timestamp_ms, point.prompt_tokens / 1000]);
+      data.push([point.timestamp_ms, value]);
     } else {
-      data.push([point.timestamp_ms, point.prompt_tokens / 1000]);
+      data.push([point.timestamp_ms, value]);
     }
     prev = point;
   }

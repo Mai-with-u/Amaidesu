@@ -18,7 +18,7 @@ export interface ReviewSpeechLoadOptions {
   clearLines?: boolean;
 }
 
-export function useReviewSpeech() {
+export function useSessionReviewSpeech() {
   const items = ref<ReviewSpeechLine[]>([]);
   const loading = ref(false);
   /** 加载错误：非空时页面不渲染列表（不与"这一场还没有台词"的空态混淆） */

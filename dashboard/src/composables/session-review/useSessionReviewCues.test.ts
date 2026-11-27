@@ -1,4 +1,4 @@
-// useReviewCues 的测试：本场记忆线索的加载状态机
+// useSessionReviewCues 的测试：本场记忆线索的加载状态机
 //
 // 覆盖：加载成功、切场清空、过期响应丢弃、错误态、空场次清空。
 // 来源筛选的行为归 ReviewCuesCard 组件（filterCuesBySource 在组件内调用），
@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reviewApi } from '@/api';
-import { useReviewCues } from './useReviewCues';
+import { useSessionReviewCues } from './useSessionReviewCues';
 
 vi.mock('@/api', () => ({ reviewApi: { listCues: vi.fn() } }));
 
@@ -41,14 +41,14 @@ function deferred() {
   return { promise, resolve };
 }
 
-describe('useReviewCues', () => {
+describe('useSessionReviewCues', () => {
   beforeEach(() => {
     listCuesMock.mockReset();
   });
 
   it('加载成功后写入条目', async () => {
     listCuesMock.mockResolvedValueOnce(listOk([cue(1, ['danmaku']), cue(2, ['self'])]));
-    const state = useReviewCues();
+    const state = useSessionReviewCues();
 
     const pending = state.load(7);
     expect(state.loading.value).toBe(true);
@@ -64,7 +64,7 @@ describe('useReviewCues', () => {
     listCuesMock
       .mockReturnValueOnce(slow.promise)
       .mockResolvedValueOnce(listOk([cue(9, ['place'])]));
-    const state = useReviewCues();
+    const state = useSessionReviewCues();
 
     const first = state.load(1);
     const second = state.load(2);
@@ -78,7 +78,7 @@ describe('useReviewCues', () => {
 
   it('加载失败写错误文案、列表为空；没有场次直接清空', async () => {
     listCuesMock.mockRejectedValueOnce(new Error('网络断了'));
-    const state = useReviewCues();
+    const state = useSessionReviewCues();
 
     await state.load(3);
     expect(state.error.value).not.toBe('');

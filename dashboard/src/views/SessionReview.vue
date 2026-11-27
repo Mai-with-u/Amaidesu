@@ -71,6 +71,15 @@
       :closable="false"
       class="review-alert"
     />
+    <!-- 选中含彩排场：默认选中不会落在彩排场，出现即用户显式选择——明示模拟数据可能混入 -->
+    <el-alert
+      v-if="includesRehearsal"
+      title="选中含彩排场：彩排场的观众侧数据可能为模拟，统计仅作调试参考"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="review-alert"
+    />
 
     <template v-if="review">
       <!-- 场次档案（本场整理出的标题 + 原话；删单行只影响下一场开播的"上一场"回忆） -->
@@ -150,7 +159,10 @@
       </div>
 
       <div class="columns">
-        <WaterlineChartCard :series="review.waterline" />
+        <WaterlineChartCard
+          :series="review.waterline"
+          :max-prompt-tokens="review.llm.overall.max_prompt_tokens"
+        />
         <LlmUsageCard :llm="review.llm" />
       </div>
 
@@ -193,8 +205,8 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import { useArchiveLines } from '@/composables/useArchiveLines';
 import { useSessionSelection } from '@/composables/session-review/useSessionSelection';
-import { useReviewCues } from '@/composables/session-review/useReviewCues';
-import { useReviewSpeech } from '@/composables/session-review/useReviewSpeech';
+import { useSessionReviewCues } from '@/composables/session-review/useSessionReviewCues';
+import { useSessionReviewSpeech } from '@/composables/session-review/useSessionReviewSpeech';
 import { consoleReplayLink, minSlowThresholdMs } from '@/utils/sessionReview';
 import ReviewArchiveCard from '@/components/session-review/ReviewArchiveCard.vue';
 import ReviewChipsBar from '@/components/session-review/ReviewChipsBar.vue';
@@ -245,10 +257,15 @@ const {
   busyChatId: speechBusyChatId,
   load: loadSpeech,
   remove: deleteSpeech,
-} = useReviewSpeech();
+} = useSessionReviewSpeech();
 
 /** 本场记忆线索：只读加载（按来源的本地筛选在 ReviewCuesCard 内） */
-const { items: cues, loading: cueLoading, error: cueError, load: loadCues } = useReviewCues();
+const {
+  items: cues,
+  loading: cueLoading,
+  error: cueError,
+  load: loadCues,
+} = useSessionReviewCues();
 
 /** 复盘聚合请求序号与在途 Promise：快速切换或手动刷新时防乱序、防双发 */
 let reviewSeq = 0;
@@ -392,6 +409,12 @@ const timeStrip = computed<{ sessionId: number; startMs: number; endMs: number }
   const endMs = brief.ended_at_ms ?? r.window_end_ms;
   if (endMs <= brief.started_at_ms) return null;
   return { sessionId: brief.live_session_id, startMs: brief.started_at_ms, endMs };
+});
+
+/** 选中含彩排场：模拟观众数据可能混入统计（默认选中只认正式场，出现即显式选择） */
+const includesRehearsal = computed<boolean>(() => {
+  const chosen = new Set(selectedIds.value);
+  return sessions.value.some(item => item.kind === 'rehearsal' && chosen.has(item.live_session_id));
 });
 
 /** 场次档案挂在单场语义上：合并视图不拉档案（没有对应的单场） */

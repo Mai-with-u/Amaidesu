@@ -2,6 +2,9 @@
   <section class="rv-panel">
     <div class="rv-panel-title">单笔输入水位（千 tokens，按 Profile）</div>
     <div ref="chartRef" class="waterline-chart"></div>
+    <p v-if="maxPromptTokens !== null && maxPromptTokens > 0" class="rv-note">
+      单笔最大输入 {{ compactNumber(maxPromptTokens) }} tokens
+    </p>
   </section>
 </template>
 
@@ -15,9 +18,14 @@ import { computed, ref } from 'vue';
 import type { EChartsCoreOption } from 'echarts/core';
 import type { WaterlineSeries } from '@/types';
 import { buildWaterlineData, waterlineColorForProfile } from '@/utils/sessionReview';
+import { compactNumber } from '@/utils/chartFormat';
 import { useChartPalette, useECharts } from '@/composables/useECharts';
 
-const props = defineProps<{ series: WaterlineSeries[] }>();
+const props = defineProps<{
+  series: WaterlineSeries[];
+  /** 窗口内单笔最大输入 tokens（后端精确值；水位序列有抽样上限，不用图上取最大） */
+  maxPromptTokens: number | null;
+}>();
 
 const chartRef = ref<HTMLElement | null>(null);
 const palette = useChartPalette();
@@ -55,8 +63,11 @@ const chartOption = computed<EChartsCoreOption | null>(() => {
       axisLine: { lineStyle: { color: palette.value.borderColor } },
     },
     yAxis: {
-      type: 'value',
-      name: '千 tokens',
+      // 对数刻度：常态 5–20k 与偶发 100k+ 尖峰同图时线性轴把常态压成贴地线，
+      // 对数轴让两者都可读；零输入笔已在数据侧按断点处理（log(0) 无定义）
+      type: 'log',
+      min: 1,
+      name: '千 tokens（对数）',
       nameTextStyle: { color: palette.value.textColor },
       axisLabel: { color: palette.value.textColor },
       splitLine: { lineStyle: { color: palette.value.borderColorLight } },

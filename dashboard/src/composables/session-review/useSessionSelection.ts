@@ -1,10 +1,11 @@
 /**
  * 场次复盘页场次下拉框的选区协调状态机
  *
- * 协调四方输入：场次列表装载、默认"最新已结束场次"、`?session=` 深链、用户手动
+ * 协调四方输入：场次列表装载、默认"最新已结束正式场"、`?session=` 深链、用户手动
  * 改选，外加 keep-alive 切回页面的静默刷新。规则：
- * - 首次挂载：优先应用 `?session=` 深链，否则默认选最新已结束场次；同时跳过紧随
- *   首次挂载触发的那一次 `onActivated`，避免双发请求；
+ * - 首次挂载：优先应用 `?session=` 深链，否则默认选最新已结束正式场（ADR-050：
+ *   统计复盘只认正式场；全无正式场回退最新已结束）；同时跳过紧随首次挂载触发的
+ *   那一次 `onActivated`，避免双发请求；
  * - 切回页面（或手动刷新）时静默刷新列表：带入新深链则切到目标场次；用户仍停在
  *   旧的自动默认场次（或尚无选择且未手动改过）时自动跟进到最新已结束场次；
  *   手动选定与已应用深链一律保留不覆盖。
@@ -96,7 +97,10 @@ export function useSessionSelection(options: UseSessionSelectionOptions) {
         if (mode !== 'initial') return true;
       }
 
-      const latestEnded = items.find(item => item.ended_at_ms !== null);
+      // 默认选中只认正式场（ADR-050：统计复盘只认正式场，彩排场观众侧数据为模拟）；
+      // 全无正式场时回退最新已结束，避免空列表下拉无可选项
+      const ended = items.filter(item => item.ended_at_ms !== null);
+      const latestEnded = ended.find(item => item.kind === 'live') ?? ended[0];
       if (mode === 'initial') {
         if (latestEnded) {
           autoSelectedDefaultId = latestEnded.live_session_id;
@@ -144,12 +148,14 @@ export function useSessionSelection(options: UseSessionSelectionOptions) {
     void loadSessions('activated');
   });
 
-  /** 下拉框选项文案：标题 + 进行中标注 + 开播时间 */
+  /** 下拉框选项文案：彩排标注 + 标题 + 进行中标注 + 开播时间 */
   function sessionLabel(item: LiveSessionItem): string {
     const title = item.title || `场次 #${item.live_session_id}`;
+    // 彩排场显式标注（默认选中不会落在它上面，选中即用户显式行为）
+    const rehearsal = item.kind === 'rehearsal' ? '彩排 · ' : '';
     // 进行中场次在列表中显式标注，避免被误当历史场次深链回看
     const ongoing = item.ended_at_ms === null ? '（进行中）' : '';
-    return `${title}${ongoing} · ${formatDateTime(item.started_at_ms)}`;
+    return `${rehearsal}${title}${ongoing} · ${formatDateTime(item.started_at_ms)}`;
   }
 
   return { sessions, sessionsLoading, selectedIds, loadSessions, onSelectChange, sessionLabel };

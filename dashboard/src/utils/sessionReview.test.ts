@@ -66,6 +66,19 @@ describe('splitWaterlinePoints', () => {
   it('空序列返回空数据', () => {
     expect(splitWaterlinePoints([])).toEqual([]);
   });
+
+  it('零输入笔按断点处理（对数轴下 log(0) 无定义）', () => {
+    const data = splitWaterlinePoints([
+      point(1_000, 5_000, 1),
+      point(2_000, 0, 1),
+      point(3_000, 6_000, 1),
+    ]);
+    expect(data).toEqual([
+      [1_000, 5],
+      [2_000, null],
+      [3_000, 6],
+    ]);
+  });
 });
 
 describe('buildWaterlineData', () => {

@@ -33,6 +33,12 @@ _Avoid_: 交接稿, 交接材料, 交接单
 **场次**:
 一次开播到下播。对应表 `live_sessions`。
 
+**复盘**:
+一场播完后回看它的数据与材料，对应 WebUI 的场次复盘页。对应路由 `/review`、组件 `SessionReview`、接口前缀 `/api/v1/review`。
+
+**复核**:
+对已生成内容的人工检查动作。仓库里三处各管一摊：切片复核（`useClipReview`，选哪些段由人定）、记忆复核（`memory_review_repo`）、结算复核（`settle_state` 的 review/reviewed）。与「复盘」无关。
+
 **承诺表**:
 她当众答应过、还没兑现的事，一行一条。对应表 `commitments`。
 _Avoid_: 承诺账本, 记忆账本
