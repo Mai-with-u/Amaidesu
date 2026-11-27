@@ -10,6 +10,7 @@ import uuid
 import pytest
 from loguru import logger as _loguru_logger
 
+from src.modules.config.multi_file_loader import generate_default_configs
 from src.modules.events.event_bus import EventBus
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.database import SQLiteDatabase
@@ -135,6 +136,19 @@ def _sqlite_template_cloning(tmp_path_factory: pytest.TempPathFactory) -> Iterat
     with pytest.MonkeyPatch.context() as patcher:
         patcher.setattr(SQLiteDatabase, "initialize", _fast_initialize)
         yield
+
+
+@pytest.fixture(scope="session")
+def config_template_bytes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bytes]:
+    """每个测试进程生成一次默认配置模板（7 个 TOML 的文件名到字节内容的映射）。
+
+    Schema 生成是确定性的（同进程两次产物逐字节一致，无时间戳与随机内容），
+    生成一次后供各域测试字节复制落盘，免去每用例重跑 Schema 生成；
+    需要非默认基线内容的测试仍走 generate_default_configs 真生成。
+    """
+    template_dir = tmp_path_factory.mktemp("config_template")
+    generate_default_configs(template_dir)
+    return {path.name: path.read_bytes() for path in sorted(template_dir.glob("*.toml"))}
 
 
 @pytest.fixture(autouse=True)

@@ -34,6 +34,17 @@ def tail_version(file_name: str) -> str:
     return max(targets, key=_version_tuple) if targets else CONFIG_BASELINE_VERSION
 
 
+def materialize_default_configs(config_dir: Path, template: dict[str, bytes]) -> None:
+    """把默认配置模板逐文件字节复制落盘，结果与 generate_default_configs 的产物逐字节一致。
+
+    配合 tests/conftest.py 的 config_template_bytes fixture 使用：每个测试进程只真生成
+    一次，之后各用例毫秒级复制，替代每用例重跑 Schema 生成。
+    """
+    config_dir.mkdir(parents=True, exist_ok=True)
+    for file_name, content in template.items():
+        (config_dir / file_name).write_bytes(content)
+
+
 def read_doc(config_dir: Path, file_name: str) -> tomlkit.TOMLDocument:
     return tomlkit.parse((config_dir / file_name).read_text(encoding="utf-8-sig"))
 

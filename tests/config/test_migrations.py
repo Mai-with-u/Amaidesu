@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.model_schemas import LLMModelConfig
-from src.modules.config.multi_file_loader import generate_default_configs, get_config_version, load_config_dir
+from src.modules.config.multi_file_loader import get_config_version, load_config_dir
 from src.modules.config.upgrade import (
     _FILE_HOOKS,
     _drop_minecraft_max_steps,
@@ -27,7 +27,7 @@ from src.modules.config.upgrade import (
     _version_tuple,
     advance_file_versions,
 )
-from tests.config.helpers import read_doc, rewind_and_append, tail_version, write_doc
+from tests.config.helpers import materialize_default_configs, read_doc, rewind_and_append, tail_version, write_doc
 
 
 @dataclass
@@ -1034,9 +1034,11 @@ def test_every_registered_upgrade_hook_is_covered_by_a_case_or_named_test() -> N
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.id)
-def test_old_layout_is_migrated_written_back_and_versions_advance_to_chain_tail(case: Case, tmp_path: Path) -> None:
+def test_old_layout_is_migrated_written_back_and_versions_advance_to_chain_tail(
+    case: Case, tmp_path: Path, config_template_bytes: dict[str, bytes]
+) -> None:
     """旧布局迁移落盘、版本推进到本文件钩子链尾，且二次加载零漂移零写回（幂等）。"""
-    generate_default_configs(tmp_path)
+    materialize_default_configs(tmp_path, config_template_bytes)
     case.seed(tmp_path)
     load_config_dir(tmp_path)
     case.check(tmp_path)
@@ -1093,8 +1095,10 @@ def test_minecraft_step_limit_hook_keeps_other_limits() -> None:
 
 @pytest.mark.parametrize("old_version", ["2.0.35", "2.0.38"])
 @pytest.mark.parametrize("old_limit", [50, 120])
-def test_minecraft_step_limit_is_removed_from_agents_only(tmp_path: Path, old_version: str, old_limit: int) -> None:
-    generate_default_configs(tmp_path)
+def test_minecraft_step_limit_is_removed_from_agents_only(
+    tmp_path: Path, old_version: str, old_limit: int, config_template_bytes: dict[str, bytes]
+) -> None:
+    materialize_default_configs(tmp_path, config_template_bytes)
     load_config_dir(tmp_path)
     doc = _rewound(tmp_path, "agents.toml", old_version)
     doc["agents"]["minecraft"]["max_steps"] = old_limit
@@ -1109,7 +1113,7 @@ def test_minecraft_step_limit_is_removed_from_agents_only(tmp_path: Path, old_ve
     assert all(path.read_bytes() == content for path, content in others.items())  # 其余配置文件保持原样
 
 
-def test_builder_scene_transport_hook_and_writeback(tmp_path: Path) -> None:
+def test_builder_scene_transport_hook_and_writeback(tmp_path: Path, config_template_bytes: dict[str, bytes]) -> None:
     builder = {"validate_tool": "builder_validate", "preview_tool": "", "execute_tool": "custom_execute"}
     data = {"agents": {"minecraft": {"builder": builder}}}
     assert _upgrade_builder_scene_transport(data)
@@ -1121,7 +1125,7 @@ def test_builder_scene_transport_hook_and_writeback(tmp_path: Path) -> None:
         _upgrade_builder_scene_transport({"agents": {"minecraft": {"builder": custom}}})
     assert custom["validate_tool"] == "my_validate"
 
-    generate_default_configs(tmp_path)
+    materialize_default_configs(tmp_path, config_template_bytes)
     agents = _rewound(tmp_path, "agents.toml", "2.0.34")
     agents["agents"]["minecraft"]["builder"] = {
         "validate_tool": "builder_validate",
@@ -1141,8 +1145,10 @@ def test_builder_scene_transport_hook_and_writeback(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(("chars", "expected_tokens"), [(160_000, 200_000), (120_000, 200_000), (300_000, 100_000)])
-def test_minecraft_context_chars_become_tokens(tmp_path: Path, chars: int, expected_tokens: int) -> None:
-    generate_default_configs(tmp_path)
+def test_minecraft_context_chars_become_tokens(
+    tmp_path: Path, chars: int, expected_tokens: int, config_template_bytes: dict[str, bytes]
+) -> None:
+    materialize_default_configs(tmp_path, config_template_bytes)
     doc = _rewound(tmp_path, "agents.toml", "2.0.40")
     context = doc["agents"]["minecraft"]["context"]
     for key in ("window_ratio", "max_tokens", "prepare_ratio", "target_ratio"):
@@ -1169,9 +1175,9 @@ def test_minecraft_context_chars_become_tokens(tmp_path: Path, chars: int, expec
     ids=["empty-with-price", "empty-without-price", "legacy-switch-string"],
 )
 def test_llm_model_cache_switch_normalized_to_enum(
-    tmp_path: Path, old_cache: str, cache_price_in: float, expected: str
+    tmp_path: Path, old_cache: str, cache_price_in: float, expected: str, config_template_bytes: dict[str, bytes]
 ) -> None:
-    generate_default_configs(tmp_path)
+    materialize_default_configs(tmp_path, config_template_bytes)
     doc = _rewound(tmp_path, "model.toml", "2.0.42")
     model = doc["llm_models"][0]
     model["cache"], model["cache_price_in"], model["price_in"] = old_cache, cache_price_in, 2.0
@@ -1196,9 +1202,9 @@ def test_file_hook_chain_tail_is_above_baseline() -> None:
         assert tail > baseline, f"{file_name} 的钩子链尾 {tail} 不高于基线 {CONFIG_BASELINE_VERSION}"
 
 
-def test_memory_section_unknown_after_migration(tmp_path: Path) -> None:
+def test_memory_section_unknown_after_migration(tmp_path: Path, config_template_bytes: dict[str, bytes]) -> None:
     """已在链尾版本的 tools.toml 手写退役段 [tools.memory] 时，加载期按未知段硬错拦截。"""
-    generate_default_configs(tmp_path)
+    materialize_default_configs(tmp_path, config_template_bytes)
     load_config_dir(tmp_path)
     doc = read_doc(tmp_path, "tools.toml")
     doc["tools"]["memory"] = {"enabled": True}

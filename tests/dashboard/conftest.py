@@ -14,6 +14,7 @@ from src.modules.config.service import ConfigService
 from src.modules.dashboard.api.router import create_app
 from src.modules.dashboard.dependencies import set_dashboard_server
 from src.modules.dashboard.server import DashboardServer
+from tests.config.helpers import materialize_default_configs
 
 
 def build_server(**components: Any) -> DashboardServer:
@@ -23,9 +24,9 @@ def build_server(**components: Any) -> DashboardServer:
 
 
 @pytest.fixture
-def initialized_config(tmp_path: Path) -> ConfigService:
-    """首启生成七文件基线的配置服务（tmp_path/config）。"""
-    (tmp_path / "config").mkdir(exist_ok=True)
+def initialized_config(tmp_path: Path, config_template_bytes: dict[str, bytes]) -> ConfigService:
+    """首启七文件基线的配置服务（tmp_path/config）：模板字节复制代替每用例重跑 Schema 生成。"""
+    materialize_default_configs(tmp_path / "config", config_template_bytes)
     service = ConfigService(base_dir=str(tmp_path))
     service.initialize()
     return service
