@@ -60,6 +60,16 @@ async def test_denied_popup_fails_connect_and_closes(tmp_path: Path) -> None:
     assert not client.is_open and socket.closed
 
 
+async def _until_held(socket: FakeVtsSocket, count: int, timeout: float = 2.0) -> None:
+    """轮询等待被扣住的回复到位；带超时上限，被测对象坏了快速失败而不是无限挂死。"""
+
+    async def _poll() -> None:
+        while len(socket.held) < count:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout)
+
+
 async def test_replies_are_matched_by_request_id_even_out_of_order(tmp_path: Path) -> None:
     socket = FakeVtsSocket({"EchoRequest": lambda data: {"echo": data["n"]}})
     client = _client(socket, tmp_path / "t.txt")
@@ -67,8 +77,7 @@ async def test_replies_are_matched_by_request_id_even_out_of_order(tmp_path: Pat
     socket.hold = True
     first = asyncio.create_task(client.request("EchoRequest", {"n": 1}))
     second = asyncio.create_task(client.request("EchoRequest", {"n": 2}))
-    while len(socket.held) < 2:
-        await asyncio.sleep(0)
+    await _until_held(socket, 2)
     await socket.release([1, 0])  # 后发的先回
     assert (await first, await second) == ({"echo": 1}, {"echo": 2})
     await client.close()
@@ -94,8 +103,7 @@ async def test_remote_drop_fails_pending_request_and_marks_closed(tmp_path: Path
     await client.connect()
     socket.hold = True
     pending = asyncio.create_task(client.request("AuthenticationRequest", {}))
-    while not socket.held:
-        await asyncio.sleep(0)
+    await _until_held(socket, 1)
     await socket.drop()
     with pytest.raises(ConnectionError):
         await pending

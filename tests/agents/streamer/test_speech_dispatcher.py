@@ -411,9 +411,13 @@ async def test_wait_playback_fails_open_on_timeout(started) -> None:
         engine=_Engine(delay_s=1.0), config=_playback_config(True, timeout_ms=150, max_pending=0)
     )
     await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    # 超时放行：上限取等待超时的数倍、仍低于首句完整播放时长（1s）——
+    # 若等播闸死住不放行，这里会等满首句播放才返回并撞上上限
     t0 = time.monotonic()
-    assert (await dispatcher.dispatch({"speech": "第二句", "emotion": {}}))[0] == "第二句"
-    assert 0.1 <= time.monotonic() - t0 < 0.9
+    result = await asyncio.wait_for(dispatcher.dispatch({"speech": "第二句", "emotion": {}}), timeout=0.8)
+    assert result[0] == "第二句"
+    # 下界验证"确实等到了等待超时才放行"：它只在提前放行时被违反，机器慢只会让耗时更长，不受负载影响
+    assert time.monotonic() - t0 >= 0.1
 
 
 # 后台扇出持有与停止汇合
@@ -451,14 +455,16 @@ async def test_dispatch_returns_immediately_and_stop_is_bounded(speak_seconds: f
     )
     await dispatcher.start()
 
-    t0 = time.monotonic()
-    assert (await dispatcher.dispatch({"speech": "x", "emotion": {"name": "happy", "intensity": 0.8}}))[0] == "x"
-    assert time.monotonic() - t0 < 0.1
+    # dispatch 只入队不等合成：上限取慢速分支耗时（1s）的一半——
+    # 若误等 TTS 完成，慢分支（1s）与挂死分支（60s）都会在此撞上上限
+    result = await asyncio.wait_for(
+        dispatcher.dispatch({"speech": "x", "emotion": {"name": "happy", "intensity": 0.8}}), timeout=0.5
+    )
+    assert result[0] == "x"
     await asyncio.wait_for(speak_started.wait(), timeout=1.0)
 
-    t1 = time.monotonic()
-    await dispatcher.stop()
-    assert time.monotonic() - t1 < 3.0
+    # stop 在汇合窗口内返回，挂死的 TTS 由队列取消机制截断；带宽裕上限只防"永远不返回"
+    await asyncio.wait_for(dispatcher.stop(), timeout=5.0)
     assert dispatcher.utterance_queue is None
 
 

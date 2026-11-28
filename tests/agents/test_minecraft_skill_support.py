@@ -189,7 +189,8 @@ async def test_remote_skill_body_is_read_through_the_real_mcp_sdk(loguru_capture
 
     client = McpClient(
         "maicraft",
-        SimpleNamespace(timeout_seconds=1, request_timeout_ms=1000, transport="http"),
+        # 进程内服务正常毫秒级响应，期限只为防挂死；给足冷启动余量（首次导入 SDK 依赖可能明显慢于 1 秒）
+        SimpleNamespace(timeout_seconds=10, request_timeout_ms=10000, transport="http"),
         transport_factory=lambda: service,  # fastmcp 直接接受进程内 server 对象作为传输
     )
     library = SkillLibrary()

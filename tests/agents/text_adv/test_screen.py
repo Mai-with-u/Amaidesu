@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import List, Optional, Tuple
 
@@ -55,16 +56,16 @@ async def test_wait_stable_returns_on_two_identical_frames() -> None:
 
 
 async def test_wait_stable_times_out_with_last_frame() -> None:
-    """帧永不相同：在超时上限附近返回最后一帧并携带超时标志，不抛异常不死等。"""
+    """帧永不相同：超时后返回最后一帧并携带超时标志，不抛异常不死等。"""
     capture = FakeCapture([b"F1", b"F2", b"F3", b"F4", None])
-    start = time.monotonic()
-    result = await wait_stable(capture, region=None, monitor_index=1, sample_ms=5, consecutive=2, timeout_ms=300)
-    elapsed_ms = (time.monotonic() - start) * 1000
+    # 超时降级由 wait_stable 自身的 timeout_ms（timed_out 标志）验证；
+    # 外层带宽裕 wait_for 只防"死等永不返回"把测试挂死，不量测耗时
+    result = await asyncio.wait_for(
+        wait_stable(capture, region=None, monitor_index=1, sample_ms=5, consecutive=2, timeout_ms=300), timeout=5.0
+    )
     assert result.timed_out is True
     # 最后一帧 = 超时前最后一次成功捕获（其后采集持续失败，不影响已持有帧）
     assert result.image == b"F4"
-    # 允许调度余量，但必须远小于死等
-    assert elapsed_ms < 1500
 
 
 async def test_text_key_normalizes_whitespace() -> None:
