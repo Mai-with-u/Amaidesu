@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import re
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import mask_names_in_text
@@ -25,6 +26,7 @@ __all__ = [
     "extract_social_facts",
     "extract_work_docs",
     "format_brief_extension",
+    "format_exc",
     "format_interaction_fact",
 ]
 
@@ -32,6 +34,23 @@ logger = get_logger("MaiGOBridge")
 
 _CROSS_SESSION_MASK_LABEL = "某位观众"
 _NOISY_GAME_EVENT_TYPES = frozenset({"chat", "body", "safety", "move", "heartbeat"})
+_DEFAULT_BRANCH_ID = "amaidesu"
+# 防御性改写服务端简报里的裸约定编号：仅匹配未带“跨端”前缀且紧跟 #/＃ 的编号，避免误伤“约 5 分钟”等口语
+_CROSS_PROMISE_REF_RE = re.compile(r"(?<!跨端)约\s*[#＃]\s*(\d+)")
+_CROSS_PROMISE_ID_RE = re.compile(r"跨端约#(\d+)")
+_PROMISE_SECTION_HEADER_RE = re.compile(r"^(?:【[^】]*约定[^】]*】|#{1,6}\s+.*约定.*)$")
+_SECTION_HEADER_RE = re.compile(r"^(?:【[^】]+】|#{1,6}\s+\S)")
+_BULLET_LINE_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)、])\s+")
+_SOURCE_TAG_RE = re.compile(r"[（(]\s*来自\s*([^（）()\s]+)\s*[）)]")
+_PROMISE_PREFIX_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)、])?\s*(?:[\[【]?\s*跨端约#\d+\s*[\]】]?)?\s*[：:·-]?\s*")
+_NON_CONTENT_CHARS_RE = re.compile(r"[\s，。！？、；：,.!?;:·\-—_()（）\[\]【】\"'“”‘’]+")
+
+
+def format_exc(exc: BaseException) -> str:
+    """格式化异常摘要为带类名的可读文本；异常消息为空时仅返回类名，避免日志留悬空冒号。"""
+    name = type(exc).__name__
+    detail = str(exc).strip()
+    return f"{name}: {detail}" if detail else name
 
 
 def _clean_compact(raw: Any, *, max_len: int = 360) -> str:
@@ -107,25 +126,210 @@ class CachedPersonEntry:
     prompt_hint: str
 
 
+def _rewrite_cross_branch_promise_refs(text: str) -> str:
+    """将服务端简报里可能与本地承诺表撞号的 `[约#N]` / `约#N` 统一改写为 `跨端约#N`。"""
+    if not text:
+        return ""
+    return _CROSS_PROMISE_REF_RE.sub(r"跨端约#\1", text)
+
+
+def _normalize_promise_body(text: str) -> str:
+    """抽取约定正文用于同源与跨段去重比对（剥离列表符号、跨端编号、来源标注与标点空白）。"""
+    cleaned = _PROMISE_PREFIX_RE.sub("", text or "")
+    cleaned = _SOURCE_TAG_RE.sub("", cleaned)
+    cleaned = _CROSS_PROMISE_ID_RE.sub("", cleaned)
+    return _NON_CONTENT_CHARS_RE.sub("", cleaned).lower()
+
+
+def _norm_matches_any(norm: str, candidates: Sequence[str]) -> bool:
+    """判断归一化后的约定正文是否与候选集合中的某条属于同一件事。"""
+    if not norm:
+        return False
+    for target in candidates:
+        if not target:
+            continue
+        if norm == target:
+            return True
+        if min(len(norm), len(target)) >= 4 and (norm in target or target in norm):
+            return True
+    return False
+
+
+def _line_source_branches(line: str) -> Set[str]:
+    """提取行内“（来自xxx）”标注中的分支名集合（小写）。"""
+    return {match.group(1).strip().lower() for match in _SOURCE_TAG_RE.finditer(line) if match.group(1).strip()}
+
+
+def _sanitize_stable_brief(
+    stable_brief: str,
+    *,
+    branch_key: str,
+    self_branch_ids: Set[int],
+    other_branch_ids: Set[int],
+    self_branch_norms: Sequence[str],
+) -> Tuple[str, Set[int], List[str]]:
+    """清洗服务端慢层简报：改写撞号标签、过滤本端同步回流约定，并收集已呈现的异端约定索引。
+
+    执行顺序：
+    1. 逐行把 `[约#N]` / `约#N` 防御性改写为 `跨端约#N`，避免跨端自增编号冒充本地承诺号；
+    2. 跳过本端分支回流（来源标注为本端、编号命中本端 open_promises，或未标明他端来源且约定段内正文与本端一致）的条目；
+       明确标注其他分支来源或编号属于已知异端 `open_promises` 的条目绝不误删；
+    3. 若某个约定分段下的条目被全部滤空，连带移除孤立的空分段标题；
+    4. 记录最终保留的跨端约定编号与正文归一化指纹，供后续 `open_promises` 段去重。
+    """
+    rewritten = _rewrite_cross_branch_promise_refs(stable_brief.strip())
+    if not rewritten:
+        return "", set(), []
+
+    raw_lines = rewritten.splitlines()
+    kept_blocks: List[Tuple[Optional[str], List[str], bool]] = []
+    current_header: Optional[str] = None
+    current_lines: List[str] = []
+    in_promise_section = False
+
+    def _flush_block() -> None:
+        nonlocal current_header, current_lines, in_promise_section
+        if current_header is not None or current_lines:
+            kept_blocks.append((current_header, list(current_lines), in_promise_section))
+        current_header = None
+        current_lines = []
+        in_promise_section = False
+
+    for line in raw_lines:
+        stripped = line.strip()
+        if stripped and _SECTION_HEADER_RE.match(stripped):
+            _flush_block()
+            current_header = line
+            in_promise_section = bool(_PROMISE_SECTION_HEADER_RE.match(stripped))
+            continue
+
+        if stripped:
+            line_ids = {int(m.group(1)) for m in _CROSS_PROMISE_ID_RE.finditer(line)}
+            is_bullet = bool(_BULLET_LINE_RE.match(line))
+            line_sources = _line_source_branches(line)
+            line_norm = _normalize_promise_body(line)
+            # 若该行明确标注来自其他分支（如“（来自maibot）”），或编号属于已知异端约定，绝不因模糊子串误删
+            is_explicit_other_branch = bool(
+                (line_sources and branch_key not in line_sources)
+                or (line_ids and (line_ids & other_branch_ids) and not (line_ids & self_branch_ids))
+            )
+            # 识别并剔除本端同步上去又经服务端回流的约定条目，避免与本地【还惦记的事】重复且贴错号
+            is_self_echo = False
+            if branch_key and not is_explicit_other_branch and (is_bullet or in_promise_section):
+                if branch_key in line_sources and (in_promise_section or bool(line_ids)):
+                    is_self_echo = True
+                elif line_ids and (line_ids & self_branch_ids):
+                    is_self_echo = True
+                elif in_promise_section and _norm_matches_any(line_norm, self_branch_norms):
+                    is_self_echo = True
+            if is_self_echo:
+                continue
+
+        current_lines.append(line)
+
+    _flush_block()
+
+    output_lines: List[str] = []
+    seen_anchor_ids: Set[int] = set()
+    seen_promise_norms: List[str] = []
+
+    for header, body_lines, is_prom_sec in kept_blocks:
+        has_content = any(item.strip() for item in body_lines)
+        if is_prom_sec and not has_content:
+            # 约定段内条目全部属于本端回流并被滤掉时，不留孤立空标题
+            continue
+        if header is not None:
+            output_lines.append(header)
+        for item in body_lines:
+            output_lines.append(item)
+            item_ids = [int(m.group(1)) for m in _CROSS_PROMISE_ID_RE.finditer(item)]
+            if item_ids:
+                seen_anchor_ids.update(item_ids)
+            if item.strip() and (is_prom_sec or item_ids):
+                norm = _normalize_promise_body(item)
+                if norm:
+                    seen_promise_norms.append(norm)
+
+    cleaned_text = "\n".join(output_lines).strip()
+    cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text)
+    return cleaned_text, seen_anchor_ids, seen_promise_norms
+
+
 def format_brief_extension(
     *,
     stable_brief: str,
     open_promises: Sequence[CachedPromiseEntry],
     save_brief: str,
+    current_branch_id: str = _DEFAULT_BRANCH_ID,
 ) -> str:
-    """在开播签出时冻结本场跨端记忆扩展文本，确保整场不变以保护提示词前缀缓存。"""
+    """在开播签出时冻结本场跨端记忆扩展文本，确保整场不变以保护提示词前缀缓存。
+
+    触发条件：开播签出解析服务端响应时调用。
+    执行顺序：先按本端分支标识识别回流约定 -> 清洗 `stable_brief`（改写 `[约#N]` 为 `[跨端约#N]` 并剔除本端回流）
+    -> 对 `open_promises` 过滤本端回流与 `stable_brief` 已涵盖的条目，仅补挂尚未出现的异端公开约定 -> 拼入存档摘要。
+    """
+    branch_key = (current_branch_id or "").strip().lower()
+    self_branch_ids: Set[int] = {
+        int(p.anchor_id)
+        for p in open_promises
+        if branch_key and p.anchor_id > 0 and p.source_branch.strip().lower() == branch_key
+    }
+    other_branch_ids: Set[int] = {
+        int(p.anchor_id)
+        for p in open_promises
+        if branch_key and p.anchor_id > 0 and p.source_branch.strip() and p.source_branch.strip().lower() != branch_key
+    }
+    self_branch_norms: List[str] = [
+        norm
+        for p in open_promises
+        if branch_key and p.source_branch.strip().lower() == branch_key
+        for norm in (_normalize_promise_body(p.content),)
+        if norm
+    ]
+
     sections: List[str] = []
-    if stable_brief.strip():
-        sections.append(stable_brief.strip())
-    active_promises = [p for p in open_promises if p.status == "open" and p.content.strip()]
-    if active_promises:
+    cleaned_brief, seen_anchor_ids, seen_promise_norms = _sanitize_stable_brief(
+        stable_brief,
+        branch_key=branch_key,
+        self_branch_ids=self_branch_ids,
+        other_branch_ids=other_branch_ids,
+        self_branch_norms=self_branch_norms,
+    )
+    if cleaned_brief:
+        sections.append(cleaned_brief)
+
+    # 仅保留真正来自其他分支、且尚未在 stable_brief 中出现过的未了结公开约定，防止双重重复注入
+    extra_promises: List[CachedPromiseEntry] = []
+    for prom in open_promises:
+        if prom.status != "open":
+            continue
+        content = prom.content.strip()
+        if not content:
+            continue
+        src_branch = prom.source_branch.strip().lower()
+        if branch_key and src_branch == branch_key:
+            continue
+        if prom.anchor_id > 0 and int(prom.anchor_id) in seen_anchor_ids:
+            continue
+        norm = _normalize_promise_body(content)
+        if _norm_matches_any(norm, seen_promise_norms):
+            continue
+        if prom.anchor_id > 0:
+            seen_anchor_ids.add(int(prom.anchor_id))
+        if norm:
+            seen_promise_norms.append(norm)
+        extra_promises.append(prom)
+
+    if extra_promises:
         lines = ["【跨端还惦记的公开约定】"]
-        for prom in active_promises:
+        for prom in extra_promises:
             branch = prom.source_branch.strip() or "其他分支"
             lines.append(f"- 跨端约#{prom.anchor_id}（来自{branch}）：{prom.content.strip()}")
         sections.append("\n".join(lines))
-    if save_brief.strip():
-        sections.append(f"【存档跨端变更摘要】\n{save_brief.strip()}")
+
+    cleaned_save = _rewrite_cross_branch_promise_refs(save_brief.strip())
+    if cleaned_save:
+        sections.append(f"【存档跨端变更摘要】\n{cleaned_save}")
     return "\n\n".join(sections)
 
 

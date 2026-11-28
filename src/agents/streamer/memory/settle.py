@@ -2863,7 +2863,7 @@ class SessionSettler:
         ref = raw.get("evidence")
         at_ms = int(line.timestamp_ms)
         if _has_value(ref):
-            return proof_for(ref, material.game_records, game=game, at_ms=at_ms) is not None
+            return proof_for(ref, material.game_records, game=game, at_ms=at_ms, claim_text=text) is not None
         if not allow_infer:
             return False
         return infer_proof_for_claim(text, material.game_records, game=game, at_ms=at_ms) is not None

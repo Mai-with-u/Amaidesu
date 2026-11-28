@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.maigo_sync.client import MaiGOClient, MaiGORejected
-from src.modules.maigo_sync.pending_log import format_interaction_fact
+from src.modules.maigo_sync.pending_log import format_exc, format_interaction_fact
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
 from src.modules.storage.repos.viewers import is_placeholder_name
 from src.modules.utils.time_utils import now_ms
@@ -146,14 +146,16 @@ class StartupHistoryBackfiller:
         try:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            logger.warning(f"读取 MaiGO 回填状态失败，将从最近窗口重扫（服务端幂等去重）: {exc}")
+            logger.warning(f"读取 MaiGO 回填状态失败，将从最近窗口重扫（服务端幂等去重）: {format_exc(exc)}")
             return empty
         if not isinstance(data, dict):
             return empty
         # v1 旧状态只保留 completed_sessions / completed_commitments，从而自动触发 v2 L0+L2 增量补齐
         return {
             "state_version": int(data.get("state_version") or 1),
-            "completed_sessions": {int(x) for x in (data.get("completed_sessions") or ()) if isinstance(x, (int, float))},
+            "completed_sessions": {
+                int(x) for x in (data.get("completed_sessions") or ()) if isinstance(x, (int, float))
+            },
             "completed_commitments": {
                 int(x) for x in (data.get("completed_commitments") or ()) if isinstance(x, (int, float))
             },
@@ -278,7 +280,9 @@ class StartupHistoryBackfiller:
             if l1_target and "archive_lines" in tables:
                 acols = _table_columns(conn, "archive_lines")
                 ph = ",".join("?" for _ in l1_target)
-                for row in conn.execute(f"SELECT * FROM archive_lines WHERE live_session_id IN ({ph})", tuple(l1_target)):
+                for row in conn.execute(
+                    f"SELECT * FROM archive_lines WHERE live_session_id IN ({ph})", tuple(l1_target)
+                ):
                     sid = int(row["live_session_id"])
                     text = _clean_text(_row_val(row, acols, "text"), max_len=360)
                     if not text:
@@ -322,7 +326,9 @@ class StartupHistoryBackfiller:
                     what = _clean_text(_row_val(row, ccols, "what"), max_len=320)
                     if not what:
                         continue
-                    fallback_ts = sessions_by_id.get(int(csid), {}).get("started_at_ms", now_val) if csid is not None else now_val
+                    fallback_ts = (
+                        sessions_by_id.get(int(csid), {}).get("started_at_ms", now_val) if csid is not None else now_val
+                    )
                     occ_ms = int(
                         _row_val(row, ccols, "updated_at_ms") or _row_val(row, ccols, "created_at_ms") or fallback_ts
                     )
@@ -358,7 +364,9 @@ class StartupHistoryBackfiller:
             if legacy_sids and "timeline_summary" in tables:
                 tcols = _table_columns(conn, "timeline_summary")
                 ph = ",".join("?" for _ in legacy_sids)
-                for row in conn.execute(f"SELECT * FROM timeline_summary WHERE live_session_id IN ({ph})", tuple(legacy_sids)):
+                for row in conn.execute(
+                    f"SELECT * FROM timeline_summary WHERE live_session_id IN ({ph})", tuple(legacy_sids)
+                ):
                     sid = int(row["live_session_id"])
                     summary = _clean_text(_row_val(row, tcols, "summary"), max_len=360)
                     if not summary:
@@ -520,7 +528,9 @@ class StartupHistoryBackfiller:
                     "overview": meta["overview"],
                     "metadata": {"backfill": True},
                 }
-                archive_batches.append((sid, {"branch_id": self._branch_id, "episode": episode_payload, "records": recs}))
+                archive_batches.append(
+                    (sid, {"branch_id": self._branch_id, "episode": episode_payload, "records": recs})
+                )
 
             # 4. 采集世界级游戏工作文档与生物名册写入 L0（按内容更新时刻键去重）
             if "game_work_docs" in tables:
@@ -602,7 +612,9 @@ class StartupHistoryBackfiller:
                     save_name = _clean_text(_row_val(row, fcols, "save_name"), max_len=80) or save_id or game
                     fkind = str(_row_val(row, fcols, "kind") or "social_fact").strip()
                     quote = _clean_text(_row_val(row, fcols, "quote"), max_len=600)
-                    upd_ms = int(_row_val(row, fcols, "updated_at_ms") or _row_val(row, fcols, "created_at_ms") or now_val)
+                    upd_ms = int(
+                        _row_val(row, fcols, "updated_at_ms") or _row_val(row, fcols, "created_at_ms") or now_val
+                    )
                     csid = _row_val(row, fcols, "updated_session_id") or _row_val(row, fcols, "created_session_id")
                     pending_sf_ids.append(fid)
                     knowledge_relations.append(
@@ -721,9 +733,9 @@ class StartupHistoryBackfiller:
                         await self._client.post_events(chunk)
                         sent_total += len(chunk)
                     except MaiGORejected as exc:
-                        logger.warning(f"MaiGO L1 历史回填批次被拒收（跳过该批）: {exc}")
+                        logger.warning(f"MaiGO L1 历史回填批次被拒收（跳过该批）: {format_exc(exc)}")
                     except Exception as exc:  # noqa: BLE001 - 服务端不可达保留进度下次续传
-                        logger.warning(f"MaiGO 启动历史回填暂停（L1 已送 {sent_total} 条）: {exc}")
+                        logger.warning(f"MaiGO 启动历史回填暂停（L1 已送 {sent_total} 条）: {format_exc(exc)}")
                         return sent_total
                     if idx + self._batch_size < len(l1_events) and self._batch_interval_s > 0:
                         await asyncio.sleep(self._batch_interval_s)
@@ -742,9 +754,7 @@ class StartupHistoryBackfiller:
                     ep_title = str((episode or {}).get("title") or f"场次 {sid}")
                     try:
                         if not records:
-                            await ingest_archive_fn(
-                                {"branch_id": self._branch_id, "episode": episode, "records": []}
-                            )
+                            await ingest_archive_fn({"branch_id": self._branch_id, "episode": episode, "records": []})
                             sent_total += 1
                         else:
                             for idx in range(0, len(records), self._batch_size):
@@ -767,9 +777,9 @@ class StartupHistoryBackfiller:
                             f"场次 {sid}（{ep_title}，本场 {len(records)} 条，累计 {sent_total} 条）"
                         )
                     except MaiGORejected as exc:
-                        logger.warning(f"MaiGO L0 原件书库场次 {sid} 被拒收（跳过）: {exc}")
+                        logger.warning(f"MaiGO L0 原件书库场次 {sid} 被拒收（跳过）: {format_exc(exc)}")
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning(f"MaiGO L0 原件书库回填暂停（场次 {sid} 留待续传）: {exc}")
+                        logger.warning(f"MaiGO L0 原件书库回填暂停（场次 {sid} 留待续传）: {format_exc(exc)}")
                         return sent_total
 
                 if world_records:
@@ -779,9 +789,9 @@ class StartupHistoryBackfiller:
                             await ingest_archive_fn({"branch_id": self._branch_id, "records": sub})
                             sent_total += len(sub)
                         except MaiGORejected as exc:
-                            logger.warning(f"MaiGO 世界笔记/同伴名册批次被拒收（跳过）: {exc}")
+                            logger.warning(f"MaiGO 世界笔记/同伴名册批次被拒收（跳过）: {format_exc(exc)}")
                         except Exception as exc:  # noqa: BLE001
-                            logger.warning(f"MaiGO 世界笔记/同伴名册回填暂停: {exc}")
+                            logger.warning(f"MaiGO 世界笔记/同伴名册回填暂停: {format_exc(exc)}")
                             return sent_total
                         if idx + self._batch_size < len(world_records) and self._batch_interval_s > 0:
                             await asyncio.sleep(self._batch_interval_s)
@@ -797,9 +807,9 @@ class StartupHistoryBackfiller:
                         await ingest_kg_fn({"branch_id": self._branch_id, "entities": [], "relations": sub})
                         sent_total += len(sub)
                     except MaiGORejected as exc:
-                        logger.warning(f"MaiGO L2 实体关系批次被拒收（跳过）: {exc}")
+                        logger.warning(f"MaiGO L2 实体关系批次被拒收（跳过）: {format_exc(exc)}")
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning(f"MaiGO L2 实体关系回填暂停: {exc}")
+                        logger.warning(f"MaiGO L2 实体关系回填暂停: {format_exc(exc)}")
                         return sent_total
                     if idx + self._batch_size < len(knowledge_relations) and self._batch_interval_s > 0:
                         await asyncio.sleep(self._batch_interval_s)

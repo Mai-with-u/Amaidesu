@@ -48,11 +48,11 @@ PROOF_GAME_EVENT_TYPES: Tuple[str, ...] = (
 # 是没做成（"还没烤完""没装好"），或前面紧挨着打算/准备/听说等非已成陈述的，不算
 _DONE_CLAIM = re.compile(
     r"(?:做|盖|搭|建|装|修|弄|种|铺|围|造|摆|放|点|挖|砌|封|补|烤|拼|画|配|收拾|整理|布置|备|堆|垒|架|焊|刷|插|挂"
-    r"|接|连|炼|熔|煮|炒|绑|圈|驯|立)好"
+    r"|接|连|炼|熔|煮|炒|绑|圈|驯|立|设|定|改|换)好"
     r"|(?:做|合成|造|炼|打造)出"
     r"|(?:做|盖|搭|建|装|修|弄|种|铺|围|造|挖|砌|补|烤|炸|拆|砍|采|收|搬|清|填|堆|插|挂|炼|熔|煮|收拾|整理)完"
     r"|(?:凑|攒|配|摆|收|备)齐"
-    r"|(?:挖|拿|找|采|收集|买|换|抓|钓|捡|弄)到"
+    r"|(?:挖|拿|找|采|收集|买|换|抓|钓|捡|弄|改|设|移)到"
     r"|(?:装|安|点|种|盖|铺|围|挂|插)上了"
     r"|种下|立起来|烤干|搞定|完成|到手|落成|竣工"
 )
@@ -224,6 +224,10 @@ _SINGLE_CHAR_OBJECT_NOUNS: frozenset[str] = frozenset(
 )
 _CJK_ANY_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _ALNUM_RUN_RE = re.compile(r"[a-z0-9_]{2,}", re.IGNORECASE)
+# 状态生效类（重生点/传送家点）核验门槛：声明断言重生点或传送家点变化时，游戏记录须体现实际生效
+# （如躺下/睡眠/重生点刷新/家点设置），绝不因仅放置床铺而误判为重生点已变更
+_RESPAWN_STATE_CLAIM_RE = re.compile(r"重生点|复活点|出生点|sethome|家点|传送点", re.IGNORECASE)
+_RESPAWN_STATE_PROOF_RE = re.compile(r"重生|复活|出生|躺下|睡|入睡|sethome|家点|传送点|绑定", re.IGNORECASE)
 
 # 记录超过这么多条时，同一次执行里连续的几步里程碑并成一行（第 54、58 场各四五十条，不用并）；
 # 每步只留这么多字。不截条数：截掉的是长场前半段，那时说的"做好了"就引不到记录、被误判成没核实到
@@ -493,11 +497,21 @@ def _record_numbers(ref: Any) -> List[int]:
     return numbers
 
 
-def proof_for(ref: Any, records: Sequence[GameRecord], *, game: Optional[str], at_ms: int) -> Optional[GameRecord]:
+def proof_for(
+    ref: Any,
+    records: Sequence[GameRecord],
+    *,
+    game: Optional[str],
+    at_ms: int,
+    claim_text: str = "",
+) -> Optional[GameRecord]:
     """模型引的记录里有没有一条撑得住这句完成说法：存在、能作证、同一个游戏、不晚于她那句（容两分钟）。
 
+    当提供 ``claim_text`` 且其断言重生点或传送家点变更时，所引记录还须包含实际生效证据
+    （如躺下/睡眠/重生点刷新/家点设置），防止仅放床的记录被显式引用来证明“换了重生点”。
     引了几条时有一条撑得住就算；都撑不住为 None。
     """
+    requires_respawn_activation = bool(claim_text and _RESPAWN_STATE_CLAIM_RE.search(claim_text))
     by_number = {record.number: record for record in records}
     for number in _record_numbers(ref):
         record = by_number.get(number)
@@ -506,6 +520,8 @@ def proof_for(ref: Any, records: Sequence[GameRecord], *, game: Optional[str], a
         if game and record.game and record.game.lower() != game.lower():
             continue
         if record.at_ms > at_ms + _LATE_SLACK_MS:
+            continue
+        if requires_respawn_activation and not _RESPAWN_STATE_PROOF_RE.search(record.text):
             continue
         return record
     return None
@@ -625,6 +641,7 @@ def infer_proof_for_claim(
     claim_units, claim_tokens, _, claim_single_nouns = _extract_proof_features(text, game=game)
     if not claim_units and not claim_single_nouns:
         return None
+    requires_respawn_activation = bool(_RESPAWN_STATE_CLAIM_RE.search(text or ""))
     deadline = at_ms + _LATE_SLACK_MS
     best: Optional[Tuple[int, int, int, GameRecord]] = None
     contradiction_times: List[int] = []
@@ -632,6 +649,9 @@ def infer_proof_for_claim(
         if game and record.game and record.game.lower() != game.lower():
             continue
         if record.at_ms > deadline:
+            continue
+        if requires_respawn_activation and record.proves and not _RESPAWN_STATE_PROOF_RE.search(record.text):
+            # 仅放置设施（如摆下床铺）不能兜底证明重生点或传送家点状态已生效
             continue
         _, rec_tokens, rec_cjk_runs, _ = _extract_proof_features(record.text, game=game)
         hit_units, overlap = _match_record_score(

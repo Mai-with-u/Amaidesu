@@ -28,6 +28,7 @@ from src.modules.maigo_sync.pending_log import (
     extract_social_facts,
     extract_work_docs,
     format_brief_extension,
+    format_exc as _format_exc,
 )
 from src.modules.storage.models.talk_card import TalkCard
 from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
@@ -79,13 +80,6 @@ def _normalize_external_id(platform: str, external_id: str) -> str:
     if _normalize_platform(platform) == "minecraft":
         return cleaned.lower()
     return cleaned
-
-
-def _format_exc(exc: BaseException) -> str:
-    """格式化异常摘要为带类名的可读文本；异常消息为空时仅返回类名，避免日志留悬空冒号。"""
-    name = type(exc).__name__
-    detail = str(exc).strip()
-    return f"{name}: {detail}" if detail else name
 
 
 class MaiGOBridge:
@@ -640,6 +634,7 @@ class MaiGOBridge:
             stable_brief=stable_brief,
             open_promises=promises,
             save_brief=save_brief,
+            current_branch_id=self._branch_id,
         )
         return _SessionCheckoutState(
             live_session_id=sid,

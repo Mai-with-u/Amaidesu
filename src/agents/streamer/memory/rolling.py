@@ -104,6 +104,7 @@ _REFUSED_NOT_MENTIONED = "这场没提到不算去掉的理由，旧行保留"
 _REFUSED_DROP_KIND = "去掉的理由要以了结、不成立、记错或被取代开头，旧行保留"
 _REFUSED_HUMAN_LOCKED = "人改过的行只有人能动"
 _REFUSED_REPLACE = "替换的新行没通过校验，旧行保留"
+_REFUSED_REPLACE_UNVERIFIED = "替换的新行未获游戏记录核实，不能顶掉已核实旧行，旧行保留"
 _REFUSED_SAME_AS = "注明重复的那一行编号不对，旧行保留"
 _REFUSED_SAME_AS_GONE = "注明重复的那一行也按重复去掉了，旧行保留"
 _EVICTED_OLD = "超出本分区快照名额，最久没被再提的先出"
@@ -260,14 +261,25 @@ def plan_from_ops(
                 quote_text = _evidence(evidence) if evidence is not None else str(correction_quote)[:_EVIDENCE_CHARS]
                 changes.append(SnapshotChange(action="drop", what=title, reason=reason, quote=quote_text))
         elif op == "replace":
-            # 替换：新行带本场原话、过新事校验器，通过才换掉旧行
+            # 替换：新行带本场原话、过新事校验器，通过才换掉旧行；未获游戏记录核实的口播说法不得顶掉已核实旧行
             written, missed = validate_new(raw)
             misses.extend(missed)
             if written:
-                removed.add(index)
-                settled.add(index)
                 replacement = written[0]
                 unverified_rep = replacement.text.endswith(UNVERIFIED_MARK)
+                if unverified_rep and not item.line.text.endswith(UNVERIFIED_MARK):
+                    # 防止未核实的完成/状态变更口播（如只放床未睡觉却虚报换重生点）覆写原本已成立的旧快照事实
+                    changes.append(
+                        SnapshotChange(
+                            action="refused",
+                            what=title,
+                            reason=_REFUSED_REPLACE_UNVERIFIED,
+                            quote=replacement.quote,
+                        )
+                    )
+                    continue
+                removed.add(index)
+                settled.add(index)
                 if unverified_rep and replacement.highlight:
                     replacement = replacement.model_copy(update={"highlight": False})
                 # 被换掉的是稳定或名场面时（未核实完成说法除外），模型没明确改为 false 的新行沿用原标记
