@@ -4,18 +4,19 @@ from contextvars import ContextVar
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, AsyncGenerator, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Iterator, List, Optional
 import uuid
 
 import pytest
 from loguru import logger as _loguru_logger
 
-from src.modules.config.multi_file_loader import generate_default_configs
 from src.modules.events.event_bus import EventBus
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.subtitle.backends.tk_gui_service import SubtitleGuiService
-from tests.helpers import FakeClock
+
+if TYPE_CHECKING:
+    from tests.helpers import FakeClock
 
 # 子进程评测自检后缀：本地可用 `-m "not slow"` 跳过，CI 全量仍会执行
 _SLOW_SELF_CHECK_SUFFIXES = (
@@ -146,6 +147,10 @@ def config_template_bytes(tmp_path_factory: pytest.TempPathFactory) -> dict[str,
     生成一次后供各域测试字节复制落盘，免去每用例重跑 Schema 生成；
     需要非默认基线内容的测试仍走 generate_default_configs 真生成。
     """
+    # 函数内 import：配置 Schema 模块导入要花以秒计的时间，而本 fixture 只有配置与接口测试
+    # 用得到；放在文件顶部会让每个测试进程启动时都付这笔钱，开并行跑小范围时尤其明显
+    from src.modules.config.multi_file_loader import generate_default_configs
+
     template_dir = tmp_path_factory.mktemp("config_template")
     generate_default_configs(template_dir)
     return {path.name: path.read_bytes() for path in sorted(template_dir.glob("*.toml"))}
@@ -218,7 +223,7 @@ async def event_bus() -> AsyncGenerator[EventBus, None]:
 
 
 @pytest.fixture
-def fake_clock() -> FakeClock:
+def fake_clock() -> "FakeClock":
     """可推进的假时钟（``tick(ms)`` 推进时刻）。
 
     适用：被测代码把时间入口做成可注入的（``now_ms`` 或等形毫秒时刻函数），
@@ -226,6 +231,10 @@ def fake_clock() -> FakeClock:
     ``time.monotonic`` 路径不受它控制，等异步条件成立请用条件轮询
     （tests/config/helpers.py 的 ``wait_until``）。
     """
+    # 函数内 import：tests.helpers 会连带导入 LLM 模块的类型（单进程约半秒），而本文件是每个
+    # 测试进程启动都要加载的；只有用到假时钟的测试才付这笔钱
+    from tests.helpers import FakeClock
+
     return FakeClock()
 
 
