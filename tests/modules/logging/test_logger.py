@@ -20,6 +20,11 @@ def reset_logger_state():
     handler_ids = logger_module._HANDLER_IDS.copy()
     default_handler_id = logger_module._DEFAULT_HANDLER_ID
     callbacks = logger_module._RECONFIGURE_CALLBACKS.copy()
+    # 清掉其他测试文件可能遗留的重配置回调（如未停干净的 LogStreamer）：
+    # 它们会在本文件的 configure_from_config 里重新挂自己的 sink，使
+    # "重配置后 loguru 处理器数"的断言取决于同进程先跑了谁。本文件的
+    # 用例各自注册自己的回调，不依赖外部遗留回调。
+    logger_module._RECONFIGURE_CALLBACKS.clear()
     yield
     logger_module._CONFIGURED = configured
     logger_module._HANDLER_IDS.clear()

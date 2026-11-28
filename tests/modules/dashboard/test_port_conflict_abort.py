@@ -413,12 +413,16 @@ async def test_create_app_components_consumes_restart_handoff_env_and_wires_lock
             captured_dashboard_kwargs.append(kwargs)
             self.widget_service = None
             self.ws_handler = None
+            # 与真实 DashboardServer 的约定一致：组合根交进来的日志流由服务在 stop 时停掉。
+            # 替身不接管的话，组装函数启动的真日志流会一直留在测试进程里，干扰同进程后面的测试
+            self.log_streamer = kwargs.get("log_streamer")
 
         async def start(self) -> None:
             return None
 
         async def stop(self) -> None:
-            return None
+            if self.log_streamer is not None:
+                await self.log_streamer.stop()
 
         async def cleanup(self) -> None:
             return None
