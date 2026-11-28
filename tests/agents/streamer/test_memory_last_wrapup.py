@@ -350,11 +350,15 @@ async def test_agent_injects_wrapup_for_at_most_two_windows_or_until_first_deleg
 
     await agent.start()
     try:
+        # 事件总线发布事件后立即返回，订阅者的处理在后台任务里跑。下面每次发布开播、下播事件后都先等
+        # 它们处理完再往下走：下播处理里有收播道别那一轮（会调一次模型），不等它就清空调用记录的话，
+        # 道别那一轮的调用会落在清空之后，被当成下一场的第一窗
         await bus.emit(
             CoreEvents.LIVE_STARTED,
             LiveStartedPayload(live_session_id=s_cur, kind="live", started_at_ms=_NOW, resumed=False),
             source="test",
         )
+        await bus.wait_until_drained()
         await wait_until(agent.is_live_active, what="首场开播就绪")
 
         # 第 1 窗、第 2 窗都有【上次收尾】，第 3 窗自动收闸（经公开递话入口唤醒决策回合）
@@ -380,6 +384,7 @@ async def test_agent_injects_wrapup_for_at_most_two_windows_or_until_first_deleg
             ),
             source="test",
         )
+        await bus.wait_until_drained()
         await wait_until(lambda: not agent.is_live_active(), what="首场下播收闸")
 
         s_next = await store.sessions.insert_live_session(started_at_ms=_NOW + 10_000, kind="live")
@@ -390,6 +395,7 @@ async def test_agent_injects_wrapup_for_at_most_two_windows_or_until_first_deleg
             LiveStartedPayload(live_session_id=s_next, kind="live", started_at_ms=_NOW + 10_000, resumed=False),
             source="test",
         )
+        await bus.wait_until_drained()
         await wait_until(agent.is_live_active, what="新场开播就绪")
         agent.receive_prompt(content="新场首窗", source="test")
         await wait_until(lambda: len(_planner_refs()) >= 1, what="新场第1窗决策完成")
@@ -420,13 +426,40 @@ async def test_agent_injects_wrapup_for_at_most_two_windows_or_until_first_deleg
             ),
             source="test",
         )
+        await bus.wait_until_drained()
         await wait_until(lambda: not agent.is_live_active(), what="新场下播收闸")
+
+        # 断线续播（resumed=True）：不注入【上次收尾】。续播的是一场没受理过委派的场次：
+        # 拿上面受理过委派的场次来续播，"受理委派后关闸"这条规则本身就会让它不注入，验不出续播这条规则
+        s_resume = await store.sessions.insert_live_session(started_at_ms=_NOW + 20_000, kind="live")
+        session_stub.active_pk = s_resume
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=s_resume, kind="live", started_at_ms=_NOW + 20_000, resumed=False),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await wait_until(agent.is_live_active, what="待续播的场次开播就绪")
+        await bus.emit(
+            CoreEvents.LIVE_ENDED,
+            LiveEndedPayload(
+                live_session_id=s_resume,
+                kind="live",
+                started_at_ms=_NOW + 20_000,
+                ended_at_ms=_NOW + 25_000,
+                empty_discarded=True,
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await wait_until(lambda: not agent.is_live_active(), what="待续播的场次下播收闸")
         llm.calls.clear()
         await bus.emit(
             CoreEvents.LIVE_STARTED,
-            LiveStartedPayload(live_session_id=s_next, kind="live", started_at_ms=_NOW + 10_000, resumed=True),
+            LiveStartedPayload(live_session_id=s_resume, kind="live", started_at_ms=_NOW + 20_000, resumed=True),
             source="test",
         )
+        await bus.wait_until_drained()
         await wait_until(lambda: len(_planner_refs()) >= 1, what="续播接回窗完成")
         assert all("【上次收尾】" not in ref for ref in _planner_refs())
     finally:

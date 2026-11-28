@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from src.agents.minecraft.skill_support import (
     LEARNED_SKILL_MAX_CONTENT_CHARS,
@@ -211,16 +211,22 @@ async def test_learned_skill_crud_limits_readonly_guard_and_reread_window(tmp_pa
     assert missing["success"] is False
 
 
+def _has_recognized_save(records: Iterable[Dict[str, Any]], save_name: str) -> bool:
+    """这些日志里有没有「认出所在存档」这一行：Agent 把该存档的工作文档和自建技能全部加载完才写它。"""
+    return any(f"认出所在存档：「{save_name}」" in record["message"] for record in records)
+
+
 async def test_minecraft_agent_auto_derives_learned_skill_repo_from_work_docs_repo_and_persists(
-    db_path: Path, tmp_path: Path
+    db_path: Path, tmp_path: Path, loguru_capture: Any
 ) -> None:
     """端到端：MinecraftAgent 仅注入 work_docs_repo 时自动派生 LearnedSkillRepo，跨重启持久化并防短窗重读。"""
     db = SQLiteDatabase(db_path)
     await db.initialize()
     try:
+        save_name = "持久化测试档"
         library = _make_skill_library(tmp_path)
         server = FakeMaicraft()
-        server.enter_world("save-persisted", "持久化测试档")
+        server.enter_world("save-persisted", save_name)
 
         phase = {"step": 0}
 
@@ -262,6 +268,9 @@ async def test_minecraft_agent_auto_derives_learned_skill_repo_from_work_docs_re
             work_docs_repo=db.game_work_docs,
         )
         try:
+            # 新启动的实例靠后台事件循环读到的页面认出存档，认出后才加载这个存档的自建技能目录。
+            # 不等它就走，写入本存档的技能可能被记到"还没认出存档"名下
+            await _wait_until(lambda: _has_recognized_save(loguru_capture.records, save_name))
             agent1.receive_delegation(instruction="记录营地自动熔炉用法", task_id="d-skill-1")
             await _wait_until(lambda: len(_reports(bus1)) == 1)
 
@@ -277,6 +286,7 @@ async def test_minecraft_agent_auto_derives_learned_skill_repo_from_work_docs_re
 
         # 模拟重启：构造全新 MinecraftAgent 实例（同样只传 work_docs_repo），验证自建技能从库里恢复进目录并可读
         registry2 = ToolRegistry()
+        logs_before_restart = len(loguru_capture.records)
         agent2, llm2, bus2 = await make_minecraft_agent(
             server,
             lambda _msgs: _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "重启验证完成"})]),
@@ -285,7 +295,8 @@ async def test_minecraft_agent_auto_derives_learned_skill_repo_from_work_docs_re
             work_docs_repo=db.game_work_docs,
         )
         try:
-            # 先触发 observe(self) 认出存档并经工具面读取
+            # 经工具面读一次自己。这里直接调工具注册表，不经过 Agent 自己的工具执行入口，
+            # 所以不会让 Agent 认出存档
             res = await registry2.invoke(
                 ToolInvocation(
                     tool_name="maicraft_observe",
@@ -295,6 +306,9 @@ async def test_minecraft_agent_auto_derives_learned_skill_repo_from_work_docs_re
                 )
             )
             assert res.success is True
+            # 重启后的实例同样要等它认出存档：认出之前自建技能目录里只有跨存档的通用技能，
+            # 这时派活，第一次调模型拿到的系统提示词里就没有本存档的技能
+            await _wait_until(lambda: _has_recognized_save(loguru_capture.records[logs_before_restart:], save_name))
             agent2.receive_delegation(instruction="核对技能目录", task_id="d-skill-2")
             await _wait_until(lambda: len(_reports(bus2)) == 1)
 
