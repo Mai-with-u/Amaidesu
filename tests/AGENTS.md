@@ -21,6 +21,7 @@
 - 载荷与场景用既有工厂构造（如 tests/modules/storage/helpers.py 的 make_room_message）；没有工厂的先建工厂再用。
 - 项目启用 `asyncio_mode = "auto"`：异步测试直接写 `async def`，不加 `@pytest.mark.asyncio`——auto 模式下该标记冗余，误挂到同步测试还会产生 PytestWarning。
 - 同一流程多组输入输出用一张 `@pytest.mark.parametrize` 参数表，禁止复制粘贴成长手写；断言差异也用参数表达，只有控制流真正不同才拆独立测试函数。
+- "提示词里必须有某条规则"的检查只写在集中清单 `tests/agents/prompt_rules.py`：一行一条规则，写明出自哪次事故、在哪份提示词里、识别它的最短片段，由 `tests/agents/test_prompt_rules.py` 统一核对；不在各测试文件里散写提示词原句断言。验"代码把数据送进了模型输入"的断言不在此列。
 
 ## 跑测试时并行开多大
 
