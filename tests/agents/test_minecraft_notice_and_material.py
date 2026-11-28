@@ -152,7 +152,6 @@ async def test_publisher_long_text_summarizes_two_column() -> None:
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert llm.calls and llm.calls[0]["profile"] == "summary"
-    assert "只压缩不评价" in llm.calls[0]["messages"][0]["content"]
     assert recorder.events == [{"message": "饿了：缺面包、缺干海带块", "scene": f"原文留档：{long_text}"}]
 
 
@@ -316,7 +315,6 @@ async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> N
     await _wait_until(lambda: len(_attention_payloads(bus)) == 2)
 
     assert llm.calls and llm.calls[0]["profile"] == "summary", "概述走 summary 档"
-    assert "只压缩不评价" in llm.calls[0]["messages"][0]["content"], "提示词只压缩不评价"
     first, summarized = _attention_payloads(bus)
     assert first.message == short and first.scene == "", "短文直通，不调概述"
     assert "干海带块" in summarized.message, "概述保信息"

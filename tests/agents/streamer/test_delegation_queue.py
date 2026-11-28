@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
-from src.agents.minecraft.tools import STREAMER_GUIDE
 from src.agents.streamer.game_now import AgentNow, GameNow, actual_doing_map
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import render_delegation_backlog, render_delegations
@@ -207,12 +206,10 @@ async def test_backlog_rendering_distinguishes_unstarted_and_shelved_with_progre
 
 
 def test_delegate_rules_state_one_in_hand_settle_on_switch_and_topic_selection() -> None:
-    """D1 + D3 提示词守则：一件在做其余待办、换活结单、挑下一件做什么三层先后、冷场旧事垫底、MC 玩法下沉。"""
+    """通用提示词不携带 Minecraft 专属玩法规矩：下沉由 tests/agents/test_prompt_rules.py 守护。"""
     reset_prompt_manager()
     try:
-        pm = get_prompt_manager()
-        rules = pm.render("amaidesu_planner_delegate_rules")
-        bare_planner = pm.render(
+        bare_planner = get_prompt_manager().render(
             "amaidesu_planner_react",
             bot_name="麦麦",
             personality="活泼",
@@ -225,11 +222,4 @@ def test_delegate_rules_state_one_in_hand_settle_on_switch_and_topic_selection()
     finally:
         reset_prompt_manager()
 
-    # 委派守则点名结单工具与合法参数，已退役的"按作废处理"表述不再出现
-    assert "`framework_task_settle`" in rules and "`when_busy`" in rules and "`current`" in rules
-    assert "按作废处理" not in rules
-
-    # D3：Minecraft 专属玩法规矩下沉在 Minecraft 层 STREAMER_GUIDE，不污染通用提示词
-    assert "死亡不掉落" in STREAMER_GUIDE and "死一次回重生点" in STREAMER_GUIDE
-    assert "随身带一条船" in STREAMER_GUIDE
     assert "死亡不掉落" not in bare_planner and "随身带一条船" not in bare_planner

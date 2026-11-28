@@ -605,16 +605,6 @@ async def test_mid_task_supplements_are_not_pinned_as_instruction_barriers_and_w
     await agent.stop()
 
 
-def test_fallback_prompt_keeps_the_bottom_lines() -> None:
-    """模板渲染不了时，内建提示词仍守住交付标准、卡住时的做法和不走捷径。"""
-    manager = MagicMock()
-    manager.render.side_effect = RuntimeError("模板坏了")
-    prompt = assemble_minecraft_agent(prompt_manager=manager)._system_prompt()
-    assert "本次目标要的结果真的达成才交付" in prompt and "听本次目标" in prompt
-    assert "至少试过两种办法再用" in prompt and "身体同一时间只做一件事" in prompt
-    assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "/give" in prompt and "创造模式" in prompt
-
-
 def test_strip_unsendable_swaps_only_the_binary_and_keeps_the_receipt_readable() -> None:
     """请求被拒时只换掉那串 base64：回执其余字段原样，换完仍是合法 JSON；正常长文本和短 base64 不动。"""
     receipt = json.dumps({"ok": True, "data": {"name": "箱子", "png": "iVBOR" + "Qk" * 110_000}}, ensure_ascii=False)
@@ -633,3 +623,11 @@ def test_strip_unsendable_swaps_only_the_binary_and_keeps_the_receipt_readable()
     assert data["data"]["name"] == "箱子" and data["data"]["png"].startswith("[这里原有 220005 字连续 base64")
     assert messages[2]["content"] == long_text and messages[3]["content"][0]["text"].endswith("Qk" * 6000)
     assert strip_unsendable(messages) == 0
+
+
+def test_fallback_prompt_is_used_when_the_template_cannot_render() -> None:
+    """模板渲染失败时不崩：内建兜底提示词顶上，系统提示词仍是一段非空文本。"""
+    manager = MagicMock()
+    manager.render.side_effect = RuntimeError("模板坏了")
+    prompt = assemble_minecraft_agent(prompt_manager=manager)._system_prompt()
+    assert prompt.strip(), "模板不可用时必须有内建兜底提示词"

@@ -647,10 +647,9 @@ def test_streamer_guide_hands_place_memos_to_the_game_and_waits_for_the_receipt(
     """主播的玩法说明：记地点交给游戏里记，手上有事就补一句、不撤手上的事；看到"已把「…」记在"才说记好了。
 
     直播里让她记的下界传送门坐标没记上：她自己的记忆是下播后从说过的话里整理的，一串坐标留不下来。
+    记地点交接的守则原文由 tests/agents/test_prompt_rules.py 守护。
     """
     assert "remembered_places" in STREAMER_GUIDE
-    assert "不要为它撤掉手上的事" in STREAMER_GUIDE
-    assert "已把「某某」记在" in STREAMER_GUIDE and "不说已经记好" in STREAMER_GUIDE
 
 
 def test_game_prompt_keeps_long_term_places_in_remember_not_the_notebook() -> None:

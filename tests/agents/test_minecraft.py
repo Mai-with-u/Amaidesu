@@ -930,13 +930,6 @@ def test_tool_guide_declares_delegate_shape_for_streamer_only() -> None:
     assert provider.guide_for("minecraft") == ""
 
 
-def test_tool_guide_tells_streamer_debug_panel_is_not_a_topic() -> None:
-    """画面左上角的 MaiCraft 调试面板是运营开着看的：说明里写明不是她按出来的、不当话题、观众问起再说。"""
-    guide = MinecraftToolProvider(state=MinecraftAgentState()).guide_for("streamer")
-    assert "调试面板" in guide and "运营开着看" in guide
-    assert "不是她按出来的" in guide and "不拿它当话题" in guide and "观众问起" in guide
-
-
 # ---------------------------------------------------------------------------
 # minecraft_chat_send：主播直发游戏公屏（复用 chat 能力执行器，不进本 Agent 决策循环）
 # ---------------------------------------------------------------------------

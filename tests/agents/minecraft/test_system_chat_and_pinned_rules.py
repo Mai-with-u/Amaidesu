@@ -922,20 +922,12 @@ def test_prompts_and_lead_mode_cover_inventory_check_correction_social_stop_and_
         "仅列原版常见设施" in build_glance_spec().description and "不含联动模组机器" in build_glance_spec().description
     )
     # 已删除诱发长文堆砌的冲突条款，不再回潮
-    assert "合并回应所有未答要点" not in agent_prompt
-
     assert "minecraft_rules" in fold_prompt
 
+    # 工具与参数标识、退役条款不回潮由 tests/agents/test_prompt_rules.py 的清单守护
     assert "memory_recall" in LEAD_MODE_PROMPT_SECTION
     assert "minecraft_rules" in LEAD_MODE_PROMPT_SECTION
     assert "[直播间静默提醒]" in LEAD_MODE_PROMPT_SECTION
     assert "correction=True" in LEAD_MODE_PROMPT_SECTION
     assert "observe(what=self)" in LEAD_MODE_PROMPT_SECTION
-    assert "暂停或取消非紧急的移动与施工目标" in LEAD_MODE_PROMPT_SECTION
-    assert "合并回应所有未答要点" not in LEAD_MODE_PROMPT_SECTION
-    assert "游戏公屏聊天栏空间狭小" in LEAD_MODE_PROMPT_SECTION
-    assert "同伴已经明确放权交给你做的事项" in LEAD_MODE_PROMPT_SECTION
     assert "rundown_control" in LEAD_MODE_PROMPT_SECTION
-    assert "游玩段不必被闹钟催着收尾" in LEAD_MODE_PROMPT_SECTION
-    assert "由主播或运营者主导" in LEAD_MODE_PROMPT_SECTION
-    assert "严格区分“正在做/准备做”与“已做成”" in LEAD_MODE_PROMPT_SECTION

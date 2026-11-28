@@ -574,24 +574,8 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
     （"带点疲惫的自嘲"），所以态度与语气正式归回复指引，但只针对已有事实、不夹带新事实。
     去原文示例（2026-11-05 拍板）：正误对照保留形态描述，成品句不进场——实测成品句会被逐字
     复读：场次 54 有 48/162 条指导语复读示范的"对 X 这件事"框架、31% 默认自嘲。
+    成品句示例不在场由 tests/agents/test_prompt_rules.py 守护。
     """
-    reset_prompt_manager()
-    try:
-        prompt = get_prompt_manager().render(
-            "amaidesu_planner_react",
-            bot_name="麦麦",
-            personality="活泼",
-            behavior_style="积极互动",
-            boundaries_rule="",
-            inside_jokes="",
-            game_rules="",
-            social_fact_step="",
-        )
-    finally:
-        reset_prompt_manager()
-    # 态度腔调的硬性要求已撤：事件本身带情绪属性才写一句客观的场景说明，回复器自己管怎么说
-    # 示范只讲形态、不给成品句：成品句会被当模板逐字复读（场次 54 实测 48/162 条指导语复读示范框架、31% 默认自嘲）
-    assert "对又一次被水冲走" not in prompt and "自嘲、嫌弃、得意" not in prompt
     # 工具参数描述与提示词契约对齐：reply_guidance 是方向 + 可选场景说明，不再要 Planner 替她定态度
     props = build_reply_tool_spec().parameters_schema["properties"]
     guidance_desc = props["reply_guidance"]["description"]

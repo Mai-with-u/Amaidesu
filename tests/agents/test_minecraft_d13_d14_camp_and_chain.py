@@ -293,8 +293,6 @@ def test_prompts_and_streamer_guide_cover_d13_camp_rules_and_d14_chain_mining() 
         prompt = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:
         reset_prompt_manager()
-    assert "营地范围内" in prompt and "走出营地" in prompt
-    assert "营地地面有坑顺手填平" in prompt
     assert "details.pits" in prompt
     assert "mod_features" in prompt and "last_chain_mining" in prompt and "not_chained_reason" in prompt
 

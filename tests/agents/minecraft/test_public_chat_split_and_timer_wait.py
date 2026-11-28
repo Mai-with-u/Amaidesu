@@ -15,7 +15,6 @@ from src.agents.minecraft.agent import (
     _public_chat_length_note,
     split_public_chat_message,
 )
-from src.agents.minecraft.lead_mode import LEAD_MODE_PROMPT_SECTION
 from src.agents.minecraft.maicraft import goal_run_of
 from src.agents.minecraft.wait_progress import WaitProgress
 from src.modules.agents.lead import LeadHandoverContext
@@ -123,13 +122,6 @@ def test_public_chat_length_note_detects_shortcut_message_between_soft_and_split
     assert PUBLIC_CHAT_SOFT_LENGTH_LIMIT < len(mid_msg) <= PUBLIC_CHAT_SPLIT_THRESHOLD
     note = _public_chat_length_note({"goal": {"ability": "chat", "message": mid_msg}})
     assert str(len(mid_msg)) in note
-
-
-def test_lead_mode_prompt_guides_natural_chat_and_plain_commentary_without_raw_readouts() -> None:
-    """主控态提示词明确游戏公屏不用裸坐标报位置、framework_commentary 用处境白话并保留专有名称。"""
-    assert "裸坐标" in LEAD_MODE_PROMPT_SECTION
-    assert "处境白话" in LEAD_MODE_PROMPT_SECTION
-    assert "专有名称保持原样" in LEAD_MODE_PROMPT_SECTION
 
 
 async def test_long_public_chat_splits_into_cut_in_chats_with_zero_extra_llm_and_full_dedup() -> None:

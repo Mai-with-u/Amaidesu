@@ -129,7 +129,5 @@ def test_format_companions_anchor_and_companions_reexports() -> None:
 
 
 def test_lead_mode_prompt_guides_about_player_cross_check() -> None:
-    """主控模式提示词在 about_player 处给出开放式核对边界，提醒对照熟人表与公屏抬头。"""
+    """主控模式提示词在 about_player 处给出开放式核对边界。"""
     assert "about_player" in LEAD_MODE_PROMPT_SECTION
-    assert "【游戏里的熟人】" in LEAD_MODE_PROMPT_SECTION
-    assert "常用称呼" in LEAD_MODE_PROMPT_SECTION

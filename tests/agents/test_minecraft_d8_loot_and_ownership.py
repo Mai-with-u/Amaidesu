@@ -192,12 +192,9 @@ def test_minecraft_prompt_and_report_spec_reflect_d4_ownership_and_loot_rules() 
         prompt = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:
         reset_prompt_manager()
-    assert "归属是事实，动别人的东西先掂量、动了要说" in prompt
-    assert "没开过的战利品容器顺路搜刮" in prompt
     assert "`loot`" in prompt
     assert 'target: {"kind": "here"}' in prompt and '"face": "up"' in prompt
     assert "others_things_touched" in prompt
-    assert "被保护挡住（结果说那东西" not in prompt
 
     report_desc = build_report_spec().parameters_schema["properties"]["content"]["description"]
     assert "归属是事实说明" in report_desc

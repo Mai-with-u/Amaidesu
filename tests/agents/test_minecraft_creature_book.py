@@ -13,7 +13,6 @@ from typing import Any, Dict
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.glance import STATUS_AWAY, STATUS_DEAD, STATUS_NEARBY, glance_brief, glance_scene
 from src.agents.minecraft.maicraft import MaicraftReply
-from src.agents.minecraft.tools import STREAMER_GUIDE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatMention, GameChatPayload
@@ -173,8 +172,6 @@ def test_game_agent_and_streamer_are_told_about_names() -> None:
     assert book.named_view() == {"阿缕": "你的女仆（莫莫酒狐皮肤），在身边"}
     book.note_death("莫莫酒狐被苦力怕炸死了", 2_000)
     assert book.named_view() == {"阿缕": "你的女仆（莫莫酒狐皮肤），已死：被苦力怕炸死了"}
-
-    assert "已死的就是死了" in STREAMER_GUIDE and "登记" not in STREAMER_GUIDE
 
 
 async def test_replay_of_the_audit_timeline(db_path: Path) -> None:
