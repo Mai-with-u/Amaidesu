@@ -23,13 +23,14 @@ import pytest
 
 from src.agents.streamer.config import StreamerMouthConfig, StreamerProactiveConfig
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
+from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.mouth import HIGH_RISK_ATTACKED_KEY, Mouth, Trigger
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv, RoundOutcome
 from src.agents.streamer.proactive_trigger import ProactiveTrigger
 from src.agents.streamer.replyer import TARGET_EXTRA_CHARS, Replyer
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
-from src.agents.streamer.session_scope import WindowMaterials
+from src.agents.streamer.session_scope import SessionScope, WindowMaterials
 from src.agents.streamer.speech_dispatcher import (
     SPEECH_PRIORITY_AUDIENCE,
     SPEECH_PRIORITY_EMERGENCY,
@@ -39,6 +40,7 @@ from src.agents.streamer.speech_dispatcher import (
 )
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.timeline import GameEventBatch
+from src.agents.streamer.tools.reply_tool import build_reply_tool_spec
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.control import build_agent_control_provider
@@ -57,7 +59,7 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.rundown import RundownChangedPayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
-from src.modules.events.payloads.utterance import UtteranceDroppedPayload
+from src.modules.events.payloads.utterance import UtteranceDroppedPayload, mark_failure_reported
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.storage.models.game_players import GamePlayer
@@ -4002,3 +4004,450 @@ async def test_enter_welcome_injects_zero_io_activity_fact_and_omits_stale_activ
     finally:
         await agent.stop()
         await game.stop()
+
+
+async def test_commentary_same_round_dedup_releases_on_dropped_failed_and_death(prompts: Any) -> None:
+    """同轮解说去重豁免：前句被硬打断（dropped）或合成失败（failed）或角色死亡后放行；正常完播且无死亡仍去重。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    dropped_events: List[UtteranceDroppedPayload] = []
+    dropped_ready = asyncio.Event()
+
+    async def _on_dropped(_name: str, payload: UtteranceDroppedPayload, _src: str) -> None:
+        dropped_events.append(payload)
+        dropped_ready.set()
+
+    bus.on(CoreEvents.TTS_UTTERANCE_DROPPED, _on_dropped, model_class=UtteranceDroppedPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    first_started = asyncio.Event()
+    fail_done = asyncio.Event()
+    finished_ids: List[str] = []
+    engine_mode: Dict[str, Any] = {"mode": "block_first"}
+
+    class _ControllableTTSEngine:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
+            del text, emotion, emotion_intensity
+            mode = engine_mode["mode"]
+            if mode == "block_first":
+                first_started.set()
+                await asyncio.Event().wait()
+            if mode == "fail_reported":
+                exc = RuntimeError("HTTP 503 busy")
+                mark_failure_reported(exc)
+                fail_done.set()
+                raise exc
+            if utterance_id:
+                finished_ids.append(utterance_id)
+
+    reply_idx = {"n": 0}
+
+    class _SeqReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode, has_target
+            return 60
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            reply_idx["n"] += 1
+            plan = kwargs["plan"]
+            return {"speech": f"播报{reply_idx['n']}：{plan.topic_summary}", "llm_request_id": f"req_{reply_idx['n']}"}
+
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "game_lead_commentary_min_interval_ms": 8_000,
+        },
+        prompt=prompts,
+        replyer=_SeqReplyer(),
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        tts_engine=_ControllableTTSEngine(),
+        speech_config={"enabled": True, "wait_playback": False, "max_queue": 6},
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=911, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # 场景 1：前句实况解说在合成/播放中被极急发言硬打断（dropped）→ 释放同轮去重，后续同轮解说放行
+        ack1 = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(game=game.name, summary="准备走过桥头", urgency="normal", round_id="mc_round_a"),
+        )
+        assert ack1.spoken is True
+        await asyncio.wait_for(first_started.wait(), timeout=2.0)
+
+        engine_mode["mode"] = "ok"
+        assert agent._speech.utterance_queue is not None
+        hard_cut = await agent._speech.utterance_queue.hard_interrupt_playing(SPEECH_PRIORITY_EMERGENCY)
+        assert hard_cut is True
+        await asyncio.wait_for(dropped_ready.wait(), timeout=2.0)
+        await agent._speech.wait_idle(timeout_ms=2_000)
+
+        clock.advance(9_000)
+        ack1_retry = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(
+                game=game.name, summary="刚过桥遇到状况补说一句", urgency="normal", round_id="mc_round_a"
+            ),
+        )
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        assert ack1_retry.spoken is True and ack1_retry.reason == "dispatched"
+
+        # 场景 2：上一句已正常完播且无死亡 → 同轮重复普通解说仍正常去重
+        clock.advance(9_000)
+        ack_dup = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(
+                game=game.name, summary="同一轮再来一句普通解说", urgency="normal", round_id="mc_round_a"
+            ),
+        )
+        assert ack_dup.accepted is True and ack_dup.spoken is False and ack_dup.reason == "same_round_deduped"
+
+        # 场景 3：无关语音（非当前解说句）合成失败 → 不得误清空当前轮去重锚点
+        engine_mode["mode"] = "fail_reported"
+        fail_done.clear()
+        await agent._speech.dispatch(
+            {"speech": "无关旁白句", "emotion": {"name": "neutral", "intensity": 0.5}},
+            round_id="unrelated_round",
+            priority=SPEECH_PRIORITY_NORMAL,
+            source="planner",
+        )
+        await asyncio.wait_for(fail_done.wait(), timeout=2.0)
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        clock.advance(9_000)
+        ack_still_deduped = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(
+                game=game.name, summary="无关句失败不应放行本轮", urgency="normal", round_id="mc_round_a"
+            ),
+        )
+        assert ack_still_deduped.spoken is False and ack_still_deduped.reason == "same_round_deduped"
+
+        # 场景 4：新轮解说自身在引擎侧 503 失败（mark_failure_reported）→ 精确释放同轮去重，后续同轮解说放行
+        fail_done.clear()
+        ack2 = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(game=game.name, summary="冲进矿洞被围攻", urgency="normal", round_id="mc_round_b"),
+        )
+        assert ack2.spoken is True
+        await asyncio.wait_for(fail_done.wait(), timeout=2.0)
+        await agent._speech.wait_idle(timeout_ms=2_000)
+
+        engine_mode["mode"] = "ok"
+        clock.advance(9_000)
+        ack2_after_fail = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(game=game.name, summary="补报刚才矿洞脱险情况", urgency="normal", round_id="mc_round_b"),
+        )
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        assert ack2_after_fail.spoken is True and ack2_after_fail.reason == "dispatched"
+
+        # 场景 5：本轮已正常完播过解说，随后收到角色死亡事件（CoreEvents.GAME_BODY_DIED）→ 释放同轮去重，死后说明放行
+        await bus.emit(
+            CoreEvents.GAME_BODY_DIED,
+            BodyEventPayload(
+                game=game.name,
+                kind="died",
+                summary="角色意外阵亡",
+                intentional=False,
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+
+        clock.advance(9_000)
+        ack_after_death = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(
+                game=game.name, summary="刚才掉进岩浆没了现在回营地复活", urgency="normal", round_id="mc_round_b"
+            ),
+        )
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        assert ack_after_death.spoken is True and ack_after_death.reason == "dispatched"
+        assert len(finished_ids) >= 3
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_enter_welcome_real_replyer_respects_registered_alias_without_prepending(prompts: Any) -> None:
+    """进房欢迎端到端：真实 Replyer 喊出熟人已登记别名时不再句首硬拼原账号名，且正确核销已欢迎表。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    speeches: List[str] = []
+    speech_emitted = asyncio.Event()
+
+    async def _on_speech(_name: str, payload: StreamerSpeechPayload, _src: str) -> None:
+        speeches.append(payload.text)
+        speech_emitted.set()
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _on_speech, model_class=StreamerSpeechPayload)
+
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    class _FakePlayerRepo:
+        async def list_players(self, *, limit: int = 200) -> List[GamePlayer]:
+            del limit
+            return [
+                GamePlayer(
+                    id=1,
+                    game=game.name,
+                    uuid="uuid-alias-1",
+                    name="AccountAlpha",
+                    names=["AccountAlpha"],
+                    aliases=["昵称甲"],
+                    first_seen_ms=100,
+                    last_seen_ms=200,
+                )
+            ]
+
+    llm = FakeLLMManager(Response(success=True, content="昵称甲来啦，快坐下一起看！", request_id="req_alias_welcome"))
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {"rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id, "proactive": {"enabled": True}},
+        llm=llm,
+        prompt=prompts,
+        round_executor=FakeRoundExecutor(),
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        game_player_repo=_FakePlayerRepo(),
+        enter_welcome_debounce_ms=0,
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=912, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        await bus.emit(
+            CoreEvents.ROOM_MESSAGE_ENTER,
+            RoomMessagePayload(
+                message_type="enter",
+                message_id="enter_alias_1",
+                content="",
+                user=RoomMessageUser(id="u_alias_1", name=" AccountAlpha "),
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await asyncio.wait_for(speech_emitted.wait(), timeout=2.0)
+        await bus.wait_until_drained()
+
+        assert speeches == ["昵称甲来啦，快坐下一起看！"]
+        assert "AccountAlpha" not in speeches[0]
+        assert agent._room_state.is_welcomed(user_id="u_alias_1", user_name="AccountAlpha") is True
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+async def test_commentary_in_flight_remember_round_failure_and_death_do_not_lock_round(prompts: Any) -> None:
+    """竞态 PoC 回归：remember_round 挂起期间遇 TTS 失败或角色死亡转折，绝不让旧解说事后锁死 LeadCoordinator 轮次。"""
+    clock = _FakeClock()
+    bus = EventBus()
+    manager = AgentManager()
+    game = _FakeAutonomousGameAgent(ready=True)
+    manager.register(game)
+    await game.start()
+
+    remember_entered = asyncio.Event()
+    remember_release = asyncio.Event()
+    should_pause = {"active": False}
+
+    class _PausingSessionScope(SessionScope):
+        async def remember_round(self, *args: Any, **kwargs: Any) -> None:
+            if should_pause["active"]:
+                should_pause["active"] = False
+                remember_entered.set()
+                await remember_release.wait()
+            await super().remember_round(*args, **kwargs)
+
+    fail_done = asyncio.Event()
+    engine_mode: Dict[str, str] = {"mode": "fail_reported"}
+
+    class _RaceTTSEngine:
+        async def handle_speech(
+            self,
+            text: str,
+            utterance_id: Optional[str] = None,
+            emotion: Optional[str] = None,
+            emotion_intensity: Optional[float] = None,
+        ) -> None:
+            del text, utterance_id, emotion, emotion_intensity
+            if engine_mode["mode"] == "fail_reported":
+                exc = RuntimeError("HTTP 503 busy")
+                mark_failure_reported(exc)
+                fail_done.set()
+                raise exc
+
+    reply_idx = {"n": 0}
+
+    class _RaceReplyer:
+        def budget_for(self, mode: str, *, has_target: bool) -> int:
+            del mode, has_target
+            return 60
+
+        async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+            reply_idx["n"] += 1
+            plan = kwargs["plan"]
+            return {
+                "speech": f"竞态播报{reply_idx['n']}：{plan.topic_summary}",
+                "llm_request_id": f"req_r_{reply_idx['n']}",
+            }
+
+    scope = _PausingSessionScope(ledger=GameLedger(), timeline=MagicMock(), chat=None, session_manager=None)
+    lead_coord = LeadCoordinator(manager, event_bus=bus, clock=clock)
+    agent = make_streamer_agent(
+        {
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+            "game_lead_commentary_min_interval_ms": 8_000,
+        },
+        prompt=prompts,
+        replyer=_RaceReplyer(),
+        round_executor=FakeRoundExecutor(),
+        session_scope=scope,
+        event_bus=bus,
+        lead_coordinator=lead_coord,
+        rundown_repo=_FakeRundownRepo(GAME_OPENING_TALK_RUNDOWN),
+        tts_engine=_RaceTTSEngine(),
+        speech_config={"enabled": True, "wait_playback": False, "max_queue": 6},
+        clock=clock,
+    )
+    manager.register(agent)
+    await agent.start()
+
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=913, kind="live", started_at_ms=clock()),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        await agent.rundown_control("next", now_ms=clock())
+        assert lead_coord.is_game_lead is True
+
+        # PoC 1：await remember_round 挂起期间 TTS 触发 fail_reported → 返回 spoken=False 且不锁 LeadCoordinator 轮次
+        should_pause["active"] = True
+        remember_entered.clear()
+        remember_release.clear()
+        fail_done.clear()
+        engine_mode["mode"] = "fail_reported"
+
+        task1 = asyncio.create_task(
+            lead_coord.submit_commentary(
+                game.name,
+                CommentaryRequest(game=game.name, summary="冲矿洞第一句", urgency="normal", round_id="mc_race_1"),
+            )
+        )
+        await asyncio.wait_for(remember_entered.wait(), timeout=2.0)
+        await asyncio.wait_for(fail_done.wait(), timeout=2.0)
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        remember_release.set()
+
+        ack1 = await asyncio.wait_for(task1, timeout=2.0)
+        assert ack1.accepted is True and ack1.spoken is False and ack1.reason == "utterance_undelivered"
+
+        engine_mode["mode"] = "ok"
+        clock.advance(9_000)
+        ack1_retry = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(game=game.name, summary="同轮补救第二句", urgency="normal", round_id="mc_race_1"),
+        )
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        assert ack1_retry.spoken is True and ack1_retry.reason == "dispatched"
+
+        # PoC 2：await remember_round 挂起期间收到 GAME_BODY_DIED → 旧解说放行后绝不事后锁死轮次，同轮死后说明放行
+        should_pause["active"] = True
+        remember_entered.clear()
+        remember_release.clear()
+        clock.advance(9_000)
+        task2 = asyncio.create_task(
+            lead_coord.submit_commentary(
+                game.name,
+                CommentaryRequest(game=game.name, summary="死前还在桥头", urgency="normal", round_id="mc_race_2"),
+            )
+        )
+        await asyncio.wait_for(remember_entered.wait(), timeout=2.0)
+        await bus.emit(
+            CoreEvents.GAME_BODY_DIED,
+            BodyEventPayload(
+                game=game.name,
+                kind="died",
+                summary="在途解说期间意外阵亡",
+                intentional=False,
+                timestamp_ms=clock(),
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        remember_release.set()
+
+        ack2 = await asyncio.wait_for(task2, timeout=2.0)
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        assert ack2.spoken is True and ack2.reason == "dispatched"
+
+        clock.advance(9_000)
+        ack2_after_death = await lead_coord.submit_commentary(
+            game.name,
+            CommentaryRequest(game=game.name, summary="刚复活回营地说明一下", urgency="normal", round_id="mc_race_2"),
+        )
+        await agent._speech.wait_idle(timeout_ms=2_000)
+        assert ack2_after_death.spoken is True and ack2_after_death.reason == "dispatched"
+    finally:
+        await agent.stop()
+        await game.stop()
+
+
+def test_topic_tag_prompt_and_tool_schema_omit_inductive_example_phrase(prompts: Any) -> None:
+    """规划器提示词与 reply 工具的 topic_tag 说明保持中性开放描述，不含诱发词「女仆妖精」。"""
+    rendered = prompts.render(
+        "amaidesu_planner_react",
+        bot_name="麦麦",
+        personality="活泼",
+        behavior_style="自然",
+        boundaries_rule="",
+        inside_jokes="",
+        game_rules="",
+        social_fact_step="",
+    )
+    assert "女仆妖精" not in rendered
+    tool_spec = build_reply_tool_spec()
+    topic_tag_desc = str(tool_spec.parameters_schema["properties"]["topic_tag"]["description"])
+    assert "女仆妖精" not in topic_tag_desc

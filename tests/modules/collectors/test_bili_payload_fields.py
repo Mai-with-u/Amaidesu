@@ -145,6 +145,7 @@ def test_gift_payload_amounts_combo_identity_and_raw_data(collector: BiliDanmaku
     assert (gift.combo_id, gift.combo_count, gift.combo_gift, gift.blind_gift_id) == ("combo_abc", 3, True, 0)
     assert (gift.guard_level, gift.fans_medal_level, gift.fans_medal_name) == (3, 21, "粉丝团")
     assert gift.msg_id == "msg_gift_1"
+    assert payload.message_id == "msg_gift_1"  # 顶层 message_id 同步透传，供规划器渲染 [id:...] 与 reply_to 反查
     assert json.loads(gift.raw_data)["data"]["combo_info"]["combo_id"] == "combo_abc"  # 完整原始 JSON，可重放补数
 
     free = _gift_raw()
@@ -155,14 +156,22 @@ def test_gift_payload_amounts_combo_identity_and_raw_data(collector: BiliDanmaku
 
 
 def test_super_chat_and_guard_payload_fields(collector: BiliDanmakuOfficialCollector) -> None:
-    sc = collector._create_payload(SuperChatMessage.from_dict(_sc_raw())).sc
+    sc_payload = collector._create_payload(SuperChatMessage.from_dict(_sc_raw()))
+    assert sc_payload is not None and sc_payload.message_id == "9527"
+    sc = sc_payload.sc
     assert (
         sc is not None and sc.total_price == 50_000 and sc.currency == "bilibili_gold_coin"
     )  # 人民币元 ×1000 换算金瓜子
     assert (sc.start_time, sc.end_time, sc.message_id, sc.fans_medal_level) == (1700000000, 1700000060, "9527", 12)
     assert sc.raw_data
 
+    sc_zero = _sc_raw()
+    sc_zero["data"]["message_id"] = 0
+    sc_zero_payload = collector._create_payload(SuperChatMessage.from_dict(sc_zero))
+    assert sc_zero_payload is not None and sc_zero_payload.message_id == ""
+
     payload = collector._create_payload(GuardMessage.from_dict(_guard_raw()))
+    assert payload is not None and payload.message_id == "msg_guard_1"
     guard = payload.guard
     assert guard is not None and (guard.guard_level, guard.guard_num, guard.guard_unit) == (3, 1, "月")
     assert (guard.total_price, guard.currency) == (138000, "bilibili_gold_coin")

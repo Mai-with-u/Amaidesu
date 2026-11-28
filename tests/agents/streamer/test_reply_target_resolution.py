@@ -6,6 +6,7 @@ from typing import List, Optional
 
 import pytest
 
+from src.agents.streamer import canonical
 from src.agents.streamer.decision_executor import (
     find_reply_target_message,
     resolve_reply_message_id,
@@ -13,7 +14,7 @@ from src.agents.streamer.decision_executor import (
     resolve_reply_target_user,
 )
 from src.agents.streamer.planner import RoundOutcome
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.room import GiftInfo, GuardInfo, RoomMessagePayload, RoomMessageUser, SuperChatInfo
 from src.modules.subtitle.protocol import ReplyQuote
 
 
@@ -99,3 +100,93 @@ def test_find_reply_target_message_returns_the_batch_message() -> None:
 )
 def test_resolve_reply_quote(plan: RoundOutcome, batch: list, expected: Optional[ReplyQuote]) -> None:
     assert resolve_reply_quote(plan, batch) == expected
+
+
+_PAID_BATCH: List[RoomMessagePayload] = [
+    RoomMessagePayload(
+        message_type="gift",
+        user=RoomMessageUser(id="u_a", name="user_a"),
+        content="",
+        message_id="msg_gift_1",
+        gift=GiftInfo(name="小星星", count=1, total_price=1000, currency="bilibili_gold_coin"),
+    ),
+    RoomMessagePayload(
+        message_type="super_chat",
+        user=RoomMessageUser(id="u_b", name="user_b"),
+        content="主播加油",
+        message_id="9527",
+        sc=SuperChatInfo(total_price=30000, currency="bilibili_gold_coin", message_id="9527"),
+    ),
+    RoomMessagePayload(
+        message_type="guard",
+        user=RoomMessageUser(id="u_c", name="user_c"),
+        content="user_c 开通了舰长",
+        message_id="msg_guard_1",
+        guard=GuardInfo(guard_level=3, guard_num=1, guard_unit="月", total_price=138000),
+    ),
+    RoomMessagePayload(
+        message_type="gift",
+        user=RoomMessageUser(id="u_d", name="昵称甲（原名）"),
+        content="",
+        message_id="msg_bracket_1",
+        gift=GiftInfo(name="小星星", count=1, total_price=1000, currency="bilibili_gold_coin"),
+    ),
+    RoomMessagePayload(
+        message_type="gift",
+        user=RoomMessageUser(id="u_dup", name="user_dup"),
+        content="",
+        message_id="msg_dup_1",
+    ),
+    RoomMessagePayload(
+        message_type="danmaku",
+        user=RoomMessageUser(id="u_dup", name="user_dup"),
+        content="顺便发条弹幕",
+        message_id="msg_dup_2",
+    ),
+]
+
+
+def test_canonical_renders_paid_messages_with_id_suffix() -> None:
+    """顶层 message_id 补齐后，canonical 渲染礼物/SC/上舰均在行尾携带 [id:...] 供 planner 引用。"""
+    gift_line = canonical.batch_item_to_message(_PAID_BATCH[0], paid=True)["content"]
+    sc_line = canonical.batch_item_to_message(_PAID_BATCH[1], paid=True)["content"]
+    guard_line = canonical.batch_item_to_message(_PAID_BATCH[2], paid=True)["content"]
+    assert gift_line.startswith("[礼物] user_a（付费观众）:") and gift_line.endswith("[id:msg_gift_1]")
+    assert sc_line.startswith("[醒目留言] user_b（付费观众）:") and sc_line.endswith("[id:9527]")
+    assert guard_line.startswith("[上舰] user_c（付费观众）:") and guard_line.endswith("[id:msg_guard_1]")
+
+
+@pytest.mark.parametrize(
+    ("target", "expected_id"),
+    [
+        ("[id:msg_gift_1]", "msg_gift_1"),
+        ("[礼物] user_a（付费观众）: 送出 小星星 ×1", "msg_gift_1"),
+        ("[礼物] user_a(付费观众): 送出 小星星 ×1", "msg_gift_1"),
+        ("[SC] user_b（付费观众）: 主播加油", "9527"),
+        ("[醒目留言] user_b（付费观众）: 主播加油", "9527"),
+        ("[上舰] user_c（付费观众）: user_c 开通了舰长", "msg_guard_1"),
+        ("昵称甲（原名）: 我名字里本来就有括号", "msg_bracket_1"),
+        ("[礼物] 昵称甲（原名）（付费观众）: 送出 小星星 ×1", "msg_bracket_1"),
+        ("[礼物] user_dup（付费观众）: 送出礼物", None),  # 同用户本轮两条消息，宁缺毋假
+        ("[礼物] 不存在的观众（付费观众）: 送出礼物", None),
+    ],
+    ids=[
+        "gift-by-id",
+        "gift-prefix-fullwidth-title",
+        "gift-prefix-ascii-title",
+        "sc-short-prefix",
+        "sc-canonical-prefix",
+        "guard-prefix-title",
+        "real-name-with-brackets",
+        "real-name-with-brackets-plus-paid-title",
+        "duplicate-user-returns-none",
+        "unknown-user-returns-none",
+    ],
+)
+def test_find_reply_target_message_handles_paid_prefixes_and_titles(
+    target: str,
+    expected_id: Optional[str],
+) -> None:
+    """planner 传回带 [礼物]/[SC]/[醒目留言]/[上舰] 前缀与头衔括号的展示串时能精确唯一反查，重名仍宁缺毋假。"""
+    found = find_reply_target_message(RoundOutcome(target=target), _PAID_BATCH)
+    assert (found.message_id if found is not None else None) == expected_id

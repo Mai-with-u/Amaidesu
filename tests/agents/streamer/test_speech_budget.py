@@ -7,14 +7,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.plan import DecisionPlan
+from src.agents.streamer.plan import DecisionPlan, ReplyRoundAttachment
 from src.agents.streamer.replyer import (
     RUNAWAY_SPEECH_FLOOR_CHARS,
     Replyer,
+    _restore_names_budget_safe,
     is_runaway_speech,
     runaway_limit_for,
 )
 from src.agents.streamer.speech_guard import fit_to_budget, guard
+from src.agents.streamer.tools.reply_tool import ReplyToolProvider
+from src.modules.tools.models import ToolInvocation
 
 
 # 登记（只读穿透，合并时进底账）：接线断言读取内建 Replyer 的台词长度预算
@@ -375,3 +378,154 @@ async def test_regular_game_turn_rules_distinguish_telemetry_from_item_spec_name
     assert "原始游戏状态读数" in rules
     assert "专有名称必须原样保留" in rules
     assert "不要改写或换算其中的数字" in rules
+
+
+@pytest.mark.parametrize(
+    ("draft", "keep_names", "aliases", "expected"),
+    [
+        # 回复稿已使用熟人别名亲切称呼：不再句首机械硬拼原账号名
+        ("昵称甲来啦，快坐！", ("AccountAlpha",), {"AccountAlpha": ("昵称甲",)}, "昵称甲来啦，快坐！"),
+        # 英文别名忽略大小写命中：同样不硬拼
+        ("hey alias_a, 欢迎来玩！", ("AccountAlpha",), {"AccountAlpha": ("Alias_A",)}, "hey alias_a, 欢迎来玩！"),
+        # 短 ASCII 别名强制词边界："a" 不得在 "haha" 单词片段里误命中，仍补回原账号名
+        ("haha 好开心呀！", ("AccountAlpha",), {"AccountAlpha": ("a",)}, "AccountAlpha，haha 好开心呀！"),
+        # 短 ASCII 别名处于独立词边界时正常命中，不硬拼原账号名
+        ("a 来啦好开心！", ("AccountAlpha",), {"AccountAlpha": ("a",)}, "a 来啦好开心！"),
+        # 既没喊原账号名也没喊任何已登记别名：照常补回句首
+        ("欢迎来到直播间呀！", ("AccountAlpha",), {"AccountAlpha": ("昵称甲",)}, "AccountAlpha，欢迎来到直播间呀！"),
+        # 多人名单：甲已用别名点到、乙漏名 → 只补拼乙，不重复硬拼甲
+        (
+            "欢迎昵称甲来玩呀！",
+            ("AccountAlpha", "AccountBeta"),
+            {"AccountAlpha": ("昵称甲",), "AccountBeta": ("昵称乙",)},
+            "AccountBeta，欢迎昵称甲来玩呀！",
+        ),
+    ],
+    ids=[
+        "alias-hit-no-prepend",
+        "alias-case-insensitive",
+        "short-ascii-alias-no-substring-false-positive",
+        "short-ascii-alias-word-boundary-hit",
+        "neither-hit-prepends",
+        "multi-user-partial-alias",
+    ],
+)
+async def test_replyer_alias_hit_avoids_prepending_account_name(
+    draft: str,
+    keep_names: tuple[str, ...],
+    aliases: dict[str, tuple[str, ...]],
+    expected: str,
+) -> None:
+    """目标用户的回复稿已包含其已登记熟人别名时视为已点名，避免句首机械硬拼成「账号名，别名！」。"""
+    replyer, llm, _ = _modal_replyer(
+        Response(success=True, content=draft, request_id="req_alias"),
+        speech_max_chars=30,
+    )
+    result = await replyer.generate(
+        DecisionPlan(should_reply=True, topic_summary="欢迎熟人进房"),
+        [],
+        reply_to="",
+        keep_names=keep_names,
+        name_aliases=aliases,
+    )
+    assert result == {"speech": expected, "llm_request_id": "req_alias"}
+    assert llm.generate.await_count == 1
+
+
+def test_restore_names_budget_safe_respects_registered_aliases() -> None:
+    """直接调用 _restore_names_budget_safe 时若正文已含已登记别名则原样返回，截断保名亦识别别名。"""
+    assert (
+        _restore_names_budget_safe(
+            "昵称甲来啦！",
+            ["AccountAlpha"],
+            budget=40,
+            keep_names=["AccountAlpha"],
+            name_aliases={"AccountAlpha": ["昵称甲"]},
+        )
+        == "昵称甲来啦！"
+    )
+    restored = _restore_names_budget_safe(
+        "昵称甲欢迎来到机械动力直播间一起玩！今天顺便看看水车和齿轮箱的转速够不够用。",
+        ["AccountBeta"],
+        budget=28,
+        keep_names=["AccountAlpha", "AccountBeta"],
+        name_aliases={"AccountAlpha": ["昵称甲"]},
+    )
+    assert "AccountBeta" in restored
+    assert "昵称甲" in restored
+    assert "AccountAlpha" not in restored
+
+
+async def test_reply_tool_passes_registered_aliases_for_paid_viewer_without_prepending() -> None:
+    """经 ReplyToolProvider 致谢付费熟人时，透传 name_aliases_provider 查到的别名，初稿喊别名不被硬拼原账号名。"""
+    replyer, _, _ = _modal_replyer(
+        Response(success=True, content="谢谢昵称甲送的小心心呀！", request_id="req_paid_alias"),
+        speech_max_chars=30,
+    )
+    provider = ReplyToolProvider(
+        replyer=replyer,
+        name_aliases_provider=lambda names: {"user_a": ["昵称甲"]} if "user_a" in names else {},
+    )
+    gift_msg = RoomMessagePayload(
+        message_type="gift",
+        message_id="g_alias_1",
+        user=RoomMessageUser(id="u_a", name="user_a"),
+        content="",
+    )
+    exec_result = await provider.invoke(
+        ToolInvocation(
+            tool_name="streamer_reply",
+            arguments={
+                "topic_summary": "感谢 user_a 送出礼物",
+                "reply_guidance": "亲切致谢",
+                "target": "[id:g_alias_1]",
+                "emotion": "happy",
+                "intensity": 0.6,
+                "is_novel": True,
+            },
+            round_id="r_paid_alias",
+            attachment=ReplyRoundAttachment(round_batch=[gift_msg]),
+        )
+    )
+    assert exec_result.success is True
+    assert exec_result.structured_content["speech"] == "谢谢昵称甲送的小心心呀！"
+
+
+async def test_reply_tool_splits_multi_person_reply_to_for_alias_lookup() -> None:
+    """ReplyToolProvider 对多人合并的 reply_to（如「A、B」）拆开逐个查别名，避免多人场景查不到别名。"""
+    queried_batches: list[list[str]] = []
+    runaway_speech = (
+        "刚才昵称甲和昵称乙一起帮我搭好了工坊门口的木桥！"
+        "今天咱们沿着东边河岸挖了一堆安山岩和铁矿，回来还补了好多齿轮箱、传动轴、漏斗和火把，"
+        "待会儿再去仓库把所有的木板和石砖分门别类码整齐，晚上就可以直接扩建二楼温室大棚啦！"
+    )
+    replyer, _, _ = _modal_replyer(
+        Response(success=True, content=runaway_speech, request_id="req_multi_alias"),
+        speech_max_chars=25,
+    )
+
+    def _lookup(names: list[str]) -> dict[str, list[str]]:
+        queried_batches.append(list(names))
+        mapping = {"AccountAlpha": ["昵称甲"], "AccountBeta": ["昵称乙"]}
+        return {n: mapping[n] for n in names if n in mapping}
+
+    provider = ReplyToolProvider(replyer=replyer, name_aliases_provider=_lookup)
+    exec_result = await provider.invoke(
+        ToolInvocation(
+            tool_name="streamer_reply",
+            arguments={
+                "topic_summary": "感谢两位同伴帮忙搭桥",
+                "reply_guidance": "自然转述",
+                "emotion": "happy",
+                "intensity": 0.6,
+                "is_novel": True,
+            },
+            round_id="r_multi_alias",
+            attachment=ReplyRoundAttachment(reply_to="AccountAlpha、AccountBeta"),
+        )
+    )
+    assert exec_result.success is True
+    assert queried_batches == [["AccountAlpha", "AccountBeta"]]
+    speech = exec_result.structured_content["speech"]
+    assert "昵称甲" in speech and "昵称乙" in speech
+    assert "AccountAlpha" not in speech and "AccountBeta" not in speech

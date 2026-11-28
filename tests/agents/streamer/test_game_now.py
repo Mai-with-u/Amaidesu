@@ -208,7 +208,7 @@ def test_block_besides_overview_stays_within_600_tokens() -> None:
     assert len(encoding.encode(text)) <= 600
     assert text.count("「") == 3
 
-    # 带满 5 条近期目标成败记录时同样守住 600 token 上限
+    # 带满近期目标成败记录（单条上限放宽至 56 字以保留部分失败的方位与原因）时守住 720 token 上限
     goals = tuple(
         GoalResultLine(at_ms=_NOW - idx * 5000, game="minecraft", outcome="没成", purpose=long, summary=long)
         for idx in range(6)
@@ -220,7 +220,7 @@ def test_block_besides_overview_stays_within_600_tokens() -> None:
         "",
         _NOW,
     )
-    assert len(encoding.encode(text_with_goals)) <= 600
+    assert len(encoding.encode(text_with_goals)) <= 720
     assert "近期目标成败（只认成了算做完）" in text_with_goals
 
 
@@ -382,3 +382,25 @@ async def test_agent_records_provider_goal_outcomes_across_delegations() -> None
     started = LiveStartedPayload(live_session_id=2, source="manual", started_at_ms=t0 + 1)
     await agent._on_live_started("live.started", started, "test")
     assert agent._game_now([]).goal_results == ()
+
+
+def test_goal_results_keep_up_to_56_chars_so_partial_failure_details_survive() -> None:
+    """目标成败截断上限放宽至 56 字：部分失败的方位与原因完整保留，超 56 字才截断补省略号。"""
+    partial_summary = "按图建了一部分：3 处北侧屋檐被木板挡住，另有 2 处缺橡木台阶"
+    assert 18 < len(partial_summary) <= 56
+    over_limit_summary = (
+        "按图建了一部分：北侧屋檐三处被阻挡、南侧楼梯缺两组深色橡木台阶、"
+        "东侧窗户缺玻璃板且地面仍有三格待平整需要马上继续补齐收尾"
+    )
+    assert len(over_limit_summary) > 56
+
+    goals = (
+        GoalResultLine(at_ms=_NOW - 5_000, game="minecraft", outcome="做了一半", purpose="", summary=partial_summary),
+        GoalResultLine(
+            at_ms=_NOW - 2_000, game="minecraft", outcome="做了一半", purpose="", summary=over_limit_summary
+        ),
+    )
+    rendered = render_game_now({}, None, GameNow(goal_results=goals), "", _NOW)
+
+    assert f"做了一半：{partial_summary}（刚刚）" in rendered
+    assert f"做了一半：{over_limit_summary[:56]}…（刚刚）" in rendered

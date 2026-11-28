@@ -281,18 +281,20 @@ def _sequenced_client(attempts: list[list[bytes] | Exception]) -> MagicMock:
 @pytest.mark.parametrize(
     ("busy_failures", "expected_sleeps"),
     [
-        (1, [0.15]),
-        (2, [0.15, 0.3]),
-        (3, [0.15, 0.3, 0.5]),
+        (1, [0.25]),
+        (2, [0.25, 0.5]),
+        (3, [0.25, 0.5, 1.0]),
+        (4, [0.25, 0.5, 1.0, 1.5]),
+        (5, [0.25, 0.5, 1.0, 1.5, 2.0]),
     ],
-    ids=["succeed-on-2nd", "succeed-on-3rd", "succeed-on-4th"],
+    ids=["succeed-on-2nd", "succeed-on-3rd", "succeed-on-4th", "succeed-on-5th", "succeed-on-6th"],
 )
 async def test_http_503_retries_with_backoff_and_succeeds(
     event_bus,
     busy_failures: int,
     expected_sleeps: list[float],
 ) -> None:
-    """硬打断交接期遇 HTTP 503（未写出任何 PCM 块）按短退避重试，恢复后正常出声不发 failed。"""
+    """硬打断交接期遇 HTTP 503（未写出任何 PCM 块）按 5 步阶梯退避（合计 5.25s）重试，恢复后正常出声不发 failed。"""
     sleeps: list[float] = []
 
     async def fake_sleep(seconds: float) -> None:
@@ -321,7 +323,7 @@ async def test_http_503_retries_with_backoff_and_succeeds(
 
 
 async def test_http_503_exhausts_retries_and_emits_failed(event_bus) -> None:
-    """连续 503 耗尽全部重试次数后走既有失败收尾：关流丢弃预缓冲、计错误、发 failed 并抛出。"""
+    """连续 503 耗尽全部 5 次阶梯重试后走既有失败收尾：关流丢弃预缓冲、计错误、发 failed 并抛出。"""
     sleeps: list[float] = []
 
     async def fake_sleep(seconds: float) -> None:
@@ -330,7 +332,7 @@ async def test_http_503_exhausts_retries_and_emits_failed(event_bus) -> None:
     provider = OpenAITTSProvider(config=dict(CONFIGURED), event_bus=event_bus, sleep_fn=fake_sleep)
     captured = record_lifecycle(event_bus)
     attempts: list[list[bytes] | Exception] = [
-        OpenAITTSApiError("接口返回 HTTP 503: TTS is busy", status_code=503) for _ in range(4)
+        OpenAITTSApiError("接口返回 HTTP 503: TTS is busy", status_code=503) for _ in range(6)
     ]
     client = _sequenced_client(attempts)
     mgr = await _started(provider, client)
@@ -340,8 +342,9 @@ async def test_http_503_exhausts_retries_and_emits_failed(event_bus) -> None:
     await event_bus.cleanup()
 
     assert exc_info.value.status_code == 503
-    assert sleeps == [0.15, 0.3, 0.5]
-    assert client.stream_synthesize.call_count == 4
+    assert sleeps == [0.25, 0.5, 1.0, 1.5, 2.0]
+    assert sum(sleeps) == pytest.approx(5.25)
+    assert client.stream_synthesize.call_count == 6
     assert provider.error_count == 1
     mgr.stop_stream.assert_called_with(discard_pending=True)
     failed_events = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FAILED]
