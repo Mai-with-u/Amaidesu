@@ -721,7 +721,12 @@ class MemoryRecallService:
         )
 
         show_weak_notice = (
-            bool(hits) and indexed.weak_only and not work_docs and not short_term and not cross_branch and danmaku_added == 0
+            bool(hits)
+            and indexed.weak_only
+            and not work_docs
+            and not short_term
+            and not cross_branch
+            and danmaku_added == 0
         )
         if order != ORDER_RELEVANT:
             hits.sort(key=lambda hit: hit.timestamp_ms, reverse=newest_first)
@@ -741,7 +746,10 @@ class MemoryRecallService:
         work_detail = f"、工作笔记 {len(work_docs)}" if work_docs else ""
         short_detail = f"、本场短期 {len(short_term)}" if short_term else ""
         cross_detail = f"、跨端 {len(cross_branch)}" if cross_branch else ""
-        return outcome, f"{indexed.detail}{work_detail}{short_detail}{cross_detail}、弹幕 {danmaku_added}，给出 {len(hits)} 条"
+        return (
+            outcome,
+            f"{indexed.detail}{work_detail}{short_detail}{cross_detail}、弹幕 {danmaku_added}，给出 {len(hits)} 条",
+        )
 
     async def _cross_branch_hits(self, query: str, context: _RecallContext) -> List[RecallEntry]:
         """在 scope=all 时并行查询 MaiGO 跨端分支高置信度记录，并按本场遮名表脱敏。"""
