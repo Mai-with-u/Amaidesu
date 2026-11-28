@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from src.modules.dashboard.stream_preview import StreamPreviewHub
+from tests.config.helpers import wait_until
 
 
 def _make_hub(flush_interval_ms: int = 20, buffer_max: int = 100):
@@ -26,7 +27,8 @@ async def test_deltas_batched_into_single_stream_message():
     hub.on_thinking_delta(**_delta(seq=2, text="了"))
     hub.on_thinking_delta(**_delta(phase="replyer", step=1, seq=3, text="说"))
 
-    await asyncio.sleep(0.1)
+    # 轮询到 flush 循环完成一次推送这一确定性信号
+    await wait_until(lambda: ws.broadcast_stream.await_count == 1, what="flush 循环合帧推送")
 
     ws.broadcast_stream.assert_awaited_once()
     stream_type, data = ws.broadcast_stream.await_args.args
@@ -42,13 +44,17 @@ async def test_flush_loop_exits_when_idle_and_restarts_on_new_delta():
     await asyncio.sleep(0.1)
     first_task = hub._flush_task
 
-    await asyncio.sleep(0.1)
+    # 轮询到 flush 循环空闲退出（task 置空或已完成）这一确定性信号
+    await wait_until(
+        lambda: first_task is None or first_task.done() or hub._flush_task is None, what="flush 循环空闲退出"
+    )
     # 空闲退出：task 置空或已完成
     assert first_task is None or first_task.done() or hub._flush_task is None
 
     hub.on_thinking_delta(**_delta(seq=2))
     assert hub._flush_task is not None
-    await asyncio.sleep(0.1)
+    # 轮询到重启后的第二次推送这一确定性信号
+    await wait_until(lambda: ws.broadcast_stream.await_count == 2, what="新 delta 重新触发推送")
     assert ws.broadcast_stream.await_count == 2
     await hub.stop()
 
@@ -80,6 +86,7 @@ async def test_push_failure_is_swallowed():
     hub, ws = _make_hub(flush_interval_ms=20)
     ws.broadcast_stream = AsyncMock(side_effect=Exception("ws down"))
     hub.on_thinking_delta(**_delta(seq=1))
-    await asyncio.sleep(0.1)
+    # 轮询到推送尝试发生（异常在循环内吞掉）这一确定性信号
+    await wait_until(lambda: ws.broadcast_stream.await_count == 1, what="推送失败被吞掉后循环继续")
     ws.broadcast_stream.assert_awaited_once()
     await hub.stop()

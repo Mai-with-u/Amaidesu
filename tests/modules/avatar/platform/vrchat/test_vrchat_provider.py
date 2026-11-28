@@ -13,6 +13,7 @@ from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider, r
 from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
 from src.modules.subtitle.service import SubtitleService
 from src.modules.tools.registry import ToolRegistry
+from tests.config.helpers import wait_until
 from tests.helpers import FakeClock
 
 
@@ -45,7 +46,8 @@ async def test_emote_writes_the_parameter_then_resets_to_zero() -> None:
     provider = _connected(emote_parameter="MyEmote", emotes={"Dance": 5, "Wave": 1})
     assert (await provider.trigger_preset_action("Dance")).success is True
     await provider.trigger_preset_action("Wave")  # 新动作取消上一个归零，只归零一次
-    await asyncio.sleep(0.12)
+    # 轮询到归零定时器触发（第三条消息到达）这一确定性信号；定时器无时钟注入口，用条件轮询
+    await wait_until(lambda: len(_sent(provider)) >= 3, what="动作参数延迟归零发出")
     assert _sent(provider) == [
         ("/avatar/parameters/MyEmote", 5),
         ("/avatar/parameters/MyEmote", 1),
@@ -71,7 +73,8 @@ async def test_chatbox_follows_subtitles_and_only_sends_the_latest_line_within_t
     await subtitles.show("第一句")  # 距上一条已满间隔：立即发出
     await subtitles.show("第二句")
     await subtitles.clear()  # 间隔内的第二句被清空覆盖，到点只发最新一条
-    await asyncio.sleep(0.15)
+    # 轮询到间隔到期后的清空消息（第二条）发出这一确定性信号；定时器无时钟注入口，用条件轮询
+    await wait_until(lambda: len(_sent(provider)) >= 2, what="间隔到期后清空消息发出")
     assert _sent(provider) == [("/chatbox/input", ["第一句", True, False]), ("/chatbox/input", ["", True, False])]
 
 

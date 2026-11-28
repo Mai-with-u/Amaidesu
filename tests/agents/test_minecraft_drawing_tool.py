@@ -194,7 +194,8 @@ async def test_release_cancels_pending_drawing_silently() -> None:
     await _wait_until(lambda: agent._drawing_builder.in_progress(), timeout=5)
     assert agent.cancel_task(task_id="d-1", reason="主播撤单"), "在办委派可撤"
     gate.set()
-    await asyncio.sleep(0.15)
+    # 轮询到取消落地的确定性信号（生成协程被撤、状态翻回非在途）
+    await _wait_until(lambda: not agent._drawing_builder.in_progress(), timeout=5)
     assert not agent._drawing_builder.in_progress(), "生成协程已被取消"
     assert not any("图纸已画好" in _texts(seen) for seen in llm.seen), "收手后结果静默丢弃"
     await agent.stop()

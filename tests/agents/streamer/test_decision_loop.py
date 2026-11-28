@@ -20,6 +20,7 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools import ToolRegistry
 from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
+from tests.config.helpers import wait_until
 
 # 登记（只读/种子穿透，合并时进底账）：主动发言 pending 信号（agent._proactive_signals
 # 的 set_* / *_pending）尚无 Agent 级公开种子/只读观察者——external 有 trigger_external_proactive
@@ -186,12 +187,13 @@ async def test_proactive_is_gated_by_live_session_not_by_danmaku(rig_factory) ->
     await rig.bus.emit(
         CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
     )
-    await asyncio.sleep(0.2)
+    # 轮询到首个主动 tick 真正执行（total_proactive 增长）这一确定性信号
+    await wait_until(lambda: agent.get_statistics()["total_proactive"] >= 1, what="开播后首个主动发言 tick")
     assert agent.is_live_active() is True and agent.get_statistics()["total_proactive"] >= 1
     assert agent._proactive_signals.rundown_pending is False
 
     await rig.bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=1, reason="手动结束"), source="test")
-    await asyncio.sleep(0.1)
+    await rig.bus.wait_until_drained()
     assert agent.is_live_active() is False
     agent._proactive_signals.set_rundown()
     baseline = agent.get_statistics()["total_proactive"]
@@ -212,7 +214,8 @@ async def test_rundown_pending_survives_disabled_switch_and_fires_after_reenable
     assert agent.get_statistics()["total_proactive"] == 0 and agent._proactive_signals.rundown_pending is True
 
     agent.set_proactive_enabled(True)
-    await asyncio.sleep(0.2)
+    # 轮询到下一 tick 消费 pending（rundown_pending 翻 False）这一确定性信号
+    await wait_until(lambda: not agent._proactive_signals.rundown_pending, what="重开开关后补说开场白消费 pending")
     assert agent._proactive_signals.rundown_pending is False
     assert agent.get_statistics()["total_proactive"] >= 1
 
@@ -234,12 +237,14 @@ async def test_rundown_pending_survives_reminder_preemption(rig_factory) -> None
     )
     agent._proactive_signals.set_rundown()
     assert agent.receive_prompt(content="后台留言", source="test") is True
-    await asyncio.sleep(0.15)
+    # 轮询到递话触发首个主动回合这一确定性信号
+    await wait_until(lambda: agent.get_statistics()["total_proactive"] >= 1, what="递话抢占触发主动回合")
     # reminder 抢占每个 tick，rundown 信号保留待送达窗口让位之后
     assert agent.get_statistics()["total_proactive"] >= 1 and agent._proactive_signals.rundown_pending is True
 
     executor.drain_reminders = True  # 恢复正常送达：决策回合照常取空递话队列
-    await asyncio.sleep(0.15)
+    # 轮询到恢复正常送达后 rundown 被消费这一确定性信号
+    await wait_until(lambda: not agent._proactive_signals.rundown_pending, what="恢复送达后 rundown 信号消费")
     assert agent._proactive_signals.rundown_pending is False
     assert agent.get_statistics()["total_proactive"] >= 2
 

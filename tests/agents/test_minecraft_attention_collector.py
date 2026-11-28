@@ -29,6 +29,7 @@ from src.modules.collectors.base import BaseCollector, CollectorState
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
+from tests.config.helpers import wait_until
 
 from .minecraft_collector_fakes import FakeEventBus as _FakeEventBus
 from .minecraft_collector_fakes import FakeMcpClient as _FakeClient
@@ -494,9 +495,9 @@ async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.Monkey
     await asyncio.sleep(0.05)
     assert bus.events == []
 
-    # 游戏上线后（换成可用客户端）循环自愈
+    # 游戏上线后（换成可用客户端）循环自愈：轮询到重试连接建立的确定性信号
     holder["client_cls"] = _FakeClient
-    await asyncio.sleep(0.35)
+    await wait_until(lambda: bool(_FakeClient.instances), what="采集循环重试建立连接", timeout_s=3.0)
     assert _FakeClient.instances, "应重试建立连接"
     await collector.stop()
     assert collector.state == CollectorState.STOPPED
