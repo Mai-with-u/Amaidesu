@@ -448,7 +448,7 @@ class DashboardServer:
                 )
                 await self._vite_dev.start()
 
-            # socket 已预绑定，serve 直接复用，不会再绑定端口
+            # socket 已预绑定并开始监听，serve 直接复用，不会再绑定端口
             self._server_task = asyncio.create_task(server.serve(sockets=[bound_socket]))
         except Exception:
             bound_socket.close()
@@ -458,7 +458,7 @@ class DashboardServer:
         self.logger.info(f"Dashboard 已启动: {self.get_url()}")
 
     def _bind_socket(self) -> socket.socket:
-        """预绑定 Dashboard 端口；配置端口被占用时依次回退尝试后续端口
+        """预绑定并开始监听 Dashboard 端口；配置端口被占用时依次回退尝试后续端口
 
         回退成功即更新 ``self.port`` 并告警（访问地址随之变化，OBS 浏览器源 /
         书签等旧地址引用需手动更新）；开发模式不回退——vite 代理目标硬编码
@@ -478,6 +478,11 @@ class DashboardServer:
             sock = socket.socket(family, socket.SOCK_STREAM)
             try:
                 sock.bind((self.host, candidate))
+                # 绑定成功就开始监听：start() 把提供服务交给后台任务后立即返回，调用方
+                # （自动打开的浏览器、健康探测）紧接着就会来连。只绑定不监听的话，后台
+                # 任务跑到开始服务之前，这个端口会拒绝连接。asyncio 接管时会按自己的
+                # 排队长度再 listen 一次，重复调用不冲突
+                sock.listen(socket.SOMAXCONN)
             except OSError as e:
                 sock.close()
                 last_error = e
