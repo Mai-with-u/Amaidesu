@@ -151,3 +151,45 @@ async def test_on_input_message_missing_user_fallback() -> None:
     svc = _make_service()
     await svc._on_input_message("room.message.danmaku", _make_payload(), "console")
     assert svc.messages[0].user_name == "观众A"
+
+
+async def test_input_message_arrives_via_event_bus() -> None:
+    """订阅走组件自己的 start()：总线发 room.message.danmaku，消息进队列并广播给前端回调。"""
+    event_bus = EventBus()
+    svc = DanmakuWidgetService(event_bus=event_bus)
+    received: list[dict] = []
+
+    async def _fake_ws_send(data: dict) -> None:
+        received.append(data)
+
+    svc.set_danmaku_callback(_fake_ws_send)
+    await svc.start()
+    try:
+        await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _make_payload(), source="test")
+        await event_bus.wait_until_drained()
+    finally:
+        await svc.stop()
+        await event_bus.cleanup()
+
+    assert len(svc.messages) == 1 and svc.messages[0].content == "主播好可爱"
+    # 广播帧只断言前端渲染依赖的关键字段，整体 dict 版式以 model_dump 为准不逐字段绑死
+    assert len(received) == 1
+    frame = received[0]
+    assert frame["type"] == "new_message"
+    assert frame["message"]["message_type"] == "text"
+    assert frame["message"]["user_name"] == "观众A"
+    assert frame["message"]["content"] == "主播好可爱"
+
+
+async def test_event_after_stop_is_not_displayed() -> None:
+    """stop 摘除全部 room.message 订阅：之后到达的消息不再上屏。"""
+    event_bus = EventBus()
+    svc = DanmakuWidgetService(event_bus=event_bus)
+    await svc.start()
+    await svc.stop()
+    try:
+        await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _make_payload(), source="test")
+        await event_bus.wait_until_drained()
+        assert len(svc.messages) == 0
+    finally:
+        await event_bus.cleanup()

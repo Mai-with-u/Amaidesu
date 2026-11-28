@@ -12,11 +12,13 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_place import GamePlacePayload
+from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.session import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.storage_ledger import StorageLedger
 from tests.modules.session.fakes import FakeSessionManager
 from tests.modules.storage.helpers import make_room_message
@@ -804,3 +806,64 @@ async def test_provider_task_succeeded_persists_deduped_and_skips_noise(
         ("minecraft", "task_succeeded", "在河边钓鱼：钓到了 1 条鳕鱼", "s1", "生存档"),
         ("minecraft", "task_succeeded", "对动力合成器使用成功，放入 1 个铁锭", "", ""),
     ]
+
+
+# -------------------- live.ended 走总线：下播清理与接管 --------------------
+
+
+async def _masked_speech_rows(store: SQLiteDatabase) -> list[str]:
+    return [row["content"] for row in await store.execute("SELECT content FROM live_chat ORDER BY id")]
+
+
+async def test_live_ended_event_clears_session_masks(event_bus: EventBus, store: SQLiteDatabase, tmp_path) -> None:
+    """live.ended 经总线到达：默认下播清遮名，之后的台词里同一昵称不再被遮成"一位观众"。"""
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        event_repo=store.events,
+        session_manager=FakeSessionManager(active_pk=_FAKE_PK),
+        privacy=privacy,
+    )
+    await ledger.start()
+    try:
+        privacy.add_masked_name("观众甲")
+        await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("谢谢观众甲的陪伴"))
+        assert await _masked_speech_rows(store) == ["谢谢一位观众的陪伴"]
+
+        await _emit(event_bus, CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=_FAKE_PK))
+        await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("下场再见观众甲"))
+    finally:
+        await ledger.stop()
+
+    assert await _masked_speech_rows(store) == ["谢谢一位观众的陪伴", "下场再见观众甲"]
+
+
+async def test_live_ended_keeps_masks_when_streamer_agent_takes_over_cleanup(
+    event_bus: EventBus, store: SQLiteDatabase, tmp_path
+) -> None:
+    """主播 Agent 运行时接管（set_cleanup_on_live_ended(False)）：live.ended 只记账，不提前清遮名。"""
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        event_repo=store.events,
+        session_manager=FakeSessionManager(active_pk=_FAKE_PK),
+        privacy=privacy,
+    )
+    ledger.set_cleanup_on_live_ended(False)
+    await ledger.start()
+    try:
+        privacy.add_masked_name("观众甲")
+        await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("谢谢观众甲的陪伴"))
+        assert await _masked_speech_rows(store) == ["谢谢一位观众的陪伴"]
+
+        await _emit(event_bus, CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=_FAKE_PK))
+        await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("下场再见观众甲"))
+    finally:
+        await ledger.stop()
+
+    # 接管模式下遮名要留到最后一句台词落库之后，由主播 Agent 自己调 finish_stream_end 清
+    assert await _masked_speech_rows(store) == ["谢谢一位观众的陪伴", "下场再见一位观众"]
