@@ -169,8 +169,7 @@ def test_archive_template_taught_ops_are_parsable(prompt_manager: PromptManager)
     for name in sorted(prompt_manager.list_templates()):
         template = prompt_manager._get_template(name)  # noqa: SLF001
         taught |= set(re.findall(r'"op":\s*"([a-z_]+)"', template.content))
-    if not taught:
-        pytest.skip("模板未教任何 op 取值，无可核对项")
+    assert taught, '没有任何模板教 {"op": ...} 取值：格式约定从模板里消失时这里必须红，不能静默跳过核对'
     accepted = _parser_accepted_archive_ops()
     unparsable = sorted(taught - accepted)
     assert not unparsable, f"模板教的 op 取值 {unparsable} 解析端不认识（解析端只认 {sorted(accepted)}）"
