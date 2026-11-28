@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional, Union
+from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Mapping, Optional, Union
 
 from src.modules.agents.game_tools import GameToolProvider, business_fail_result, run_dict_tool
 from src.modules.llm.context_meter import SECTION_SKILLS
@@ -603,6 +603,27 @@ def build_drawing_spec() -> ToolSpec:
 # ---------------------------------------------------------------------------
 
 
+# MaiCraft 侧天然只读、可安全无感重连重试 1 次的工具裸名，以及 goal 工具下的只读操作白名单
+_MAICRAFT_IDEMPOTENT_READ_TOOLS: frozenset[str] = frozenset({"observe", "lookup", "events"})
+_MAICRAFT_IDEMPOTENT_GOAL_OPERATIONS: frozenset[str] = frozenset({"get", "list"})
+
+
+def is_idempotent_maicraft_call(tool_name: str, arguments: Mapping[str, Any]) -> bool:
+    """判断一次 MaiCraft MCP 工具调用是否属于幂等只读查询（遇空闲会话回收可安全重试 1 次）。
+
+    仅放行 ``observe`` / ``lookup`` / ``events`` 以及 ``goal(operation=get|list)``；
+    ``execute`` 及 ``goal(cancel|answer|pause|resume)`` 等会修改游戏状态的非幂等写操作一律返回 False，
+    绝不盲目自动重放。
+    """
+    short = str(tool_name or "").strip().removeprefix("maicraft_").lower()
+    if short in _MAICRAFT_IDEMPOTENT_READ_TOOLS:
+        return True
+    if short == "goal":
+        operation = str(arguments.get("operation") or "").strip().lower()
+        return operation in _MAICRAFT_IDEMPOTENT_GOAL_OPERATIONS
+    return False
+
+
 class MaicraftMcpProvider(McpToolProvider):
     """MaiCraft 私有 MCP Provider：补目标任务的查询适配器，激活任务跟踪循环的周期兜底。
 
@@ -615,6 +636,10 @@ class MaicraftMcpProvider(McpToolProvider):
     视图），在 ``list_tools`` 逐 spec 盖 ``visible_to``——server 侧清单刷新
     （重连换血）后新工具同样经此路径携带名单。
     """
+
+    def _is_idempotent_call(self, tool_name: str, arguments: Dict[str, Any]) -> bool:
+        """只对 MaiCraft 只读查询开启会话回收无感重试，非幂等写操作绝不自动重放。"""
+        return is_idempotent_maicraft_call(tool_name, arguments)
 
     def list_tools(self) -> Iterable[ToolSpec]:
         """缓存清单 + 逐 spec 盖 minecraft 名单（server 侧声明不携带名单）。"""

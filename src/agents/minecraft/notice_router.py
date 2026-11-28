@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Literal, Optional, Sequence
 
-from src.agents.minecraft.attention_matrix import classify, summarize
+from src.agents.minecraft.attention_matrix import classify, disambiguate_mob_names, summarize
 from src.agents.minecraft.chosen_death import CHOSEN_DEATH_NOTICE
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN
 from src.agents.minecraft.others_things import OTHERS_THINGS_TOUCHED
@@ -225,10 +225,11 @@ def body_notice_content(route: BodyEventRoute, message: str, *, history: List[An
     或待读队列里一字不差的那条重复时，只留一句指回前面那条；前面那条已被历史整理换成摘要、
     或根本还没读到时，指过去没有意义，完整展示。其余通知（角色死亡等）每次都是新事实，原样给。
     """
-    content = (route.template or "{message}").format(message=message)
+    normalized_message = disambiguate_mob_names(message)
+    content = (route.template or "{message}").format(message=normalized_message)
     if not route.dedup_content or not notice_present(content, history, queue):
         return content
-    return repeat_reference(message)
+    return repeat_reference(normalized_message)
 
 
 def interaction_notice(messages: Sequence[str]) -> str:

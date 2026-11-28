@@ -268,9 +268,27 @@ def _hearts_words(hearts: int) -> str:
     return "掉了点血" if hearts <= 3 else "掉了一大截血"
 
 
+#: 容易在受击/死亡事件里被模型误解为友方的模组敌对生物译名纠偏表：
+#: 车万女仆语言包把敌对野生妖精 touhou_little_maid:fairy 译成"女仆妖精"，模型易误解成己方女仆，
+#: 统一替换为明确标明野生敌对属性的"野生敌对妖精"（不触碰单独出现的"女仆"）。
+_DISAMBIGUATE_MOB_NAMES: Tuple[Tuple[str, str], ...] = (
+    ("touhou_little_maid:fairy", "野生敌对妖精"),
+    ("女仆妖精", "野生敌对妖精"),
+)
+
+
+def disambiguate_mob_names(text: str) -> str:
+    """将易误解为友方的模组敌对生物名称替换为明确标注野生敌对属性的名称。"""
+    result = str(text or "")
+    for raw_name, clear_name in _DISAMBIGUATE_MOB_NAMES:
+        if raw_name in result:
+            result = result.replace(raw_name, clear_name)
+    return result
+
+
 def _rewrite_clause(clause: str) -> str:
     """一个分句 → 观众听得懂的说法；返回空串表示这句不念（幕后说法、遥测或重复）。"""
-    text = _PLAYER_NAME.sub("", clause.strip())
+    text = disambiguate_mob_names(_PLAYER_NAME.sub("", clause.strip()))
     if text in _PHRASES:
         return _PHRASES[text]
     # 数量限定换成"附近"，范围限定本身要保留："32 格内没有能睡的床" → "附近没有能睡的床"
@@ -355,7 +373,7 @@ def classify(source_event_type: str) -> Optional[str]:
 
 def without_coordinates(text: str) -> str:
     """去掉括号里的坐标与观察编号，并删掉裸写坐标的分句（"被威胁，插入自卫：打点在 3, 64, 9" → "被威胁，插入自卫"）。"""
-    plain = _PARENTHESIZED_COORDINATES.sub("", _OBSERVATION_IDS.sub("", str(text or "")))
+    plain = disambiguate_mob_names(_PARENTHESIZED_COORDINATES.sub("", _OBSERVATION_IDS.sub("", str(text or ""))))
     clauses = [clause.strip() for clause in _CLAUSE_BREAK.split(plain)]
     return "，".join(clause for clause in clauses if clause and not _COORDINATES.search(clause))
 
@@ -470,6 +488,7 @@ __all__ = [
     "RESOLVED_KINDS",
     "biome_name",
     "classify",
+    "disambiguate_mob_names",
     "item_name",
     "items_tossed_line",
     "plain_detail",

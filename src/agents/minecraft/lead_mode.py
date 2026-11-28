@@ -24,6 +24,8 @@ __all__ = [
     "LEAD_MODE_PROMPT_SECTION",
     "MAX_SPOKEN_ECHOES",
     "MAX_SPOKEN_ECHO_CHARS",
+    "PROLONGED_SILENCE_MS",
+    "PROLONGED_SILENCE_NUDGE_COUNT",
     "SILENCE_NUDGE_PREFIX",
     "SpokenEchoEntry",
     "SpokenEchoBuffer",
@@ -37,6 +39,9 @@ __all__ = [
 
 # 直播间静默暖场提醒的消息前缀（入队去重、出队识别与守卫条件①首句豁免共用）
 SILENCE_NUDGE_PREFIX = "[直播间静默提醒]"
+# 久静提醒升级阈值：自上次实际开口以来连续第 2 次提醒，或累计静默达到 150 秒时升级为久静提醒
+PROLONGED_SILENCE_NUDGE_COUNT = 2
+PROLONGED_SILENCE_MS = 150_000
 
 # 只读台词回执缓冲上限与单条截断长度：只留最近几句刚播过的话，避免挤占游戏推理上下文
 MAX_SPOKEN_ECHOES = 5
@@ -67,7 +72,7 @@ LEAD_MODE_PROMPT_SECTION = """
 - **游玩节奏按现场推进，收尾归主播与运营者（`rundown_control`）**：主控期收到 `[流程单超时提醒]` 时，游玩段不必被闹钟催着收尾——只要当前探索、制作或联机互动仍值得继续，可直接调用 `rundown_control` 的 `renew` 安心续期；确认本段游玩目标已告一段落且需要切往下一环节时，再用 `next` 推进。整场直播的收尾告别、点名感谢与何时结束整张流程单由主播或运营者主导，游戏侧不在游玩段替主播提前做收尾总结；流程单结束后进入自由游玩阶段，按存档现状与现场兴致继续安排游玩即可。
 - **理性自主处理 `[直播间建议]`**：`[直播间建议]` 是主播转达的观众点菜或善意提醒，不是强制命令，也不会打断你正在执行的后台目标。结合当前安全态势、手头进度与环节目标自主评估：顺手且合适就立即执行或排进 `minecraft_todo`，当下不合适或与主线冲突时先搁置或完成手头事后再考虑。
 - **参考 `[直播间刚说过]` 避免复读**：当步消息若附带 `[直播间刚说过]`，说明直播间刚刚对观众播报过这些内容（仅作只读参考）。后续调用 `framework_commentary` 时避开已播过的同一话题，只补充新进展或新变化。
-- **按需回应 `[直播间静默提醒]`**：当直播间长时间无人发声时，宿主可能送来 `[直播间静默提醒]` 让你在后台推进间隙顺手暖场。若当前在跑的目标进度、眼下现场细节或下一步打算有值得向观众交代的新信息，可调用一次 `framework_commentary` 提交简短客观要点（不影响在跑后台目标）；若眼下暂无值得分享的新变化或正忙于关键操作，不必硬聊，忽略提醒并正常推进或结束本轮即可。
+- **按需回应 `[直播间静默提醒]`**：当直播间长时间无人发声时，宿主可能送来 `[直播间静默提醒]` 让你在后台推进间隙顺手暖场。首次温和提醒时，若当前在跑的目标进度、眼下现场细节或下一步打算有值得向观众交代的新信息，可调用一次 `framework_commentary` 提交简短客观要点（不影响在跑后台目标）；若连续多次提醒仍未开口、直播间已持续久静，则结合当前在跑任务的最新进展、周边观察或接下来的打算主动用 `framework_commentary` 向观众交代一句，避免长时间冷场。
 """
 
 
@@ -309,11 +314,40 @@ def format_rundown_nudge_notice(
     return "；".join(parts)
 
 
-def format_silence_nudge_notice(*, silent_ms: int) -> str:
-    """把直播间连续静默暖场提醒格式化为紧凑的 ``[直播间静默提醒]`` 通知。"""
-    seconds = max(1, int(silent_ms or 0) // 1000)
+def format_silence_nudge_notice(
+    *,
+    silent_ms: int,
+    consecutive_count: int = 1,
+    elapsed_since_first_ms: int = 0,
+    active_task_summary: str = "",
+) -> str:
+    """把直播间连续静默暖场提醒格式化为 ``[直播间静默提醒]`` 通知。
+
+    首次温和提醒允许模型在暂无新变化时静默让出；当自上次实际开口以来连续收到多次提醒
+    或累计静默时长达到久静阈值时，升级为久静提醒：不再附带消极放行句，并附带当前进行中任务
+    的进度摘要，引导模型自然分享现场进度、周边观察或接下来的打算。
+    """
+    effective_silent_ms = max(0, int(silent_ms or 0))
+    elapsed_ms = max(0, int(elapsed_since_first_ms or 0))
+    count = max(1, int(consecutive_count or 1))
+    display_ms = max(effective_silent_ms, elapsed_ms)
+    seconds = max(1, display_ms // 1000)
+    summary = " ".join((active_task_summary or "").split())
+    task_clause = f"当前进行中：{summary}。" if summary else ""
+
+    # 连续第 2 次及以上仍未开口，或静默时长已达久静阈值：升级为久静提醒，取消消极放行句
+    is_prolonged = count >= PROLONGED_SILENCE_NUDGE_COUNT or display_ms >= PROLONGED_SILENCE_MS
+    if is_prolonged:
+        count_note = f"（已连续第 {count} 次提醒仍未开口）" if count >= PROLONGED_SILENCE_NUDGE_COUNT else ""
+        return (
+            f"{SILENCE_NUDGE_PREFIX} 直播间已持续约 {seconds} 秒无人发声{count_note}。"
+            f"{task_clause}"
+            "请调用一次 framework_commentary（不打断在跑后台目标），结合眼下的施工或任务进展、"
+            "周边环境观察或接下来的打算向观众自然交代一句，避免长时间冷场。"
+        )
     return (
         f"{SILENCE_NUDGE_PREFIX} 直播间已连续约 {seconds} 秒无人发声。"
+        f"{task_clause}"
         "若当前在跑目标进展、现场所见或下一步计划有值得跟观众聊一句的新变化，"
         "可调用一次 framework_commentary 提交简短要点（不打断在跑后台目标）；"
         "若暂时没有新变化或正忙，不必硬聊，直接结束本轮等待即可。"

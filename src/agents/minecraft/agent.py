@@ -1047,6 +1047,7 @@ class MinecraftAgent(BaseAgent):
             notify=self._notify_drawing,
             release_epoch_reader=lambda: self._release_epoch,
             max_validation_retries=config.drawing_builder.max_validation_retries,
+            clock=self._clock,
         )
         has_skill_tool = skill_library is not None or self._learned_skill_repo is not None
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
@@ -1218,6 +1219,10 @@ class MinecraftAgent(BaseAgent):
         # 刚收到 [直播间静默提醒] 待消化的标记：出队投递给模型时置位，首次成功受理 framework_commentary
         # 或本批结束/切换主控/下播时清零；有效期间豁免条件①（不让暖场被 2 秒窗打回），仍保留条件②
         self._pending_silence_nudge_commentary: bool = False
+        # 长施工挂起/主控期自上次实际开口以来的连续静默提醒次数与首次提醒单调时刻（秒）：
+        # 达到久静阈值时升级提醒文案并附当前进行中任务摘要，实际开口或切换主控/下播时清零
+        self._consecutive_silence_nudges: int = 0
+        self._silence_nudge_first_at: Optional[float] = None
 
         # 本批 ReAct 是否正在跑；本批期间的身体事件（上报时随 payload 带上任务上下文）
         self._batch_active: bool = False
@@ -1273,6 +1278,7 @@ class MinecraftAgent(BaseAgent):
         if not self._live_active_injected:
             self._live_active = False
         self._pending_silence_nudge_commentary = False
+        self._reset_silence_nudge_streak()
         self._worker_task = asyncio.create_task(self._worker())
         self._goals.start()
         if self._event_bus is not None:
@@ -1288,6 +1294,7 @@ class MinecraftAgent(BaseAgent):
         del event_name, source
         self._live_active = True
         self._current_session_id = payload.live_session_id
+        self._reset_silence_nudge_streak()
         # 新场次开播先等待残留合批定时器彻底退出，再清空上场游戏公屏门控与纯内存本场短期记忆
         await self._cancel_chat_flush_task(await_done=True)
         self._reset_session_chat_and_memory()
@@ -1334,6 +1341,7 @@ class MinecraftAgent(BaseAgent):
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
         self._pending_silence_nudge_commentary = False
+        self._reset_silence_nudge_streak()
         self._reset_lead_idle_state()
         # 攒着的互动通知一并作废：下一场开播时冒出上一场的蹲起只是过时的事
         self._interaction_throttle.clear()
@@ -1512,6 +1520,7 @@ class MinecraftAgent(BaseAgent):
         self._lead_handover_context = None
         self._solo_pacing.reset()
         self._spoken_echo_buffer.clear()
+        self._reset_silence_nudge_streak()
         self._reset_lead_idle_state()
         await self._cancel_chat_flush_task(await_done=True)
         self._reset_session_chat_and_memory()
@@ -1683,6 +1692,7 @@ class MinecraftAgent(BaseAgent):
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
         self._pending_silence_nudge_commentary = False
+        self._reset_silence_nudge_streak()
         self._in_lead_mode = True
         self._lead_handover_context = normalized_context
         self._solo_pacing.enter_lead()
@@ -1744,6 +1754,7 @@ class MinecraftAgent(BaseAgent):
         self._wake_queue.clear()
         self._spoken_echo_buffer.clear()
         self._pending_silence_nudge_commentary = False
+        self._reset_silence_nudge_streak()
         self._reset_lead_idle_state()
         self._pending_handover_summary = ""
         self._task_finished = True
@@ -1785,9 +1796,14 @@ class MinecraftAgent(BaseAgent):
         return True
 
     def receive_spoken_echo(self, text: str, *, source: str = "", timestamp_ms: int = 0) -> None:
-        """接收主播实时发声回执：纯同步写入有界缓冲，绝不置位 _wake_event（零唤醒）。"""
+        """接收主播实时发声回执：纯同步写入有界缓冲，绝不置位 _wake_event（零唤醒）。
+
+        直播间一旦有非空实际发声，同步清零连续静默提醒计数，避免下次静默误用久静升级口径。
+        """
         if not self._in_lead_mode:
             return
+        if (text or "").strip():
+            self._reset_silence_nudge_streak()
         self._spoken_echo_buffer.push(text, source=source, timestamp_ms=timestamp_ms)
 
     def receive_rundown_update(
@@ -1906,30 +1922,88 @@ class MinecraftAgent(BaseAgent):
                 f"MinecraftAgent 收到流程单切段更新（segment_id={seg_id or '未标'}, title={title or '未命名'}）"
             )
 
+    def _reset_silence_nudge_streak(self) -> None:
+        """清零连续静默提醒次数与起始时刻（实际开口、切换主控或下播时调用）。"""
+        self._consecutive_silence_nudges = 0
+        self._silence_nudge_first_at = None
+
+    def _active_task_summary_for_silence_nudge(self) -> str:
+        """提取当前进行中任务的紧凑进度摘要，供静默提醒附带给模型参考（无进行中事项返回空串）。"""
+        parts: List[str] = []
+        # 优先摘取正在执行的 Mod 后台目标及其最新进度说明
+        for note in self._goal_ledger.all_notes_sorted():
+            if note.get("state") == "finished":
+                continue
+            label = stop_goal_label(str(note.get("ability") or ""), str(note.get("purpose") or ""))
+            doing = " ".join(str(note.get("doing") or "").split())
+            if doing and doing != label:
+                parts.append(f"{label}（{doing[:48]}）")
+            elif label:
+                parts.append(label)
+            if len(parts) >= 2:
+                break
+        if self._drawing_builder.in_progress():
+            parts.append("后台建筑图纸生成中")
+        if self._furnace_waits.waiting():
+            parts.append("熔炉烧炼等待中")
+        # 若当前没有后台目标，兜底摘取正在推进或未完成的待办要点
+        if not parts:
+            ordered_todos = [
+                t.content.strip() for t in self._mc_state.todos if t.status == "in_progress" and t.content.strip()
+            ] or [t.content.strip() for t in self._mc_state.todos if t.status != "done" and t.content.strip()]
+            parts.extend(ordered_todos[:2])
+        return "；".join(parts)
+
     def receive_silence_nudge(self, *, silent_ms: int) -> None:
         """接收直播间连续静默提醒：主控态下以不堆积方式入队 ``[直播间静默提醒]`` 并按需唤醒等待中的循环。
 
         触发条件：游戏自主主控期直播间长时间无人发声时由主从协调器转达；
-        动作与边界：若队列中已有未读静默提醒则原地替换为最新静默时长（防止堆积刷屏），
-        并唤醒长后台施工挂起中的推理循环，让游戏侧可顺手提交一句 ``framework_commentary``
-        进展要点而不打断在跑 Mod 目标；非主控或收工态直接忽略。
+        动作与边界：
+        - 追踪自上次实际开口以来连续收到的静默提醒次数与累计静默时长（使用注入单调时钟）；
+          若队列中已有未读静默提醒则原地替换为最新文案而不重复递增次数；
+        - 连续静默达到久静阈值时自动升级为久静提醒，取消消极放行句并附当前进行中任务摘要，
+          唤醒长后台施工挂起中的推理循环，让游戏侧顺手提交 ``framework_commentary`` 而不打断在跑目标；
+        - 非主控或收工态直接忽略。
         """
         if not (self._in_lead_mode and self._live_active):
             return
-        notice = format_silence_nudge_notice(silent_ms=max(0, int(silent_ms or 0)))
+        now_s = self._clock()
         queue_items = self._wake_queue.items
-        replaced = False
+        pending_idx: Optional[int] = None
         for idx, item in enumerate(queue_items):
             if isinstance(item, tuple) and len(item) == 2 and str(item[1]).startswith(SILENCE_NUDGE_PREFIX):
-                queue_items[idx] = ("", notice)
-                replaced = True
+                pending_idx = idx
                 break
-        if not replaced:
+        # 队列无未读提醒时说明上一轮提醒已被消费但仍未开口，累计次数加一；原地替换不重复计数
+        if pending_idx is None:
+            self._consecutive_silence_nudges += 1
+            if self._silence_nudge_first_at is None:
+                self._silence_nudge_first_at = now_s
+        else:
+            if self._consecutive_silence_nudges <= 0:
+                self._consecutive_silence_nudges = 1
+            if self._silence_nudge_first_at is None:
+                self._silence_nudge_first_at = now_s
+
+        elapsed_since_first_ms = max(0, int(round((now_s - self._silence_nudge_first_at) * 1000)))
+        effective_silent_ms = max(0, int(silent_ms or 0))
+        notice = format_silence_nudge_notice(
+            silent_ms=effective_silent_ms,
+            consecutive_count=self._consecutive_silence_nudges,
+            elapsed_since_first_ms=elapsed_since_first_ms,
+            active_task_summary=self._active_task_summary_for_silence_nudge(),
+        )
+        if pending_idx is not None:
+            queue_items[pending_idx] = ("", notice)
+        else:
             self._wake_queue.push_notice(notice)
         self._reset_lead_idle_state()
         if not self._task_suspended:
             self._wake_event.set()
-        self._logger.debug(f"MinecraftAgent 收到直播间静默提醒（silent_ms={max(0, int(silent_ms or 0))}）")
+        self._logger.debug(
+            f"MinecraftAgent 收到直播间静默提醒（silent_ms={effective_silent_ms}, "
+            f"consecutive={self._consecutive_silence_nudges}, elapsed_ms={elapsed_since_first_ms}）"
+        )
 
     def receive_rundown_nudge(
         self,
@@ -2883,10 +2957,13 @@ class MinecraftAgent(BaseAgent):
                     self._commitment_ledger_dirty = True
                 if is_commentary_call and observation.get("accepted") is True:
                     commentary_succeeded = True
-                    # 首次成功受理 framework_commentary 后消耗静默提醒豁免资格，后续解说恢复常规 2 秒瞬态窗
+                    # 首次成功受理 framework_commentary 后消耗静默提醒豁免资格；
+                    # 但仅在直播间确认实际出声（spoken=True）时才清零连续静默计数，
+                    # 防止被去重/敏感词过滤/回复器失败抑制（accepted=True, spoken=False）时误清零
                     self._pending_silence_nudge_commentary = False
                     if observation.get("spoken") is True:
                         commentary_spoken = True
+                        self._reset_silence_nudge_streak()
                         if pre_commentary_echoes is not None:
                             self._strip_self_produced_echoes(pre_commentary_echoes)
                 self._absorb_reply(call.name, arguments, observation)

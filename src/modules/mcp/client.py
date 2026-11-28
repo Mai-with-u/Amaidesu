@@ -54,6 +54,41 @@ ClientFactory = Callable[..., Any]
 # "同一个 server 因同一个原因连不上，warning 只该出现一次"的语义。
 _last_connect_failures: Dict[str, str] = {}
 
+# 服务端空闲会话回收 / 会话终止的明确错误特征（不区分大小写）
+_SESSION_TERMINATED_MARKERS: tuple[str, ...] = (
+    "session terminated",
+    "unknown or expired mcp session",
+    "session expired",
+    "session not found",
+)
+
+
+def is_session_terminated_error(exc: BaseException) -> bool:
+    """判断异常是否为 MCP 服务端明确回收/终止空闲会话导致的错误。
+
+    排除本地超时（远端结果未知）与任务取消；沿异常链逐层检查消息与底层 JSON-RPC ErrorData，
+    仅命中明确会话失效特征时返回 True，供幂等只读调用安全触发重连并重试 1 次。
+    """
+    if isinstance(exc, (McpRequestTimeout, asyncio.CancelledError)):
+        return False
+    current: Optional[BaseException] = exc
+    visited: set[int] = set()
+    for _ in range(6):
+        if current is None or id(current) in visited:
+            break
+        visited.add(id(current))
+        candidates: List[str] = [str(current)]
+        err_data = getattr(current, "error", None)
+        err_msg = getattr(err_data, "message", None) if err_data is not None else None
+        if isinstance(err_msg, str):
+            candidates.append(err_msg)
+        for text in candidates:
+            lowered = text.lower()
+            if any(marker in lowered for marker in _SESSION_TERMINATED_MARKERS):
+                return True
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+    return False
+
 
 class McpClient:
     """单个 MCP server 的客户端封装。
@@ -355,12 +390,21 @@ class McpClient:
             logger.warning(f"MCP server '{self.name}' list_resources 失败: {type(exc).__name__}: {exc}")
             return []
 
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        idempotent: bool = False,
+    ) -> Any:
         """调用 server 上的工具，返回 FastMCP CallToolResult（原始结果）。
 
         Args:
             tool_name: MCP 侧工具原名（Provider 从注册名→原名映射表查得）
             arguments: 工具参数 dict
+            idempotent: 是否为幂等只读查询。为 True 且遇服务端明确空闲会话回收
+                （如 ``Session terminated``）时，自动重连并无感重试 1 次；
+                为 False（默认，涵盖所有写操作）时绝不自动重放，避免重复下单。
 
         Returns:
             CallToolResult；未连接 / 传输层调用失败时返回 None（由 Provider 转换为错误结果）
@@ -389,10 +433,42 @@ class McpClient:
             logger.warning(f"MCP server '{self.name}' 工具 '{tool_name}' 业务错误（连接保持）: {exc}")
             raise
         except Exception as exc:  # noqa: BLE001 - 通道边界兜底
-            # 传输层故障（断线/服务重启）：标记断开，下次调用触发重连
-            logger.warning(f"MCP server '{self.name}' 调用工具 '{tool_name}' 失败: {type(exc).__name__}: {exc}")
+            # 传输层故障或空闲会话被服务端回收：先标记断开
             if self._client is active_client:
                 self._connected = False
+            if idempotent and is_session_terminated_error(exc):
+                # 仅对显式声明幂等只读的调用在会话回收后重连并无感重试 1 次，写操作绝不自动重放
+                logger.info(
+                    f"MCP server '{self.name}' 会话已过期或被回收（{tool_name}: {exc}），"
+                    "自动重连并无感重试 1 次（幂等只读调用）"
+                )
+                if not await self.connect():
+                    logger.warning(f"MCP server '{self.name}' 会话回收后重连失败，放弃重试 '{tool_name}'")
+                    return None
+                reconnected_client = self._client
+                if reconnected_client is None:
+                    return None
+                try:
+                    return await self._request(
+                        f"tools/call {tool_name}",
+                        lambda: reconnected_client.call_tool(tool_name, arguments),
+                    )
+                except McpRequestTimeout:
+                    raise
+                except ToolError as retry_exc:
+                    logger.warning(
+                        f"MCP server '{self.name}' 工具 '{tool_name}' 重试后业务错误（连接保持）: {retry_exc}"
+                    )
+                    raise
+                except Exception as retry_exc:  # noqa: BLE001 - 重试仍失败则直接按原语义收口，绝不循环
+                    logger.warning(
+                        f"MCP server '{self.name}' 重连后重试工具 '{tool_name}' 仍失败: "
+                        f"{type(retry_exc).__name__}: {retry_exc}"
+                    )
+                    if self._client is reconnected_client:
+                        self._connected = False
+                    return None
+            logger.warning(f"MCP server '{self.name}' 调用工具 '{tool_name}' 失败: {type(exc).__name__}: {exc}")
             return None
 
     async def close(self) -> None:
@@ -432,4 +508,11 @@ async def shared_ssl_context() -> ssl.SSLContext:
     return _shared_ssl
 
 
-__all__ = ["ClientFactory", "McpClient", "ResourceUpdateCallback", "TransportFactory", "shared_ssl_context"]
+__all__ = [
+    "ClientFactory",
+    "McpClient",
+    "ResourceUpdateCallback",
+    "TransportFactory",
+    "is_session_terminated_error",
+    "shared_ssl_context",
+]

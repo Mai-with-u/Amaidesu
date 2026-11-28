@@ -114,6 +114,16 @@ _MOBS: Dict[str, str] = {
     "player": "玩家",
 }
 
+#: 模组生物的精确中文译名（按带命名空间完整 ID 匹配，避免与其他模组同名实体混淆）：
+#: 车万女仆的野生妖精（touhou_little_maid:fairy）是敌对怪物，游戏语言包直译"女仆妖精"极易被误解成己方女仆，
+#: 必须明确标注"野生敌对"属性以与己方驯服女仆（touhou_little_maid:maid）清晰区分。
+_MOD_MOBS: Dict[str, str] = {
+    "touhou_little_maid:fairy": "野生敌对妖精",
+}
+
+#: 已知敌对模组生物的完整 ID 集合（用于 distant_entities 计数通道精确过滤，不误伤其他模组同名实体）
+_MOD_HOSTILE_IDS: frozenset[str] = frozenset({"touhou_little_maid:fairy"})
+
 #: 原版敌对生物的裸名（去命名空间后的 ID）：含永远敌对的与受激才敌对的（末影人、猪灵、蜘蛛等），拿不准的敌对家族从宽收进来。
 #: 计数通道（``distant_entities``）里 Mod 对未逐只列出的实体只给种类计数、无敌对标记，Amaidesu 无从靠标记识别，
 #: 只能按这份名单过滤计数键；名单外的模组敌对会漏网（接受），Mod 给计数加敌对标记是将来更优解。
@@ -253,8 +263,12 @@ STATUS_DEAD = "已死"
 
 
 def _mob_name(raw: str) -> str:
-    plain = item_name(raw)
-    short = raw.split(":", 1)[-1]
+    cleaned = raw.strip()
+    mod_label = _MOD_MOBS.get(cleaned)
+    if mod_label is not None:
+        return mod_label
+    plain = item_name(cleaned)
+    short = cleaned.split(":", 1)[-1]
     return _MOBS.get(plain) or _MOBS.get(short) or plain
 
 
@@ -1167,10 +1181,12 @@ def _distant(entities: Any, counts: Any) -> List[str]:
     if isinstance(counts, dict):
         for kind, count in counts.items():
             if isinstance(count, int) and not isinstance(count, bool) and count > 0:
-                # 计数键是带命名空间的种类 ID（如 minecraft:zombie），去掉命名空间后查敌对名单
-                if str(kind).rsplit(":", 1)[-1] in HOSTILE_KINDS:
+                # 计数键是带命名空间的种类 ID（如 minecraft:zombie / touhou_little_maid:fairy）：
+                # 先按完整模组敌对 ID 精确过滤，再按原版裸名过滤
+                kind_str = str(kind).strip()
+                if kind_str in _MOD_HOSTILE_IDS or kind_str.rsplit(":", 1)[-1] in HOSTILE_KINDS:
                     continue
-                tally[str(kind)] = tally.get(str(kind), 0) + count
+                tally[kind_str] = tally.get(kind_str, 0) + count
     ordered = sorted(tally.items(), key=lambda pair: (-pair[1], pair[0]))
     return [f"{kind} ×{count}" for kind, count in ordered]
 
@@ -1196,8 +1212,12 @@ def described_entity(entity: Dict[str, Any], things: Dict[str, Dict[str, Any]]) 
     thing = things.get(str(entity.get("id") or ""), {})
     traits = entity.get("traits") if isinstance(entity.get("traits"), dict) else {}
     described: Dict[str, Any] = {"type": entity.get("type")}
+    raw_type = str(entity.get("type") or "").strip()
     if thing.get("kind"):
         described["kind"] = thing["kind"]
+    elif raw_type in _MOD_MOBS:
+        # 易与友方混淆的敌对模组生物在结构化速览中显式落 kind，避免下游仅看英文 ID 或直译误判
+        described["kind"] = _MOD_MOBS[raw_type]
     if entity.get("name"):
         described["name"] = entity["name"]
     if thing.get("skin_name") or thing.get("skin_id"):

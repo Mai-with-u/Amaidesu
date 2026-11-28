@@ -153,6 +153,15 @@ class McpToolProvider(ConnectionToolProvider):
         """连接建立（工具清单同步成功）后暴露的全量清单 = 本地 specs 缓存。"""
         return list(self._specs)
 
+    def _is_idempotent_call(self, tool_name: str, arguments: Dict[str, Any]) -> bool:
+        """判断一次工具调用是否属于幂等只读查询（会话被服务端回收时允许安全重连并重试 1 次）。
+
+        通用 MCP 通道不猜测具体 server 工具语义，默认保守返回 False；
+        特定业务子类（如 ``MaicraftMcpProvider``）可按只读工具白名单覆写。
+        """
+        del tool_name, arguments
+        return False
+
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         """执行 MCP 工具：按派生全名对照 spec → 原始名直呼 server。永远不抛异常。"""
         started_ms = int(time.time() * 1000)
@@ -171,9 +180,14 @@ class McpToolProvider(ConnectionToolProvider):
         # fastmcp 为可选重型依赖：业务异常类在调用点延迟获取（与 client 延迟导入同策略）
         from fastmcp.exceptions import ToolError
 
+        args = dict(invocation.arguments or {})
         try:
-            # spec.name = server 原始名，原样直呼（无任何名字解析）
-            result = await self._client.call_tool(spec.name, dict(invocation.arguments or {}))
+            # spec.name = server 原始名，原样直呼（无任何名字解析）；
+            # 仅在显式识别为幂等只读查询时向通道声明 idempotent=True，保持非幂等路径签名兼容
+            if self._is_idempotent_call(spec.name, args):
+                result = await self._client.call_tool(spec.name, args, idempotent=True)
+            else:
+                result = await self._client.call_tool(spec.name, args)
         except McpRequestTimeout as exc:
             # 没有回执不能宣称远端未执行；把不确定性完整交给调用者，通道不代替它重试动作。
             return ToolExecutionResult(
