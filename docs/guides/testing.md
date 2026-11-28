@@ -73,13 +73,10 @@ tests/
 ### 基本命令
 
 ```bash
-# 运行所有测试
-uv run pytest tests/
+# 全量（并行，进程数见下面"并行开多大"）
+uv run pytest tests/ -n 16
 
-# 并行运行所有测试（pytest-xdist；本机 32 worker 约 1 分钟）
-uv run pytest tests/ -n auto
-
-# 运行特定测试文件
+# 运行特定测试文件（一两个文件不开并行）
 uv run pytest tests/modules/events/test_event_bus.py
 
 # 运行特定测试函数
@@ -92,19 +89,22 @@ uv run pytest tests/ -v -s
 uv run pytest tests/ -v --tb=long
 ```
 
+### 并行开多大
+
+开并行本身有启动成本：每个测试进程启动时都要导入一遍全局测试配置（`tests/conftest.py`）并各自收集用例，进程越多启动越慢。按要跑的范围选：
+
+- **一两个文件**：不加 `-n`。开并行光启动就比测试本身还慢。
+- **一个目录**：`-n 4`。再往上加进程，收益已经很小。
+- **全量**：`-n 16`。进程数超过机器的物理核数后反而变慢——本机 24 个物理核，开满（`-n auto`，32 个进程）实测比 16 个慢。换机器后按物理核数重新量。
+
 ### 测试过滤
 
 ```bash
 # 排除慢速测试
 uv run pytest -m "not slow"
 
-# 只运行特定标记的测试
-uv.mark.asyncio
-async def test_xxx():
-    ...
-
-# 运行带特定标记的测试
-uv run pytest -m asyncio
+# 只运行带某个标记的测试
+uv run pytest -m slow
 ```
 
 ### 覆盖率
@@ -129,8 +129,8 @@ uv run pytest -x
 # 显示本地变量（调试用）
 uv run pytest -l
 
-# 并行执行（需要安装 pytest-xdist）
-uv run pytest -n auto
+# 并行执行（pytest-xdist；进程数按上面"并行开多大"选）
+uv run pytest tests/ -n 16
 ```
 
 ## 5. 测试最佳实践

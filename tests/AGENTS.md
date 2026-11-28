@@ -21,3 +21,8 @@
 - 载荷与场景用既有工厂构造（如 tests/modules/storage/helpers.py 的 make_room_message）；没有工厂的先建工厂再用。
 - 项目启用 `asyncio_mode = "auto"`：异步测试直接写 `async def`，不加 `@pytest.mark.asyncio`——auto 模式下该标记冗余，误挂到同步测试还会产生 PytestWarning。
 - 同一流程多组输入输出用一张 `@pytest.mark.parametrize` 参数表，禁止复制粘贴成长手写；断言差异也用参数表达，只有控制流真正不同才拆独立测试函数。
+
+## 跑测试时并行开多大
+
+- 只跑一两个文件不加 `-n`：开并行光启动就比测试本身还慢。
+- 跑整个目录或全量才开并行；进程数不超过机器的物理核数，开满（`-n auto`）反而更慢。本机该用几个进程、依据是什么，见 `docs/guides/testing.md` 的"并行开多大"一节。
