@@ -1162,3 +1162,231 @@ async def test_commitment_ledger_uses_player_display_label_with_aliases(tmp_path
     finally:
         await bus.cleanup()
         await db.close()
+
+
+@pytest.mark.parametrize(
+    ("commitment_what", "verdict", "summary", "target_title", "expected_ok"),
+    [
+        # 典型跨表错号：本地条目是“砌菜地墙”，说明却是“树场苗槽已整理完成” -> 必须拦住
+        ("砌菜地墙", "done", "树场苗槽已整理完成", "", False),
+        # 显式 target_title 与库内内容不匹配，即便 summary 很泛也必须拦住
+        ("砌菜地墙", "done", "已经做完了", "整理树场苗槽", False),
+        # 显式 target_title 匹配库内内容时，允许简短/口语化 summary 放行
+        ("砌菜地墙", "done", "同伴说不用再弄啦", "菜地墙", True),
+        # 口语同义改写（小羊棚子 -> 羊圈搭好了）通过高辨识度核心词“羊”放行
+        ("给小羊盖棚子", "done", "羊圈搭好了", "", True),
+        # 极简通用状态句与常见口语时间/评价/进展更正（无 target_title）均应放行，不误伤
+        ("砌菜地墙", "done", "已经全部做完了", "", True),
+        ("给营地修一条石砖路", "progress", "目前铺到一半，明天接着干", "", True),
+        ("帮同伴整理仓库", "done", "刚才顺手办妥了", "", True),
+        ("下次去下界找堡垒", "invalid", "同伴说先取消，改天再去", "", True),
+        ("砌菜地墙", "done", "已经弄完啦，对方很满意", "", True),
+        # 世界重置类 invalid 放行；但无关具体实体的 invalid 仍拦截
+        ("砌菜地墙", "invalid", "已换新世界，旧约定作废", "", True),
+        ("砌菜地墙", "invalid", "树场已经拆掉了", "", False),
+        # 共享宽泛地点后缀（场）或纯数字（3）不得穿透放行错号
+        ("整理树场", "done", "修好农场围栏", "", False),
+        ("补还 PlayerA 3 颗钻石", "done", "种完 3 排树苗", "", False),
+    ],
+)
+async def test_memory_correct_semantic_guard_blocks_cross_table_mismatch_without_false_positives(
+    tmp_path: Path,
+    commitment_what: str,
+    verdict: str,
+    summary: str,
+    target_title: str,
+    expected_ok: bool,
+) -> None:
+    """场内更正语义核验护栏：挡住跨表错号与 target_title 错配，放行口语同义、简短状态与世界级作废。"""
+    db = SQLiteDatabase(tmp_path / "sem_guard.db")
+    await db.initialize()
+    try:
+        s1 = await db.sessions.insert_live_session(started_at_ms=1_000_000, kind=SESSION_KIND_LIVE)
+        await db.sessions.close_live_session(live_session_id=s1, ended_at_ms=2_000_000)
+        s2 = await db.sessions.insert_live_session(started_at_ms=3_000_000, kind=SESSION_KIND_LIVE)
+        comm_id = await db.commitments.insert_commitment(
+            what=commitment_what,
+            quote=f"下次{commitment_what}",
+            created_session_id=s1,
+            now_ms_value=1_500_000,
+        )
+        assert comm_id is not None
+
+        provider = MemoryCorrectionToolProvider(
+            correction_repo=db.memory_corrections,
+            session_provider=lambda: s2,
+            brief_archive_ids_provider=lambda: (),
+            commitments_repo=db.commitments,
+            archive_repo=db.archive,
+        )
+        args: Dict[str, str] = {
+            "target": f"约#{comm_id}",
+            "verdict": verdict,
+            "summary": summary,
+            "evidence_kind": "self_seen",
+        }
+        if target_title:
+            args["target_title"] = target_title
+
+        res = await provider.invoke(ToolInvocation(tool_name="streamer_memory_correct", arguments=args))
+        assert res.success is expected_ok, res.error_message
+        comm_after = await db.commitments.get_commitment(commitment_id=comm_id)
+        assert comm_after is not None
+        if expected_ok:
+            if verdict == "progress":
+                assert comm_after.status == "open"
+            else:
+                assert comm_after.status != "open"
+        else:
+            assert comm_after.status == "open"
+            err = res.error_message or ""
+            assert f"本地 约#{comm_id} 实际内容为「{commitment_what}」" in err
+            assert "不匹配，请核对编号" in err
+    finally:
+        await db.close()
+
+
+async def test_memory_correct_semantic_guard_uses_verified_evidence_quote(tmp_path: Path) -> None:
+    """语义核验在证据查库通过后纳入 verified_quote：简短口语配合无关回执仍拦、配合同题玩家原话放行。"""
+    db = SQLiteDatabase(tmp_path / "sem_verified_quote.db")
+    await db.initialize()
+    try:
+        s1 = await db.sessions.insert_live_session(started_at_ms=1_000_000, kind=SESSION_KIND_LIVE)
+        await db.sessions.close_live_session(live_session_id=s1, ended_at_ms=2_000_000)
+        s2 = await db.sessions.insert_live_session(started_at_ms=3_000_000, kind=SESSION_KIND_LIVE)
+        comm_id = await db.commitments.insert_commitment(
+            what="砌菜地墙",
+            quote="下次把菜地墙砌起来",
+            created_session_id=s1,
+            now_ms_value=1_500_000,
+        )
+        assert comm_id is not None
+
+        await db.events.insert_game_event(
+            live_session_id=s2,
+            timestamp_ms=3_010_000,
+            game="minecraft",
+            event_type="milestone",
+            message="树场苗槽补种与整理完成",
+        )
+        player = await db.game_players.meet_player(
+            game="minecraft", uuid="uuid-p-quote", name="玩家乙", live_session_id=s2, at_ms=3_015_000
+        )
+        await db.game_players.add_game_chat(
+            live_session_id=s2,
+            game="minecraft",
+            direction="player",
+            player_id=player.id,
+            content="菜地墙我自己砌完啦，不用再管",
+            at_ms=3_020_000,
+            message_id="gc-88",
+        )
+
+        provider = MemoryCorrectionToolProvider(
+            correction_repo=db.memory_corrections,
+            session_provider=lambda: s2,
+            brief_archive_ids_provider=lambda: (),
+            commitments_repo=db.commitments,
+            event_repo=db.events,
+            game_player_repo=db.game_players,
+            archive_repo=db.archive,
+        )
+
+        # 1) summary 是通用短句，但已核验的 game_receipt 明确指向“树场苗槽” -> 阻断误关“砌菜地墙”
+        r_bad = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": f"约#{comm_id}",
+                    "verdict": "done",
+                    "summary": "刚才顺手办妥了",
+                    "evidence_kind": "game_receipt",
+                    "evidence_quote": "树场苗槽补种与整理完成",
+                },
+            )
+        )
+        assert not r_bad.success
+        assert f"本地 约#{comm_id} 实际内容为「砌菜地墙」" in (r_bad.error_message or "")
+
+        # 2) 已核验的 player_chat 指向“菜地墙” -> 配合简短口语 summary 正常放行结案
+        r_ok = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": f"约#{comm_id}",
+                    "verdict": "done",
+                    "summary": "同伴说已经弄完啦",
+                    "evidence_kind": "player_chat",
+                    "evidence_quote": "菜地墙我自己砌完啦",
+                    "evidence_message_id": "gc-88",
+                },
+            )
+        )
+        assert r_ok.success, r_ok.error_message
+    finally:
+        await db.close()
+
+
+async def test_memory_correct_rejects_cross_branch_id_and_guards_archive_mismatch(tmp_path: Path) -> None:
+    """传跨端约#N 直接清晰打回；接入 archive_repo 时 档#N 同样受跨表错号语义护栏保护。"""
+    db = SQLiteDatabase(tmp_path / "cross_and_arch.db")
+    await db.initialize()
+    try:
+        seeded = await _seed_prev_and_current_sessions(db)
+        curr_session = seeded["curr_session"]
+        line_id = seeded["line_id"]
+
+        provider = MemoryCorrectionToolProvider(
+            correction_repo=db.memory_corrections,
+            session_provider=lambda: curr_session,
+            brief_archive_ids_provider=lambda: (line_id,),
+            commitments_repo=db.commitments,
+            archive_repo=db.archive,
+        )
+
+        # 1) 传 跨端约#15 直接拒绝并提示不能用此工具结案
+        r_cross = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": "跨端约#15",
+                    "verdict": "done",
+                    "summary": "树场苗槽已整理完成",
+                    "evidence_kind": "self_seen",
+                },
+            )
+        )
+        assert not r_cross.success
+        assert "跨端约#N" in (r_cross.error_message or "")
+
+        # 2) 拿完全不相干的“树场苗槽”更正 档#N（营地东门还没封顶）被拦截
+        r_arch_bad = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": f"档#{line_id}",
+                    "verdict": "done",
+                    "summary": "树场苗槽已整理完成",
+                    "evidence_kind": "self_seen",
+                },
+            )
+        )
+        assert not r_arch_bad.success
+        assert f"本地 档#{line_id} 实际内容为「Minecraft：营地东门还没封顶」" in (r_arch_bad.error_message or "")
+
+        # 3) 语义匹配的档案更正正常放行
+        r_arch_ok = await provider.invoke(
+            ToolInvocation(
+                tool_name="streamer_memory_correct",
+                arguments={
+                    "target": f"档#{line_id}",
+                    "target_title": "营地东门",
+                    "verdict": "done",
+                    "summary": "东门已经封好顶啦",
+                    "evidence_kind": "self_seen",
+                },
+            )
+        )
+        assert r_arch_ok.success
+    finally:
+        await db.close()

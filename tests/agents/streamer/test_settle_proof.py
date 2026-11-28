@@ -25,7 +25,7 @@ from src.agents.streamer.memory.settle_proof import (
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.models.memory import SettleReport
+from src.modules.storage.models.memory import PendingArchiveLine, SettleReport
 from tests.modules.llm.fakes import FakeLLMManager
 
 _MINUTE = 60_000
@@ -42,8 +42,13 @@ _MINUTE = 60_000
         ("火把也插好了", True),
         ("三面墙立好了", True),
         ("钻石镐合成出来啦", True),
+        ("重生点设好了", True),
+        ("重生点改到矿洞啦", True),
+        ("重生点换到矿洞黄床了", True),
         ("海带还没烤完", False),
         ("门没装好", False),
+        ("重生点还没设好", False),
+        ("打算把重生点换到矿洞", False),
         ("动力压机还没完全修好", False),
         ("打算把门装好", False),
         ("准备去拿到钻石", False),
@@ -965,3 +970,166 @@ async def test_quote_rescue_and_time_order_rebind_avoid_early_preview_line(
     assert len(report.quote_rescues) == 2
     assert any("第 5 行" in note and "非所引第 4 行" in note for note in report.quote_rescues)
     assert any("第 6 行" in note and "非所引第 2 行" in note for note in report.quote_rescues)
+
+
+async def test_bed_placement_does_not_prove_respawn_change_or_overwrite_verified_home_anchor(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """只放床未睡觉不得核实换重生点，且未核实口播不得经 replace 覆盖原有已核实快照记录；同步守护提示词规则。"""
+    archive_prompt = prompt_manager.render("memory_archive_system")
+    assert "摆放或搭建了设施" in archive_prompt
+    assert "目标状态实际生效" in archive_prompt
+    assert "不同机制的独立锚点或设施记录" in archive_prompt
+
+    commitment_prompt = prompt_manager.render("memory_commitment_system")
+    assert "截至本场结束时仍然成立的公开约定" in commitment_prompt
+    assert "本场内已被否决、改口或放弃的方案" in commitment_prompt
+
+    # 纯放床记录既不能显式引用证明“换重生点/设传送家点”，也不能兜底证明；而真实躺下或入睡更新重生点的记录放行
+    bed_only_records = game_records([_event("task_succeeded", "在矿洞摆下一张黄床", 4 * _MINUTE)], [])
+    assert (
+        proof_for(
+            "记录#1",
+            bed_only_records,
+            game="Minecraft",
+            at_ms=6 * _MINUTE,
+            claim_text="Minecraft：把重生点换到矿洞黄床 重生点换到矿洞黄床啦",
+        )
+        is None
+    )
+    assert (
+        proof_for(
+            "记录#1",
+            bed_only_records,
+            game="Minecraft",
+            at_ms=6 * _MINUTE,
+            claim_text="Minecraft：传送家点定在矿洞",
+        )
+        is None
+    )
+    assert (
+        infer_proof_for_claim(
+            "Minecraft：把重生点换到矿洞黄床 重生点换到矿洞黄床啦",
+            bed_only_records,
+            game="Minecraft",
+            at_ms=6 * _MINUTE,
+        )
+        is None
+    )
+    # 真实 SleepTask 躺床文案“躺下了”与入睡更新重生点文案均应正常通过显式引用与兜底核验
+    for sleep_msg in ("在矿洞黄床躺下了", "在矿洞黄床入睡并刷新重生点"):
+        sleep_records = game_records([_event("task_succeeded", sleep_msg, 4 * _MINUTE)], [])
+        assert (
+            proof_for(
+                "记录#1",
+                sleep_records,
+                game="Minecraft",
+                at_ms=6 * _MINUTE,
+                claim_text="Minecraft：把重生点换到矿洞黄床 重生点换到矿洞黄床啦",
+            )
+            is not None
+        ), sleep_msg
+        assert (
+            infer_proof_for_claim(
+                "Minecraft：把重生点换到矿洞黄床 重生点换到矿洞黄床啦",
+                sleep_records,
+                game="Minecraft",
+                at_ms=6 * _MINUTE,
+            )
+            is not None
+        ), sleep_msg
+
+    # 端到端下播结算：上一场已有已核实的 /sethome 营地家点；本场仅摆下黄床未睡觉，模型误用 replace 替换旧行
+    s1 = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    c_prev = await store.chat.insert_live_chat(
+        live_session_id=s1,
+        timestamp_ms=2 * _MINUTE,
+        sender_role="assistant",
+        content="用传送家点把营地定成主家了",
+        message_type="speech",
+    )
+    await store.sessions.close_live_session(live_session_id=s1, ended_at_ms=10 * _MINUTE)
+    await store.sessions.apply_settlement(
+        live_session_id=s1,
+        settled_at_ms=11 * _MINUTE,
+        now_ms_value=11 * _MINUTE,
+        archive_lines=[
+            PendingArchiveLine(
+                text="Minecraft：/sethome 传送家点定在营地",
+                quote="用传送家点把营地定成主家了",
+                evidence_chat_id=int(c_prev),
+                game="Minecraft",
+                lasting=True,
+                in_snapshot=True,
+            )
+        ],
+        commitments=[],
+        closures=[],
+        settle_report="{}",
+    )
+
+    s2 = await store.sessions.insert_live_session(started_at_ms=20 * _MINUTE, kind="live")
+    await store.sessions.close_live_session(live_session_id=s2, ended_at_ms=40 * _MINUTE)
+    await store.events.insert_game_event(
+        live_session_id=s2,
+        game="Minecraft",
+        event_type="task_succeeded",
+        message="在矿洞摆下一张黄床",
+        timestamp_ms=25 * _MINUTE,
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=s2,
+        timestamp_ms=26 * _MINUTE,
+        sender_role="assistant",
+        content="黄床放下来了，重生点换到矿洞黄床啦",
+        message_type="speech",
+    )
+
+    llm = FakeLLMManager(
+        responses=[
+            Response(
+                success=True,
+                content=json.dumps(
+                    {
+                        "previous": [
+                            {
+                                "old": 1,
+                                "op": "replace",
+                                "line": 1,
+                                "title": "Minecraft：把重生点换到矿洞黄床",
+                                "quote": "重生点换到矿洞黄床啦",
+                                "game": "Minecraft",
+                                "lasting": True,
+                                # 即便模型显式引用仅放床的记录#1，也必须被状态生效门槛拦截并保住原家点
+                                "evidence": "记录#1",
+                            }
+                        ],
+                        "archive": [],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+            Response(success=True, content='{"commitments": []}'),
+        ]
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 50 * _MINUTE,
+    )
+
+    assert await settler.settle_session(s2) is True
+    snap = await store.archive.get_snapshot(live_session_id=s2)
+    assert snap is not None
+    # 原有的已核实 /sethome 营地家点必须被代码保护保留，不得被未核实的放床换重生点口播顶掉
+    assert [item.line.text for item in snap.lines] == ["Minecraft：/sethome 传送家点定在营地"]
+    session2 = await store.sessions.get_live_session(live_session_id=s2)
+    assert session2 is not None and session2.settle_report is not None
+    report = SettleReport.model_validate_json(session2.settle_report)
+    assert any(ch.action == "refused" and "未获游戏记录核实" in ch.reason for ch in report.snapshot_changes)

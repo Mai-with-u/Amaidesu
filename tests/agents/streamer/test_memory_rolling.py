@@ -615,3 +615,73 @@ def test_highlights_survive_four_subsequent_sessions_with_independent_quota() ->
     hl_pool_8 = [*hl_pool, _old(207, seen=2_000, highlight=True, game="minecraft", save_id="s1")]
     hl_sel_8 = select_snapshot([], hl_pool_8, session_started_at_ms=9_000)
     assert [ref.archive_line_id for ref in hl_sel_8.kept] == [200, 202, 203, 204, 205, 206, 207]
+
+
+def test_unverified_replacement_cannot_overwrite_verified_snapshot_row() -> None:
+    """未获游戏记录核实的完成/状态变更说法不能顶掉已核实旧快照行，而对本来未核实的旧行仍允许替换。"""
+    verified_old = SnapshotLine(
+        line=ArchiveLine(
+            id=10,
+            live_session_id=1,
+            text="Minecraft：/sethome 营地家点已设好",
+            quote="营地设了个家点",
+            evidence_chat_id=10,
+            game="minecraft",
+        ),
+        lasting=True,
+        seen_at_ms=1_000,
+    )
+    unverified_old = SnapshotLine(
+        line=ArchiveLine(
+            id=11,
+            live_session_id=1,
+            text=mark_unverified("Minecraft：重生点换到河边"),
+            quote="重生点换到河边啦",
+            evidence_chat_id=11,
+            game="minecraft",
+        ),
+        lasting=False,
+        seen_at_ms=1_000,
+    )
+    speech = {
+        1: SettleSpeechLine(id=81, timestamp_ms=9_100, content="黄床放好了，重生点换到矿洞啦"),
+    }
+
+    def _validate_unverified(raw: Dict[str, Any]) -> Tuple[List[PendingArchiveLine], List[UnregisteredItem]]:
+        return [
+            PendingArchiveLine(
+                text=mark_unverified(str(raw["title"])),
+                quote=str(raw["quote"]),
+                evidence_chat_id=81,
+                game="minecraft",
+            )
+        ], []
+
+    plan = plan_from_ops(
+        [
+            {
+                "old": 1,
+                "op": "replace",
+                "line": 1,
+                "title": "Minecraft：重生点换到矿洞黄床",
+                "quote": "重生点换到矿洞啦",
+            },
+            {
+                "old": 2,
+                "op": "replace",
+                "line": 1,
+                "title": "Minecraft：重生点换到矿洞黄床",
+                "quote": "重生点换到矿洞啦",
+            },
+        ],
+        [verified_old, unverified_old],
+        session_started_at_ms=_NOW,
+        line_of=lambda raw: speech.get(raw) if isinstance(raw, int) else None,
+        validate_new=_validate_unverified,
+    )
+
+    assert [item.line.id for item in plan.kept] == [10]
+    assert len(plan.replacements) == 1
+    assert plan.changes[0].action == "refused"
+    assert "未获游戏记录核实" in plan.changes[0].reason
+    assert plan.changes[1].action == "replace"

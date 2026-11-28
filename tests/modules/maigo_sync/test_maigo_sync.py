@@ -21,8 +21,10 @@ from src.modules.maigo_sync import (
     MaiGORejected,
     MaiGOSyncConfigSchema,
 )
+from src.modules.maigo_sync import backfill as maigo_backfill_mod
 from src.modules.maigo_sync import bridge as maigo_bridge_mod
 from src.modules.maigo_sync.backfill import StartupHistoryBackfiller
+from src.modules.maigo_sync.pending_log import CachedPromiseEntry, format_brief_extension
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL
 
@@ -87,6 +89,10 @@ class _StubMaiGOClient:
         self.fail_heartbeat: Optional[Exception] = None
         self.fail_checkin_times: int = 0
         self.fail_post_after: Optional[int] = None
+        self.fail_post_error: Optional[Exception] = None
+        self.fail_archive_error: Optional[Exception] = None
+        self.fail_world_archive_error: Optional[Exception] = None
+        self.fail_knowledge_error: Optional[Exception] = None
         self.checkin_error: Exception = RuntimeError("MaiGO 离线")
         self.closed = False
 
@@ -114,15 +120,21 @@ class _StubMaiGOClient:
 
     async def post_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         if self.fail_post_after is not None and len(self.posted_batches) >= self.fail_post_after:
-            raise ConnectionError("MaiGO 暂不可达")
+            raise self.fail_post_error or ConnectionError("MaiGO 暂不可达")
         self.posted_batches.append([dict(item) for item in events])
         return {"ok": True, "accepted": len(events), "deduplicated": 0}
 
     async def ingest_archive(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if payload.get("episode") is not None and self.fail_archive_error is not None:
+            raise self.fail_archive_error
+        if payload.get("episode") is None and "external_episode_id" not in payload and self.fail_world_archive_error:
+            raise self.fail_world_archive_error
         self.archive_batches.append(dict(payload))
         return {"ok": True, "accepted": len(payload.get("records") or [])}
 
     async def ingest_knowledge(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self.fail_knowledge_error is not None:
+            raise self.fail_knowledge_error
         self.knowledge_batches.append(dict(payload))
         return {"ok": True, "relations_accepted": len(payload.get("relations") or [])}
 
@@ -787,3 +799,247 @@ async def test_bridge_exception_warnings_include_class_name_without_trailing_col
         )
     finally:
         await bridge.stop()
+
+
+def test_format_brief_extension_rewrites_promise_tags_and_deduplicates_self_branch_echoes() -> None:
+    """跨端简报改写 `[约#N]` 为 `[跨端约#N]`、滤除本端回流约定并去重，同时保留真正异端约定且不误伤日常数字。"""
+    stable_brief = (
+        "# 今日动态\n"
+        "- 下午逛了约 5 分钟社区，提到约#88 的闲聊话题。\n\n"
+        "【跨端还惦记的约定】\n"
+        "- [约#15] 整理树场苗槽\n"
+        "- [约#16] 砌菜地墙（来自amaidesu）\n"
+        "- [约#32] 周末在群里发新歌单（来自maibot）\n"
+    )
+    open_promises = [
+        CachedPromiseEntry(anchor_id=15, content="整理树场苗槽", status="open", source_branch="amaidesu"),
+        CachedPromiseEntry(anchor_id=16, content="砌菜地墙", status="open", source_branch="amaidesu"),
+        CachedPromiseEntry(anchor_id=32, content="周末在群里发新歌单", status="open", source_branch="maibot"),
+        CachedPromiseEntry(anchor_id=41, content="下周和群友联机挖矿", status="open", source_branch="maibot"),
+    ]
+
+    rendered = format_brief_extension(
+        stable_brief=stable_brief,
+        open_promises=open_promises,
+        save_brief="存档备注提到 [约#91] 待跟进",
+        current_branch_id="amaidesu",
+    )
+
+    # 绝不残留裸 `[约#N]` 或 `约#N`，且日常“约 5 分钟”原样保留
+    assert "[约#" not in rendered
+    assert "约#15" not in rendered and "约#16" not in rendered
+    assert "约 5 分钟" in rendered
+    assert "跨端约#88" in rendered
+    assert "[跨端约#32] 周末在群里发新歌单（来自maibot）" in rendered
+    assert "[跨端约#91]" in rendered
+    # 本端同步回流的 amaidesu 约定在两段均被剔除
+    assert "整理树场苗槽" not in rendered
+    assert "砌菜地墙" not in rendered
+    # 已在 stable_brief 出现的异端约#32 不在【跨端还惦记的公开约定】里重复出现，仅补挂未出现过的约#41
+    assert rendered.count("周末在群里发新歌单") == 1
+    assert "【跨端还惦记的公开约定】" in rendered
+    assert "- 跨端约#41（来自maibot）：下周和群友联机挖矿" in rendered
+
+    # 若【跨端还惦记的约定】下全部条目均为本端回流，空分段标题也一并清理
+    only_self = format_brief_extension(
+        stable_brief="# 今日动态\n- 逛了一圈。\n\n【跨端还惦记的约定】\n- [约#15] 整理树场苗槽\n",
+        open_promises=[
+            CachedPromiseEntry(anchor_id=15, content="整理树场苗槽", status="open", source_branch="amaidesu")
+        ],
+        save_brief="",
+        current_branch_id="amaidesu",
+    )
+    assert only_self == "# 今日动态\n- 逛了一圈。"
+
+    # 本端有“修建新木屋”时，明确标注异端来源或编号属已知异端的同词约定绝不因模糊子串被误删
+    overlapping_other = format_brief_extension(
+        stable_brief=(
+            "【跨端还惦记的约定】\n"
+            "- [约#15] 修建新木屋\n"
+            "- [约#32] 周末群里发修建新木屋的截图（来自maibot）\n"
+            "- [约#33] 分享修建新木屋设计草图\n"
+        ),
+        open_promises=[
+            CachedPromiseEntry(anchor_id=15, content="修建新木屋", status="open", source_branch="amaidesu"),
+            CachedPromiseEntry(
+                anchor_id=32, content="周末群里发修建新木屋的截图", status="open", source_branch="maibot"
+            ),
+            CachedPromiseEntry(anchor_id=33, content="分享修建新木屋设计草图", status="open", source_branch="maibot"),
+        ],
+        save_brief="",
+        current_branch_id="amaidesu",
+    )
+    assert "[跨端约#15]" not in overlapping_other
+    assert "[跨端约#32] 周末群里发修建新木屋的截图（来自maibot）" in overlapping_other
+    assert "[跨端约#33] 分享修建新木屋设计草图" in overlapping_other
+    assert "【跨端还惦记的公开约定】" not in overlapping_other
+
+
+async def test_bridge_filters_self_branch_promises_in_brief_but_retains_anchor_for_checkin(tmp_path: Path) -> None:
+    """桥接层签出扩展简报滤掉本端回流约定，但内存仍保留其 anchor_id 以支持下播签入回写结案。"""
+    db = SQLiteDatabase(tmp_path / "anchor_retain.db")
+    await db.initialize()
+    try:
+        sid = await db.sessions.insert_live_session(
+            stream_id="9002", platform="bilibili", started_at_ms=2_000_000, title="树场整理"
+        )
+        cid = await db.commitments.insert_commitment(
+            what="整理树场苗槽",
+            quote="下次整理树场苗槽",
+            created_session_id=sid - 1 if sid > 1 else None,
+            now_ms_value=1_500_000,
+        )
+        assert cid is not None
+        await db.commitments.close_commitment(commitment_id=cid, close_quote="整理完了", updated_at_ms=2_010_000)
+
+        bus = EventBus()
+        client = _StubMaiGOClient(
+            checkout_response={
+                "checkout_id": "chk-self-echo",
+                "brief_etag": "etag-self",
+                "stable_brief": "【跨端还惦记的约定】\n- [约#15] 整理树场苗槽\n- [约#32] 周末在群里发新歌单",
+                "live_context": "",
+                "open_promises": [
+                    {"id": 15, "content": "整理树场苗槽", "status": "open", "source_branch": "amaidesu"},
+                    {"id": 32, "content": "周末在群里发新歌单", "status": "open", "source_branch": "maibot"},
+                ],
+                "topic_cards": [],
+                "person_directory": [],
+                "save_brief": "",
+            }
+        )
+        bridge = MaiGOBridge(event_bus=bus, client=client, retry_delays_ms=(), clock_ms=lambda: 2_020_000)
+        try:
+            assert (
+                await bridge.ensure_checked_out(
+                    LiveStartedPayload(live_session_id=sid, kind=SESSION_KIND_LIVE, started_at_ms=2_000_000)
+                )
+                is True
+            )
+            ext = bridge.render_brief_extension()
+            assert "整理树场苗槽" not in ext
+            assert "[跨端约#32]" in ext
+            assert ext.count("周末在群里发新歌单") == 1
+
+            assert await bridge.push_settled_session(sid, commitments_repo=db.commitments) is True
+            _, payload = client.checkins[-1]
+            assert any(p["anchor_id"] == 15 and p["status"] == "closed" for p in payload["promises"])
+        finally:
+            await bridge.stop()
+    finally:
+        await db.close()
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_suffix"),
+    [
+        (lambda: TimeoutError(), "TimeoutError"),
+        (lambda: TimeoutError("   "), "TimeoutError"),
+        (lambda: RuntimeError("连接重置"), "RuntimeError: 连接重置"),
+    ],
+)
+async def test_backfill_exception_warnings_include_class_name_without_trailing_colon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exc_factory: Any,
+    expected_suffix: str,
+) -> None:
+    """历史回填 L1 / L0 场次 / L0 世界笔记 / L2 异常日志统一带出异常类名，空消息异常不留悬空冒号。"""
+    db_file = tmp_path / "backfill_exc.db"
+    state_file = tmp_path / "backfill_exc_state.json"
+    now_val = 1_800_000_000_000
+    recent_t = now_val - 3_600_000
+
+    db = SQLiteDatabase(db_file)
+    await db.initialize()
+    try:
+        sid = await db.sessions.insert_live_session(
+            stream_id="live-exc-1",
+            platform="bilibili",
+            kind=SESSION_KIND_LIVE,
+            started_at_ms=recent_t,
+            title="异常日志测试场",
+        )
+        chat_id = await db.chat.insert_live_chat(
+            live_session_id=sid,
+            timestamp_ms=recent_t + 100,
+            sender_role="assistant",
+            content="今天把营地工作台整理好了",
+            message_type="speech",
+        )
+        await db.archive.insert_line(
+            live_session_id=sid,
+            text="整理营地工作台",
+            quote="今天把营地工作台整理好了",
+            evidence_chat_id=chat_id,
+            game="minecraft",
+            save_id="save-exc",
+        )
+        await db.execute(
+            "INSERT INTO game_work_docs (game, save_id, save_name, notebook, todos, pinned_rules, updated_session_id, updated_at_ms) "
+            "VALUES ('minecraft', 'save-exc', '异常测试档', '测试笔记内容', '[]', '[]', ?, ?)",
+            (sid, recent_t + 200),
+        )
+        await db.execute(
+            "INSERT INTO game_social_facts (game, save_id, save_name, kind, text, quote, status, created_session_id, created_at_ms, updated_at_ms) "
+            "VALUES ('minecraft', 'save-exc', '异常测试档', 'members', '玩家甲负责仓库', '我管仓库', 'active', ?, ?, ?)",
+            (sid, recent_t + 300, recent_t + 300),
+        )
+    finally:
+        await db.close()
+
+    warnings: List[str] = []
+
+    def _capture_warning(msg: str, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        warnings.append(str(msg))
+
+    monkeypatch.setattr(maigo_backfill_mod.logger, "warning", _capture_warning)
+
+    client = _StubMaiGOClient()
+    backfiller = StartupHistoryBackfiller(
+        db_path=db_file,
+        state_path=state_file,
+        client=client,
+        branch_id="amaidesu",
+        since_days=30,
+        batch_size=10,
+        batch_interval_ms=0,
+        clock_ms=lambda: now_val,
+    )
+
+    # 1) L1 暂停告警
+    client.fail_post_after = 0
+    client.fail_post_error = exc_factory()
+    assert await backfiller.run() == 0
+    assert any("MaiGO 启动历史回填暂停" in line and line.endswith(f": {expected_suffix}") for line in warnings), (
+        warnings
+    )
+
+    # 2) L0 场次原件暂停告警
+    warnings.clear()
+    client.fail_post_after = None
+    client.fail_post_error = None
+    client.fail_archive_error = exc_factory()
+    await backfiller.run()
+    assert any("MaiGO L0 原件书库回填暂停" in line and line.endswith(f": {expected_suffix}") for line in warnings), (
+        warnings
+    )
+
+    # 3) L0 世界笔记/同伴名册暂停告警
+    warnings.clear()
+    client.fail_archive_error = None
+    client.fail_world_archive_error = exc_factory()
+    await backfiller.run()
+    assert any(
+        "MaiGO 世界笔记/同伴名册回填暂停" in line and line.endswith(f": {expected_suffix}") for line in warnings
+    ), warnings
+
+    # 4) L2 实体关系暂停告警
+    warnings.clear()
+    client.fail_world_archive_error = None
+    client.fail_knowledge_error = exc_factory()
+    await backfiller.run()
+    assert any("MaiGO L2 实体关系回填暂停" in line and line.endswith(f": {expected_suffix}") for line in warnings), (
+        warnings
+    )
