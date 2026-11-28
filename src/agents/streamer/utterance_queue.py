@@ -170,6 +170,7 @@ class UtteranceQueue:
         max_queue: int = DEFAULT_MAX_QUEUE,
         render_timeout_ms: int = DEFAULT_RENDER_TIMEOUT_MS,
         clock: Callable[[], int] = now_ms,
+        on_undelivered: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         """构造发言队列。
 
@@ -201,6 +202,8 @@ class UtteranceQueue:
         self._max_queue = max_queue
         self._render_timeout_ms = render_timeout_ms
         self._clock = clock
+        # 未实际完播（dropped / failed）代码直连回调：参数 (utterance_id, status)，供主播侧释放同轮去重锚点
+        self._on_undelivered = on_undelivered
         # 最近开播的那一句所属的段落：更高优先级的台词插进来时，这个段落剩下的句子作废
         self._current_segment = ""
         # 当前正在被 worker 播放的条目：取件临界区内与 _processing 同步置位，
@@ -741,12 +744,26 @@ class UtteranceQueue:
         except Exception as exc:  # noqa: BLE001 - 告警是旁路，不阻断队列
             self._logger.warning(f"发布熔断告警失败（已忽略）: err={exc}")
 
+    def _notify_undelivered(self, utterance_id: str, status: str) -> None:
+        """代码直连通知单条 utterance 未实际完播（``dropped`` / ``failed``）；旁路异常只记告警不阻断播放。"""
+        callback = self._on_undelivered
+        if callback is None or not utterance_id:
+            return
+        try:
+            callback(utterance_id, status)
+        except Exception as exc:  # noqa: BLE001 - 旁路回调失败不阻断队列
+            self._logger.warning(
+                f"未送达回调执行异常（已忽略）: utterance_id={utterance_id}, status={status}, err={exc}",
+                exc=True,
+            )
+
     async def _emit_failed(self, utterance_id: str, text: str, error_message: str) -> None:
         """这句到不了引擎，代发 ``tts.utterance.failed`` 让字幕兜底出字。
 
         ``emit`` 为后台扇出（事件总线自行 create_task 分发），不阻塞调用方。
         未注入事件总线、或发布失败时只记日志，不影响队列继续运转。
         """
+        self._notify_undelivered(utterance_id, "failed")
         if self._event_bus is None:
             return
         payload = UtteranceFailedPayload(
@@ -768,6 +785,7 @@ class UtteranceQueue:
 
     async def _emit_dropped(self, utterance_id: str, reason: str) -> None:
         """确知这句没送到观众面前（且未出字幕），发布 ``tts.utterance.dropped`` 供存储打没送达标记。"""
+        self._notify_undelivered(utterance_id, "dropped")
         if self._event_bus is None:
             return
         payload = UtteranceDroppedPayload(
@@ -905,7 +923,8 @@ class UtteranceQueue:
             self._logger.error(f"speak 调用异常（已忽略，继续下一条）: utterance_id={item.utterance_id}, err={exc}")
             if is_failure_reported(exc):
                 # 合成或播放中途失败：引擎已经先发过 failed（字幕已据此出字）再抛，
-                # 这里不能再补发，否则同一句话两条 failed，仪表盘失败句数与诊断记录翻倍
+                # 这里不再补发事件，但仍需经代码直连通知上游该 utterance 未实际完播
+                self._notify_undelivered(item.utterance_id, "failed")
                 return
             # 引擎在发事件之前就失败了（典型：首句懒启动 setup() 抛错，如 Omni 引擎
             # 缺音色配置、Edge 引擎缺依赖或声卡初始化失败）：引擎一个事件都没发，

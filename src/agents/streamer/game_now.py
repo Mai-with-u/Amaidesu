@@ -50,9 +50,10 @@ _GOAL_RESULTS_WINDOW_MS = 15 * 60 * 1000
 _GOAL_RESULTS_MAX = 5
 _GOAL_RESULTS_WITH_DELEGATION_MAX = 2
 _GOAL_RESULTS_BUFFER = 30
-_GOAL_RESULT_MAX_CHARS = 18
-# 手上那件事的状态、此刻那一步、每步结果、游戏那边的判断各自至多几个字：除现场速览外整块封顶约 600 token
-# （现场速览按原样挪进来，第 58 场中位约 960 token，它的大小归游戏侧的看一眼工具管）
+# 放宽至 56 字以完整保留部分失败的具体方位与阻塞原因，避免被截断后诱发规划器误判
+_GOAL_RESULT_MAX_CHARS = 56
+# 手上那件事的状态、此刻那一步、每步结果、游戏那边的判断各自至多几个字：除现场速览外基础约 600 token
+# （带满放宽至 56 字的近期目标成败清单时约 700 token；现场速览按原样挪进来，大小归游戏侧的看一眼工具管）
 _STATE_MAX_CHARS = 36
 _STEP_MAX_CHARS = 28
 # 进展备注带"（这一步：……）"尾巴（交代这一步在干嘛）后 30 字以内经常把尾巴截掉，留足 36 字保住尾巴

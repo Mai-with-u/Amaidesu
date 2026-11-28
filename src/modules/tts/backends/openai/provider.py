@@ -46,8 +46,9 @@ CHANNELS = 1
 DTYPE = np.int16
 # 单个样本的字节数：传输块边界可能切在半个样本之间，拼接残字节时用它对齐
 _SAMPLE_BYTES = np.dtype(DTYPE).itemsize
-# 远端单并发推理机硬打断交接期返回 HTTP 503 时的默认短退避重试间隔（毫秒）
-DEFAULT_BUSY_RETRY_DELAYS_MS: Tuple[int, ...] = (150, 300, 500)
+# 远端单并发推理机硬打断交接期返回 HTTP 503 时的默认阶梯退避重试间隔（毫秒）：
+# 旧句剩余同步推理释放单并发槽位通常需 1.5–4s，5 步阶梯退避合计 5.25s 覆盖交接窗口
+DEFAULT_BUSY_RETRY_DELAYS_MS: Tuple[int, ...] = (250, 500, 1000, 1500, 2000)
 # 触发短退避重试的远端繁忙状态码
 _HTTP_SERVICE_UNAVAILABLE = 503
 
@@ -237,8 +238,8 @@ class OpenAITTSProvider:
                             self.logger.warning(f"流结束时残留半个样本（{len(leftover)} 字节，已丢弃）")
                         break
                     except OpenAITTSApiError as exc:
-                        # 仅当尚未写出任何音频样本且远端返回 HTTP 503（繁忙）时执行有界短退避重试：
-                        # 硬打断旧流后远端推理机可能需要数百毫秒释放单并发槽位；已出声或非 503 立即放弃
+                        # 仅当尚未写出任何音频样本且远端返回 HTTP 503（繁忙）时执行有界阶梯退避重试：
+                        # 硬打断旧流后远端单并发推理机通常需数秒释放旧句剩余同步推理槽位；已出声或非 503 立即放弃
                         if (
                             total_samples == 0
                             and exc.status_code == _HTTP_SERVICE_UNAVAILABLE

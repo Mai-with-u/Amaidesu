@@ -383,6 +383,8 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 platform=_PLATFORM,
                 user=user,
                 content="",
+                # 顶层补传礼物 msg_id，供规划器渲染 [id:...] 并在回执链精确反查回复目标
+                message_id=bili_msg.msg_id,
                 gift=GiftInfo(
                     name=gift_name,
                     count=actual_num,
@@ -406,11 +408,14 @@ class BiliDanmakuOfficialCollector(BaseCollector):
 
         if isinstance(bili_msg, SuperChatMessage):
             self.logger.debug(f"[SC] {bili_msg.uname}: {bili_msg.message}")
+            sc_message_id = str(bili_msg.message_id) if bili_msg.message_id else ""
             return RoomMessagePayload(
                 message_type="super_chat",
                 platform=_PLATFORM,
                 user=user,
                 content=bili_msg.message,
+                # 顶层补传醒目留言 message_id，供规划器渲染 [id:...] 并在回执链精确反查回复目标
+                message_id=sc_message_id,
                 sc=SuperChatInfo(
                     total_price=bili_msg.rmb * RMB_TO_GOLD_COIN,
                     currency=CURRENCY_GOLD,
@@ -419,7 +424,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                     guard_level=bili_msg.guard_level,
                     fans_medal_level=bili_msg.fans_medal_level,
                     fans_medal_name=bili_msg.fans_medal_name,
-                    message_id=str(bili_msg.message_id) if bili_msg.message_id else "",
+                    message_id=sc_message_id,
                     raw_data=json.dumps(bili_msg.raw_data, ensure_ascii=False) if bili_msg.raw_data else "",
                 ),
                 timestamp_ms=timestamp_ms,
@@ -433,6 +438,8 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 platform=_PLATFORM,
                 user=user,
                 content=f"{bili_msg.uname} 开通了{guard_name}",
+                # 顶层补传上舰 msg_id，供规划器渲染 [id:...] 并在回执链精确反查回复目标
+                message_id=bili_msg.msg_id,
                 guard=GuardInfo(
                     guard_level=bili_msg.guard_level,
                     guard_num=bili_msg.guard_num,

@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 
@@ -263,6 +263,7 @@ class Replyer:
         speech_mode: str = "play",
         target_familiarity: str = "",
         keep_names: Sequence[str] = (),
+        name_aliases: Optional[Mapping[str, Sequence[str]]] = None,
         commentary: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
@@ -294,6 +295,8 @@ class Replyer:
         explicit_keep_names = _collect_keep_names("", [*keep_names, *paid_names])
         # 汇总本轮必须硬保的观众/玩家称呼（支持多位进房观众合并称呼如 "A、B" 与显式 keep_names）
         required_names = _collect_keep_names(reply_to, explicit_keep_names)
+        # 归一化目标用户已登记别名表：初稿或截断后若已用任一别名点名，不再句首机械补拼原账号名
+        normalized_aliases = _normalize_name_aliases(name_aliases)
         has_target = bool(plan.target or reply_to or required_names)
         budget = self._budget_for(mode, has_target=has_target)
         system_prompt = self._render_system_prompt(mode)
@@ -347,22 +350,32 @@ class Replyer:
         # 同时硬保必须保留的观众/玩家称呼，零额外 LLM 推理调用
         if is_runaway_speech(speech, budget):
             original_len = len(speech)
-            speech = _truncate_with_names(speech, budget=budget, keep_names=required_names)
+            speech = _truncate_with_names(
+                speech,
+                budget=budget,
+                keep_names=required_names,
+                name_aliases=normalized_aliases,
+            )
             self.logger.info(
                 f"台词触发极端长文熔断（{original_len} 字，软预算 {budget}，熔断阈值 {runaway_limit_for(budget)}）："
                 f"确定性截短至 {len(speech)} 字"
             )
 
         # 显式观众称呼（进房欢迎、付费礼物/醒目留言/上舰）：即使初稿未触发熔断，
-        # 若模型漏掉昵称也补回句首，避免欢迎或致谢沦为泛称
+        # 若模型既未点原账号名也未点任一已登记熟人别名才补回句首，避免欢迎或致谢沦为泛称或重复硬拼
         if explicit_keep_names:
-            missing_explicit = _missing_keep_names(speech, explicit_keep_names)
+            missing_explicit = _missing_keep_names(
+                speech,
+                explicit_keep_names,
+                name_aliases=normalized_aliases,
+            )
             if missing_explicit:
                 speech = _restore_names_budget_safe(
                     speech,
                     missing_explicit,
                     budget=budget,
                     keep_names=required_names,
+                    name_aliases=normalized_aliases,
                 )
 
         # 近逐字复读机械兜底：初稿把更早某句话几乎原样又说了一遍时，打回让回复器换个说法重说一次，
@@ -379,6 +392,7 @@ class Replyer:
                 request_id=request_id,
                 budget=budget,
                 keep_names=required_names,
+                name_aliases=normalized_aliases,
             )
             if not rephrased:
                 return None
@@ -409,6 +423,7 @@ class Replyer:
         request_id: Optional[str],
         budget: int,
         keep_names: Sequence[str] = (),
+        name_aliases: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> Tuple[str, Optional[str]]:
         """初稿命中近逐字复读时，带着本轮输入与撞车初稿让表达模型换个说法重说一次。"""
         self.logger.info(f"Replyer 初稿命中近逐字复读（重合度 {repeat.ratio:.2f}），打回重说: {repeat.sentence!r}")
@@ -441,9 +456,15 @@ class Replyer:
         if is_runaway_speech(rephrased, budget):
             rephrased = fit_to_budget(rephrased, budget)
         if names:
-            missing = _missing_keep_names(rephrased, names)
+            missing = _missing_keep_names(rephrased, names, name_aliases=name_aliases)
             if missing:
-                rephrased = _restore_names_budget_safe(rephrased, missing, budget=budget, keep_names=names)
+                rephrased = _restore_names_budget_safe(
+                    rephrased,
+                    missing,
+                    budget=budget,
+                    keep_names=names,
+                    name_aliases=name_aliases,
+                )
         still_repeat = find_verbatim_repeat(rephrased, earlier_lines)
         if still_repeat is not None:
             self.logger.info(
@@ -731,6 +752,8 @@ _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 _EXAMPLE_MARKS = "-*•· \t"
 #: 合并称呼分隔符（如多位进房观众 "A、B" 或逗号分隔名单）
 _NAME_SPLIT_RE = re.compile(r"[、，,]+")
+#: 纯 ASCII 字母/数字/下划线别名判定：此类短别名必须按词边界匹配，避免 "a" 在 "haha" 等普通英文词里误命中
+_ASCII_WORD_ALIAS_RE = re.compile(r"^[a-z0-9_]+$")
 #: 付费事件消息类型（礼物/醒目留言/上舰）：批次含此类事件时自动提取送礼/付费观众昵称进保名名单
 _PAID_MESSAGE_TYPES: frozenset[str] = frozenset({"gift", "super_chat", "guard"})
 
@@ -778,10 +801,70 @@ def _collect_keep_names(reply_to: str, keep_names: Sequence[str] = ()) -> List[s
     return result
 
 
-def _missing_keep_names(text: str, keep_names: Sequence[str]) -> List[str]:
-    """返回 ``keep_names`` 中未出现在 ``text``（忽略大小写）里的称呼列表。"""
+def collect_keep_names(reply_to: str, keep_names: Sequence[str] = ()) -> List[str]:
+    """从 ``reply_to``（支持多位观众/同伴合并称呼如 ``A、B``）与 ``keep_names`` 提取保序去重的必填称呼名单。"""
+    return _collect_keep_names(reply_to, keep_names)
+
+
+def _normalize_name_aliases(
+    name_aliases: Optional[Mapping[str, Sequence[str]]],
+) -> Dict[str, Tuple[str, ...]]:
+    """将目标用户的已登记别名映射归一为「小写原名 → 去空去重别名元组」，供点名判定忽略大小写比对。"""
+    if not name_aliases:
+        return {}
+    normalized: Dict[str, Tuple[str, ...]] = {}
+    for raw_name, raw_aliases in name_aliases.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            continue
+        key = raw_name.strip().lower()
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for alias in raw_aliases or ():
+            if not isinstance(alias, str):
+                continue
+            item = alias.strip()
+            if not item:
+                continue
+            item_key = item.lower()
+            if item_key == key or item_key in seen:
+                continue
+            seen.add(item_key)
+            cleaned.append(item)
+        if cleaned:
+            normalized[key] = tuple(cleaned)
+    return normalized
+
+
+def _alias_mentioned_in_text(lowered_text: str, alias: str) -> bool:
+    """判断单个已登记别名是否出现在文本中：纯 ASCII 字母数字/下划线别名强制词边界，避免误命中普通英文单词片段。"""
+    lowered_alias = alias.lower()
+    if _ASCII_WORD_ALIAS_RE.fullmatch(lowered_alias):
+        return re.search(rf"(?<![a-z0-9_]){re.escape(lowered_alias)}(?![a-z0-9_])", lowered_text) is not None
+    return lowered_alias in lowered_text
+
+
+def _is_name_mentioned(
+    lowered_text: str,
+    name: str,
+    alias_map: Mapping[str, Sequence[str]],
+) -> bool:
+    """判断回复稿中是否已点名：命中原账号名或该用户任一已登记别名即视为已点名。"""
+    key = name.lower()
+    if key in lowered_text:
+        return True
+    return any(_alias_mentioned_in_text(lowered_text, alias) for alias in alias_map.get(key, ()))
+
+
+def _missing_keep_names(
+    text: str,
+    keep_names: Sequence[str],
+    *,
+    name_aliases: Optional[Mapping[str, Sequence[str]]] = None,
+) -> List[str]:
+    """返回 ``keep_names`` 中既未出现原名也未出现已登记别名（忽略大小写）的称呼列表。"""
     lowered = (text or "").lower()
-    return [name for name in keep_names if name.lower() not in lowered]
+    alias_map = _normalize_name_aliases(name_aliases)
+    return [name for name in keep_names if not _is_name_mentioned(lowered, name, alias_map)]
 
 
 def _restore_missing_names(text: str, missing: Sequence[str]) -> str:
@@ -799,21 +882,31 @@ def _restore_names_budget_safe(
     *,
     budget: int,
     keep_names: Sequence[str],
+    name_aliases: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> str:
     """补回缺失称呼并防止外层 ``fit_to_budget`` 二次裁句误丢后句称呼。
 
-    补回句首后若总长仍在预算内，直接返回；若超出预算，先试跑一次 ``fit_to_budget``：
-    裁掉不含称呼的尾句即可保住全部称呼时采用该结果；若裁尾会丢掉后句里的称呼，则收敛为
-    单句首句并把所有缺失称呼一并归入句首，确保单句结构不再被外层预算守卫二次截断丢名。
+    先用 ``name_aliases`` 复核 ``missing``：若回复稿已包含某用户的任一已登记熟人别名，
+    则视同已点名不再句首硬拼原账号名。补回句首后若总长仍在预算内，直接返回；若超出预算，
+    先试跑一次 ``fit_to_budget``：裁掉不含称呼的尾句即可保住全部称呼时采用该结果；
+    若裁尾会丢掉后句里的称呼，则收敛为单句首句并把所有缺失称呼一并归入句首，
+    确保单句结构不再被外层预算守卫二次截断丢名。
     """
-    restored = _restore_missing_names(base, missing)
+    alias_map = _normalize_name_aliases(name_aliases)
+    effective_missing = _missing_keep_names(base, missing, name_aliases=alias_map)
+    if not effective_missing:
+        return base
+    restored = _restore_missing_names(base, effective_missing)
     if budget <= 0 or len(restored) <= budget:
         return restored
     refitted = fit_to_budget(restored, budget)
-    if not _missing_keep_names(refitted, keep_names):
+    if not _missing_keep_names(refitted, keep_names, name_aliases=alias_map):
         return refitted
     first_sentence = fit_to_budget(base, 1)
-    return _restore_missing_names(first_sentence, _missing_keep_names(first_sentence, keep_names))
+    return _restore_missing_names(
+        first_sentence,
+        _missing_keep_names(first_sentence, keep_names, name_aliases=alias_map),
+    )
 
 
 def runaway_limit_for(budget: int) -> int:
@@ -835,15 +928,22 @@ def _truncate_with_names(
     *,
     budget: int,
     keep_names: Sequence[str],
+    name_aliases: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> str:
-    """极端长文熔断的纯确定性截断：按完整句截到软预算内，并硬保必须保留的观众/玩家称呼。"""
+    """极端长文熔断的纯确定性截断：按完整句截到软预算内，并硬保必须保留的观众/玩家称呼（含已登记别名）。"""
     fitted = fit_to_budget(speech, budget)
     if not keep_names:
         return fitted
-    missing = _missing_keep_names(fitted, keep_names)
+    missing = _missing_keep_names(fitted, keep_names, name_aliases=name_aliases)
     if not missing:
         return fitted
-    return _restore_names_budget_safe(fitted, missing, budget=budget, keep_names=keep_names)
+    return _restore_names_budget_safe(
+        fitted,
+        missing,
+        budget=budget,
+        keep_names=keep_names,
+        name_aliases=name_aliases,
+    )
 
 
 def _length_rule(budget: int, mode: str, *, has_target: bool = False) -> str:

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple
 
@@ -768,6 +769,30 @@ def resolve_reply_target_user(
         return None
 
 
+# 付费消息 canonical 展示行前导类型前缀（[礼物] / [SC] / [醒目留言] / [上舰]）
+_REPLY_TARGET_TYPE_PREFIX_RE = re.compile(r"^\[(?:礼物|SC|醒目留言|上舰)\]\s*", re.IGNORECASE)
+# 展示行用户名后附带的头衔括号（如 （付费观众） / (付费观众) 等）
+_REPLY_TARGET_TITLE_SUFFIX_RE = re.compile(r"\s*[（(][^（()）]+[)）]\s*$")
+
+
+def _extract_reply_target_candidates(raw_user: str) -> List[str]:
+    """从 planner 传回的展示行用户段提取候选用户名（优先精确保留原名，逐层剥离末尾头衔括号并按由长到短保留全部中间候选）。"""
+    stripped = _REPLY_TARGET_TYPE_PREFIX_RE.sub("", raw_user.strip()).strip()
+    if not stripped:
+        return []
+    candidates: List[str] = [stripped]
+    # 逐层剥离末尾头衔括号，每层中间值均入候选列表：
+    # 既能剥掉末尾「（付费观众）」，也能保住真名自带括号的用户（如「昵称甲（原名）（付费观众）」→「昵称甲（原名）」）
+    without_title = stripped
+    while True:
+        next_val = _REPLY_TARGET_TITLE_SUFFIX_RE.sub("", without_title).strip()
+        if not next_val or next_val == without_title:
+            break
+        candidates.append(next_val)
+        without_title = next_val
+    return candidates
+
+
 def find_reply_target_message(
     outcome: RoundOutcome,
     batch: List[RoomMessagePayload],
@@ -775,11 +800,12 @@ def find_reply_target_message(
     """把 planner 给的回复指向（reply_to / target）定位到本轮批内那条弹幕。
 
     reply_to / target 是 planner LLM 抄自 canonical 行尾 ``[id:…]`` 的自由文本，
-    可能是消息 ID、``[id:…]`` 引用写法、也可能是"用户名: 内容"整行展示串。
+    可能是消息 ID、``[id:…]`` 引用写法、也可能是"用户名: 内容"或带付费前缀/头衔的
+    整行展示串（如 ``[礼物] 用户名（付费观众）: 送出 ...``）。
     两档匹配：target 归一后恰为批内某条弹幕的 message_id 时取那条；"用户名:
-    内容"形态按用户名精确匹配、且该用户本轮仅一条弹幕时取那条。其余一律
-    返回 None（宁缺毋假——关联错弹幕比不关联更糟）。只做解析，不写状态、
-    不发事件；异常记 warning 不上抛（决策循环必须继续）。
+    内容"形态剥离前导类型前缀与末尾头衔括号后按用户名精确匹配、且该用户本轮仅
+    一条消息时取那条。其余一律返回 None（宁缺毋假——关联错消息比不关联更糟）。
+    只做解析，不写状态、不发事件；异常记 warning 不上抛（决策循环必须继续）。
     """
     reply_to = outcome.reply_to
     target = reply_to or outcome.target
@@ -795,16 +821,17 @@ def find_reply_target_message(
             for msg in batch:
                 if getattr(msg, "message_id", None) == message_id:
                     return msg
-        # "用户名: 内容" 形态：用户名精确匹配，该用户本轮仅一条弹幕才取
+        # "用户名: 内容" / "[礼物] 用户名（付费观众）: 内容" 形态：剥离前缀与头衔后按用户名精确匹配，唯一命中才取
         user, sep, _ = target.partition(":")
         if not sep:
             user, sep, _ = target.partition("：")
-        user_name = user.strip()
-        if not user_name:
-            return None
-        hits = [msg for msg in batch if getattr(getattr(msg, "user", None), "name", None) == user_name]
-        if len(hits) == 1:
-            return hits[0]
+        for candidate_name in _extract_reply_target_candidates(user):
+            hits = [msg for msg in batch if getattr(getattr(msg, "user", None), "name", None) == candidate_name]
+            if len(hits) == 1:
+                return hits[0]
+            if len(hits) > 1:
+                # 该用户本轮多条消息无法唯一区分，立即放弃（宁缺毋假）
+                return None
         return None
     except Exception as exc:
         _MODULE_LOGGER.warning(f"定位回复目标弹幕异常: {exc}")

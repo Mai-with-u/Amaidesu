@@ -127,6 +127,8 @@ class SpeechDispatcher:
         self._slot_free.set()
         # 杂谈档段落被插断时，没播的后半段原文交给这里（话头工作台记尾句；未接线为 None）
         self._interrupted_tail_listener: Optional[Callable[[str], None]] = None
+        # 单条语音未实际完播（dropped / failed）时的代码直连回调（参数：utterance_id, status）
+        self._undelivered_listener: Optional[Callable[[str, str], None]] = None
 
     def _spawn(self, coro: Coroutine[Any, Any, Any], *, label: str) -> None:
         """把后台 coroutine 创建并纳入强引用持有（决策循环同步返回，不等待）。
@@ -233,6 +235,7 @@ class SpeechDispatcher:
                 logger_name="StreamerAgent.UtteranceQueue",
                 max_queue=self._speech_max_queue,
                 render_timeout_ms=self._speech_render_timeout_ms,
+                on_undelivered=self._notify_undelivered,
             )
             await self._utterance_queue.start()
         except Exception as exc:
@@ -307,6 +310,23 @@ class SpeechDispatcher:
     def bind_interrupted_tail_listener(self, listener: Optional[Callable[[str], None]]) -> None:
         """接线杂谈档段落被插断时的尾句去处（话头工作台记下她没说完的后半段）。"""
         self._interrupted_tail_listener = listener
+
+    def bind_undelivered_listener(self, listener: Optional[Callable[[str, str], None]]) -> None:
+        """接线语音未实际完播（``dropped`` / ``failed``）的直连回调；传 None 摘掉。"""
+        self._undelivered_listener = listener
+
+    def _notify_undelivered(self, utterance_id: str, status: str) -> None:
+        """将播放队列上报的未送达状态转发给已绑定监听器；异常隔离不阻断队列。"""
+        listener = self._undelivered_listener
+        if listener is None or not utterance_id:
+            return
+        try:
+            listener(utterance_id, status)
+        except Exception as exc:  # noqa: BLE001 - 旁路回调失败不阻断发言管线
+            self._logger.warning(
+                f"未送达回调执行异常（已忽略）: utterance_id={utterance_id}, status={status}, err={exc}",
+                exc=True,
+            )
 
     async def _enqueue_paragraph(
         self,

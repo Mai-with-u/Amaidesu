@@ -190,8 +190,10 @@ class LeadCoordinator:
         # 流程单超时提醒节流状态（上次推送时刻与对应环节 id；切段或主控变更时自动清零）
         self._last_rundown_nudge_ms: Optional[int] = None
         self._last_rundown_nudge_segment_id: str = ""
-        # 同轮普通解说防抖锚点：游戏名 → 最近一次已出声解说所属 round_id（切主控时清零）
+        # 同轮普通解说防抖锚点：游戏名 → 最近一次已出声解说所属 round_id（切主控或显式释放时清零）
         self._last_spoken_commentary_round: Dict[str, str] = {}
+        # 同轮解说防抖代际号：每次释放或切主控清零时递增，防止在途解说跨过死亡/未送达/切主控后事后锁死轮次
+        self._commentary_round_epoch: int = 0
 
     # -------------------- 只读状态与候选发现 --------------------
 
@@ -541,6 +543,7 @@ class LeadCoordinator:
                 self._last_rundown_nudge_ms = None
                 self._last_rundown_nudge_segment_id = ""
                 self._last_spoken_commentary_round.clear()
+                self._commentary_round_epoch += 1
                 emitted.append(
                     AgentLeadChangedPayload(
                         lead_agent=STREAMER_AGENT_NAME,
@@ -573,6 +576,7 @@ class LeadCoordinator:
         self._last_rundown_nudge_ms = None
         self._last_rundown_nudge_segment_id = ""
         self._last_spoken_commentary_round.clear()
+        self._commentary_round_epoch += 1
         handover_summary = handover_ctx.segment_goal or handover_ctx.segment_title or ""
         emitted.append(
             AgentLeadChangedPayload(
@@ -618,6 +622,7 @@ class LeadCoordinator:
         self._last_rundown_nudge_ms = None
         self._last_rundown_nudge_segment_id = ""
         self._last_spoken_commentary_round.clear()
+        self._commentary_round_epoch += 1
         emitted.append(
             AgentLeadChangedPayload(
                 lead_agent=STREAMER_AGENT_NAME,
@@ -771,6 +776,7 @@ class LeadCoordinator:
             ack = CommentaryAck(accepted=True, spoken=False, reason="same_round_deduped")
             await self._emit_commentary_event(caller_name, req, ack)
             return ack
+        epoch_before = self._commentary_round_epoch
         try:
             ack = await handler(req)
             if not isinstance(ack, CommentaryAck):
@@ -778,10 +784,33 @@ class LeadCoordinator:
         except Exception as exc:  # noqa: BLE001 - 解说处理器异常隔离
             logger.exception(f"解说处理器执行异常（game={caller_name}）: {exc}")
             ack = CommentaryAck(accepted=False, spoken=False, reason=f"handler_error: {type(exc).__name__}")
-        if ack.spoken and round_id:
+        # 仅当处理器挂起期间未发生释放/死亡转折/切主控（代际未变）且确实播报时才锁同轮去重，杜绝在途解说事后锁轮
+        if ack.spoken and round_id and self._commentary_round_epoch == epoch_before:
             self._last_spoken_commentary_round[caller_name] = round_id
         await self._emit_commentary_event(caller_name, req, ack)
         return ack
+
+    def release_commentary_round(self, game: str = "", *, round_id: str = "") -> None:
+        """释放协调器层的同轮实况解说去重记录，允许同轮补救或转折解说放行。
+
+        触发场景：主播侧确认该轮解说语音因硬打断或合成失败未实际完播，或收到角色死亡等重大状态转折事件。
+        ``game`` 与 ``round_id`` 可组合限定范围：指定 ``round_id`` 时仅清除匹配的轮次记录，避免误清无关轮次。
+        每次释放均递增 ``_commentary_round_epoch``，防止在途解说事后覆盖锁死轮次。
+        """
+        self._commentary_round_epoch += 1
+        target_game = (game or "").strip()
+        target_round = (round_id or "").strip()
+        if target_game:
+            current = self._last_spoken_commentary_round.get(target_game)
+            if current is not None and (not target_round or current == target_round):
+                self._last_spoken_commentary_round.pop(target_game, None)
+            return
+        if target_round:
+            matched_games = [k for k, v in self._last_spoken_commentary_round.items() if v == target_round]
+            for matched in matched_games:
+                self._last_spoken_commentary_round.pop(matched, None)
+            return
+        self._last_spoken_commentary_round.clear()
 
     def publish_spoken_echo(self, text: str, *, source: str = "", timestamp_ms: int = 0) -> None:
         """把主播刚说出口的话同步转发给当前主控游戏 Agent（零唤醒、异常隔离）。"""

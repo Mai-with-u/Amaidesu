@@ -47,6 +47,7 @@ from typing import (
     Iterable,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -480,8 +481,14 @@ class StreamerAgent(BaseAgent):
         # 实况解说串行锁与同轮/短间隔防抖锚点（避免短时间内两笔解说同时调 Replyer 撞词）
         self._commentary_lock = asyncio.Lock()
         self._last_commentary_round_id: str = ""
+        self._last_commentary_utterance_id: str = ""
         self._last_commentary_summary: str = ""
         self._last_commentary_spoken_ms: Optional[int] = None
+        # 同轮去重代际号：每次释放同轮锚点（死亡转折、未送达、切主控、重置）单调递增，
+        # 用于阻断在途解说（generate / dispatch / remember_round 挂起期间）事后锁死轮次
+        self._commentary_dedup_epoch: int = 0
+        # 记录近期未实际完播（dropped / failed）的 utterance_id，防止同步或在途抢跑导致刚丢弃的解说仍锁定同轮去重
+        self._undelivered_utterance_ids: deque[str] = deque(maxlen=16)
         # 零 I/O 当前游戏活动只读快照（记录最近一条非报错游戏进展或实况解说摘要及时间，供轻量进房欢迎对齐当下活动）
         self._latest_game_activity_summary: str = ""
         self._latest_game_activity_ms: int = 0
@@ -998,6 +1005,8 @@ class StreamerAgent(BaseAgent):
         )
         # 杂谈档连播段落被插话打断时，未播出的尾句交给话头工作台记下，下一轮空闲窗由她决定是否补完
         self._speech.bind_interrupted_tail_listener(self._talk_workbench.note_interrupted_tail)
+        # 实况解说语音被硬打断（dropped）或合成失败（failed）未实际完播时，精确释放同轮去重锚点
+        self._speech.bind_undelivered_listener(self._on_utterance_undelivered)
         # 决策执行器（两阶段决策的执行半；调度半留 Agent）。测试可注入替身，
         # 契约 = ``execute(batch, *, forced, trigger_cause, proactive, closing_session)``；
         # 注入方经 ``set_reminders_provider`` 接上递话取空动词（内建构造路径
@@ -1317,6 +1326,7 @@ class StreamerAgent(BaseAgent):
                 # 没有聊天仓储时历史仍由内存对话轮承载，回复器照样知道上一句说了什么
                 history_provider=self._read_history_sync,
                 rundown_text_provider=self._rundown_coord.build_text_sync,
+                name_aliases_provider=self._lookup_player_aliases,
                 event_bus=self._event_bus,
             )
         # Planner 的 reply 调用经 registry；Provider 经 PlannerEnv 工厂迟解析，
@@ -1368,6 +1378,7 @@ class StreamerAgent(BaseAgent):
                     session_provider=self._current_session_pk,
                     brief_archive_ids_provider=lambda: self._memory_brief_archive_ids,
                     commitments_repo=self._commitments_repo,
+                    archive_repo=self._archive_repo,
                     event_repo=self._event_repo,
                     game_player_repo=self._game_player_repo,
                     chat_repo=self._chat_repo,
@@ -3408,6 +3419,9 @@ class StreamerAgent(BaseAgent):
         """
         try:
             self._note_game_activity(payload.game)
+            # 角色死亡属于重大状态转折：立即释放实况解说同轮去重锚点，避免同轮死后说明被误当重复连发吞掉
+            if event_name == CoreEvents.GAME_BODY_DIED or payload.kind == "died":
+                self._release_commentary_round_dedup(reason="body_died", game=payload.game)
             summary = self._game_ledger.record_encounter(
                 payload.game,
                 payload.kind,
@@ -3782,50 +3796,99 @@ class StreamerAgent(BaseAgent):
             if self._enter_welcome_task is current_task:
                 self._enter_welcome_task = None
 
-    async def _describe_enter_viewer_facts(self, entries: Sequence[Tuple[str, str]]) -> List[str]:
-        """按已注入的观众仓储与游戏常驻玩家表核查刚进房观众的真实身份事实；无记录或已申请遗忘时不附注。"""
+    async def _load_active_players_by_key(self) -> Dict[str, List[Any]]:
+        """预加载当前存档且未申请遗忘的常驻游戏玩家，按账号名与常用称呼（小写）建立查询索引。"""
+        players_by_key: Dict[str, List[Any]] = {}
+        if self._game_player_repo is None or not hasattr(self._game_player_repo, "list_players"):
+            return players_by_key
+        try:
+            rows = await self._game_player_repo.list_players(limit=200)
+        except Exception as exc:  # noqa: BLE001 - 玩家表读不到不影响主链
+            self._logger.warning(f"读取游戏玩家列表失败（已省略熟人别名）: {exc}", exc=exc)
+            return players_by_key
+        for player in rows:
+            if getattr(player, "forget_requested_at_ms", None) is not None:
+                continue
+            player_name = str(getattr(player, "name", "") or "").strip()
+            if not player_name:
+                continue
+            if self._current_saves:
+                active_save = self._current_saves.get(getattr(player, "game", ""))
+                if active_save is None:
+                    continue
+                saves = getattr(player, "saves", ()) or ()
+                if active_save.known and saves and not any(item.save_id == active_save.id for item in saves):
+                    continue
+            if self._privacy_service is not None:
+                try:
+                    if await self._privacy_service.is_player_forgotten(game=player.game, uuid=player.uuid):
+                        continue
+                except Exception as exc:  # noqa: BLE001 - 隐私核查失败时保守跳过
+                    self._logger.warning(f"核对玩家 #{player.id} 遗忘名单失败（已跳过）: {exc}", exc=exc)
+                    continue
+            keys = {player_name.lower()}
+            effective_fn = getattr(player, "effective_aliases", None)
+            aliases = list(effective_fn()) if callable(effective_fn) else []
+            for alias in aliases:
+                cleaned = str(alias or "").strip()
+                if cleaned:
+                    keys.add(cleaned.lower())
+            for key in keys:
+                players_by_key.setdefault(key, []).append(player)
+        return players_by_key
+
+    @staticmethod
+    def _aliases_for_matched_player(target_name: str, player: Any) -> List[str]:
+        """从唯一命中的熟人玩家对象提取可用于替代 ``target_name`` 的已登记称呼列表（保序去重）。"""
+        target_key = target_name.strip().lower()
+        candidates: List[str] = []
+        player_name = str(getattr(player, "name", "") or "").strip()
+        if player_name:
+            candidates.append(player_name)
+        effective_fn = getattr(player, "effective_aliases", None)
+        if callable(effective_fn):
+            candidates.extend(str(alias or "").strip() for alias in effective_fn())
+        result: List[str] = []
+        seen: set[str] = {target_key}
+        for item in candidates:
+            if not item:
+                continue
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    async def _lookup_player_aliases(self, names: Sequence[str]) -> Dict[str, List[str]]:
+        """为一批观众/同伴名称查询唯一命中的未遗忘熟人别名表，供 Replyer 保名时识别亲切称呼。"""
+        cleaned_names = [str(name or "").strip() for name in names if isinstance(name, str) and name.strip()]
+        if not cleaned_names:
+            return {}
+        players_by_key = await self._load_active_players_by_key()
+        if not players_by_key:
+            return {}
+        alias_map: Dict[str, List[str]] = {}
+        for name in cleaned_names:
+            matched_players = players_by_key.get(name.lower(), [])
+            if len(matched_players) != 1:
+                continue
+            aliases = self._aliases_for_matched_player(name, matched_players[0])
+            if aliases:
+                alias_map[name] = aliases
+        return alias_map
+
+    async def _resolve_enter_viewer_facts_and_aliases(
+        self,
+        entries: Sequence[Tuple[str, str]],
+    ) -> Tuple[List[str], Dict[str, List[str]]]:
+        """按已注入的观众仓储与游戏常驻玩家表核查刚进房观众的身份事实与熟人别名表；无记录或已遗忘时不附注。"""
         notes: List[str] = []
+        name_aliases: Dict[str, List[str]] = {}
         current_session_id = self._current_session_pk()
 
         # 预加载当前存档未申请遗忘的游戏玩家（用于按账号名/常用称呼精确匹配熟人，绝不读取删除专用对号表）
-        players_by_key: Dict[str, List[Any]] = {}
-        if self._game_player_repo is not None and hasattr(self._game_player_repo, "list_players"):
-            try:
-                rows = await self._game_player_repo.list_players(limit=200)
-            except Exception as exc:  # noqa: BLE001 - 玩家表读不到不影响进房欢迎主链
-                self._logger.warning(f"轻量进房欢迎读取游戏玩家列表失败（已省略熟人附注）: {exc}", exc=exc)
-                rows = []
-            for player in rows:
-                if getattr(player, "forget_requested_at_ms", None) is not None:
-                    continue
-                player_name = str(getattr(player, "name", "") or "").strip()
-                if not player_name:
-                    continue
-                if self._current_saves:
-                    active_save = self._current_saves.get(getattr(player, "game", ""))
-                    if active_save is None:
-                        continue
-                    saves = getattr(player, "saves", ()) or ()
-                    if active_save.known and saves and not any(item.save_id == active_save.id for item in saves):
-                        continue
-                if self._privacy_service is not None:
-                    try:
-                        if await self._privacy_service.is_player_forgotten(game=player.game, uuid=player.uuid):
-                            continue
-                    except Exception as exc:  # noqa: BLE001 - 隐私核查失败时保守跳过
-                        self._logger.warning(
-                            f"轻量进房欢迎核对玩家 #{player.id} 遗忘名单失败（已跳过）: {exc}", exc=exc
-                        )
-                        continue
-                keys = {player_name.lower()}
-                effective_fn = getattr(player, "effective_aliases", None)
-                aliases = list(effective_fn()) if callable(effective_fn) else []
-                for alias in aliases:
-                    cleaned = str(alias or "").strip()
-                    if cleaned:
-                        keys.add(cleaned.lower())
-                for key in keys:
-                    players_by_key.setdefault(key, []).append(player)
+        players_by_key = await self._load_active_players_by_key()
 
         for uid, uname in entries:
             cleaned_name = (uname or "").strip()
@@ -3871,7 +3934,7 @@ class StreamerAgent(BaseAgent):
                     elif stats.earlier_sessions >= 1:
                         facts.append("之前来过直播间的熟面孔")
 
-            # 仅在唯一命中某位常驻游戏玩家的账号名或常用称呼时附注熟人身份，避免重名误认
+            # 仅在唯一命中某位常驻游戏玩家的账号名或常用称呼时附注熟人身份并登记别名，避免重名误认
             matched_players = players_by_key.get(cleaned_name.lower(), [])
             if len(matched_players) == 1:
                 player = matched_players[0]
@@ -3881,9 +3944,17 @@ class StreamerAgent(BaseAgent):
                     facts.append(f"游戏里的熟人（账号 {player.name}，常叫：{'、'.join(aliases)}）")
                 else:
                     facts.append(f"游戏里的熟人（账号 {player.name}）")
+                alt_names = self._aliases_for_matched_player(cleaned_name, player)
+                if alt_names:
+                    name_aliases[cleaned_name] = alt_names
 
             if facts:
                 notes.append(f"{cleaned_name}：{'，'.join(facts)}")
+        return notes, name_aliases
+
+    async def _describe_enter_viewer_facts(self, entries: Sequence[Tuple[str, str]]) -> List[str]:
+        """按已注入的观众仓储与游戏常驻玩家表核查刚进房观众的真实身份事实；无记录或已申请遗忘时不附注。"""
+        notes, _ = await self._resolve_enter_viewer_facts_and_aliases(entries)
         return notes
 
     def _note_latest_game_activity(self, summary: str, *, at_ms: int) -> None:
@@ -3950,7 +4021,7 @@ class StreamerAgent(BaseAgent):
             if not self._should_use_game_lead_enter_welcome():
                 return
             joined_names = "、".join(names)
-            viewer_notes = await self._describe_enter_viewer_facts(entries)
+            viewer_notes, name_aliases = await self._resolve_enter_viewer_facts_and_aliases(entries)
             activity_fact = self._current_activity_fact()
             fact_lines = [
                 f"刚进直播间待欢迎的观众：{joined_names}",
@@ -3974,9 +4045,10 @@ class StreamerAgent(BaseAgent):
             )
             recent_speeches = self._spoken_log.recent_texts(limit=8)
             rundown_text = self._rundown_coord.build_text_sync()
+            extra_generate_kwargs: Dict[str, Any] = {"name_aliases": name_aliases} if name_aliases else {}
             try:
                 # 进房欢迎对象是直播间观众而非游戏同伴：必须置 reply_to=""、通过 keep_names 保留观众昵称，
-                # 防止 Replyer 在 batch=[] 且 reply_to 非空时渲染成「提及的游戏同伴」诱发编造游戏里见过面
+                # 同时透传已登记熟人别名，避免初稿亲切喊别名时被机械补拼原账号名
                 generated = await self._replyer.generate(
                     plan=plan,
                     batch=[],
@@ -3987,6 +4059,7 @@ class StreamerAgent(BaseAgent):
                     reply_to="",
                     keep_names=names,
                     speech_mode="play",
+                    **extra_generate_kwargs,
                 )
             except Exception as exc:  # noqa: BLE001 - Replyer 异常隔离，保留未欢迎状态待下次进房补迎
                 self._logger.exception(f"轻量进房欢迎调用 Replyer 异常（names={joined_names}）: {exc}")
@@ -4002,6 +4075,7 @@ class StreamerAgent(BaseAgent):
                 raw_speech,
                 reply_to="",
                 required_names=names,
+                name_aliases=name_aliases,
                 log_label="轻量进房欢迎",
             )
             if final_speech is None:
@@ -4043,8 +4117,13 @@ class StreamerAgent(BaseAgent):
                 return
 
             spoken_text = dispatched[0]
-            # 仅按实际说出的文本核销已欢迎表：台词未点到某人名字时不误标已欢迎
+            # 按实际说出的文本核销已欢迎表：命中原昵称或该观众的已登记熟人别名均视为已欢迎，避免反复欢迎
             self._room_state.note_spoken(spoken_text)
+            for uid, uname in entries:
+                cleaned_uname = (uname or "").strip()
+                aliases = name_aliases.get(cleaned_uname, ())
+                if aliases and any(mentions_name(alias, spoken_text) for alias in aliases):
+                    self._room_state.mark_welcomed(user_id=uid, user_name=cleaned_uname)
             self._room_state.record_speech(self._clock())
             self._last_silence_nudge_ms = None
             await self._scope.remember_round([], speech=spoken_text, batch_persisted=True)
@@ -4055,6 +4134,7 @@ class StreamerAgent(BaseAgent):
         *,
         reply_to: str,
         required_names: Sequence[str] = (),
+        name_aliases: Optional[Mapping[str, Sequence[str]]] = None,
         log_label: str,
     ) -> Optional[str]:
         """对直通 Replyer 的输出做外层极端长文熔断与敏感词兜底；常规短话直接放行、不硬裁。"""
@@ -4079,13 +4159,23 @@ class StreamerAgent(BaseAgent):
             return None
         candidate = verdict.text.strip()
 
-        # 真实 Replyer 内层已完成熔断与保名补回：若外层截句把原本保住的称呼切丢，
+        # 真实 Replyer 内层已完成熔断与保名补回：若外层截句把原本保住的称呼（含已登记别名）切丢，
         # 仅保留敏感词净化后的完整保名句，避免多观众欢迎或带同伴解说被二次截断丢名
+        alias_lookup = {k.strip().lower(): tuple(v) for k, v in (name_aliases or {}).items() if k and v}
+
+        def _has_name_or_alias(name: str, text: str) -> bool:
+            if mentions_name(name, text):
+                return True
+            return any(mentions_name(alias, text) for alias in alias_lookup.get(name.strip().lower(), ()))
+
         if (
             isinstance(self._replyer, Replyer)
             and required_names
             and candidate != raw_speech.strip()
-            and any(mentions_name(name, raw_speech) and not mentions_name(name, candidate) for name in required_names)
+            and any(
+                _has_name_or_alias(name, raw_speech) and not _has_name_or_alias(name, candidate)
+                for name in required_names
+            )
         ):
             filtered_only = guard(raw_speech, speech_max_chars=0, word_filter=self._word_filter)
             if filtered_only.text is None:
@@ -4895,11 +4985,52 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 名单刷新失败不阻断主控切换
             self._logger.warning(f"刷新 streamer_memory_correct 可见名单失败: {exc}", exc=True)
 
+    def _release_commentary_round_dedup(self, *, reason: str, game: str = "") -> None:
+        """释放实况解说的同轮去重与短间隔防抖锚点（含协调器层同轮记录），允许后续补救或转折解说放行。"""
+        # 无论本地锚点此刻是否已写，均递增代际号以阻断在途解说（generate / dispatch / remember_round 挂起期间）事后锁轮
+        self._commentary_dedup_epoch += 1
+        prev_round_id = self._last_commentary_round_id
+        prev_utterance_id = self._last_commentary_utterance_id
+        has_local = bool(
+            prev_round_id
+            or prev_utterance_id
+            or self._last_commentary_summary
+            or self._last_commentary_spoken_ms is not None
+        )
+        if has_local:
+            self._logger.debug(
+                f"释放实况解说同轮去重锚点（reason={reason}, round_id={prev_round_id!r}, "
+                f"utterance_id={prev_utterance_id!r}）"
+            )
+            self._last_commentary_round_id = ""
+            self._last_commentary_utterance_id = ""
+            self._last_commentary_summary = ""
+            self._last_commentary_spoken_ms = None
+        # 同步释放 LeadCoordinator 层的同轮去重记录，防止游戏侧再次提交同轮解说时被协调器前置门禁拦截
+        coord = self._lead_coordinator
+        release_fn = getattr(coord, "release_commentary_round", None) if coord is not None else None
+        if callable(release_fn) and (prev_round_id or game):
+            release_fn(game=game, round_id=prev_round_id)
+
+    def _on_utterance_undelivered(self, utterance_id: str, status: str) -> None:
+        """播放队列直连回调：当该轮最近一次已派发解说语音被硬打断（dropped）或失败（failed）未实际完播时释放同轮去重。"""
+        uid = (utterance_id or "").strip()
+        if not uid:
+            return
+        if self._last_commentary_utterance_id and uid == self._last_commentary_utterance_id:
+            self._release_commentary_round_dedup(reason=f"utterance_{status}")
+            return
+        # 记录未完播编号，防止 dispatch / remember_round 在途期间已丢弃/失败时仍误锁同轮去重；无关旧句绝不清现行锚点
+        self._undelivered_utterance_ids.append(uid)
+
     def _reset_commentary_state(self) -> None:
         """清空主播侧实况解说同轮与短间隔防抖锚点及近期活动快照，供开播、下播及主控切换共用。"""
+        self._commentary_dedup_epoch += 1
         self._last_commentary_round_id = ""
+        self._last_commentary_utterance_id = ""
         self._last_commentary_summary = ""
         self._last_commentary_spoken_ms = None
+        self._undelivered_utterance_ids.clear()
         self._latest_game_activity_summary = ""
         self._latest_game_activity_ms = 0
 
@@ -5037,6 +5168,7 @@ class StreamerAgent(BaseAgent):
             return CommentaryAck(accepted=False, spoken=False, reason="empty_summary")
 
         async with self._commentary_lock:
+            dedup_epoch_before = self._commentary_dedup_epoch
             now = self._clock()
             game_name = (req.game or "").strip() or "game"
             self._note_game_activity(game_name)
@@ -5097,10 +5229,12 @@ class StreamerAgent(BaseAgent):
                 intensity=intensity,
             )
             reply_to = (req.about_player or "").strip()
+            name_aliases = await self._lookup_player_aliases([reply_to]) if reply_to else {}
             recent_speeches = self._spoken_log.recent_texts(limit=8)
 
             # 净化盲人回复器输入面：只给本轮这一条干净解说要点 + 防复读最近口播（及必要的 reply_to），
             # 剥离过时流程单文本与陈旧节流堆积，避免盲人回复器被陈旧上下文带偏
+            extra_generate_kwargs: Dict[str, Any] = {"name_aliases": name_aliases} if name_aliases else {}
             try:
                 generated = await self._replyer.generate(
                     plan=plan,
@@ -5112,6 +5246,7 @@ class StreamerAgent(BaseAgent):
                     reply_to=reply_to,
                     speech_mode="play",
                     commentary=True,
+                    **extra_generate_kwargs,
                 )
             except Exception as exc:  # noqa: BLE001 - 解说润色异常隔离，不反噬主控游戏循环
                 self._logger.exception(f"实况解说调用 Replyer 异常: {exc}")
@@ -5124,12 +5259,13 @@ class StreamerAgent(BaseAgent):
             if not raw_speech:
                 return CommentaryAck(accepted=True, spoken=False, reason="empty_speech")
 
-            # 外层极端长文熔断与敏感词兜底：与 Replyer 复用同一熔断口径，保护同伴称呼不被二次裁句误丢
+            # 外层极端长文熔断与敏感词兜底：与 Replyer 复用同一熔断口径，保护同伴称呼（含已登记别名）不被二次裁句误丢
             required_names = [reply_to] if reply_to else []
             final_speech = self._guard_replyer_speech(
                 raw_speech,
                 reply_to=reply_to,
                 required_names=required_names,
+                name_aliases=name_aliases,
                 log_label="实况解说",
             )
             if final_speech is None:
@@ -5153,15 +5289,30 @@ class StreamerAgent(BaseAgent):
             if dispatched is None:
                 return CommentaryAck(accepted=True, spoken=False, reason="dispatch_empty")
 
+            # 先完成所有异步记账，再在零 await 原子段内完成未送达/代际核对、锚点置位与回执返回，
+            # 杜绝 remember_round 挂起期间收到 failed/dropped 或死亡事件后被旧解说事后锁死轮次
+            await self._scope.remember_round([], speech=dispatched[0], batch_persisted=True)
+
             spoken_at = self._clock()
-            # 推进全局最近发声时刻：同步复位冷场兜底与静默提醒冷却，并更新下一条普通解说的防抖与同轮去重基准
+            dispatched_utterance_id = dispatched[2]
             self._room_state.record_speech(spoken_at)
+            self._last_silence_nudge_ms = None
+            if dispatched_utterance_id in self._undelivered_utterance_ids:
+                self._undelivered_utterance_ids.remove(dispatched_utterance_id)
+                self._release_commentary_round_dedup(reason="utterance_undelivered_in_flight", game=game_name)
+                return CommentaryAck(accepted=True, spoken=False, reason="utterance_undelivered")
+            if self._commentary_dedup_epoch != dedup_epoch_before:
+                # 在途期间已发生死亡转折/主控切换/重置等释放事件：本句不锁定同轮去重，同步通知协调器防事后锁轮
+                coord = self._lead_coordinator
+                release_fn = getattr(coord, "release_commentary_round", None) if coord is not None else None
+                if callable(release_fn):
+                    release_fn(game=game_name, round_id=req_round_id)
+                return CommentaryAck(accepted=True, spoken=True, reason="dispatched")
             self._last_commentary_spoken_ms = spoken_at
             self._last_commentary_summary = summary
+            self._last_commentary_utterance_id = dispatched_utterance_id
             if req_round_id:
                 self._last_commentary_round_id = req_round_id
-            self._last_silence_nudge_ms = None
-            await self._scope.remember_round([], speech=dispatched[0], batch_persisted=True)
             return CommentaryAck(accepted=True, spoken=True, reason="dispatched")
 
     # ==================================================================

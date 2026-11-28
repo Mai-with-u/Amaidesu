@@ -34,7 +34,7 @@ from src.modules.types.emotion_vocab import EMOTION_CN_ALIASES, Emotion
 
 from .. import canonical
 from ..plan import DecisionPlan, ReplyRoundAttachment, assistant_speech_lines
-from ..replyer import Replyer
+from ..replyer import Replyer, collect_keep_names
 
 __all__ = [
     "build_reply_tool_spec",
@@ -147,7 +147,7 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         "topic_tag": {
             "type": "string",
             "description": (
-                "话题短名（可空）：3–8 个字，给本轮话题起个名字，如 照明进度、玩家打人、女仆妖精。"
+                "话题短名（可空）：3–8 个字，用简洁的中性短语概括本轮核心事项或互动对象。"
                 "还是同一件事就用同一个短名；换话题就换新名；只写事实指向，不带评价。"
             ),
         },
@@ -269,11 +269,13 @@ class ReplyToolProvider(BaseToolProvider):
         replyer: Replyer,
         history_provider: Optional[Any] = None,
         rundown_text_provider: Optional[Any] = None,
+        name_aliases_provider: Optional[Any] = None,
         event_bus: Optional[Any] = None,
     ) -> None:
         self._replyer = replyer
         self._history_provider = history_provider
         self._rundown_text_provider = rundown_text_provider
+        self._name_aliases_provider = name_aliases_provider
         # 可选 EventBus：reply 调用入口发布 planner.verdict（裁决时刻即时事实）
         self._event_bus = event_bus
         self._logger = get_logger("ReplyTool")
@@ -333,6 +335,17 @@ class ReplyToolProvider(BaseToolProvider):
         except Exception as exc:
             self._logger.warning(f"reply_tool: rundown_text_provider 调用失败: {exc}")
             return None
+
+    async def _resolve_name_aliases(self, names: Sequence[str]) -> Dict[str, List[str]]:
+        """按待保名名单查询已登记的熟人别名；未注入查询器或查询异常时降级返回空表。"""
+        if self._name_aliases_provider is None or not names:
+            return {}
+        try:
+            resolved = await self._await_maybe(self._name_aliases_provider(names))
+            return dict(resolved) if isinstance(resolved, dict) else {}
+        except Exception as exc:
+            self._logger.warning(f"reply_tool: name_aliases_provider 调用失败（已省略别名）: {exc}", exc=True)
+            return {}
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         """reply 工具的 invoke（ToolProvider 协议）。
@@ -462,6 +475,19 @@ class ReplyToolProvider(BaseToolProvider):
         speech_mode = "talk" if materials.speech_mode == "talk" else "play"
         target_msg_id = _resolve_target_message_id(plan.target, batch, history, materials.familiarity_by_message_id)
         target_familiarity = materials.familiarity_by_message_id.get(target_msg_id, "") if target_msg_id else ""
+        # 查询本轮可能走保名补拼的观众/同伴已登记熟人别名（复用 collect_keep_names 拆分多人合并 reply_to），
+        # 防止回复稿用别名称呼后被句首硬拼原账号名
+        paid_viewer_names: List[str] = []
+        for msg in batch:
+            msg_type = str(getattr(msg, "message_type", "") or "").strip()
+            if msg_type in ("gift", "super_chat", "guard"):
+                user = getattr(msg, "user", None)
+                uname = str(getattr(user, "name", "") or "").strip() if user is not None else ""
+                if uname:
+                    paid_viewer_names.append(uname)
+        alias_lookup_names = collect_keep_names(materials.reply_to, paid_viewer_names)
+        name_aliases = await self._resolve_name_aliases(alias_lookup_names)
+        extra_generate_kwargs: Dict[str, Any] = {"name_aliases": name_aliases} if name_aliases else {}
         try:
             result = await self._replyer.generate(
                 plan=plan,
@@ -477,6 +503,7 @@ class ReplyToolProvider(BaseToolProvider):
                 reply_to=materials.reply_to,
                 speech_mode=speech_mode,
                 target_familiarity=target_familiarity,
+                **extra_generate_kwargs,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")
