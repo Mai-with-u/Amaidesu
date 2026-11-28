@@ -185,7 +185,14 @@ class FakeMcpClient(McpClient):
     async def list_tools(self) -> List[Any]:
         return list(self._tools) if self._connected else []
 
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        idempotent: bool = False,
+    ) -> Any:
+        del idempotent
         if not self._connected:
             return None
         self.called.append({"name": tool_name, "arguments": arguments})

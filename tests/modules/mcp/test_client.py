@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.modules.mcp.client import McpClient, shared_ssl_context
+from src.modules.mcp.client import McpClient, is_session_terminated_error, shared_ssl_context
 from src.modules.mcp.config import McpServerConfig
 from tests.modules.mcp.fakes import AnyConfig, Endpoint, FakeFastmcpClient, FakeTool, Updated, recording_client_factory
 from src.modules.mcp.provider import McpToolProvider
@@ -473,3 +473,132 @@ async def test_connect_failure_dedup_survives_instance_recreation(loguru_capture
     assert any(r["level"] == "DEBUG" and "同因" in r["message"] for r in loguru_capture.records)
 
     assert await make_client("changed").connect() is False and failures() == 2  # 原因变了，重新 warning
+
+
+# 空闲会话回收无感重试（幂等只读查询）
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected"),
+    [
+        (lambda: RuntimeError("Session terminated"), True),
+        (lambda: RuntimeError("HTTP 404: Unknown or expired MCP session"), True),
+        (lambda: ConnectionError("connection reset by peer"), False),
+        (lambda: TimeoutError("timed out"), False),
+    ],
+    ids=["session-terminated", "expired-mcp-session", "generic-conn-reset", "timeout"],
+)
+def test_is_session_terminated_error_recognizes_server_reap_only(exc_factory: Any, expected: bool) -> None:
+    """只将明确的服务端会话回收错误识别为 session terminated，不误判普通传输断连或超时。"""
+    assert is_session_terminated_error(exc_factory()) is expected
+
+
+async def test_idempotent_call_retries_once_after_session_terminated_and_succeeds() -> None:
+    """幂等只读调用遇 Session terminated：自动重连并无感重试 1 次成功，不把瞬态错误抛给调用方。"""
+    # 可选重型依赖 mcp 仅在模拟会话终止协议异常时延迟加载
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+
+    created: List[int] = []
+    calls: List[tuple[int, str]] = []
+
+    class _RotatingEndpoint(Endpoint):
+        def __init__(self, idx: int) -> None:
+            super().__init__()
+            self.idx = idx
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+            del arguments
+            calls.append((self.idx, tool_name))
+            if self.idx == 1:
+                raise McpError(ErrorData(code=32600, message="Session terminated"))
+            return SimpleNamespace(is_error=False, content=[], structured_content={"ok": True, "session": self.idx})
+
+    def _factory(*_args: Any, **_kwargs: Any) -> _RotatingEndpoint:
+        idx = len(created) + 1
+        created.append(idx)
+        return _RotatingEndpoint(idx)
+
+    client = _injected_client(_factory)
+    try:
+        assert await client.connect() is True
+        result = await client.call_tool("observe", {"what": "self"}, idempotent=True)
+        assert result is not None
+        assert result.structured_content == {"ok": True, "session": 2}
+        assert client.connected is True
+        assert created == [1, 2]
+        assert calls == [(1, "observe"), (2, "observe")]
+    finally:
+        await client.close()
+
+
+async def test_idempotent_call_gives_up_after_single_retry_failure() -> None:
+    """幂等只读调用遇 Session terminated 重连重试 1 次后仍失败时直接返回 None，绝不无限重试。"""
+    # 可选重型依赖 mcp 仅在模拟会话终止协议异常时延迟加载
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+
+    created: List[int] = []
+    calls: List[tuple[int, str]] = []
+
+    class _AlwaysTerminatedEndpoint(Endpoint):
+        def __init__(self, idx: int) -> None:
+            super().__init__()
+            self.idx = idx
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+            del arguments
+            calls.append((self.idx, tool_name))
+            raise McpError(ErrorData(code=32600, message="Session terminated"))
+
+    def _factory(*_args: Any, **_kwargs: Any) -> _AlwaysTerminatedEndpoint:
+        idx = len(created) + 1
+        created.append(idx)
+        return _AlwaysTerminatedEndpoint(idx)
+
+    client = _injected_client(_factory)
+    try:
+        assert await client.connect() is True
+        result = await client.call_tool("lookup", {"topic": "knowledge"}, idempotent=True)
+        assert result is None
+        assert client.connected is False
+        assert created == [1, 2]
+        assert calls == [(1, "lookup"), (2, "lookup")]
+    finally:
+        await client.close()
+
+
+async def test_non_idempotent_call_never_replays_after_session_terminated() -> None:
+    """默认（非幂等写操作）遇 Session terminated 绝不自动重放，避免重复下单。"""
+    # 可选重型依赖 mcp 仅在模拟会话终止协议异常时延迟加载
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+
+    created: List[int] = []
+    calls: List[tuple[int, str]] = []
+
+    class _WriteEndpoint(Endpoint):
+        def __init__(self, idx: int) -> None:
+            super().__init__()
+            self.idx = idx
+
+        async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+            del arguments
+            calls.append((self.idx, tool_name))
+            raise McpError(ErrorData(code=32600, message="Session terminated"))
+
+    def _factory(*_args: Any, **_kwargs: Any) -> _WriteEndpoint:
+        idx = len(created) + 1
+        created.append(idx)
+        return _WriteEndpoint(idx)
+
+    client = _injected_client(_factory)
+    try:
+        assert await client.connect() is True
+        result = await client.call_tool("execute", {"goal": {"ability": "build"}})
+        assert result is None
+        assert client.connected is False
+        assert created == [1]
+        assert calls == [(1, "execute")]
+    finally:
+        await client.close()
